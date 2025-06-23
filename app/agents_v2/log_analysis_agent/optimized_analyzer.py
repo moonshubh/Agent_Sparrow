@@ -13,6 +13,7 @@ from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
 from langchain_google_genai import ChatGoogleGenerativeAI
 from app.core.logging_config import get_logger
+from app.core.settings import settings
 
 class OptimizedLogAnalyzer:
     """
@@ -25,13 +26,13 @@ class OptimizedLogAnalyzer:
         self.reasoning_llm = ChatGoogleGenerativeAI(
             model="gemini-2.5-pro",
             temperature=0.1,
-            google_api_key=os.getenv("GEMINI_API_KEY"),
+            google_api_key=settings.gemini_api_key,
         )
         
         self.fast_llm = ChatGoogleGenerativeAI(
             model="gemini-2.5-flash",
             temperature=0.1,
-            google_api_key=os.getenv("GEMINI_API_KEY"),
+            google_api_key=settings.gemini_api_key,
         )
         
         # Performance configuration

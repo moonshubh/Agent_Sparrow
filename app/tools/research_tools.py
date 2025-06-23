@@ -2,6 +2,8 @@ import os
 from dotenv import load_dotenv
 import json
 import redis
+
+from app.core.settings import settings
 from tenacity import (
     retry,
     stop_after_attempt,
@@ -30,7 +32,7 @@ except ImportError:  # pragma: no cover
 load_dotenv()
 
 # Redis URL
-REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
+REDIS_URL = settings.redis_url
 # 24 hours TTL for scrape cache
 SCRAPE_CACHE_TTL_SEC = int(os.getenv("SCRAPE_CACHE_TTL_SEC", "86400"))
 
