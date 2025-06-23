@@ -13,7 +13,7 @@ export DEBIAN_FRONTEND=noninteractive
 sudo apt-get update -qq
 sudo apt-get install -y --no-install-recommends \
      build-essential git curl \
-     python3.10 python3.10-venv python3.10-dev \
+     python3 python3-venv python3-dev \
      libpq-dev  # → psycopg2 / pgvector wheels
 
 echo ">>> Installing Node.js 18.x & pnpm"
@@ -26,8 +26,13 @@ if ! command -v pnpm >/dev/null 2>&1; then
 fi
 
 echo ">>> Creating Python virtual-env & installing backend dependencies"
+PYTHON_BIN="$(command -v python3)"
+if [ -z "$PYTHON_BIN" ]; then
+  echo "Python 3 is not installed" >&2
+  exit 1
+fi
 if [ ! -d venv ]; then
-  python3.10 -m venv venv
+  "$PYTHON_BIN" -m venv venv
 fi
 # shellcheck disable=SC1091
 source venv/bin/activate
