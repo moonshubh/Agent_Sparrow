@@ -1,0 +1,66 @@
+---
+description: 
+globs: 
+alwaysApply: false
+---
+# Global Best Practices for Python AI Agent Development
+
+This document outlines universal best practices for creating robust, scalable, and maintainable AI agent systems. These guidelines are technology-agnostic where possible but assume a modern Python stack.
+
+## 1. Project Structure & Modularity
+
+- **Decoupled Architecture**: For any system with a user interface, adopt a decoupled frontend/backend architecture.
+    - **Backend**: A dedicated API server (e.g., using FastAPI, Flask) to handle business logic, agent orchestration, and data processing.
+    - **Frontend**: A separate web application (e.g., using React, Vue, Svelte) that consumes the backend API. This is more scalable than monolithic frameworks like Streamlit for production systems.
+- **Service-Oriented Modularity**: Organize the backend into distinct modules or "services" based on functionality.
+    - `agents/`: Core agent definitions and orchestration logic (e.g., using LangGraph).
+    - `api/` or `main.py`: The main API entry point.
+    - `core/` or `shared/`: Shared utilities, data models, and configurations.
+    - `services/`: Integrations with external services (e.g., vector databases, web search APIs).
+    - `tools/`: Definitions for tools that agents can use.
+
+## 2. Python Coding Standards
+
+- **Follow PEP 8**: Adhere strictly to the [PEP 8 style guide](mdc:https:/www.python.org/dev/peps/pep-0008) for all Python code. Use tools like `black` and `isort` to automate formatting.
+- **Use Type Hinting**: Use modern type hints for all function signatures and complex data structures. This improves readability and allows for static analysis.
+    ```python
+    # ✅ DO: Use type hints
+    from typing import List, Dict
+
+    def process_data(records: List[Dict[str, any]]) -> int:
+        # ... function logic ...
+        return len(records)
+    ```
+- **Prefer `pathlib`**: Use the `pathlib` module for all filesystem operations. It provides an object-oriented and more intuitive API than `os.path`.
+- **Use f-strings**: Use f-strings for all string formatting unless the situation specifically requires another method.
+
+## 3. Configuration Management
+
+- **Separate Config from Code**: Never hardcode configuration values directly in the source code.
+- **Use `.env` for Secrets**: All secrets (API keys, database credentials) **must** be stored in a `.env` file, which should be listed in `.gitignore`.
+- **Use YAML or Pydantic for App Config**: For non-secret application configuration (e.g., model names, temperature settings, file paths), use a dedicated YAML file (`config.yaml`) or a Pydantic settings model. This makes configuration explicit and easy to manage.
+
+## 4. API & Backend Design
+
+- **Use `async/await`**: For any I/O-bound operations (API calls, database queries, file reading), use `async/await` to ensure the server remains non-blocking and responsive. Use libraries like `httpx` for async HTTP requests.
+- **Implement Robust Error Handling**: Define custom exception classes for predictable errors and use global exception handlers in your API framework to return standardized error responses.
+- **Use Data Validation**: Use a library like [Pydantic](mdc:https:/docs.pydantic.dev) to define and validate all incoming request bodies and outgoing responses. This prevents data-related errors and serves as clear API documentation.
+
+## 5. Security
+
+- **Never Commit Secrets**: Re-iterating for emphasis: API keys, passwords, and other credentials must never be committed to version control. Add `.env`, `secrets.yaml`, and other sensitive files to `.gitignore` immediately.
+- **Validate All Inputs**: Treat all data from external sources (user input, API responses) as untrusted. Sanitize and validate it before processing.
+
+## 6. Testing
+
+- **Write Unit Tests**: Every core function and piece of business logic should have a corresponding unit test.
+- **Mock External Services**: In unit tests, always mock external dependencies like databases and third-party APIs. This ensures tests are fast, reliable, and don't incur costs.
+- **Use Integration Tests**: Write integration tests to verify that different components of your system (e.g., API endpoint → agent → tool) work together correctly. These can run against a test database or sandboxed API environments.
+
+## 7. Documentation
+
+- **Maintain a `README.md`**: The `README.md` should contain a project overview, setup instructions, and basic usage examples.
+- **Use Docstrings**: All public modules, classes, and functions should have comprehensive docstrings explaining their purpose, arguments, and return values. Follow the [Google Python Style Guide](mdc:https:/google.github.io/styleguide/pyguide.html#3.8-comments-and-docstrings) for docstring formatting.
+- **Keep Documentation Current**: When code is updated, the corresponding documentation must also be updated.
+
+By following these global best practices, we can ensure that our agent development process is modern, secure, and results in a high-quality, maintainable system.

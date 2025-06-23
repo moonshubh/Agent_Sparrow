@@ -1,0 +1,115 @@
+---
+description: 
+globs: 
+alwaysApply: false
+---
+# MB-Sparrow Agent: Project-Specific Rules & Context
+
+This document contains the single source of truth for the MB-Sparrow Agent project. All development must adhere to the standards and architecture defined herein. This file will be updated as the project evolves.
+
+## Document Metadata
+- **Last Updated:** 2025-06-18
+- **Version:** 1.2
+- **Change Log:** See the end of this document for a summary of modifications.
+- **Update Policy:** Any significant change to the agent architecture, core model stack, or production infrastructure **must** be accompanied by an update to this document in the same pull-request. Owners: `@ai-platform`.
+
+## 1. Project Mission & Core Architecture
+
+- **Mission**: To build a state-of-the-art, fullstack multi-agent AI system to enhance Mailbird customer support. The system will be capable of general support, deep log analysis, and complex research.
+- **Core Architecture**: A decoupled system inspired by [Google's Gemini Fullstack Quickstart](mdc:MB-Sparrow-main/MB-Sparrow-main/MB-Sparrow-main/MB-Sparrow-main/https:/github.com/google-gemini/gemini-fullstack-langgraph-quickstart).
+    - **Frontend**: A **React** application built with Vite for a modern, responsive UI.
+    - **Backend**: A **FastAPI** server that orchestrates agentic workflows using **LangGraph**.
+- **Primary Reference**: The master plan is detailed in [MAILBIRD_AGENT_IMPROVEMENT_PLAN.md](mdc:MB-Sparrow-main/MB-Sparrow-main/MB-Sparrow-main/MB-Sparrow-main/MAILBIRD_AGENT_IMPROVEMENT_PLAN.md).
+
+## 2. Official Gemini Model Stack
+
+This project will exclusively use the following Google Gemini models for their specific roles to optimize for cost and performance. **No other models should be used without updating this rule.**
+
+| Role            | Model                                     | Purpose                                            |
+|-----------------|-------------------------------------------|----------------------------------------------------|
+| **Router**      | `google/gemma-2b-it`                      | Fast, low-cost query classification.               |
+| **Primary Agent** | `gemini-2.5-flash`                          | General support, balancing speed and capability.   |
+| **Log Analyst**   | `gemini-2.5-pro`                            | Deep, structured reasoning on large log contexts.  |
+| **Researcher**  | `gemini-2.5-flash` / `gemini-2.5-pro`       | Web search, RAG, and synthesis (Flash default).    |
+
+## 3. Technology & Tooling
+
+- **Orchestration**: LangGraph
+- **Vector Database**: Supabase (PostgreSQL with pgvector extension)
+- **Web Search**: **Firecrawl MCP tool** must be used for all web-related lookups for web scraping and data extraction.
+- **Task Management**: Project tasks are managed via `taskmaster.ai` tools and tracked in the `/tasks` directory.
+
+## 4. File Structure & Key Locations
+
+The project structure is defined in `MAILBIRD_AGENT_IMPROVEMENT_PLAN.md`. Key development areas are:
+- `frontend/`: All React frontend code.
+- `app/`: All Python backend code (FastAPI, LangGraph agents, services).
+- `tasks/`: Task definitions for the project.
+
+## 5. Development Guidelines & Instructions for AI
+
+- **Consult This File First**: Before starting any task, review this file to ensure alignment with the current project architecture and goals.
+- **Propose Updates**: If a decision is made that alters the architecture, model stack, or core dependencies, first propose an update to this document to reflect the change.
+- **Prioritize This Context**: The information here and in `MAILBIRD_AGENT_IMPROVEMENT_PLAN.md` overrides general knowledge.
+- **Follow Best Practices**: Adhere to the guidelines in `python_agent_best_practices.mdc`.
+- **Incremental Progress**: Follow the task-based workflow. Complete one task at a time as defined in the `tasks/` directory.
+- **Update Documentation**: After a task is implemented, update the main `README.md` to reflect any changes to architecture, project structure, or setup.
+
+## Gemini Model Guidelines
+
+### Model Selection
+- **`gemini-2.5-pro`**: The most powerful model for complex reasoning, multi-turn conversation, and when the highest accuracy is paramount. Use for core agent logic where detailed understanding and generation are critical (e.g., Log Analysis Agent, optionally Research Agent for complex queries).
+- **`gemini-2.5-flash`**: A faster, more cost-effective model suitable for tasks that require high throughput or lower latency, such as summarization, RAG, or tool use where the context is well-defined (e.g., Primary Support Agent, default for Research Agent synthesis).
+- Always evaluate **token / quality trade-off**. If the answer quality from *Flash* is insufficient (detected via QA loop or user feedback), consider retrying with *Pro* for specific tasks or user segments.
+
+### Advanced Prompting
+1. **Few-Shot + System Instructions**: Prepend 1–3 minimal, high-signal examples. Keep total prompt < 50 % of context window.
+2. **Structured Output Requests**: Explicitly provide JSON schema; wrap with `Return JSON ONLY:` guard.
+3. **Chain-of-Thought**: For Pro model only. Use hidden `__internal_reasoning` key to avoid leaking chain to user.
+4. **Safety & Tone**: Include role, limits, and refusal style in the system message.
+
+### Output Interpretation
+- Parse JSON with `json.loads`; fallback to raw text if parsing fails and log a warning.
+- Respect `safety_attributes.block_reason` in Gemini responses; surface a polite refusal message to the user when content is blocked.
+- Capture `citation_metadata` when present and attach to `sources` list.
+
+## Web-Based RAG Architecture
+The Research Agent follows a three-step retrieval-augmented generation pipeline:
+1. **Search** – Uses **Tavily** (Brave Search API wrapper) to fetch the top N URLs for the user query.
+2. **Scrape** – Invokes **Firecrawl** to extract cleaned markdown from each URL. Results are cached in Redis (24 h TTL).
+3. **Synthesis** – Passes concatenated, chunked content (≤ 6 k tokens) to Gemini 2.5 Flash (or Pro, if complexity demands) along with the original query to produce an answer + inline citations.
+
+```mermaid
+flowchart TD
+    A[User Query] --> B[Tavily Search]\n(top URLs)
+    B --> C[Firecrawl Scrape]\n(markdown)
+    C --> D[Chunk & Trim]\n(≤6k tokens)
+    D --> E[Gemini 2.5 Flash/Pro]\n(RAG prompt)
+    E --> F[Answer + Citations]
+```
+
+### Data Handling Notes
+- **Rate limits**: Tavily (60 rpm) and Firecrawl (30 rpm) enforced via Tenacity retry wrapper.
+- **Privacy**: No PII is stored; URLs and scraped content are removed after TTL expiry.
+
+## Production Best Practices
+
+### Monitoring and Observability
+- **Tracing**: OpenTelemetry spans around search, scrape, embedding, and model calls. Export to OTLP → Grafana Tempo.
+- **Metrics**: Latency, error rate, token usage, cache hit rate. Visualised in Grafana dashboards (Task 10).
+
+### Quality Assurance
+- Automatic weekly evaluation suite (Task 7) compares agent answers against golden set; regression threshold < 3 %.
+- Live feedback loop: thumbs-up / thumbs-down in frontend posts to `/feedback` endpoint and triggers re-grading job.
+
+### Security Measures
+- **Input Sanitisation**: All user inputs validated & length-clamped.
+- **Secrets**: API keys stored in `.env`, loaded with `python-dotenv`; never hard-coded.
+- **Rate Limiting**: Tavily / Firecrawl wrappers enforce exponential back-off.
+- **Data Privacy**: Cached web content purged after TTL; conversation vectors scoped per `user_id`.
+
+## Change Log
+- **2025-06-18 v1.2** – Updated Primary, Log Analysis, and Research Agents to Gemini 2.5 Flash/Pro. Aligned all documentation and model guidelines to Gemini 2.5 series.
+- **2025-06-11 v1.1** – Added Gemini 2.5 guidelines, Web-Based RAG architecture section, Production Best Practices (incl. security), metadata & update policy.
+
+This document ensures that all development work, whether performed by a human or an AI, remains consistent with the project's strategic direction.

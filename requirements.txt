@@ -1,0 +1,46 @@
+# Core Application & Agent Dependencies
+fastapi==0.115.12
+uvicorn
+python-multipart
+pydantic==2.11.5
+python-dotenv
+
+# Langchain Stack
+langchain==0.3.25
+langchain-core==0.3.65
+langchain-community==0.3.25
+langchain-google-genai==2.1.5
+langgraph
+
+# Torch (CPU version will be selected by --extra-index-url)
+torch
+torchvision
+
+# Database & Auth
+psycopg2-binary # For PostgreSQL
+pgvector # For pgvector PostgreSQL extension integration
+qdrant-client
+PyJWT==2.8.0
+python-jose[cryptography]==3.3.0
+
+# External Tools
+tavily-python==0.3.0
+redis
+firecrawl-py # For data_importer.py
+
+# Testing
+pytest
+pytest-asyncio==0.23.7
+pytest-cov==5.0.0
+pytest-benchmark==4.0.0
+
+# Observability & Utilities
+opentelemetry-api
+opentelemetry-sdk
+opentelemetry-exporter-otlp-proto-http
+protobuf==3.20.3
+structlog
+loguru
+psutil
+python-dateutil
+pgvector==0.4.1
