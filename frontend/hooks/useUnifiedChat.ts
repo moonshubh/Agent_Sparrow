@@ -40,8 +40,11 @@ export interface UseUnifiedChatReturn {
 }
 
 /**
- * Unified chat hook that intelligently routes between agents
- * while maintaining a single conversation interface
+ * Provides a unified chat hook that routes user queries to the appropriate agent (primary, log analyst, or researcher) and manages the conversation state.
+ *
+ * The hook maintains chat history, handles message sending (including file uploads for log analysis), processes streaming responses, manages errors, and supports conversation reset and retry functionality. It intelligently determines the agent type based on message content and attached files, ensuring a seamless multi-agent chat experience.
+ *
+ * @returns An object containing the current chat state, a function to send messages (with optional files), a function to clear the conversation, and a function to retry the last user message.
  */
 export function useUnifiedChat(): UseUnifiedChatReturn {
   const apiBaseUrl = process.env.NEXT_PUBLIC_API_BASE_URL || ""
@@ -204,6 +207,18 @@ export function useUnifiedChat(): UseUnifiedChatReturn {
             const event = JSON.parse(jsonStr)
             
             if (event.role === 'system' && event.content) {
+              // Filter out [DONE] tokens that come as system messages
+              if (event.content === '[DONE]') {
+                setState(prev => ({
+                  ...prev, 
+                  isProcessing: false,
+                  messages: prev.messages.map(msg => 
+                    msg.id === messageId ? { ...msg, streaming: false } : msg
+                  )
+                }))
+                return
+              }
+              
               // Handle system messages (routing notifications)
               const systemMessage: UnifiedMessage = {
                 id: `system-${Date.now()}`,

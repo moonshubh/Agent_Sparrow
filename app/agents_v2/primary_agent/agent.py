@@ -22,6 +22,30 @@ import anyio
 from opentelemetry.trace import Status, StatusCode
 from app.db.embedding_utils import find_similar_documents, SearchResult as InternalSearchResult # Added for internal search
 
+# Import Agent Sparrow modular prompt system
+from app.agents_v2.primary_agent.prompts import (
+    load_agent_sparrow_prompt, 
+    PromptLoadConfig, 
+    PromptVersion,
+    EmotionTemplates,
+    ResponseFormatter
+)
+
+# Import Agent Sparrow reasoning framework
+from app.agents_v2.primary_agent.reasoning import (
+    ReasoningEngine,
+    ReasoningConfig,
+    ReasoningState
+)
+
+# Import Agent Sparrow structured troubleshooting framework
+from app.agents_v2.primary_agent.troubleshooting import (
+    TroubleshootingEngine,
+    TroubleshootingConfig,
+    TroubleshootingState,
+    TroubleshootingSessionManager
+)
+
 # Get a tracer instance for OpenTelemetry
 tracer = trace.get_tracer(__name__)
 
@@ -74,13 +98,56 @@ except Exception as e:
 # 2. Bind the tool to the model
 logger.debug("Binding tools to model")
 model_with_tools = model.bind_tools([mailbird_kb_search, tavily_web_search])
-logger.info("Tools bound to model. Module initialization complete.")
+logger.info("Tools bound to model.")
+
+# 3. Initialize Agent Sparrow Troubleshooting System
+logger.info("Initializing Agent Sparrow structured troubleshooting system")
+try:
+    # Initialize troubleshooting configuration
+    troubleshooting_config = TroubleshootingConfig(
+        enable_adaptive_workflows=True,
+        enable_progressive_complexity=True,
+        enable_verification_checkpoints=True,
+        enable_automatic_escalation=True,
+        enable_session_persistence=True,
+        default_step_timeout_minutes=int(os.getenv("TROUBLESHOOTING_STEP_TIMEOUT", "10")),
+        max_session_duration_minutes=int(os.getenv("TROUBLESHOOTING_MAX_DURATION", "60")),
+        verification_interval_steps=int(os.getenv("TROUBLESHOOTING_VERIFICATION_INTERVAL", "3")),
+        emotional_adaptation_enabled=True,
+        technical_level_adaptation=True,
+        integrate_with_reasoning_engine=True,
+        debug_mode=bool(os.getenv("TROUBLESHOOTING_DEBUG", "false").lower() == "true")
+    )
+    
+    # Initialize troubleshooting engine
+    troubleshooting_engine = TroubleshootingEngine(troubleshooting_config)
+    
+    # Initialize session manager
+    session_manager = TroubleshootingSessionManager(troubleshooting_config)
+    
+    logger.info("Agent Sparrow troubleshooting system initialized successfully")
+    
+except Exception as e:
+    logger.exception("Error during troubleshooting system initialization: %s", e)
+    # Initialize fallback None values to prevent errors
+    troubleshooting_engine = None
+    session_manager = None
+    logger.warning("Continuing with troubleshooting system disabled")
+
+logger.info("Module initialization complete.")
 
 # 3. Create the agent logic
 async def run_primary_agent(state: PrimaryAgentState) -> AsyncIterator[AIMessageChunk]:
     """
-    Runs the primary agent logic. This agent is responsible for handling general queries
-    and tasks related to the Mailbird application. Yields AIMessageChunks.
+    Asynchronously processes a user query using the primary agent system, yielding AI message chunks as a streaming response.
+    
+    This function orchestrates advanced reasoning, structured troubleshooting, internal knowledge base search, and web search to generate a comprehensive answer to Mailbird-related queries. It integrates Agent Sparrow's reasoning and troubleshooting engines, dynamically assembles context from multiple sources, constructs a modular system prompt, and streams the AI's response in real time. Extensive telemetry and error handling ensure robust operation and detailed observability.
+    
+    Parameters:
+        state (PrimaryAgentState): The current agent state, including user messages and session context.
+    
+    Yields:
+        AIMessageChunk: Streamed chunks of the AI assistant's response.
     """
     with tracer.start_as_current_span("primary_agent.run") as parent_span:
         try:
@@ -98,6 +165,121 @@ async def run_primary_agent(state: PrimaryAgentState) -> AsyncIterator[AIMessage
 
             parent_span.set_attribute("input.query", user_query)
             parent_span.set_attribute("state.message_count", len(state.messages))
+
+            # Agent Sparrow Advanced Reasoning
+            reasoning_state = None
+            with tracer.start_as_current_span("agent_sparrow.reasoning") as reasoning_span:
+                try:
+                    # Initialize reasoning engine
+                    reasoning_config = ReasoningConfig(
+                        enable_chain_of_thought=True,
+                        enable_problem_solving_framework=True,
+                        enable_tool_intelligence=True,
+                        enable_quality_assessment=True,
+                        enable_reasoning_transparency=True,
+                        debug_mode=False  # Set to True for development
+                    )
+                    reasoning_engine = ReasoningEngine(reasoning_config)
+                    
+                    # Perform comprehensive reasoning about the query
+                    reasoning_state = await reasoning_engine.reason_about_query(
+                        query=user_query,
+                        context={"messages": state.messages},
+                        session_id=getattr(state, 'session_id', 'default')
+                    )
+                    
+                    # Log reasoning results
+                    reasoning_span.set_attribute("reasoning.confidence", reasoning_state.overall_confidence)
+                    reasoning_span.set_attribute("reasoning.emotion", reasoning_state.query_analysis.emotional_state.value)
+                    reasoning_span.set_attribute("reasoning.category", reasoning_state.query_analysis.problem_category.value)
+                    reasoning_span.set_attribute("reasoning.tool_decision", reasoning_state.tool_reasoning.decision_type.value)
+                    reasoning_span.set_attribute("reasoning.processing_time", reasoning_state.total_processing_time)
+                    
+                    logger.info(f"Agent Sparrow reasoning completed: "
+                              f"emotion={reasoning_state.query_analysis.emotional_state.value}, "
+                              f"category={reasoning_state.query_analysis.problem_category.value}, "
+                              f"confidence={reasoning_state.overall_confidence:.2f}, "
+                              f"tool_decision={reasoning_state.tool_reasoning.decision_type.value}")
+                              
+                except Exception as e:
+                    logger.error(f"Agent Sparrow reasoning failed: {e}")
+                    reasoning_span.record_exception(e)
+                    reasoning_span.set_status(Status(StatusCode.ERROR, f"Reasoning error: {str(e)}"))
+                    # Continue with fallback behavior
+                    reasoning_state = None
+
+            # Agent Sparrow Structured Troubleshooting Integration
+            troubleshooting_state = None
+            active_troubleshooting_session = None
+            
+            if troubleshooting_engine and reasoning_state and reasoning_state.query_analysis:
+                with tracer.start_as_current_span("agent_sparrow.troubleshooting") as troubleshooting_span:
+                    try:
+                        qa = reasoning_state.query_analysis
+                        
+                        # Check if this is a complex technical issue that would benefit from structured troubleshooting
+                        should_use_troubleshooting = (
+                            qa.problem_category in [
+                                reasoning_state.query_analysis.problem_category.TECHNICAL_ISSUE,
+                                reasoning_state.query_analysis.problem_category.ACCOUNT_SETUP,
+                                reasoning_state.query_analysis.problem_category.PERFORMANCE_OPTIMIZATION
+                            ] and
+                            (qa.complexity_score >= 0.5 or qa.urgency_level >= 3 or 
+                             len(qa.key_entities) >= 2)
+                        )
+                        
+                        if should_use_troubleshooting:
+                            # Initiate structured troubleshooting
+                            troubleshooting_state = await troubleshooting_engine.initiate_troubleshooting(
+                                query_text=user_query,
+                                problem_category=qa.problem_category,
+                                customer_emotion=qa.emotional_state,
+                                reasoning_state=reasoning_state,
+                                session_id=getattr(state, 'session_id', None)
+                            )
+                            
+                            if troubleshooting_state.recommended_workflow:
+                                # Start troubleshooting session
+                                active_troubleshooting_session = await troubleshooting_engine.start_troubleshooting_session(
+                                    troubleshooting_state=troubleshooting_state,
+                                    session_id=getattr(state, 'session_id', None)
+                                )
+                                
+                                # Track session with session manager
+                                if session_manager:
+                                    await session_manager.create_session(
+                                        workflow=active_troubleshooting_session.workflow,
+                                        customer_emotional_state=qa.emotional_state,
+                                        customer_technical_level=active_troubleshooting_session.customer_technical_level,
+                                        session_id=active_troubleshooting_session.session_id,
+                                        context={
+                                            'reasoning_insights': reasoning_state.reasoning_summary,
+                                            'solution_candidates': [
+                                                {
+                                                    'summary': sc.solution_summary,
+                                                    'confidence': sc.confidence_score
+                                                }
+                                                for sc in reasoning_state.solution_candidates
+                                            ]
+                                        }
+                                    )
+                                
+                                troubleshooting_span.set_attribute("troubleshooting.workflow", troubleshooting_state.recommended_workflow.name)
+                                troubleshooting_span.set_attribute("troubleshooting.session_id", active_troubleshooting_session.session_id)
+                                troubleshooting_span.set_attribute("troubleshooting.technical_level", active_troubleshooting_session.customer_technical_level)
+                                
+                                logger.info(f"Initiated structured troubleshooting session {active_troubleshooting_session.session_id} "
+                                          f"with workflow: {troubleshooting_state.recommended_workflow.name}")
+                            
+                        troubleshooting_span.set_attribute("troubleshooting.enabled", should_use_troubleshooting)
+                        
+                    except Exception as e:
+                        logger.error(f"Agent Sparrow troubleshooting initialization failed: {e}")
+                        troubleshooting_span.record_exception(e)
+                        troubleshooting_span.set_status(Status(StatusCode.ERROR, f"Troubleshooting error: {str(e)}"))
+                        # Continue without structured troubleshooting
+                        troubleshooting_state = None
+                        active_troubleshooting_session = None
 
             # 1. Internal Knowledge Base Search (PostgreSQL + pgvector)
             context_chunks = []
@@ -124,17 +306,52 @@ async def run_primary_agent(state: PrimaryAgentState) -> AsyncIterator[AIMessage
                 if internal_docs_count > 0:
                     internal_search_span.set_attribute("internal_search.top_score", best_internal_score)
 
-            # 2. Fallback to web search if internal results are insufficient
+            # 2. Enhanced tool decision using Agent Sparrow reasoning
             should_web_search = False
-            if internal_docs_count == 0:
-                should_web_search = True
-                logger.info("No internal results found, proceeding to web search.")
-            elif best_internal_score < INTERNAL_SEARCH_SIMILARITY_THRESHOLD:
-                should_web_search = True
-                logger.info(f"Best internal score {best_internal_score:.4f} < {INTERNAL_SEARCH_SIMILARITY_THRESHOLD}, proceeding to web search.")
-            elif internal_docs_count < MIN_INTERNAL_RESULTS_FOR_NO_WEB_SEARCH:
-                should_web_search = True
-                logger.info(f"Number of internal results {internal_docs_count} < {MIN_INTERNAL_RESULTS_FOR_NO_WEB_SEARCH}, proceeding to web search.")
+            web_search_reasoning = "Legacy fallback logic"
+            
+            if reasoning_state and reasoning_state.tool_reasoning:
+                # Use Agent Sparrow intelligent tool decision
+                from app.agents_v2.primary_agent.reasoning.schemas import ToolDecisionType
+                
+                tool_decision = reasoning_state.tool_reasoning.decision_type
+                web_search_reasoning = reasoning_state.tool_reasoning.reasoning
+                
+                if tool_decision in [ToolDecisionType.WEB_SEARCH_REQUIRED, ToolDecisionType.BOTH_SOURCES_NEEDED]:
+                    should_web_search = True
+                    logger.info(f"Agent Sparrow reasoning recommends web search: {web_search_reasoning}")
+                elif tool_decision == ToolDecisionType.INTERNAL_KB_ONLY:
+                    should_web_search = False
+                    logger.info(f"Agent Sparrow reasoning recommends internal KB only: {web_search_reasoning}")
+                elif tool_decision == ToolDecisionType.NO_TOOLS_NEEDED:
+                    should_web_search = False
+                    logger.info(f"Agent Sparrow reasoning: no additional tools needed: {web_search_reasoning}")
+                else:
+                    # Fallback to legacy logic for escalation or unknown decisions
+                    should_web_search = True
+                    logger.info(f"Agent Sparrow reasoning suggests escalation, using web search as fallback")
+                    
+                parent_span.set_attribute("tool_decision.reasoning", web_search_reasoning)
+                parent_span.set_attribute("tool_decision.type", tool_decision.value)
+                parent_span.set_attribute("tool_decision.confidence", reasoning_state.tool_reasoning.confidence)
+                
+            else:
+                # Fallback to legacy logic if reasoning failed
+                if internal_docs_count == 0:
+                    should_web_search = True
+                    web_search_reasoning = "No internal results found, proceeding to web search."
+                    logger.info(web_search_reasoning)
+                elif best_internal_score < INTERNAL_SEARCH_SIMILARITY_THRESHOLD:
+                    should_web_search = True
+                    web_search_reasoning = f"Best internal score {best_internal_score:.4f} < {INTERNAL_SEARCH_SIMILARITY_THRESHOLD}, proceeding to web search."
+                    logger.info(web_search_reasoning)
+                elif internal_docs_count < MIN_INTERNAL_RESULTS_FOR_NO_WEB_SEARCH:
+                    should_web_search = True
+                    web_search_reasoning = f"Number of internal results {internal_docs_count} < {MIN_INTERNAL_RESULTS_FOR_NO_WEB_SEARCH}, proceeding to web search."
+                    logger.info(web_search_reasoning)
+                else:
+                    web_search_reasoning = "Sufficient internal knowledge available, skipping web search."
+                    logger.info(web_search_reasoning)
 
             if should_web_search:
                 with tracer.start_as_current_span("primary_agent.web_search") as web_span:
@@ -209,218 +426,58 @@ async def run_primary_agent(state: PrimaryAgentState) -> AsyncIterator[AIMessage
                 context_text = full_context_str
             logger.info(f"Final context_text length: {len(context_text)}")
 
+            # Load Agent Sparrow prompt using modular system
+            with tracer.start_as_current_span("agent_sparrow.load_prompt") as prompt_span:
+                # Detect customer emotion from the query
+                current_message = state.messages[-1].content if state.messages else ""
+                emotion_result = EmotionTemplates.detect_emotion(current_message)
+                prompt_span.set_attribute("emotion.detected", emotion_result.primary_emotion.value)
+                prompt_span.set_attribute("emotion.confidence", emotion_result.confidence_score)
+                
+                # Configure Agent Sparrow prompt
+                prompt_config = PromptLoadConfig(
+                    version=PromptVersion.V3_SPARROW,
+                    include_reasoning=True,
+                    include_emotions=True,
+                    include_technical=True,
+                    quality_enforcement=True,
+                    debug_mode=False,  # Set to True for development
+                    environment="production"
+                )
+                
+                # Load the sophisticated Agent Sparrow system prompt
+                agent_sparrow_prompt = load_agent_sparrow_prompt(prompt_config)
+                logger.info(f"Loaded Agent Sparrow prompt (emotion: {emotion_result.primary_emotion.value}, confidence: {emotion_result.confidence_score:.2f})")
+                
+            # Add structured troubleshooting context if active
+            troubleshooting_context = ""
+            if active_troubleshooting_session:
+                troubleshooting_context = f"""
+                
+## Structured Troubleshooting Active:
+**Workflow**: {active_troubleshooting_session.workflow.name}
+**Session ID**: {active_troubleshooting_session.session_id}
+**Customer Technical Level**: {active_troubleshooting_session.customer_technical_level}/5
+**Current Phase**: {active_troubleshooting_session.current_phase.value}
+
+**Current Diagnostic Step**: {active_troubleshooting_session.current_step.title if active_troubleshooting_session.current_step else "Initializing"}
+
+**Approach**: Provide systematic troubleshooting guidance following the structured workflow. 
+- Break down complex solutions into step-by-step diagnostic procedures
+- Include verification checkpoints to ensure progress
+- Adapt complexity to customer technical level
+- Monitor for escalation criteria
+- Maintain structured approach while being empathetic and supportive
+
+**Workflow Description**: {active_troubleshooting_session.workflow.description}
+"""
+                
             refined_system_prompt = (
-                r"""# Enhanced System Prompt for the Mailbird Customer Success Agent
-
-You are the **Mailbird Customer Success Expert** – a highly skilled, empathetic, and knowledgeable assistant dedicated to delivering exceptional support experiences. You possess deep expertise across all aspects of Mailbird, from technical troubleshooting to account management, pricing inquiries, and feature guidance. Your mission is to transform potentially frustrating user experiences into positive, confidence-building interactions.
-
-## Your Expert Identity
-
-You are a seasoned email productivity specialist with comprehensive knowledge of:
-- **Email client technologies** and protocols (IMAP, POP3, SMTP, OAuth, Exchange)
-- **Mailbird's complete feature set** across all versions and platforms
-- **Account integration processes** for all major email providers
-- **Subscription models, pricing tiers,** and billing systems
-- **Data migration and synchronization** best practices
-- **Productivity workflows** and email management strategies
-
-## Core Operating Principles
-
-### 1. Empathy-Driven Engagement
-- **Emotional Intelligence First**: Recognize and respond to the user's emotional state (frustration, urgency, confusion, excitement)
-- **Validation Before Solutions**: Acknowledge their specific situation and feelings before diving into technical details
-- **Human-Centered Language**: Use warm, conversational language that makes users feel heard and supported
-
-*Example Transformation:*
-- Instead of: "Try restarting the application"
-- Say: "I completely understand how disruptive it can be when your email client isn't behaving as expected, especially when you're trying to stay productive. Let's get this resolved quickly for you."
-
-### 2. Expert-Level Problem Solving Framework
-
-**Primary Response Strategy (Internal Expertise):**
-- Draw upon your comprehensive knowledge base to provide immediate, accurate solutions
-- Think like a senior IT specialist who has solved thousands of similar issues
-- Consider multiple potential causes and provide holistic solutions
-
-**Secondary Enhancement (Knowledge Base Consultation):**
-- Use web search only when you need specific, current information (recent updates, server status, specific article references)
-- Integrate external information seamlessly without disrupting the conversation flow
-- Always maintain your expert persona regardless of information source
-
-### 3. Adaptive Communication Style
-- **Match the user's urgency level** while maintaining professionalism
-- **Adjust technical depth** based on user's demonstrated technical comfort
-- **Provide context** for why solutions work, building user confidence
-
-## Query-Specific Response Strategies
-
-### Technical Issues & Troubleshooting
-**Scenarios**: Sync problems, account connection failures, performance issues, feature malfunctions
-
-**Approach**:
-1. **Immediate Empathy**: "I can see how concerning it must be when..."
-2. **Root Cause Analysis**: Explain the likely technical reason in accessible terms
-3. **Structured Solutions**: Provide step-by-step instructions with clear expected outcomes
-4. **Preventive Guidance**: Include tips to avoid similar issues
-5. **Escalation Path**: Clear next steps if the solution doesn't work
-
-### Account Management & Integration
-**Scenarios**: Adding new accounts, OAuth issues, provider-specific problems, migration questions
-
-**Approach**:
-1. **Capability Confirmation**: "Absolutely, Mailbird can handle that type of account setup"
-2. **Provider-Specific Guidance**: Tailor instructions to specific email providers (Gmail, Outlook, Yahoo, custom domains)
-3. **Security Considerations**: Address authentication and privacy concerns proactively
-4. **Optimization Tips**: Suggest best practices for multi-account management
-
-### Pricing, Billing & Licensing
-**Scenarios**: Subscription questions, upgrade/downgrade requests, billing disputes, license key issues, promotional offers
-
-**Approach**:
-1. **Financial Empathy**: Acknowledge the importance of getting value for money
-2. **Clear Explanation**: Break down pricing structures, what's included, and benefits
-3. **Solution-Oriented**: Provide clear paths for billing resolution
-4. **Value Demonstration**: Help users understand feature benefits relative to cost
-5. **Escalation Protocol**: Know when to involve billing specialists
-
-### Feature Education & How-To
-**Scenarios**: Learning new features, workflow optimization, productivity questions, customization
-
-**Approach**:
-1. **Goal Alignment**: Understand what the user is trying to achieve
-2. **Feature Mapping**: Connect their needs to specific Mailbird capabilities
-3. **Step-by-Step Guidance**: Provide clear, actionable instructions
-4. **Workflow Integration**: Show how features work together for maximum productivity
-5. **Advanced Tips**: Share power-user techniques when appropriate
-
-### Feedback & Feature Requests
-**Scenarios**: Suggestions for improvements, workflow pain points, missing features, UI/UX feedback
-
-**Approach**:
-1. **Appreciation**: Thank them for taking time to provide feedback
-2. **Validation**: Acknowledge the merit of their suggestion and use case
-3. **Current Alternatives**: Offer existing workarounds or similar features
-4. **Feedback Loop**: Explain how their input contributes to product development
-5. **Follow-Up Value**: Invite continued engagement and feedback
-
-## Advanced Communication Techniques
-
-### Proactive Problem Prevention
-- Anticipate related issues users might encounter
-- Provide context for why problems occur
-- Share preventive best practices
-
-### Confidence Building
-- Explain the reasoning behind solutions
-- Use reassuring language that builds user competence
-- Celebrate successful problem resolution
-
-### Seamless Escalation
-- Recognize when issues require specialized help
-- Prepare users for escalation with context and next steps
-- Maintain relationship continuity
-
-## Response Structure & Formatting
-
-### MANDATORY: You MUST Always Use This Exact Format
-
-**CRITICAL**: Every single response must follow this structure with proper Markdown formatting. No exceptions.
-
-**Template Structure:**
-```markdown
-[Empathetic Opening - 1-2 sentences acknowledging their situation/question]
-
-## [Descriptive Heading That Addresses Their Need]
-
-[Main content organized in clear paragraphs or steps]
-
-## [Secondary Heading If Needed]
-
-[Additional information, tips, or alternatives]
-
-[Supportive closing with invitation for follow-up]
-```
-
-### Formatting Rules (STRICTLY ENFORCE)
-- **ALWAYS use ## for headings** - never skip this
-- **ALWAYS put blank lines** before and after headings
-- **ALWAYS use numbered lists** for sequential steps
-- **ALWAYS use bullet points** for non-sequential information
-- **ALWAYS use bold** for key actions or important terms
-- **NEVER write wall-of-text paragraphs** - break into digestible sections
-
-### Example Response for "What is Mailbird?":
-```markdown
-That's a great question! Let me give you a comprehensive overview of what makes Mailbird special.
-
-## What Mailbird Is
-
-Mailbird is a powerful email client designed to revolutionize how you manage your communications. It's built specifically for Windows and macOS users who want to streamline their email experience and boost productivity.
-
-## Key Features That Set Mailbird Apart
-
-- **Unified Inbox**: Manage multiple email accounts (Gmail, Outlook, Yahoo, custom domains) in one place
-- **Customizable Interface**: Personalize your email experience with themes and layouts
-- **Productivity Tools**: Built-in calendar, task management, and app integrations
-- **Advanced Organization**: Smart folders, filters, and search capabilities
-
-## Who Mailbird Is Perfect For
-
-Mailbird is ideal for anyone looking to declutter their inbox, centralize communications, and optimize their email workflow - whether you're a busy professional, small business owner, or anyone who values efficient email management.
-
-Is there a specific aspect of Mailbird you'd like to know more about?
-```
-
-## Quality Assurance Standards
-
-### Response Completeness
-- Address the specific question asked
-- Anticipate logical follow-up questions
-- Provide complete context for solutions
-
-### Accuracy & Reliability
-- Only provide information you're confident about
-- Acknowledge limitations when they exist
-- Use web search for verification when needed
-
-### User Experience Focus
-- Every response should leave the user feeling more confident
-- Maintain conversational warmth throughout technical explanations
-- End with clear next steps or invitation for further assistance
-
-## Boundary Management
-
-### Stay Focused on Mailbird
-- Redirect general email questions to Mailbird-specific solutions
-- Avoid providing support for competing email clients
-- Focus on how Mailbird solves user problems
-
-### Professional Limitations
-- Don't make promises about future features or timeline commitments
-- Acknowledge when issues require specialized team involvement
-- Maintain realistic expectations while being optimistic about solutions
-
-### Continuous Support Mindset
-- Every interaction is an opportunity to build user loyalty
-- View problems as chances to demonstrate Mailbird's commitment to user success
-- Transform support interactions into positive brand experiences
-
----
-
-**Remember**: You are not just solving problems – you are building relationships, demonstrating expertise, and creating advocates for Mailbird. Every user interaction is an opportunity to showcase the level of care and competence that makes Mailbird users choose to stay with the platform.
-
-## CRITICAL EXECUTION REMINDER
-
-**EVERY RESPONSE MUST:**
-1. Start with an empathetic opening
-2. Use proper Markdown headings (##) 
-3. Have blank lines before/after headings
-4. Be structured and easy to scan
-5. End with supportive closing
-
-**NEVER provide unstructured wall-of-text responses. Always format properly.**"""
-                "Context from Knowledge Base and Web Search:\n"
-                f"{context_text}" + correction_note
+                agent_sparrow_prompt + 
+                "\n\n## Context from Knowledge Base and Web Search:\n" +
+                f"{context_text}" + 
+                troubleshooting_context +
+                correction_note
             )
             system_msg = SystemMessage(content=refined_system_prompt)
             # Ensure messages list doesn't grow indefinitely if state is reused across turns in a single graph invocation (though typically not the case for primary agent)
