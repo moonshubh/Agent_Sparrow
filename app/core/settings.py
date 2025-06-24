@@ -21,14 +21,27 @@ class Settings(BaseSettings):
     router_conf_threshold: float = Field(default=0.6, alias="ROUTER_CONF_THRESHOLD")
     use_enhanced_log_analysis: bool = Field(default=True, alias="USE_ENHANCED_LOG_ANALYSIS")
     enhanced_log_model: str = Field(default="gemini-2.5-pro", alias="ENHANCED_LOG_MODEL")
+    
+    # FeedMe Configuration
+    feedme_enabled: bool = Field(default=True, alias="FEEDME_ENABLED")
+    feedme_max_file_size_mb: int = Field(default=10, alias="FEEDME_MAX_FILE_SIZE_MB")
+    feedme_max_examples_per_conversation: int = Field(default=20, alias="FEEDME_MAX_EXAMPLES_PER_CONVERSATION")
+    feedme_embedding_batch_size: int = Field(default=10, alias="FEEDME_EMBEDDING_BATCH_SIZE")
+    feedme_similarity_threshold: float = Field(default=0.7, alias="FEEDME_SIMILARITY_THRESHOLD")
+    feedme_max_retrieval_results: int = Field(default=3, alias="FEEDME_MAX_RETRIEVAL_RESULTS")
 
     class Config:
         case_sensitive = False
         env_file = ENV_PATH
+        extra = "ignore"
 
 @lru_cache()
 def get_settings() -> Settings:
-    """Return a cached Settings instance."""
+    """
+    Return a singleton instance of the application settings.
+    
+    Uses an internal cache to ensure the same Settings instance is returned on each call.
+    """
     return Settings()
 
 # Instantiate settings at import time for convenience
