@@ -1,10 +1,12 @@
 from __future__ import annotations
-import os
+
 from pathlib import Path
 from typing import List, TYPE_CHECKING, Union  # Added Union for flexible message types
 from langchain_core.messages import BaseMessage, HumanMessage # Added HumanMessage for clarity
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_google_genai import ChatGoogleGenerativeAI
+
+from app.core.settings import settings
 
 if TYPE_CHECKING:
     from app.agents_v2.orchestration.state import GraphState # Import Pydantic GraphState
@@ -13,7 +15,7 @@ from app.agents_v2.router.schemas import RouteQueryWithConf
 import logging
 
 # Environment variable for the API key
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
+GEMINI_API_KEY = settings.gemini_api_key
 
 # Define the path to the prompt file
 PROMPT_FILE_PATH = Path(__file__).parent / "prompts" / "router_prompt.md"
@@ -117,7 +119,7 @@ def query_router(state: 'GraphState' | dict) -> Union[dict, str]:
         logger.info("Router decision: dest=%s confidence=%.2f", destination, confidence)
 
         # Apply threshold fallback
-        CONF_THRESHOLD = float(os.getenv("ROUTER_CONF_THRESHOLD", "0.6"))
+        CONF_THRESHOLD = settings.router_conf_threshold
         if confidence < CONF_THRESHOLD:
             logger.warning(
                 "Low confidence (%.2f < %.2f). Falling back to primary_agent", confidence, CONF_THRESHOLD

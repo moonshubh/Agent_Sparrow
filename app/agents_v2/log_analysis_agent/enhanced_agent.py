@@ -9,6 +9,8 @@ import time
 from typing import Dict, Any, List
 from dotenv import load_dotenv
 from langchain_google_genai import ChatGoogleGenerativeAI
+
+from app.core.settings import settings
 from uuid import uuid4
 from datetime import datetime
 
@@ -31,7 +33,7 @@ from .optimized_analyzer import perform_optimized_log_analysis
 load_dotenv()
 
 # Ensure the GEMINI_API_KEY is set
-if "GEMINI_API_KEY" not in os.environ:
+if not settings.gemini_api_key:
     raise ValueError("GEMINI_API_KEY environment variable not set.")
 
 
@@ -42,13 +44,13 @@ class EnhancedLogAnalysisAgent:
         self.primary_llm = ChatGoogleGenerativeAI(
             model="gemini-2.5-pro",  # Use most advanced model
             temperature=0.1,
-            google_api_key=os.getenv("GEMINI_API_KEY"),
+            google_api_key=settings.gemini_api_key,
         )
         
         self.fallback_llm = ChatGoogleGenerativeAI(
             model="gemini-1.5-pro-latest",
             temperature=0.2,
-            google_api_key=os.getenv("GEMINI_API_KEY"),
+            google_api_key=settings.gemini_api_key,
         )
         
         # Performance configuration

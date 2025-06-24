@@ -23,6 +23,8 @@ from langchain_google_genai import embeddings as gen_embeddings
 from typing import List, Optional, Dict, Any # Removed Tuple
 from pydantic import BaseModel # Added Pydantic BaseModel
 
+from app.core.settings import settings
+
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -43,7 +45,7 @@ DB_PORT = os.getenv("DB_PORT", "5432")
 DB_USER = os.getenv("DB_USER")
 DB_PASSWORD = os.getenv("DB_PASSWORD")
 DB_NAME = os.getenv("DB_NAME")
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+GEMINI_API_KEY = settings.gemini_api_key
 
 EMBEDDING_MODEL_NAME = "models/embedding-001" # Google's embedding-001 has 768 dimensions
 
