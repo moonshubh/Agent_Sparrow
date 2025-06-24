@@ -287,13 +287,15 @@ Remember: You're not just solving email problems – you're building relationshi
     @classmethod
     def build_system_prompt(cls, config: Optional[PromptConfig] = None) -> str:
         """
-        Build the complete system prompt based on configuration
+        Assembles the full system prompt for Agent Sparrow based on the specified configuration.
         
-        Args:
-            config: PromptConfig object specifying which components to include
-            
+        Includes or omits reasoning, emotional intelligence, technical expertise, and quality checklist sections according to the provided configuration. Always includes the base identity and response templates. Appends a debug mode notice if enabled.
+        
+        Parameters:
+            config (Optional[PromptConfig]): Configuration specifying which prompt components to include.
+        
         Returns:
-            Complete system prompt string ready for LLM consumption
+            str: The complete system prompt string for use with a language model.
         """
         if config is None:
             config = PromptConfig()
@@ -324,7 +326,15 @@ Remember: You're not just solving email problems – you're building relationshi
     
     @classmethod
     def get_component(cls, component: PromptComponent) -> str:
-        """Get a specific prompt component by enum value"""
+        """
+        Return the string content of a specified prompt component.
+        
+        Parameters:
+        	component (PromptComponent): The enum value identifying the desired prompt section.
+        
+        Returns:
+        	str: The text of the selected prompt component.
+        """
         component_map = {
             PromptComponent.BASE_IDENTITY: cls.BASE_IDENTITY,
             PromptComponent.REASONING_FRAMEWORK: cls.REASONING_FRAMEWORK,
@@ -337,7 +347,15 @@ Remember: You're not just solving email problems – you're building relationshi
     
     @classmethod
     def estimate_token_count(cls, config: Optional[PromptConfig] = None) -> int:
-        """Estimate token count for the complete prompt (rough approximation)"""
+        """
+        Estimate the approximate token count of the assembled system prompt based on the provided configuration.
+        
+        Parameters:
+        	config (Optional[PromptConfig]): Configuration specifying which prompt components to include.
+        
+        Returns:
+        	int: Estimated number of tokens in the constructed prompt, using an average of 4 characters per token.
+        """
         prompt = cls.build_system_prompt(config)
         # Rough estimation: 4 characters per token on average
         return len(prompt) // 4

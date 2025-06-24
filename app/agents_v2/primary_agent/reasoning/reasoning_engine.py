@@ -52,10 +52,9 @@ class ReasoningEngine:
     
     def __init__(self, config: Optional[ReasoningConfig] = None):
         """
-        Initialize the reasoning engine
+        Initialize the ReasoningEngine with optional configuration.
         
-        Args:
-            config: Optional reasoning configuration
+        If no configuration is provided, a default ReasoningConfig is used. Instantiates the problem-solving and tool intelligence components required for the reasoning process.
         """
         self.config = config or ReasoningConfig()
         self.problem_solver = ProblemSolvingFramework(self.config)
@@ -68,15 +67,17 @@ class ReasoningEngine:
         session_id: str = "default"
     ) -> ReasoningState:
         """
-        Main reasoning pipeline for analyzing customer queries
+        Executes the full multi-phase reasoning pipeline to analyze a customer query and generate a comprehensive reasoning state.
         
-        Args:
-            query: Customer query text
-            context: Optional context information
-            session_id: Session identifier for tracking
-            
+        This method orchestrates advanced cognitive processes including query analysis, context recognition, solution mapping, tool usage assessment, response strategy development, and quality evaluation. It integrates emotional and contextual understanding, problem categorization, and quality control, returning a detailed reasoning state with confidence scores, recommendations, and escalation flags if needed.
+        
+        Parameters:
+            query (str): The customer query text to be analyzed.
+            context (Optional[Dict[str, Any]]): Optional contextual information relevant to the query.
+            session_id (str): Identifier for the reasoning session.
+        
         Returns:
-            Complete reasoning state with analysis and recommendations
+            ReasoningState: The complete reasoning state containing analysis results, recommendations, confidence metrics, and escalation indicators.
         """
         with tracer.start_as_current_span("reasoning_engine.reason_about_query") as span:
             start_time = time.time()
@@ -142,7 +143,11 @@ class ReasoningEngine:
         reasoning_state: ReasoningState, 
         context: Optional[Dict[str, Any]]
     ) -> None:
-        """Phase 1: Comprehensive query analysis"""
+        """
+        Performs comprehensive analysis of the customer query, extracting emotional state, problem category, urgency, complexity, key entities, inferred intent, and contextual clues.
+        
+        Updates the reasoning state with a detailed query analysis and records a reasoning step summarizing the findings.
+        """
         with tracer.start_as_current_span("reasoning_engine.analyze_query"):
             
             # Detect emotional state
@@ -195,7 +200,11 @@ class ReasoningEngine:
         reasoning_state: ReasoningState, 
         context: Optional[Dict[str, Any]]
     ) -> None:
-        """Phase 2: Context recognition and enrichment"""
+        """
+        Analyzes and enriches the reasoning state with contextual insights and confidence factors based on provided context and query analysis.
+        
+        This phase identifies relevant situational factors such as previous conversation history, user profile, system state, emotional urgency, problem category, and entity complexity. It computes an overall context confidence score and records a reasoning step summarizing the context recognition process.
+        """
         with tracer.start_as_current_span("reasoning_engine.recognize_context"):
             
             context_insights = []
@@ -246,7 +255,11 @@ class ReasoningEngine:
             reasoning_state.add_reasoning_step(step)
     
     async def _map_solutions(self, reasoning_state: ReasoningState) -> None:
-        """Phase 3: Solution mapping and candidate generation"""
+        """
+        Generates and selects solution candidates for the analyzed query using the problem-solving framework.
+        
+        This phase creates potential solutions based on the query analysis attributes, selects the most confident solution if available, and records the process as a reasoning step in the reasoning state.
+        """
         with tracer.start_as_current_span("reasoning_engine.map_solutions"):
             
             if not reasoning_state.query_analysis:
@@ -285,7 +298,11 @@ class ReasoningEngine:
             reasoning_state.add_reasoning_step(step)
     
     async def _assess_tool_needs(self, reasoning_state: ReasoningState) -> None:
-        """Phase 4: Intelligent tool assessment"""
+        """
+        Evaluates whether external tools are needed to address the query and records the tool usage decision in the reasoning state.
+        
+        This phase uses tool intelligence to analyze the query and solution candidates, determines the necessity and type of tool usage, and documents the decision along with confidence, evidence, and considered alternatives in the reasoning process.
+        """
         with tracer.start_as_current_span("reasoning_engine.assess_tool_needs"):
             
             if not reasoning_state.query_analysis:
@@ -311,7 +328,11 @@ class ReasoningEngine:
             reasoning_state.add_reasoning_step(step)
     
     async def _develop_response_strategy(self, reasoning_state: ReasoningState) -> None:
-        """Phase 5: Response strategy development"""
+        """
+        Constructs a comprehensive response strategy by integrating emotional state, urgency, complexity, tool decisions, and solution attributes into actionable guidance for customer interaction.
+        
+        The strategy adapts tone, structure, and content to the customer's emotional and situational context, and is recorded in the reasoning state for downstream use.
+        """
         with tracer.start_as_current_span("reasoning_engine.develop_response_strategy"):
             
             strategy_elements = []
@@ -367,7 +388,11 @@ class ReasoningEngine:
             reasoning_state.add_reasoning_step(step)
     
     async def _assess_quality(self, reasoning_state: ReasoningState) -> None:
-        """Phase 6: Quality assessment and validation"""
+        """
+        Evaluates the quality of the reasoning process across multiple dimensions and updates the reasoning state with assessment results.
+        
+        Assesses reasoning clarity, solution completeness, emotional appropriateness, technical accuracy, and response structure, computes an overall quality score, and generates improvement suggestions and quality issues if thresholds are not met. Flags the reasoning state for human review if the overall quality score falls below the configured threshold.
+        """
         with tracer.start_as_current_span("reasoning_engine.assess_quality"):
             
             # Assess different quality dimensions
@@ -420,7 +445,9 @@ class ReasoningEngine:
                 reasoning_state.escalation_reasons.append(f"Quality score {overall_quality:.2f} below threshold {self.config.quality_score_threshold}")
     
     async def _finalize_reasoning(self, reasoning_state: ReasoningState, start_time: float) -> None:
-        """Finalize reasoning process with summary and metadata"""
+        """
+        Finalizes the reasoning process by updating the reasoning state with processing time, overall confidence, summary, transparency explanation, and escalation flags if necessary.
+        """
         
         # Calculate processing time
         reasoning_state.total_processing_time = time.time() - start_time
@@ -445,7 +472,12 @@ class ReasoningEngine:
     # Helper methods for analysis
     
     def _categorize_problem(self, query: str) -> Tuple[ProblemCategory, float]:
-        """Categorize the problem type from query text"""
+        """
+        Categorize the type of customer problem described in the query and assign a confidence score.
+        
+        Returns:
+            A tuple containing the identified problem category and a confidence score between 0 and 1.
+        """
         query_lower = query.lower()
         
         # Technical issue indicators
@@ -472,7 +504,16 @@ class ReasoningEngine:
         return ProblemCategory.GENERAL_SUPPORT, 0.5
     
     def _assess_urgency(self, query: str, emotion: EmotionalState) -> int:
-        """Assess urgency level from 1-5"""
+        """
+        Determines the urgency level of a query on a scale from 1 to 5 based on emotional state and presence of urgency-related keywords.
+        
+        Parameters:
+        	query (str): The customer query text to analyze.
+        	emotion (EmotionalState): The detected emotional state associated with the query.
+        
+        Returns:
+        	int: An integer urgency score from 1 (lowest) to 5 (highest).
+        """
         urgency_score = 1
         
         # Emotional urgency indicators
@@ -489,7 +530,14 @@ class ReasoningEngine:
         return min(urgency_score, 5)
     
     def _assess_complexity(self, query: str) -> float:
-        """Assess complexity from 0-1"""
+        """
+        Calculates a complexity score for a query on a scale from 0 to 1.
+        
+        The score is based on query length, presence of technical terms, and indicators of multiple problems. Higher scores indicate greater complexity.
+         
+        Returns:
+            float: A value between 0 and 1 representing the assessed complexity of the query.
+        """
         complexity_factors = []
         
         # Length complexity
@@ -513,7 +561,12 @@ class ReasoningEngine:
         return min(sum(complexity_factors), 1.0)
     
     def _extract_entities(self, query: str) -> List[str]:
-        """Extract key entities from query"""
+        """
+        Extracts key entities such as email providers, Mailbird features, and error codes from the query string.
+        
+        Returns:
+            entities (List[str]): A list of extracted entities in the format 'email_provider:<name>', 'feature:<name>', or 'error:<pattern>'.
+        """
         entities = []
         
         # Email providers
@@ -536,7 +589,16 @@ class ReasoningEngine:
         return entities
     
     def _infer_intent(self, query: str, category: ProblemCategory) -> str:
-        """Infer customer intent"""
+        """
+        Infers the customer's intent based on the query and identified problem category.
+        
+        Parameters:
+            query (str): The customer's query text.
+            category (ProblemCategory): The categorized type of problem detected in the query.
+        
+        Returns:
+            str: A concise description of the inferred customer intent.
+        """
         if category == ProblemCategory.TECHNICAL_ISSUE:
             return "Customer wants to resolve a technical problem"
         elif category == ProblemCategory.ACCOUNT_SETUP:
@@ -549,7 +611,14 @@ class ReasoningEngine:
             return "Customer seeks general support and assistance"
     
     def _extract_context_clues(self, query: str, context: Optional[Dict[str, Any]]) -> List[str]:
-        """Extract contextual clues from query and context"""
+        """
+        Extracts contextual clues from the query text and optional context metadata.
+        
+        Identifies temporal and frequency references within the query, and adds context clues based on user type and account age if provided in the context dictionary.
+        
+        Returns:
+            List of extracted context clue strings.
+        """
         clues = []
         
         # Temporal clues
@@ -574,7 +643,15 @@ class ReasoningEngine:
         return clues
     
     def _assess_reasoning_clarity(self, reasoning_state: ReasoningState) -> float:
-        """Assess clarity of reasoning process"""
+        """
+        Calculates a clarity score for the reasoning process based on phase coverage, reasoning depth, and supporting evidence.
+        
+        Parameters:
+        	reasoning_state (ReasoningState): The current reasoning state containing reasoning steps and evidence.
+        
+        Returns:
+        	float: A normalized clarity score between 0.0 and 1.0 reflecting the thoroughness and transparency of the reasoning process.
+        """
         if not reasoning_state.reasoning_steps:
             return 0.3
         
@@ -599,7 +676,12 @@ class ReasoningEngine:
         return min(clarity_score, 1.0)
     
     def _assess_solution_completeness(self, reasoning_state: ReasoningState) -> float:
-        """Assess completeness of solution"""
+        """
+        Calculates a completeness score for the selected solution based on detail, fallback options, success indicators, time estimate, and risk factors.
+        
+        Returns:
+            float: A score between 0.0 and 1.0 indicating the thoroughness of the proposed solution.
+        """
         if not reasoning_state.selected_solution:
             return 0.2
         
@@ -629,7 +711,12 @@ class ReasoningEngine:
         return min(completeness_score, 1.0)
     
     def _assess_emotional_appropriateness(self, reasoning_state: ReasoningState) -> float:
-        """Assess emotional appropriateness of response strategy"""
+        """
+        Evaluates how well the response strategy aligns with the detected emotional state of the query.
+        
+        Returns:
+            float: A score between 0 and 1 indicating the degree of emotional appropriateness, with higher values reflecting better alignment between the response strategy and the user's emotional state.
+        """
         if not reasoning_state.query_analysis or not reasoning_state.response_strategy:
             return 0.5
         
@@ -649,7 +736,12 @@ class ReasoningEngine:
             return 0.6  # Neutral emotional alignment
     
     def _assess_technical_accuracy(self, reasoning_state: ReasoningState) -> float:
-        """Assess technical accuracy (placeholder - would need domain knowledge)"""
+        """
+        Estimates the technical accuracy of the reasoning process based on the presence and detail of technical reasoning.
+        
+        Returns:
+            float: A confidence score representing the assessed technical accuracy, with higher values for detailed technical solutions to technical issues.
+        """
         # This would typically involve checking against known technical facts
         # For now, return high confidence if technical reasoning is present
         
@@ -662,7 +754,12 @@ class ReasoningEngine:
         return 0.7  # Default for non-technical queries
     
     def _assess_response_structure(self, reasoning_state: ReasoningState) -> float:
-        """Assess response structure quality"""
+        """
+        Evaluates the structural quality of the response by scoring the presence and completeness of key components in the reasoning state.
+        
+        Returns:
+            float: A score between 0.0 and 1.0 reflecting the overall response structure quality.
+        """
         structure_score = 0.0
         
         # Check if response strategy exists
@@ -684,7 +781,12 @@ class ReasoningEngine:
         return min(structure_score, 1.0)
     
     def _generate_reasoning_summary(self, reasoning_state: ReasoningState) -> str:
-        """Generate concise reasoning summary"""
+        """
+        Produces a concise summary string highlighting key reasoning phases, including query analysis, solution generation, tool decision, and quality assessment, based on the provided reasoning state.
+        
+        Returns:
+            str: A summary of the main reasoning steps and outcomes.
+        """
         summary_parts = []
         
         if reasoning_state.query_analysis:
@@ -704,7 +806,12 @@ class ReasoningEngine:
         return " | ".join(summary_parts)
     
     def _generate_transparency_explanation(self, reasoning_state: ReasoningState) -> str:
-        """Generate user-friendly explanation of reasoning process"""
+        """
+        Generate a user-friendly explanation of the reasoning process based on the current reasoning state.
+        
+        Returns:
+            str: A concise, natural language summary describing detected emotion, problem category, urgency, tool usage decisions, and solution confidence, or an empty string if transparency is disabled.
+        """
         if not self.config.enable_reasoning_transparency:
             return ""
         

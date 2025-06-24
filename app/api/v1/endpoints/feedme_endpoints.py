@@ -46,7 +46,15 @@ router = APIRouter()
 # Database helper functions
 
 async def get_conversation_by_id(conversation_id: int) -> Optional[FeedMeConversation]:
-    """Get conversation by ID from database"""
+    """
+    Retrieve a conversation record from the database by its unique ID.
+    
+    Parameters:
+        conversation_id (int): The unique identifier of the conversation to retrieve.
+    
+    Returns:
+        Optional[FeedMeConversation]: The conversation object if found, otherwise None.
+    """
     conn = None
     try:
         conn = get_db_connection()
@@ -67,7 +75,18 @@ async def get_conversation_by_id(conversation_id: int) -> Optional[FeedMeConvers
 
 
 async def create_conversation_in_db(conversation_data: ConversationCreate) -> FeedMeConversation:
-    """Create new conversation in database"""
+    """
+    Inserts a new conversation record into the database using the provided conversation data.
+    
+    Parameters:
+    	conversation_data (ConversationCreate): The data required to create a new conversation, including title, original filename, transcript content, metadata, and uploader.
+    
+    Returns:
+    	FeedMeConversation: The newly created conversation record.
+    
+    Raises:
+    	HTTPException: If the database operation fails, an HTTP 500 error is raised with details.
+    """
     conn = None
     try:
         conn = get_db_connection()
@@ -98,7 +117,21 @@ async def create_conversation_in_db(conversation_data: ConversationCreate) -> Fe
 
 
 async def update_conversation_in_db(conversation_id: int, update_data: ConversationUpdate) -> Optional[FeedMeConversation]:
-    """Update conversation in database"""
+    """
+    Updates specified fields of a conversation record in the database and returns the updated conversation.
+    
+    If no fields are provided for update, retrieves and returns the existing conversation. Updates the `updated_at` timestamp on modification.
+    
+    Parameters:
+        conversation_id (int): The ID of the conversation to update.
+        update_data (ConversationUpdate): Fields to update in the conversation.
+    
+    Returns:
+        FeedMeConversation or None: The updated conversation object if found, otherwise None.
+    
+    Raises:
+        HTTPException: If a database error occurs during the update.
+    """
     conn = None
     try:
         conn = get_db_connection()
@@ -173,8 +206,15 @@ async def upload_transcript(
     transcript_content: Optional[str] = Form(None, description="Transcript content as text")
 ):
     """
-    Upload a customer support transcript for processing.
-    Can accept either a file upload or direct text content.
+    Uploads a customer support transcript for ingestion, accepting either a file upload or direct text input.
+    
+    Validates input exclusivity, file size, UTF-8 encoding, and minimum content length. Creates a new conversation record with the provided transcript and metadata. If `auto_process` is enabled, schedules the conversation for background processing by updating its status to pending.
+    
+    Returns:
+        FeedMeConversation: The created conversation record.
+    
+    Raises:
+        HTTPException: If the service is disabled, input is invalid, file is too large, encoding fails, or database operations fail.
     """
     
     if not settings.feedme_enabled:
@@ -253,7 +293,21 @@ async def list_conversations(
     status: Optional[ProcessingStatus] = Query(None, description="Filter by processing status"),
     uploaded_by: Optional[str] = Query(None, description="Filter by uploader")
 ):
-    """List all conversations with optional filtering and pagination"""
+    """
+    Retrieve a paginated list of conversations with optional filtering by processing status and uploader.
+    
+    Parameters:
+        page (int): The page number to retrieve (1-based).
+        page_size (int): The number of conversations per page.
+        status (Optional[ProcessingStatus]): Filter conversations by their processing status.
+        uploaded_by (Optional[str]): Filter conversations by the uploader's identifier.
+    
+    Returns:
+        ConversationListResponse: A paginated response containing the list of conversations, total count, current page, page size, and a flag indicating if more pages are available.
+    
+    Raises:
+        HTTPException: If the FeedMe service is disabled (503) or if a database error occurs (500).
+    """
     
     if not settings.feedme_enabled:
         raise HTTPException(status_code=503, detail="FeedMe service is currently disabled")
@@ -316,7 +370,15 @@ async def list_conversations(
 
 @router.get("/conversations/{conversation_id}", response_model=FeedMeConversation, tags=["FeedMe"])
 async def get_conversation(conversation_id: int):
-    """Get a specific conversation by ID"""
+    """
+    Retrieve a conversation by its unique ID.
+    
+    Raises:
+        HTTPException: If the FeedMe service is disabled (503) or the conversation is not found (404).
+    
+    Returns:
+        FeedMeConversation: The conversation record matching the provided ID.
+    """
     
     if not settings.feedme_enabled:
         raise HTTPException(status_code=503, detail="FeedMe service is currently disabled")
@@ -330,7 +392,15 @@ async def get_conversation(conversation_id: int):
 
 @router.put("/conversations/{conversation_id}", response_model=FeedMeConversation, tags=["FeedMe"])
 async def update_conversation(conversation_id: int, update_data: ConversationUpdate):
-    """Update a conversation"""
+    """
+    Updates a conversation record with the specified fields.
+    
+    Raises:
+        HTTPException: If the FeedMe service is disabled (503), the conversation is not found (404), or the update fails (500).
+    
+    Returns:
+        FeedMeConversation: The updated conversation object.
+    """
     
     if not settings.feedme_enabled:
         raise HTTPException(status_code=503, detail="FeedMe service is currently disabled")
@@ -350,7 +420,15 @@ async def update_conversation(conversation_id: int, update_data: ConversationUpd
 
 @router.delete("/conversations/{conversation_id}", tags=["FeedMe"])
 async def delete_conversation(conversation_id: int):
-    """Delete a conversation and all its examples"""
+    """
+    Deletes a conversation and all associated examples from the database.
+    
+    Raises:
+        HTTPException: If the FeedMe service is disabled (503), the conversation does not exist (404), or deletion fails (500).
+    
+    Returns:
+        dict: A message confirming successful deletion.
+    """
     
     if not settings.feedme_enabled:
         raise HTTPException(status_code=503, detail="FeedMe service is currently disabled")
@@ -391,7 +469,21 @@ async def list_conversation_examples(
     page_size: int = Query(20, ge=1, le=100, description="Number of items per page"),
     is_active: Optional[bool] = Query(None, description="Filter by active status")
 ):
-    """List examples for a specific conversation"""
+    """
+    Retrieve a paginated list of examples associated with a specific conversation.
+    
+    Parameters:
+        conversation_id (int): The ID of the conversation to retrieve examples for.
+        page (int): The page number for pagination (default is 1).
+        page_size (int): The number of examples per page (default is 20, maximum is 100).
+        is_active (Optional[bool]): If provided, filters examples by their active status.
+    
+    Returns:
+        ExampleListResponse: A paginated response containing the list of examples, total count, current page, page size, and whether more pages are available.
+    
+    Raises:
+        HTTPException: Returns 404 if the conversation does not exist, 503 if the FeedMe service is disabled, or 500 on database errors.
+    """
     
     if not settings.feedme_enabled:
         raise HTTPException(status_code=503, detail="FeedMe service is currently disabled")
@@ -455,7 +547,15 @@ async def list_conversation_examples(
 
 @router.get("/conversations/{conversation_id}/status", response_model=ProcessingStatusResponse, tags=["FeedMe"])
 async def get_processing_status(conversation_id: int):
-    """Get processing status for a conversation"""
+    """
+    Retrieve the processing status and progress information for a specific conversation.
+    
+    Raises:
+        HTTPException: If the FeedMe service is disabled (503) or the conversation is not found (404).
+    
+    Returns:
+        ProcessingStatusResponse: An object containing the conversation's processing status, progress percentage, error message, number of examples extracted, and estimated completion time (if available).
+    """
     
     if not settings.feedme_enabled:
         raise HTTPException(status_code=503, detail="FeedMe service is currently disabled")
@@ -484,7 +584,17 @@ async def get_processing_status(conversation_id: int):
 
 @router.post("/search", response_model=SearchResponse, tags=["FeedMe"])
 async def search_examples(search_query: SearchQuery):
-    """Search FeedMe examples using similarity search"""
+    """
+    Performs a similarity search on FeedMe examples based on the provided query.
+    
+    Currently returns a placeholder response with no results. Raises HTTP 503 if the FeedMe service is disabled and HTTP 500 on internal errors.
+    
+    Parameters:
+        search_query (SearchQuery): The search query containing the text to search for.
+    
+    Returns:
+        SearchResponse: The search results, including the original query, an empty results list, total found count, and search time in milliseconds.
+    """
     
     if not settings.feedme_enabled:
         raise HTTPException(status_code=503, detail="FeedMe service is currently disabled")
@@ -511,7 +621,15 @@ async def search_examples(search_query: SearchQuery):
 
 @router.get("/analytics", response_model=AnalyticsResponse, tags=["FeedMe"])
 async def get_analytics():
-    """Get comprehensive FeedMe analytics and statistics"""
+    """
+    Retrieve aggregated analytics and statistics for FeedMe conversations and examples.
+    
+    Returns:
+        AnalyticsResponse: An object containing conversation statistics, top tags, issue type distribution, quality metrics, and the last updated timestamp.
+    
+    Raises:
+        HTTPException: If the FeedMe service is disabled (503) or analytics generation fails (500).
+    """
     
     if not settings.feedme_enabled:
         raise HTTPException(status_code=503, detail="FeedMe service is currently disabled")
@@ -623,7 +741,15 @@ async def get_analytics():
 
 @router.post("/conversations/{conversation_id}/reprocess", tags=["FeedMe"])
 async def reprocess_conversation(conversation_id: int, background_tasks: BackgroundTasks):
-    """Reprocess a conversation to extract examples"""
+    """
+    Schedules reprocessing of a conversation to extract examples.
+    
+    Raises:
+    	HTTPException: If the FeedMe service is disabled (503), the conversation is not found (404), or scheduling fails (500).
+    
+    Returns:
+    	Dict[str, str]: Confirmation message indicating that reprocessing has been scheduled.
+    """
     
     if not settings.feedme_enabled:
         raise HTTPException(status_code=503, detail="FeedMe service is currently disabled")

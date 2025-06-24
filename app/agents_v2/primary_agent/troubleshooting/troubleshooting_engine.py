@@ -57,10 +57,7 @@ class TroubleshootingEngine:
     
     def __init__(self, config: Optional[TroubleshootingConfig] = None):
         """
-        Initialize the troubleshooting engine
-        
-        Args:
-            config: Optional troubleshooting configuration
+        Initializes the TroubleshootingEngine with optional configuration and sets up all core subsystems for managing troubleshooting workflows.
         """
         self.config = config or TroubleshootingConfig()
         
@@ -89,17 +86,12 @@ class TroubleshootingEngine:
         session_id: Optional[str] = None
     ) -> TroubleshootingState:
         """
-        Initiate structured troubleshooting workflow
+        Initiates a structured troubleshooting workflow based on the customer's query, problem category, emotional state, and optional reasoning insights.
         
-        Args:
-            query_text: Customer's problem description
-            problem_category: Categorized problem type
-            customer_emotion: Customer's emotional state
-            reasoning_state: Optional reasoning insights from Agent Sparrow
-            session_id: Optional session identifier
-            
+        Analyzes the provided information to create a troubleshooting state, integrates reasoning insights if available, retrieves relevant workflows, and selects a recommended workflow tailored to the situation.
+        
         Returns:
-            Complete troubleshooting state with recommended workflow
+            TroubleshootingState: The populated troubleshooting state with available workflows and a recommended workflow.
         """
         with tracer.start_as_current_span("troubleshooting_engine.initiate") as span:
             span.set_attribute("problem_category", problem_category.value)
@@ -144,15 +136,12 @@ class TroubleshootingEngine:
         session_id: Optional[str] = None
     ) -> TroubleshootingSession:
         """
-        Start active troubleshooting session with selected workflow
+        Begins an active troubleshooting session using the provided troubleshooting state and workflow.
         
-        Args:
-            troubleshooting_state: Current troubleshooting state
-            workflow: Optional specific workflow to use
-            session_id: Optional session identifier
-            
+        If no workflow is specified, uses the recommended workflow from the troubleshooting state. Adapts the workflow based on customer emotion and technical level if enabled in the configuration, initializes the first diagnostic step, and tracks the session as active.
+        
         Returns:
-            Active troubleshooting session
+            TroubleshootingSession: The initialized and active troubleshooting session.
         """
         with tracer.start_as_current_span("troubleshooting_engine.start_session") as span:
             
@@ -205,15 +194,18 @@ class TroubleshootingEngine:
         customer_feedback: Optional[str] = None
     ) -> Tuple[bool, Optional[DiagnosticStep]]:
         """
-        Execute current diagnostic step and determine next action
+        Executes the current diagnostic step in a troubleshooting session, evaluates its outcome, and determines the next step.
         
-        Args:
-            session: Active troubleshooting session
-            step_result: Results from executing the diagnostic step
-            customer_feedback: Optional customer feedback
-            
+        Parameters:
+            session (TroubleshootingSession): The active troubleshooting session containing the current diagnostic step.
+            step_result (Dict[str, Any]): The results produced from executing the diagnostic step.
+            customer_feedback (Optional[str]): Optional feedback provided by the customer for this step.
+        
         Returns:
-            Tuple of (step_successful, next_step)
+            Tuple[bool, Optional[DiagnosticStep]]: A tuple where the first element indicates if the step was successful, and the second is the next diagnostic step to execute, or None if escalation is triggered or no further steps remain.
+        
+        Raises:
+            ValueError: If there is no current diagnostic step to execute.
         """
         with tracer.start_as_current_span("troubleshooting_engine.execute_step") as span:
             
@@ -280,15 +272,12 @@ class TroubleshootingEngine:
         resolution_summary: str = ""
     ) -> TroubleshootingOutcome:
         """
-        Complete troubleshooting session with final outcome
+        Finalize a troubleshooting session and determine its outcome based on resolution status, escalation, and completed steps.
         
-        Args:
-            session: Active troubleshooting session
-            resolution_achieved: Whether the problem was resolved
-            resolution_summary: Summary of resolution or current state
-            
+        If verification checkpoints are enabled and the session is marked as resolved, a final verification is performed, which may update the outcome to require follow-up if verification does not pass. Generates follow-up actions, removes the session from active tracking, and records session data for workflow learning if enabled.
+        
         Returns:
-            Final troubleshooting outcome
+            TroubleshootingOutcome: The final outcome of the troubleshooting session.
         """
         with tracer.start_as_current_span("troubleshooting_engine.complete_session") as span:
             
@@ -343,7 +332,12 @@ class TroubleshootingEngine:
     # Helper methods
     
     def _extract_reasoning_insights(self, reasoning_state: ReasoningState) -> Dict[str, Any]:
-        """Extract relevant insights from reasoning state"""
+        """
+        Extracts key diagnostic and contextual insights from a ReasoningState object.
+        
+        Returns:
+            insights (dict): Dictionary containing complexity score, urgency level, key entities, inferred intent, tool decision, knowledge gaps, solution confidence, estimated time, and overall confidence, if available.
+        """
         insights = {}
         
         if reasoning_state.query_analysis:
@@ -369,7 +363,18 @@ class TroubleshootingEngine:
         troubleshooting_state: TroubleshootingState,
         available_workflows: List[TroubleshootingWorkflow]
     ) -> Optional[TroubleshootingWorkflow]:
-        """Select the most appropriate workflow for the current situation"""
+        """
+        Selects the most suitable troubleshooting workflow from a list based on customer emotional state, workflow success rate, and reasoning insights.
+        
+        Considers factors such as workflow success rate, estimated time, difficulty level, customer urgency or confusion, and problem complexity to compute a score for each workflow. Returns the workflow with the highest score, or None if no workflows are available.
+        
+        Parameters:
+            troubleshooting_state (TroubleshootingState): The current troubleshooting context, including customer emotion and reasoning insights.
+            available_workflows (List[TroubleshootingWorkflow]): Candidate workflows to evaluate.
+        
+        Returns:
+            Optional[TroubleshootingWorkflow]: The workflow with the highest suitability score, or None if no workflows are provided.
+        """
         
         if not available_workflows:
             return None
@@ -418,7 +423,14 @@ class TroubleshootingEngine:
         return selected_workflow
     
     def _assess_customer_technical_level(self, troubleshooting_state: TroubleshootingState) -> int:
-        """Assess customer technical level from 1-5 based on available information"""
+        """
+        Estimate the customer's technical proficiency level on a scale from 1 to 5 based on their query content and emotional state.
+        
+        The assessment considers the presence of technical terms, query length, and emotional indicators to infer the customer's familiarity with technical concepts.
+        
+        Returns:
+            int: An integer from 1 (least technical) to 5 (most technical) representing the estimated technical level.
+        """
         
         base_level = 2  # Default assumption
         
@@ -451,7 +463,11 @@ class TroubleshootingEngine:
         return max(1, min(5, base_level))
     
     async def _adapt_workflow_for_emotion(self, session: TroubleshootingSession) -> None:
-        """Adapt workflow based on customer emotional state"""
+        """
+        Adapts the troubleshooting workflow in the session to address the customer's emotional state.
+        
+        Modifies session notes to reflect workflow adjustments such as prioritizing quick resolutions, adding verification checkpoints, simplifying steps, or optimizing for speed based on the customer's emotion.
+        """
         
         emotion = session.customer_emotional_state
         
@@ -472,7 +488,11 @@ class TroubleshootingEngine:
             session.session_notes.append("Adapted for urgent customer: optimizing for speed")
     
     async def _adapt_workflow_for_technical_level(self, session: TroubleshootingSession) -> None:
-        """Adapt workflow based on customer technical level"""
+        """
+        Adapts the troubleshooting workflow in the session based on the customer's technical level.
+        
+        For beginner customers (technical level 2 or below), adds notes to provide more detailed instructions and safety checks. For advanced customers (technical level 4 or above), adds notes to enable more complex diagnostics and skip basic checks.
+        """
         
         tech_level = session.customer_technical_level
         
@@ -489,7 +509,16 @@ class TroubleshootingEngine:
         step: DiagnosticStep,
         step_result: Dict[str, Any]
     ) -> bool:
-        """Evaluate whether a diagnostic step was successful"""
+        """
+        Determines if a diagnostic step was successful based on explicit success flags, matching success criteria, failure indicators, or the presence of result data.
+        
+        Parameters:
+            step (DiagnosticStep): The diagnostic step being evaluated.
+            step_result (Dict[str, Any]): The result data from executing the step.
+        
+        Returns:
+            bool: True if the step is considered successful, otherwise False.
+        """
         
         # Check explicit success/failure indicators
         if 'success' in step_result:
@@ -509,13 +538,23 @@ class TroubleshootingEngine:
         return bool(step_result and step_result.get('data'))
     
     async def _check_verification_needed(self, session: TroubleshootingSession) -> bool:
-        """Check if verification checkpoint is needed"""
+        """
+        Determine whether a verification checkpoint is required based on the number of completed steps since the last verification.
+        
+        Returns:
+            bool: True if the number of steps since the last verification meets or exceeds the configured verification interval; otherwise, False.
+        """
         
         steps_since_verification = len(session.completed_steps) - len(session.verification_results)
         return steps_since_verification >= self.config.verification_interval_steps
     
     async def _generate_follow_up_actions(self, session: TroubleshootingSession) -> List[str]:
-        """Generate follow-up actions based on session outcome"""
+        """
+        Generate a list of recommended follow-up actions based on the outcome of a troubleshooting session.
+        
+        Returns:
+            actions (List[str]): A list of follow-up actions tailored to the session's final outcome.
+        """
         
         actions = []
         
@@ -538,7 +577,11 @@ class TroubleshootingEngine:
         return actions
     
     async def _record_session_learning(self, session: TroubleshootingSession) -> None:
-        """Record session outcomes for workflow improvement"""
+        """
+        Records the outcomes and step patterns of a troubleshooting session to support workflow improvement and learning.
+        
+        This method logs information about successful and failed diagnostic steps, which can be used to refine troubleshooting workflows over time.
+        """
         
         # This would integrate with a learning system to improve workflows
         logger.info(f"Recording learning insights from session {session.session_id}")

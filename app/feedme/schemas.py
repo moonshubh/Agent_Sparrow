@@ -90,6 +90,15 @@ class TranscriptUploadRequest(BaseModel):
 
     @validator('transcript_content')
     def validate_transcript_content(cls, v):
+        """
+        Validates that the transcript content is at least 10 characters long after stripping whitespace.
+        
+        Raises:
+            ValueError: If the stripped transcript content is shorter than 10 characters.
+        
+        Returns:
+            str: The stripped transcript content.
+        """
         if len(v.strip()) < 10:
             raise ValueError('Transcript content must be at least 10 characters long')
         return v.strip()
