@@ -11,6 +11,7 @@ import asyncio
 from typing import Dict, List, Optional, Any, Tuple
 from datetime import datetime, timedelta
 import uuid
+import time
 
 from opentelemetry import trace
 
@@ -71,6 +72,11 @@ class TroubleshootingEngine:
         
         # Active sessions tracking
         self.active_sessions: Dict[str, TroubleshootingSession] = {}
+        self._last_cleanup_time = time.time()
+        
+        # Configure cleanup parameters from config with defaults
+        self._cleanup_interval = getattr(self.config, 'session_cleanup_interval_seconds', 300)  # 5 minutes
+        self._session_timeout = getattr(self.config, 'session_timeout_seconds', 3600)  # 1 hour
         
         logger.info("TroubleshootingEngine initialized with structured workflow capabilities")
     
@@ -176,9 +182,13 @@ class TroubleshootingEngine:
                 session.current_step = first_step
                 logger.info(f"Starting with diagnostic step: {first_step.title}")
             
-            # Track active session
+            # Track active session and update last activity time
+            session.last_activity_time = datetime.utcnow()
             self.active_sessions[session.session_id] = session
             troubleshooting_state.active_session = session
+            
+            # Clean up stale sessions if needed
+            await self._cleanup_stale_sessions()
             
             span.set_attribute("session_id", session.session_id)
             span.set_attribute("workflow_name", selected_workflow.name)
@@ -251,8 +261,11 @@ class TroubleshootingEngine:
             next_step = await self.diagnostic_sequencer.get_next_step(session, step_successful)
             session.current_step = next_step
             
-            # Update progress
-            session.overall_progress = len(session.completed_steps) / len(session.workflow.diagnostic_steps)
+            # Update progress, handling case where there are no diagnostic steps
+            if hasattr(session.workflow, 'diagnostic_steps') and session.workflow.diagnostic_steps:
+                session.overall_progress = len(session.completed_steps) / len(session.workflow.diagnostic_steps)
+            else:
+                session.overall_progress = 0.0  # Default to 0 if no steps are defined
             
             span.set_attribute("step_successful", step_successful)
             span.set_attribute("next_step_available", next_step is not None)
@@ -309,6 +322,10 @@ class TroubleshootingEngine:
             # Remove from active sessions
             if session.session_id in self.active_sessions:
                 del self.active_sessions[session.session_id]
+            
+            # Clean up stale sessions if we have many active sessions
+            if len(self.active_sessions) > getattr(self.config, 'session_cleanup_threshold', 10):
+                await self._cleanup_stale_sessions()
             
             # Record session for learning
             if self.config.enable_workflow_learning:
@@ -535,3 +552,59 @@ class TroubleshootingEngine:
         if session.failed_steps:
             failed_step_types = [step.step_type.value for step in session.failed_steps]
             logger.debug(f"Failed steps for learning: {failed_step_types}")
+    
+    async def _cleanup_stale_sessions(self) -> int:
+        """
+        Clean up stale sessions that have exceeded the inactivity timeout.
+        
+        Returns:
+            int: Number of sessions that were cleaned up
+        """
+        current_time = time.time()
+        
+        # Only run cleanup if enough time has passed since the last cleanup
+        if current_time - self._last_cleanup_time < self._cleanup_interval:
+            return 0
+            
+        logger.debug(f"Starting cleanup of stale sessions (timeout: {self._session_timeout}s)")
+        
+        # Make a copy of session IDs to avoid modifying dict during iteration
+        session_ids = list(self.active_sessions.keys())
+        removed_count = 0
+        
+        for session_id in session_ids:
+            try:
+                session = self.active_sessions.get(session_id)
+                if not session:
+                    continue
+                    
+                # Calculate session age in seconds
+                session_age = current_time - session.last_activity_time.timestamp()
+                
+                if session_age > self._session_timeout:
+                    # Log session termination
+                    logger.info(f"Removing stale session {session_id} (inactive for {session_age:.1f}s)")
+                    
+                    # Add session to history before removing
+                    if hasattr(session, 'troubleshooting_history'):
+                        session.troubleshooting_history.append({
+                            'timestamp': datetime.utcnow(),
+                            'event': 'session_terminated',
+                            'reason': 'inactivity_timeout',
+                            'inactive_seconds': session_age
+                        })
+                    
+                    # Remove the session
+                    self.active_sessions.pop(session_id, None)
+                    removed_count += 1
+                    
+            except Exception as e:
+                logger.error(f"Error cleaning up session {session_id}: {str(e)}", exc_info=True)
+        
+        # Update last cleanup time
+        self._last_cleanup_time = current_time
+        
+        if removed_count > 0:
+            logger.info(f"Cleaned up {removed_count} stale sessions")
+        
+        return removed_count
