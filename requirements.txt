@@ -3,6 +3,7 @@ fastapi==0.115.12
 uvicorn
 python-multipart
 pydantic==2.11.5
+pydantic-settings
 python-dotenv
 
 # Langchain Stack

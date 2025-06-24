@@ -14,6 +14,8 @@ import requests
 import structlog
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
 
+from app.core.settings import settings
+
 QDRANT_URL = os.getenv("QDRANT_URL", "http://localhost:6333")
 QDRANT_API_KEY = os.getenv("QDRANT_API_KEY")
 _COLLECTION_PREFIX = os.getenv("QDRANT_COLLECTION_PREFIX", "conversation_")
@@ -30,7 +32,7 @@ class QdrantMemory:
         # Gemini embedding model; 768-dimensional
         self.embedder = GoogleGenerativeAIEmbeddings(
             model="models/embedding-001",
-            google_api_key=os.getenv("GEMINI_API_KEY"),
+            google_api_key=settings.gemini_api_key,
         )
 
     # ---------------------------------------------------------------------

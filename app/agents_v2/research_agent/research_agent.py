@@ -20,6 +20,8 @@ import logging
 import os
 from typing import List, Optional, TypedDict
 
+from app.core.settings import settings
+
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langgraph.graph import END, StateGraph
 
@@ -137,7 +139,7 @@ Return JSON in this format (no markdown block):
 
     model = ChatGoogleGenerativeAI(
         model="gemini-2.5-flash",
-        google_api_key=os.getenv("GEMINI_API_KEY"),
+        google_api_key=settings.gemini_api_key,
     )
 
     try:

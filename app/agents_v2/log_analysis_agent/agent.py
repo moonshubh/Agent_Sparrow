@@ -1,7 +1,8 @@
 import os
 import json
 from typing import Dict, Any
-from dotenv import load_dotenv
+
+from app.core.settings import settings
 from langchain_google_genai import ChatGoogleGenerativeAI
 from uuid import uuid4
 from app.core.logging_config import get_logger
@@ -16,11 +17,8 @@ from .prompts import LOG_ANALYSIS_PROMPT_TEMPLATE
 from .parsers import parse_log_content
 from datetime import datetime
 
-# Load environment variables from .env file
-load_dotenv()
-
 # Ensure the GEMINI_API_KEY is set
-if "GEMINI_API_KEY" not in os.environ:
+if not settings.gemini_api_key:
     raise ValueError("GEMINI_API_KEY environment variable not set.")
 
 async def run_log_analysis_agent(state: LogAnalysisAgentState) -> Dict[str, Any]:
@@ -100,7 +98,7 @@ async def run_legacy_log_analysis_agent(state: LogAnalysisAgentState) -> Dict[st
         llm = ChatGoogleGenerativeAI(
             model="gemini-1.5-pro-latest",
             temperature=0.1,
-            google_api_key=os.getenv("GEMINI_API_KEY"),
+            google_api_key=settings.gemini_api_key,
         )
         llm_so = llm.with_structured_output(StructuredLogAnalysisOutput)
 

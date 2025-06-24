@@ -3,14 +3,15 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 from typing import Any, Optional
+
+from app.core.settings import settings
 
 import redis
 from redis.exceptions import ConnectionError as RedisConnectionError
 
-REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
-CACHE_TTL_SEC = int(os.getenv("CACHE_TTL_SEC", "3600"))
+REDIS_URL = settings.redis_url
+CACHE_TTL_SEC = settings.cache_ttl_sec
 
 _redis_client: redis.Redis | None = None
 

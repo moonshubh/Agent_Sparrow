@@ -9,6 +9,8 @@ import time
 from typing import Dict, Any, List
 from datetime import datetime
 from langchain_google_genai import ChatGoogleGenerativeAI
+
+from app.core.settings import settings
 from app.core.logging_config import get_logger
 
 class IntelligentLogAnalyzer:
@@ -21,7 +23,7 @@ class IntelligentLogAnalyzer:
         self.reasoning_llm = ChatGoogleGenerativeAI(
             model="gemini-2.5-pro",
             temperature=0.1,  # Low temperature for consistent analysis
-            google_api_key=os.getenv("GEMINI_API_KEY"),
+            google_api_key=settings.gemini_api_key,
         )
         
         # System instructions for the AI analyst

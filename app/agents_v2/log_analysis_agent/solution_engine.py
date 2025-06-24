@@ -9,6 +9,8 @@ from typing import Dict, List, Optional, Any, Tuple
 from datetime import datetime
 import os
 from langchain_google_genai import ChatGoogleGenerativeAI
+
+from app.core.settings import settings
 from langchain_core.prompts import PromptTemplate
 from pydantic import BaseModel, Field
 
@@ -52,13 +54,13 @@ class AdvancedSolutionEngine:
         self.primary_llm = ChatGoogleGenerativeAI(
             model="gemini-2.5-pro",  # Use the most powerful model
             temperature=0.1,  # Low temperature for consistent reasoning
-            google_api_key=os.getenv("GEMINI_API_KEY"),
+            google_api_key=settings.gemini_api_key,
         )
         
         self.fallback_llm = ChatGoogleGenerativeAI(
             model="gemini-1.5-pro-latest",
             temperature=0.2,
-            google_api_key=os.getenv("GEMINI_API_KEY"),
+            google_api_key=settings.gemini_api_key,
         )
         
         # Solution generation prompt template

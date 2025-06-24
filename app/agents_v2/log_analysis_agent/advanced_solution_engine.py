@@ -9,6 +9,8 @@ from typing import Dict, List, Optional, Any, Tuple
 from datetime import datetime
 import os
 from langchain_google_genai import ChatGoogleGenerativeAI
+
+from app.core.settings import settings
 from langchain_core.prompts import PromptTemplate
 from pydantic import BaseModel, Field
 
@@ -54,7 +56,7 @@ class AdvancedSolutionEngine:
         self.primary_llm = ChatGoogleGenerativeAI(
             model="gemini-2.5-pro",
             temperature=0.1,
-            google_api_key=os.getenv("GEMINI_API_KEY"),
+            google_api_key=settings.gemini_api_key,
         )
         
         # Account-specific solution templates
