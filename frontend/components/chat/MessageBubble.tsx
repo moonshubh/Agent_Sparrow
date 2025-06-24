@@ -543,8 +543,8 @@ export default function MessageBubble({
           ) : (
             // For log analysis, render structured components instead of raw text
             agentType === 'log_analyst' && metadata?.analysisResults ? null : (
-              // Use markdown rendering for primary-support agent responses
-              agentType === 'primary' && !isUser ? (
+              // Use markdown rendering for all assistant responses
+              !isUser ? (
                 <MarkdownMessage content={content} />
               ) : (
                 <div className="text-sm leading-relaxed whitespace-pre-wrap">

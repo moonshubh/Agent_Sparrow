@@ -204,6 +204,18 @@ export function useUnifiedChat(): UseUnifiedChatReturn {
             const event = JSON.parse(jsonStr)
             
             if (event.role === 'system' && event.content) {
+              // Filter out [DONE] tokens that come as system messages
+              if (event.content === '[DONE]') {
+                setState(prev => ({
+                  ...prev, 
+                  isProcessing: false,
+                  messages: prev.messages.map(msg => 
+                    msg.id === messageId ? { ...msg, streaming: false } : msg
+                  )
+                }))
+                return
+              }
+              
               // Handle system messages (routing notifications)
               const systemMessage: UnifiedMessage = {
                 id: `system-${Date.now()}`,

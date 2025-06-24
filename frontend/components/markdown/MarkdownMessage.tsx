@@ -8,6 +8,7 @@ interface MarkdownMessageProps {
 export const MarkdownMessage = ({ content }: MarkdownMessageProps) => (
   <div className="prose prose-sm max-w-none dark:prose-invert
                   prose-headings:font-semibold prose-headings:text-foreground prose-headings:mb-3 prose-headings:mt-4
+                  prose-h2:mt-4 prose-h2:text-base prose-h2:font-semibold
                   prose-ul:my-2 prose-ol:my-2 prose-li:my-1
                   prose-p:mb-3 prose-p:leading-relaxed prose-p:text-foreground
                   prose-strong:text-foreground prose-strong:font-semibold
