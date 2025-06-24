@@ -38,8 +38,6 @@ from app.feedme.schemas import (
 from app.db.embedding_utils import get_db_connection, get_embedding_model
 import psycopg2
 import psycopg2.extras as psycopg2_extras
-from pgvector.psycopg2 import register_vector
-
 logger = logging.getLogger(__name__)
 router = APIRouter()
 

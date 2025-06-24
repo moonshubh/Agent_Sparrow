@@ -15,6 +15,15 @@ from app.agents_v2.primary_agent.reasoning.schemas import ProblemCategory, Solut
 from app.agents_v2.primary_agent.prompts.emotion_templates import EmotionalState
 
 
+class ExecutionStatus(Enum):
+    """Status of diagnostic step execution"""
+    PENDING = "pending"
+    IN_PROGRESS = "in_progress"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    SKIPPED = "skipped"
+
+
 class TroubleshootingPhase(Enum):
     """Phases of structured troubleshooting workflow"""
     INITIAL_ASSESSMENT = "initial_assessment"
@@ -91,7 +100,7 @@ class DiagnosticStep:
     common_issues: List[str] = field(default_factory=list)
     
     # Execution tracking
-    execution_status: str = "pending"  # pending, in_progress, completed, failed, skipped
+    execution_status: ExecutionStatus = field(default=ExecutionStatus.PENDING)
     execution_start_time: Optional[datetime] = None
     execution_end_time: Optional[datetime] = None
     execution_notes: str = ""

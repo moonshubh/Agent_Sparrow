@@ -174,6 +174,7 @@ class ResponseFormatter:
                 # Primary or secondary heading
                 if not primary_heading:
                     primary_heading = line
+                    # Only set empathetic_opening if it's not already set and we have content
                     if current_content and not empathetic_opening:
                         empathetic_opening = '\n'.join(current_content).strip()
                     current_content = []
@@ -184,7 +185,14 @@ class ResponseFormatter:
                     current_section = line
                     current_content = []
             elif line.startswith('###'):
-                # Subsection heading
+                # Subsection heading - ensure we have a primary heading first
+                if not primary_heading:
+                    logger.warning("Found subsection header before any primary heading")
+                    # Treat as content until we find a primary heading
+                    current_content.append(line)
+                    continue
+                    
+                # Save current section if exists
                 if current_section:
                     sections[current_section] = '\n'.join(current_content).strip()
                 current_section = line
@@ -195,7 +203,7 @@ class ResponseFormatter:
         # Handle last section
         if current_section:
             sections[current_section] = '\n'.join(current_content).strip()
-        elif not empathetic_opening and current_content:
+        elif current_content and not empathetic_opening:  # Only set empathetic_opening if not already set
             empathetic_opening = '\n'.join(current_content).strip()
         
         # Check for proper markdown formatting
@@ -368,7 +376,6 @@ class ResponseFormatter:
             str: A response template string ready for content insertion, structured according to Agent Sparrow's standards.
         """
         # Get emotion-specific empathy template
-        from .emotion_templates import EmotionTemplates
         empathy_opening = EmotionTemplates.get_empathy_template(emotion, issue)
         
         # Generate action-oriented heading based on solution type
@@ -436,13 +443,17 @@ class ResponseFormatter:
         for i, line in enumerate(lines):
             stripped = line.strip()
             
-            # Ensure proper spacing around headers
+            # Handle header spacing
             if stripped.startswith('#'):
-                if i > 0 and formatted_lines and formatted_lines[-1].strip():
-                    formatted_lines.append('')  # Add blank line before header
+                # Add blank line before header if needed
+                if i > 0 and formatted_lines and formatted_lines[-1].strip() and (i == 0 or lines[i-1].strip() != ''):
+                    formatted_lines.append('')
+                
                 formatted_lines.append(line)
-                if i < len(lines) - 1:
-                    formatted_lines.append('')  # Add blank line after header
+                
+                # Add blank line after header if needed
+                if i < len(lines) - 1 and (i + 1 >= len(lines) or lines[i+1].strip() != ''):
+                    formatted_lines.append('')
             else:
                 formatted_lines.append(line)
         
@@ -476,7 +487,6 @@ class ResponseFormatter:
         
         # Generate proper empathetic opening if missing
         if not structure.empathetic_opening or len(structure.empathetic_opening) < 20:
-            from .emotion_templates import EmotionTemplates
             empathy_opening = EmotionTemplates.format_emotion_aware_opening(emotion_result, issue)
         else:
             empathy_opening = structure.empathetic_opening
@@ -496,11 +506,12 @@ class ResponseFormatter:
         
         # Add Pro Tips section if missing
         if "### Pro Tips" not in main_content and "💡" not in main_content:
-            main_content += "\n\n### Pro Tips 💡\n- Consider enabling automatic sync for real-time email updates\n- Use keyboard shortcuts (Ctrl+N for new message) to boost productivity"
+            pro_tips = cls._generate_contextual_pro_tips(issue, emotion_result.primary_emotion)
+            if pro_tips:
+                main_content += f"\n\n### Pro Tips 💡\n{pro_tips}"
         
         # Generate supportive closing if missing or inadequate
         if not structure.has_closing or len(structure.has_closing) < 30:
-            from .emotion_templates import EmotionTemplates
             strategy = EmotionTemplates.get_response_strategy(emotion_result.primary_emotion)
             
             if emotion_result.primary_emotion == EmotionalState.FRUSTRATED:
@@ -521,5 +532,55 @@ class ResponseFormatter:
 
 {supportive_closing}"""
         
+    @classmethod
+    def _generate_contextual_pro_tips(cls, issue: str, emotion: EmotionalState) -> str:
+        """Generate context-aware pro tips based on the issue and customer emotion.
+        
+        Args:
+            issue: The specific issue being addressed
+            emotion: Detected customer emotional state
+            
+        Returns:
+            Formatted pro tips as a string with markdown bullet points
+        """
+        # Default tips that are generally useful
+        default_tips = [
+            "Use keyboard shortcuts (Ctrl+N for new message) to boost productivity",
+            "Enable notifications to stay on top of important emails",
+            "Use the unified inbox to manage multiple email accounts in one place"
+        ]
+        
+        # Context-specific tips based on common issues
+        issue_tips = []
+        issue_lower = issue.lower()
+        
+        if any(term in issue_lower for term in ['sync', 'update', 'refresh']):
+            issue_tips.extend([
+                "Enable 'Sync in background' for real-time email updates",
+                "Check your internet connection if sync seems delayed"
+            ])
+        elif any(term in issue_lower for term in ['slow', 'performance', 'lag']):
+            issue_tips.extend([
+                "Clear cache from Settings > Storage to improve performance",
+                "Limit the number of emails loaded in each folder"
+            ])
+        elif any(term in issue_lower for term in ['attachment', 'file']):
+            issue_tips.extend([
+                "Use the paperclip icon to quickly attach files to emails",
+                "Drag and drop files directly into your email to attach them"
+            ])
+        
+        # Emotion-appropriate tips
+        if emotion == EmotionalState.FRUSTRATED:
+            issue_tips.append("Try restarting the application if you're experiencing unexpected behavior")
+        elif emotion == EmotionalState.CONFUSED:
+            issue_tips.append("Hover over any icon to see a tooltip explaining its function")
+        
+        # Combine tips, prioritizing issue-specific ones
+        all_tips = list(dict.fromkeys(issue_tips + default_tips))  # Remove duplicates while preserving order
+        
+        # Format as markdown bullet points
+        return '\n'.join(f"- {tip}" for tip in all_tips[:3])  # Return up to 3 tips
+
         # Apply formatting rules
         return cls.apply_mandatory_formatting(enhanced_response)
