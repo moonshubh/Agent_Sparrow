@@ -139,8 +139,15 @@ logger.info("Module initialization complete.")
 # 3. Create the agent logic
 async def run_primary_agent(state: PrimaryAgentState) -> AsyncIterator[AIMessageChunk]:
     """
-    Runs the primary agent logic. This agent is responsible for handling general queries
-    and tasks related to the Mailbird application. Yields AIMessageChunks.
+    Asynchronously processes a user query using the primary agent system, yielding AI message chunks as a streaming response.
+    
+    This function orchestrates advanced reasoning, structured troubleshooting, internal knowledge base search, and web search to generate a comprehensive answer to Mailbird-related queries. It integrates Agent Sparrow's reasoning and troubleshooting engines, dynamically assembles context from multiple sources, constructs a modular system prompt, and streams the AI's response in real time. Extensive telemetry and error handling ensure robust operation and detailed observability.
+    
+    Parameters:
+        state (PrimaryAgentState): The current agent state, including user messages and session context.
+    
+    Yields:
+        AIMessageChunk: Streamed chunks of the AI assistant's response.
     """
     with tracer.start_as_current_span("primary_agent.run") as parent_span:
         try:

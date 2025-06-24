@@ -37,10 +37,9 @@ class EscalationManager:
     
     def __init__(self, config: TroubleshootingConfig):
         """
-        Initialize escalation manager
+        Initializes the EscalationManager with escalation pathways and configuration.
         
-        Args:
-            config: Troubleshooting configuration
+        The manager defines multiple escalation pathways, each with specific criteria, estimated resolution times, and success rates, to support intelligent escalation decisions during troubleshooting sessions.
         """
         self.config = config
         
@@ -85,13 +84,12 @@ class EscalationManager:
         session: TroubleshootingSession
     ) -> bool:
         """
-        Check if current session meets escalation criteria
+        Evaluates whether a troubleshooting session meets any escalation criteria.
         
-        Args:
-            session: Current troubleshooting session
-            
+        Aggregates triggers from time, complexity, failure, customer satisfaction, and resource/expertise checks to determine if escalation is required. Returns True if any escalation triggers are present and records the triggers in the session notes.
+        
         Returns:
-            True if escalation is needed
+            bool: True if escalation is needed, otherwise False.
         """
         
         escalation_triggers = []
@@ -131,13 +129,12 @@ class EscalationManager:
         session: TroubleshootingSession
     ) -> str:
         """
-        Get detailed escalation reason for session
+        Generate a detailed textual explanation for why a troubleshooting session should be escalated.
         
-        Args:
-            session: Current troubleshooting session
-            
+        Analyzes session duration, workflow complexity, failure count, progress, customer emotional state, and technical expertise mismatch to construct a comprehensive escalation reason. Returns a summary string describing the primary escalation triggers, or a generic reason if no specific triggers are found.
+        
         Returns:
-            Detailed escalation reason
+            str: Detailed escalation reason for the session.
         """
         
         reasons = []
@@ -187,13 +184,12 @@ class EscalationManager:
         session: TroubleshootingSession
     ) -> Tuple[str, Dict[str, Any]]:
         """
-        Recommend optimal escalation pathway for session
+        Selects and returns the most suitable escalation pathway for a troubleshooting session based on session characteristics and pathway criteria.
         
-        Args:
-            session: Current troubleshooting session
-            
+        The method evaluates all available escalation pathways, scores them according to their fit with the session's context, and returns the pathway with the highest score along with detailed pathway information, including recommendation score, session context, and escalation priority.
+        
         Returns:
-            Tuple of (pathway_name, pathway_details)
+            tuple: A pair containing the recommended pathway name and a dictionary with pathway details and session-specific context.
         """
         
         # Score each pathway based on session characteristics
@@ -223,14 +219,16 @@ class EscalationManager:
         pathway_name: str
     ) -> Dict[str, Any]:
         """
-        Prepare comprehensive documentation for escalation
+        Compile a comprehensive escalation documentation package for a troubleshooting session and selected escalation pathway.
         
-        Args:
-            session: Current troubleshooting session
-            pathway_name: Selected escalation pathway
-            
+        The documentation includes a session summary, problem analysis, attempted solutions, customer profile, technical context, escalation reasoning, recommended actions, priority level, specialist requirements, and handoff instructions.
+        
+        Parameters:
+            session (TroubleshootingSession): The current troubleshooting session to be escalated.
+            pathway_name (str): The name of the selected escalation pathway.
+        
         Returns:
-            Complete escalation documentation
+            Dict[str, Any]: A dictionary containing all relevant escalation documentation fields for handoff and further action.
         """
         
         escalation_doc = {
@@ -253,7 +251,11 @@ class EscalationManager:
     # Trigger checking methods
     
     async def _check_time_based_triggers(self, session: TroubleshootingSession) -> List[EscalationTrigger]:
-        """Check time-based escalation triggers"""
+        """
+        Checks for time-based escalation triggers in a troubleshooting session.
+        
+        Evaluates whether the overall session duration or the current step duration has exceeded configured time limits, and returns a list of corresponding escalation triggers.
+        """
         triggers = []
         
         session_duration = datetime.now() - session.start_time
@@ -274,7 +276,12 @@ class EscalationManager:
         return triggers
     
     async def _check_complexity_triggers(self, session: TroubleshootingSession) -> List[EscalationTrigger]:
-        """Check complexity-based escalation triggers"""
+        """
+        Checks for escalation triggers related to workflow complexity and customer technical level.
+        
+        Returns:
+            List of escalation triggers if the workflow is highly complex or if there is a significant mismatch between workflow difficulty and the customer's technical expertise.
+        """
         triggers = []
         
         workflow_difficulty = session.workflow.difficulty_level
@@ -291,7 +298,12 @@ class EscalationManager:
         return triggers
     
     async def _check_failure_triggers(self, session: TroubleshootingSession) -> List[EscalationTrigger]:
-        """Check failure-based escalation triggers"""
+        """
+        Checks for escalation triggers based on the number and severity of failed troubleshooting steps.
+        
+        Returns:
+            List of escalation triggers indicating multiple failures or the presence of a critical issue.
+        """
         triggers = []
         
         failed_steps = len(session.failed_steps)
@@ -308,7 +320,12 @@ class EscalationManager:
         return triggers
     
     async def _check_customer_satisfaction_triggers(self, session: TroubleshootingSession) -> List[EscalationTrigger]:
-        """Check customer satisfaction-based triggers"""
+        """
+        Checks for escalation triggers based on customer emotional state and feedback.
+        
+        Returns:
+            List of escalation triggers if the customer is frustrated, urgent, or has requested escalation in feedback.
+        """
         triggers = []
         
         emotion = session.customer_emotional_state
@@ -329,7 +346,12 @@ class EscalationManager:
         return triggers
     
     async def _check_resource_triggers(self, session: TroubleshootingSession) -> List[EscalationTrigger]:
-        """Check resource and expertise-based triggers"""
+        """
+        Check for escalation triggers related to external dependencies and insufficient permissions in the troubleshooting session.
+        
+        Returns:
+            List of escalation triggers indicating the presence of external dependencies or required elevated permissions.
+        """
         triggers = []
         
         # Check for external dependencies
@@ -353,7 +375,14 @@ class EscalationManager:
         pathway_name: str,
         pathway_info: Dict[str, Any]
     ) -> float:
-        """Score escalation pathway appropriateness for session"""
+        """
+        Calculates a suitability score for an escalation pathway based on session characteristics and pathway attributes.
+        
+        The score incorporates the pathway's historical success rate, the degree to which session criteria match the pathway's requirements, urgency adjustments for customer emotional state, and alignment with the customer's technical level.
+        
+        Returns:
+            float: The computed suitability score for the escalation pathway.
+        """
         
         score = 0.0
         
@@ -383,7 +412,15 @@ class EscalationManager:
         session: TroubleshootingSession,
         pathway_criteria: List[str]
     ) -> float:
-        """Calculate how well session matches pathway criteria"""
+        """
+        Calculate the fraction of escalation pathway criteria that are met by the troubleshooting session.
+        
+        Parameters:
+            pathway_criteria (List[str]): List of criteria names to evaluate against the session.
+        
+        Returns:
+            float: The proportion of pathway criteria satisfied by the session, as a value between 0.0 and 1.0.
+        """
         
         matches = 0
         total_criteria = len(pathway_criteria)
@@ -395,7 +432,15 @@ class EscalationManager:
         return matches / total_criteria if total_criteria > 0 else 0.0
     
     async def _check_criteria_match(self, session: TroubleshootingSession, criteria: str) -> bool:
-        """Check if session matches specific escalation criteria"""
+        """
+        Determine whether a troubleshooting session meets a specified escalation criterion.
+        
+        Parameters:
+        	criteria (str): The escalation criterion to check, such as 'complexity', 'failure', 'frustration', 'time', 'account', 'billing', 'technical', 'expert', 'critical', or 'bug'.
+        
+        Returns:
+        	bool: True if the session matches the specified criterion, otherwise False.
+        """
         
         criteria_lower = criteria.lower()
         
@@ -439,7 +484,12 @@ class EscalationManager:
     # Documentation generation
     
     async def _generate_session_summary(self, session: TroubleshootingSession) -> str:
-        """Generate concise session summary"""
+        """
+        Generate a concise summary of the troubleshooting session, including duration, workflow, customer technical level and emotional state, number of completed and failed steps, and overall progress.
+        
+        Returns:
+            str: A formatted summary string describing key session attributes.
+        """
         
         duration = datetime.now() - session.start_time
         
@@ -456,7 +506,12 @@ class EscalationManager:
         return summary.strip()
     
     async def _generate_problem_analysis(self, session: TroubleshootingSession) -> str:
-        """Generate detailed problem analysis"""
+        """
+        Generate a detailed analysis of the troubleshooting problem, including the original issue, category, complexity, observed symptoms, and failure patterns.
+        
+        Returns:
+            str: A formatted string summarizing the problem analysis for the session.
+        """
         
         analysis_parts = []
         
@@ -480,7 +535,14 @@ class EscalationManager:
         return " | ".join(analysis_parts)
     
     async def _document_attempted_solutions(self, session: TroubleshootingSession) -> List[Dict[str, Any]]:
-        """Document all attempted solutions"""
+        """
+        Generates a list of documented attempted solutions from completed and failed troubleshooting steps in the session.
+        
+        Each solution includes step details, status, duration, summary notes, and customer feedback.
+        
+        Returns:
+            List of dictionaries, each representing an attempted solution with step metadata and outcomes.
+        """
         
         solutions = []
         
@@ -504,7 +566,12 @@ class EscalationManager:
         return solutions
     
     async def _generate_customer_profile(self, session: TroubleshootingSession) -> Dict[str, Any]:
-        """Generate customer profile for escalation"""
+        """
+        Builds a customer profile summarizing technical level, emotional state, communication style, patience level, and preferred troubleshooting approach for escalation documentation.
+        
+        Returns:
+            profile (Dict[str, Any]): Dictionary containing customer attributes relevant to escalation and handoff.
+        """
         
         profile = {
             'technical_level': session.customer_technical_level,
@@ -517,7 +584,12 @@ class EscalationManager:
         return profile
     
     async def _gather_technical_context(self, session: TroubleshootingSession) -> Dict[str, Any]:
-        """Gather technical context for escalation"""
+        """
+        Collects and returns technical context information from a troubleshooting session for escalation purposes.
+        
+        Returns:
+            A dictionary containing workflow details, required tools and permissions, system context, environmental factors, and verification results relevant to the session.
+        """
         
         context = {
             'workflow_used': session.workflow.name,
@@ -542,7 +614,15 @@ class EscalationManager:
         session: TroubleshootingSession,
         pathway_name: str
     ) -> List[str]:
-        """Generate recommended actions for escalation pathway"""
+        """
+        Generate a list of recommended actions tailored to the specified escalation pathway and the current troubleshooting session.
+        
+        Parameters:
+            pathway_name (str): The name of the escalation pathway for which to generate actions.
+        
+        Returns:
+            List[str]: A list of recommended actions based on the escalation pathway and session context, including considerations for multiple failed steps and customer frustration.
+        """
         
         actions = []
         
@@ -581,7 +661,12 @@ class EscalationManager:
         return actions
     
     async def _determine_escalation_priority(self, session: TroubleshootingSession) -> str:
-        """Determine escalation priority level"""
+        """
+        Assign an escalation priority level (HIGH, MEDIUM, NORMAL) based on session attributes such as customer emotional state, failure count, session duration, and workflow difficulty.
+        
+        Returns:
+            str: The escalation priority level ("HIGH", "MEDIUM", or "NORMAL").
+        """
         
         high_priority_conditions = [
             session.customer_emotional_state == EmotionalState.URGENT,
@@ -604,7 +689,12 @@ class EscalationManager:
             return "NORMAL"
     
     async def _identify_specialist_requirements(self, session: TroubleshootingSession) -> List[str]:
-        """Identify specific specialist skills required"""
+        """
+        Determine the specialist skills required for escalation based on the session's workflow, failed troubleshooting steps, and customer characteristics.
+        
+        Returns:
+            requirements (List[str]): A list of specialist skills needed to address the session's specific challenges.
+        """
         
         requirements = []
         
@@ -640,7 +730,16 @@ class EscalationManager:
         session: TroubleshootingSession,
         pathway_name: str
     ) -> str:
-        """Generate specific handoff instructions"""
+        """
+        Generate tailored handoff instructions summarizing the troubleshooting session, customer state, and pathway-specific guidance for the next support specialist.
+        
+        Parameters:
+            session (TroubleshootingSession): The current troubleshooting session.
+            pathway_name (str): The name of the recommended escalation pathway.
+        
+        Returns:
+            str: A formatted string containing handoff instructions, including session progress, customer emotional and technical state, recent actions, and pathway-specific recommendations.
+        """
         
         instructions = []
         
@@ -669,7 +768,12 @@ class EscalationManager:
         return " | ".join(instructions)
     
     async def _determine_preferred_approach(self, session: TroubleshootingSession) -> str:
-        """Determine customer's preferred troubleshooting approach"""
+        """
+        Infers the customer's preferred troubleshooting approach based on their technical level and emotional state.
+        
+        Returns:
+            str: A description of the recommended troubleshooting style (e.g., "Technical and detailed", "Quick and efficient", "Simple and guided", "Empathetic and reassuring", or "Balanced and thorough").
+        """
         
         if session.customer_technical_level >= 4:
             return "Technical and detailed"

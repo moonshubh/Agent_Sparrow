@@ -37,10 +37,7 @@ class VerificationSystem:
     
     def __init__(self, config: TroubleshootingConfig):
         """
-        Initialize verification system
-        
-        Args:
-            config: Troubleshooting configuration
+        Initializes the VerificationSystem with troubleshooting configuration and sets up verification templates for each troubleshooting phase.
         """
         self.config = config
         
@@ -60,14 +57,14 @@ class VerificationSystem:
         checkpoint_type: Optional[str] = None
     ) -> VerificationCheckpoint:
         """
-        Run verification checkpoint for current session state
+        Runs a verification checkpoint for the current troubleshooting session, assessing progress and solution effectiveness based on the session state and checkpoint type.
         
-        Args:
-            session: Active troubleshooting session
-            checkpoint_type: Optional specific checkpoint type
-            
+        Parameters:
+            session (TroubleshootingSession): The active troubleshooting session.
+            checkpoint_type (Optional[str]): The specific type of checkpoint to run. If not provided, the type is determined automatically.
+        
         Returns:
-            Completed verification checkpoint
+            VerificationCheckpoint: The completed verification checkpoint with status, notes, evidence, and confidence score.
         """
         
         # Determine checkpoint type if not specified
@@ -96,13 +93,10 @@ class VerificationSystem:
         session: TroubleshootingSession
     ) -> VerificationCheckpoint:
         """
-        Run comprehensive final verification for resolved issues
+        Performs a comprehensive final verification to confirm issue resolution, customer satisfaction, and solution stability for a completed troubleshooting session.
         
-        Args:
-            session: Completed troubleshooting session
-            
         Returns:
-            Final verification checkpoint
+            VerificationCheckpoint: The finalized checkpoint summarizing the outcome, supporting evidence, and confidence score of the final verification.
         """
         
         # Create comprehensive final verification
@@ -160,15 +154,12 @@ class VerificationSystem:
         step_result: Dict[str, Any]
     ) -> Tuple[bool, float, List[str]]:
         """
-        Validate completion of individual diagnostic step
+        Validates whether a diagnostic step in a troubleshooting session has been successfully completed.
         
-        Args:
-            session: Current troubleshooting session
-            completed_step: The completed diagnostic step
-            step_result: Results from step execution
-            
+        Assesses the step result against defined success criteria and failure indicators, performs additional validation checks, and computes a confidence score. Returns whether validation passed, the confidence score, and explanatory notes.
+        
         Returns:
-            Tuple of (validation_passed, confidence_score, validation_notes)
+            Tuple[bool, float, List[str]]: A tuple containing a boolean indicating if validation passed, the confidence score, and a list of validation notes.
         """
         
         validation_notes = []
@@ -225,7 +216,14 @@ class VerificationSystem:
         session: TroubleshootingSession,
         checkpoint_type: str
     ) -> VerificationCheckpoint:
-        """Create verification checkpoint based on session state"""
+        """
+        Creates a verification checkpoint for the current troubleshooting session and phase.
+        
+        Selects a phase-specific checkpoint template if available, or generates a generic checkpoint otherwise. The checkpoint is then adapted to the customer's emotional state and technical level before being returned.
+         
+        Returns:
+            VerificationCheckpoint: The adapted verification checkpoint for the session and phase.
+        """
         
         current_phase = session.current_phase
         
@@ -247,7 +245,14 @@ class VerificationSystem:
         session: TroubleshootingSession,
         checkpoint: VerificationCheckpoint
     ) -> Dict[str, Any]:
-        """Execute verification checkpoint process"""
+        """
+        Executes a verification checkpoint by analyzing recent diagnostic steps for success and failure indicators.
+        
+        Evaluates evidence from the most recent completed steps, checks for the presence of defined success and failure indicators, determines the checkpoint status (PASSED, FAILED, INCONCLUSIVE), and calculates a confidence score based on the findings.
+        
+        Returns:
+            Dict[str, Any]: A dictionary containing the verification status, confidence score, collected evidence, and explanatory notes.
+        """
         
         verification_result = {
             'status': VerificationStatus.PENDING,
@@ -314,7 +319,14 @@ class VerificationSystem:
         session: TroubleshootingSession,
         checkpoint: VerificationCheckpoint
     ) -> Dict[str, Any]:
-        """Execute comprehensive final verification"""
+        """
+        Performs a comprehensive final verification of the troubleshooting session, evaluating problem resolution, customer satisfaction, and solution stability.
+        
+        Collects evidence from all completed diagnostic steps, assesses whether the original issue is resolved, measures customer satisfaction, and evaluates the stability of the implemented solution. Returns a dictionary containing the final verification status, confidence score, supporting notes, and collected evidence.
+         
+        Returns:
+            Dict[str, Any]: A dictionary with keys 'status', 'confidence', 'notes', and 'evidence' summarizing the final verification outcome.
+        """
         
         verification_result = {
             'status': VerificationStatus.PENDING,
@@ -379,7 +391,11 @@ class VerificationSystem:
     # Verification template creators
     
     async def _create_basic_verification_template(self, session: TroubleshootingSession) -> VerificationCheckpoint:
-        """Create basic diagnostics verification checkpoint"""
+        """
+        Create a verification checkpoint template for the basic diagnostics phase.
+        
+        This checkpoint focuses on confirming that fundamental system and application functions are operational, with questions and indicators tailored to early-stage troubleshooting.
+        """
         return VerificationCheckpoint(
             name="Basic Diagnostics Verification",
             description="Verify basic diagnostic steps are working correctly",
@@ -406,7 +422,14 @@ class VerificationSystem:
         )
     
     async def _create_intermediate_verification_template(self, session: TroubleshootingSession) -> VerificationCheckpoint:
-        """Create intermediate diagnostics verification checkpoint"""
+        """
+        Create a verification checkpoint template for the intermediate diagnostics phase.
+        
+        This checkpoint focuses on validating progress made during intermediate troubleshooting steps, such as configuration changes and connectivity improvements. It defines relevant verification questions, success and failure indicators, and specifies the required evidence for assessing the effectiveness of intermediate diagnostics.
+        
+        Returns:
+            VerificationCheckpoint: A checkpoint configured for intermediate diagnostics verification.
+        """
         return VerificationCheckpoint(
             name="Intermediate Diagnostics Verification",
             description="Verify intermediate diagnostic steps show progress",
@@ -434,7 +457,11 @@ class VerificationSystem:
         )
     
     async def _create_advanced_verification_template(self, session: TroubleshootingSession) -> VerificationCheckpoint:
-        """Create advanced diagnostics verification checkpoint"""
+        """
+        Create a verification checkpoint template for the advanced diagnostics phase.
+        
+        This checkpoint focuses on verifying the effectiveness of advanced diagnostic procedures, including root cause analysis and complex configuration validation.
+        """
         return VerificationCheckpoint(
             name="Advanced Diagnostics Verification",
             description="Verify advanced diagnostic procedures are effective",
@@ -462,7 +489,12 @@ class VerificationSystem:
         )
     
     async def _create_resolution_verification_template(self, session: TroubleshootingSession) -> VerificationCheckpoint:
-        """Create resolution verification checkpoint"""
+        """
+        Create a verification checkpoint template focused on confirming complete problem resolution at the end of troubleshooting.
+        
+        Returns:
+            VerificationCheckpoint: A checkpoint configured to assess whether the original problem is resolved, the customer can complete intended tasks, and the solution is stable and reliable.
+        """
         return VerificationCheckpoint(
             name="Resolution Verification",
             description="Verify complete problem resolution",
@@ -490,7 +522,12 @@ class VerificationSystem:
         )
     
     async def _create_generic_verification_checkpoint(self, session: TroubleshootingSession) -> VerificationCheckpoint:
-        """Create generic verification checkpoint"""
+        """
+        Create a generic verification checkpoint to assess overall troubleshooting progress and effectiveness.
+        
+        Returns:
+            VerificationCheckpoint: A checkpoint with questions and indicators focused on evaluating whether the troubleshooting session is making progress, including required evidence such as step results and customer feedback.
+        """
         return VerificationCheckpoint(
             name="Progress Verification",
             description="Verify troubleshooting progress and effectiveness",
@@ -520,7 +557,12 @@ class VerificationSystem:
     # Helper methods
     
     def _determine_checkpoint_type(self, session: TroubleshootingSession) -> str:
-        """Determine appropriate checkpoint type for session state"""
+        """
+        Determines the appropriate verification checkpoint type based on the session's completed steps and current troubleshooting phase.
+        
+        Returns:
+            str: The checkpoint type identifier corresponding to the session's progress and phase.
+        """
         
         completed_steps = len(session.completed_steps)
         current_phase = session.current_phase
@@ -541,7 +583,14 @@ class VerificationSystem:
         checkpoint: VerificationCheckpoint,
         session: TroubleshootingSession
     ) -> VerificationCheckpoint:
-        """Adapt verification checkpoint for customer characteristics"""
+        """
+        Adapts a verification checkpoint's description and questions to match the customer's emotional state and technical level.
+        
+        Modifies checkpoint language and content to provide reassurance, brevity, or technical detail based on the customer's emotional profile, and adjusts question complexity and evidence requirements according to technical proficiency.
+        
+        Returns:
+            VerificationCheckpoint: The adapted verification checkpoint tailored to the customer's characteristics.
+        """
         
         # Adapt based on customer emotional state
         emotion = session.customer_emotional_state
@@ -579,7 +628,18 @@ class VerificationSystem:
         return checkpoint
     
     def _check_criteria_in_result(self, criteria: str, step_result: Dict[str, Any]) -> bool:
-        """Check if criteria is met in step result"""
+        """
+        Determines whether a specified criterion is satisfied within a diagnostic step result.
+        
+        Checks for the presence of the criterion as a keyword in the result, evaluates success indicators, and matches status fields to identify if the criterion is met.
+        
+        Parameters:
+            criteria (str): The success or failure criterion to check for.
+            step_result (Dict[str, Any]): The result data from a diagnostic step.
+        
+        Returns:
+            bool: True if the criterion is satisfied in the step result, otherwise False.
+        """
         
         criteria_lower = criteria.lower()
         result_str = str(step_result).lower()
@@ -603,7 +663,12 @@ class VerificationSystem:
         return False
     
     def _check_indicator_in_evidence(self, indicator: str, evidence: List[str]) -> bool:
-        """Check if indicator is present in collected evidence"""
+        """
+        Determine whether a specified indicator string is present within any of the collected evidence items.
+        
+        Returns:
+            bool: True if the indicator is found in any evidence item (case-insensitive), otherwise False.
+        """
         
         indicator_lower = indicator.lower()
         
@@ -618,7 +683,12 @@ class VerificationSystem:
         step: DiagnosticStep,
         checkpoint: VerificationCheckpoint
     ) -> List[str]:
-        """Extract relevant evidence from diagnostic step"""
+        """
+        Extracts evidence strings from a diagnostic step, including result data, execution notes, customer feedback, and execution status.
+        
+        Returns:
+            List[str]: A list of evidence strings relevant to the verification checkpoint.
+        """
         
         evidence = []
         
@@ -648,7 +718,11 @@ class VerificationSystem:
         validation_notes: List[str],
         confidence_factors: List[float]
     ) -> None:
-        """Perform additional validation checks specific to step type"""
+        """
+        Performs additional validation checks for a diagnostic step based on its type and execution timing.
+        
+        Adds step-type-specific validation notes and confidence factors, such as confirming network connectivity, configuration status, and whether the step was completed within the expected time frame.
+        """
         
         step_type = completed_step.step_type
         
@@ -686,7 +760,12 @@ class VerificationSystem:
         session: TroubleshootingSession,
         evidence: List[str]
     ) -> bool:
-        """Verify that the original problem has been resolved"""
+        """
+        Determines whether the original problem described in the troubleshooting session has been resolved based on provided evidence.
+        
+        Returns:
+            bool: True if resolution indicators in the evidence outnumber problem indicators and at least one resolution indicator is present; otherwise, False.
+        """
         
         # This would typically involve checking against the original problem description
         # and looking for resolution indicators in the evidence
@@ -719,7 +798,14 @@ class VerificationSystem:
         return resolution_count > problem_count and resolution_count > 0
     
     async def _assess_customer_satisfaction(self, session: TroubleshootingSession) -> float:
-        """Assess customer satisfaction based on session data"""
+        """
+        Calculates a customer satisfaction score for the troubleshooting session.
+        
+        The score is determined by analyzing customer feedback from completed steps, overall session progress, and the number of failed steps. The result is a float between 0.0 (very dissatisfied) and 1.0 (very satisfied).
+         
+        Returns:
+            float: The computed customer satisfaction score for the session.
+        """
         
         satisfaction_score = 0.5  # Neutral baseline
         
@@ -761,7 +847,12 @@ class VerificationSystem:
         session: TroubleshootingSession,
         evidence: List[str]
     ) -> float:
-        """Assess stability and reliability of the solution"""
+        """
+        Evaluates the stability and reliability of the implemented solution based on evidence and recent troubleshooting step outcomes.
+        
+        Returns:
+            float: A stability score between 0.0 and 1.0, where higher values indicate greater solution stability.
+        """
         
         stability_score = 0.7  # Optimistic baseline
         

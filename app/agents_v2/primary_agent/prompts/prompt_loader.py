@@ -58,10 +58,9 @@ class PromptLoader:
     
     def __init__(self, config_path: Optional[Path] = None):
         """
-        Initialize PromptLoader
+        Initializes a PromptLoader instance with optional configuration file path.
         
-        Args:
-            config_path: Optional path to configuration file
+        If a config path is provided, it is stored for later use. Initializes internal caches for prompts and their metadata.
         """
         self.logger = logging.getLogger(__name__)
         self.config_path = config_path
@@ -70,13 +69,15 @@ class PromptLoader:
         
     def load_prompt(self, config: Optional[PromptLoadConfig] = None) -> str:
         """
-        Load and assemble Agent Sparrow prompt based on configuration
+        Loads and assembles an Agent Sparrow prompt according to the specified configuration.
         
-        Args:
-            config: PromptLoadConfig specifying how to build the prompt
-            
+        If a prompt matching the configuration is cached, returns the cached version; otherwise, builds the prompt based on the selected version, applies any custom components, validates the result, caches it, and stores associated metadata.
+        
+        Parameters:
+            config (Optional[PromptLoadConfig]): Configuration specifying prompt version, included features, custom components, and environment.
+        
         Returns:
-            Complete system prompt string ready for LLM
+            str: The fully assembled system prompt string ready for use with a language model.
         """
         if config is None:
             config = PromptLoadConfig()
@@ -122,7 +123,15 @@ class PromptLoader:
         return prompt
     
     def _build_sparrow_prompt(self, config: PromptLoadConfig) -> str:
-        """Build the sophisticated Agent Sparrow prompt"""
+        """
+        Constructs the Agent Sparrow system prompt based on the provided configuration.
+        
+        Parameters:
+        	config (PromptLoadConfig): Configuration specifying which components and features to include in the prompt.
+        
+        Returns:
+        	str: The assembled Agent Sparrow prompt string.
+        """
         prompt_config = PromptConfig(
             include_reasoning=config.include_reasoning,
             include_emotions=config.include_emotions,
@@ -134,7 +143,9 @@ class PromptLoader:
         return AgentSparrowPrompts.build_system_prompt(prompt_config)
     
     def _load_legacy_prompt(self) -> str:
-        """Load the original Mailbird prompt for comparison/fallback"""
+        """
+        Return the original Mailbird prompt string used as a legacy fallback or for comparison purposes.
+        """
         # This would contain the original prompt from agent.py
         return """# Enhanced System Prompt for the Mailbird Customer Success Agent
 
@@ -143,7 +154,21 @@ You are the **Mailbird Customer Success Expert** – a highly skilled, empatheti
 [Rest of original prompt would be here]"""
     
     def _apply_custom_components(self, prompt: str, custom_components: Dict[str, str]) -> str:
-        """Apply custom prompt components for specific use cases"""
+        """
+        Inserts custom components into the prompt at designated locations based on component type.
+        
+        Custom components are added as follows:
+        - "custom_identity" is prepended to the prompt.
+        - "custom_instructions" is appended to the prompt.
+        - "custom_examples" is inserted before the "Quality Assurance Checklist" section, if present.
+        
+        Parameters:
+            prompt (str): The original prompt string.
+            custom_components (Dict[str, str]): Mapping of component names to their content.
+        
+        Returns:
+            str: The prompt with custom components inserted.
+        """
         enhanced_prompt = prompt
         
         for component_name, component_content in custom_components.items():
@@ -165,7 +190,12 @@ You are the **Mailbird Customer Success Expert** – a highly skilled, empatheti
         return enhanced_prompt
     
     def _validate_prompt(self, prompt: str, config: PromptLoadConfig) -> str:
-        """Validate prompt structure and content"""
+        """
+        Validates the structure and content of a prompt against required sections, length constraints, and formatting standards.
+        
+        Returns:
+            str: "valid" if the prompt passes all checks, otherwise "warning".
+        """
         validation_issues = []
         
         # Check required sections
@@ -198,7 +228,11 @@ You are the **Mailbird Customer Success Expert** – a highly skilled, empatheti
             return "valid"
     
     def _generate_cache_key(self, config: PromptLoadConfig) -> str:
-        """Generate unique cache key for prompt configuration"""
+        """
+        Generate a unique string key representing the given prompt configuration for caching purposes.
+        
+        The key incorporates configuration attributes and a hash of the sorted custom components to ensure uniqueness for each distinct configuration.
+        """
         key_components = [
             config.version.value,
             str(config.include_reasoning),
@@ -212,7 +246,15 @@ You are the **Mailbird Customer Success Expert** – a highly skilled, empatheti
         return "_".join(key_components)
     
     def _get_included_components(self, config: PromptLoadConfig) -> List[str]:
-        """Get list of components included in the prompt"""
+        """
+        Return a list of component names that will be included in the prompt based on the provided configuration.
+        
+        Parameters:
+        	config (PromptLoadConfig): The configuration specifying which prompt features to include.
+        
+        Returns:
+        	List[str]: Names of the components included in the assembled prompt.
+        """
         components = ["base_identity", "response_templates"]
         
         if config.include_reasoning:
@@ -229,7 +271,15 @@ You are the **Mailbird Customer Success Expert** – a highly skilled, empatheti
         return components
     
     def get_prompt_metadata(self, config: Optional[PromptLoadConfig] = None) -> PromptMetadata:
-        """Get metadata about the loaded prompt"""
+        """
+        Retrieve metadata for a prompt configuration, loading the prompt if necessary.
+        
+        Parameters:
+        	config (Optional[PromptLoadConfig]): The configuration for which to retrieve prompt metadata. If not provided, the default configuration is used.
+        
+        Returns:
+        	PromptMetadata: Metadata describing the loaded prompt, including version, token estimate, included components, environment, and validation status.
+        """
         if config is None:
             config = PromptLoadConfig()
             
@@ -242,17 +292,30 @@ You are the **Mailbird Customer Success Expert** – a highly skilled, empatheti
         return self._prompt_metadata[cache_key]
     
     def clear_cache(self) -> None:
-        """Clear prompt cache"""
+        """
+        Clears all cached prompts and associated metadata from the loader.
+        """
         self._cached_prompts.clear()
         self._prompt_metadata.clear()
         self.logger.info("Prompt cache cleared")
     
     def list_available_versions(self) -> List[str]:
-        """List all available prompt versions"""
+        """
+        Return a list of all available prompt version identifiers as strings.
+        """
         return [version.value for version in PromptVersion]
     
     def compare_prompts(self, config1: PromptLoadConfig, config2: PromptLoadConfig) -> Dict[str, Any]:
-        """Compare two prompt configurations"""
+        """
+        Compares two prompt configurations and summarizes their differences.
+        
+        Parameters:
+            config1 (PromptLoadConfig): The first prompt configuration to compare.
+            config2 (PromptLoadConfig): The second prompt configuration to compare.
+        
+        Returns:
+            Dict[str, Any]: A dictionary containing the lengths of both prompts, their length and token count differences, differences in included components, and their respective versions.
+        """
         prompt1 = self.load_prompt(config1)
         prompt2 = self.load_prompt(config2)
         
@@ -276,7 +339,11 @@ You are the **Mailbird Customer Success Expert** – a highly skilled, empatheti
         }
     
     def export_prompt_config(self, config: PromptLoadConfig, output_path: Path) -> None:
-        """Export prompt configuration to file for version control"""
+        """
+        Export the given prompt configuration and its metadata to a JSON file for version control.
+        
+        The exported file includes the prompt version, configuration options, custom components, and associated metadata.
+        """
         export_data = {
             "version": config.version.value,
             "configuration": {
@@ -297,7 +364,15 @@ You are the **Mailbird Customer Success Expert** – a highly skilled, empatheti
         self.logger.info(f"Prompt configuration exported to: {output_path}")
     
     def import_prompt_config(self, input_path: Path) -> PromptLoadConfig:
-        """Import prompt configuration from file"""
+        """
+        Imports a prompt configuration from a JSON file and returns a PromptLoadConfig instance.
+        
+        Parameters:
+            input_path (Path): Path to the JSON file containing the prompt configuration.
+        
+        Returns:
+            PromptLoadConfig: The imported prompt configuration object.
+        """
         with open(input_path, 'r', encoding='utf-8') as f:
             data = json.load(f)
         
@@ -321,7 +396,9 @@ _global_prompt_loader = None
 
 
 def get_prompt_loader() -> PromptLoader:
-    """Get global prompt loader instance (singleton pattern)"""
+    """
+    Returns the global singleton instance of the PromptLoader, creating it if it does not already exist.
+    """
     global _global_prompt_loader
     if _global_prompt_loader is None:
         _global_prompt_loader = PromptLoader()
@@ -329,6 +406,14 @@ def get_prompt_loader() -> PromptLoader:
 
 
 def load_agent_sparrow_prompt(config: Optional[PromptLoadConfig] = None) -> str:
-    """Convenience function to load Agent Sparrow prompt"""
+    """
+    Loads and returns the Agent Sparrow prompt using the specified configuration.
+    
+    Parameters:
+        config (Optional[PromptLoadConfig]): Configuration options for prompt assembly. If not provided, defaults are used.
+    
+    Returns:
+        str: The assembled Agent Sparrow prompt string.
+    """
     loader = get_prompt_loader()
     return loader.load_prompt(config)

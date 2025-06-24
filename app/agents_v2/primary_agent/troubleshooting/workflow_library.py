@@ -36,7 +36,9 @@ class WorkflowLibrary:
     """
     
     def __init__(self):
-        """Initialize workflow library with pre-built workflows"""
+        """
+        Initialize the WorkflowLibrary with a collection of predefined troubleshooting workflows for various problem categories.
+        """
         
         self.workflows: Dict[str, TroubleshootingWorkflow] = {}
         
@@ -55,14 +57,12 @@ class WorkflowLibrary:
         customer_emotion: EmotionalState = EmotionalState.NEUTRAL
     ) -> List[TroubleshootingWorkflow]:
         """
-        Get appropriate workflows for problem category and customer state
+        Retrieve troubleshooting workflows for a given problem category, ordered by suitability for the customer's emotional state.
         
-        Args:
-            problem_category: Type of problem to solve
-            customer_emotion: Customer emotional state
-            
+        If no workflows exist for the specified category, returns a generic workflow for that category. The returned list is sorted to prioritize workflows most appropriate for the provided customer emotion.
+        
         Returns:
-            List of suitable workflows ordered by appropriateness
+            List[TroubleshootingWorkflow]: Workflows matching the problem category, ordered by appropriateness.
         """
         
         # Filter workflows by category
@@ -83,7 +83,15 @@ class WorkflowLibrary:
         return sorted_workflows
     
     async def get_workflow_by_name(self, workflow_name: str) -> Optional[TroubleshootingWorkflow]:
-        """Get specific workflow by name"""
+        """
+        Retrieve a troubleshooting workflow by its name.
+        
+        Parameters:
+            workflow_name (str): The name of the workflow to retrieve.
+        
+        Returns:
+            Optional[TroubleshootingWorkflow]: The workflow instance if found, otherwise None.
+        """
         return self.workflows.get(workflow_name)
     
     async def create_adaptive_workflow(
@@ -94,16 +102,16 @@ class WorkflowLibrary:
         complexity_adjustment: int = 0
     ) -> TroubleshootingWorkflow:
         """
-        Create adaptive workflow based on customer characteristics
+        Create a customized troubleshooting workflow adapted to a customer's technical skill level, emotional state, and desired complexity.
         
-        Args:
-            base_workflow: Base workflow to adapt
-            customer_technical_level: Customer technical skill (1-5)
-            customer_emotion: Customer emotional state
-            complexity_adjustment: Additional complexity adjustment (-2 to +2)
-            
+        Parameters:
+            base_workflow (TroubleshootingWorkflow): The workflow to use as a template for adaptation.
+            customer_technical_level (int): The customer's technical proficiency, on a scale from 1 (beginner) to 5 (expert).
+            customer_emotion (EmotionalState): The customer's current emotional state, used to tailor instructions and step selection.
+            complexity_adjustment (int, optional): Adjustment to workflow complexity, ranging from -2 (simpler) to +2 (more complex). Defaults to 0.
+        
         Returns:
-            Adapted workflow for specific customer
+            TroubleshootingWorkflow: An adapted workflow with diagnostic steps and metadata tailored to the customer's profile.
         """
         
         # Create copy of base workflow
@@ -147,7 +155,11 @@ class WorkflowLibrary:
     # Workflow initialization methods
     
     def _initialize_email_connectivity_workflows(self):
-        """Initialize email connectivity troubleshooting workflows"""
+        """
+        Initializes and registers basic and advanced email connectivity troubleshooting workflows.
+        
+        Defines two workflows for resolving email connectivity issues: a basic workflow for common connection problems and an advanced workflow for complex technical diagnostics. Each workflow includes relevant metadata, diagnostic steps, verification checkpoints, escalation criteria, and required tools and permissions.
+        """
         
         # Basic Email Connectivity Workflow (Level 1-2)
         basic_connectivity = TroubleshootingWorkflow(
@@ -213,7 +225,11 @@ class WorkflowLibrary:
         self.workflows["advanced_email_connectivity"] = advanced_connectivity
     
     def _initialize_account_setup_workflows(self):
-        """Initialize account setup troubleshooting workflows"""
+        """
+        Initializes and registers the troubleshooting workflow for email account setup.
+        
+        Creates a workflow that guides customers through configuring a new email account, including validation steps, verification checkpoints, escalation criteria, and required tools and permissions. The workflow is added to the library under the "email_account_setup" key.
+        """
         
         account_setup = TroubleshootingWorkflow(
             name="Email Account Setup Assistant",
@@ -246,7 +262,11 @@ class WorkflowLibrary:
         self.workflows["email_account_setup"] = account_setup
     
     def _initialize_sync_issue_workflows(self):
-        """Initialize email synchronization troubleshooting workflows"""
+        """
+        Initializes and registers the troubleshooting workflow for resolving email synchronization issues.
+        
+        This workflow addresses problems such as emails not updating, missing or duplicate emails, folder synchronization issues, and delayed synchronization. It defines relevant phases, diagnostic steps, verification checkpoints, escalation criteria, estimated time, success rate, difficulty level, and required tools and permissions for effective troubleshooting.
+        """
         
         sync_issues = TroubleshootingWorkflow(
             name="Email Synchronization Resolution",
@@ -280,7 +300,11 @@ class WorkflowLibrary:
         self.workflows["email_sync_issues"] = sync_issues
     
     def _initialize_performance_workflows(self):
-        """Initialize performance optimization workflows"""
+        """
+        Initializes and registers the performance optimization troubleshooting workflow.
+        
+        Defines a workflow for diagnosing and resolving Mailbird performance issues, including slowdowns, high memory usage, and interface lag. The workflow includes relevant phases, diagnostic steps, verification checkpoints, escalation criteria, and required tools and permissions.
+        """
         
         performance = TroubleshootingWorkflow(
             name="Mailbird Performance Optimization",
@@ -314,7 +338,11 @@ class WorkflowLibrary:
         self.workflows["performance_optimization"] = performance
     
     def _initialize_feature_education_workflows(self):
-        """Initialize feature education workflows"""
+        """
+        Initializes and registers the workflow for educating customers on Mailbird features and best practices.
+        
+        This workflow guides users through learning how to use features, addresses feature-related questions, and provides best practice recommendations. It includes diagnostic steps, verification checkpoints, escalation criteria, and specifies required tools and permissions.
+        """
         
         feature_education = TroubleshootingWorkflow(
             name="Mailbird Feature Education",
@@ -349,7 +377,12 @@ class WorkflowLibrary:
     # Diagnostic step creation methods
     
     def _create_basic_connectivity_steps(self) -> List[DiagnosticStep]:
-        """Create basic connectivity diagnostic steps"""
+        """
+        Create and return a list of basic diagnostic steps for troubleshooting email connectivity issues.
+        
+        Returns:
+            List[DiagnosticStep]: A sequence of steps guiding users through credential verification, connection testing, server settings checks, application restart, and email send/receive validation.
+        """
         return [
             DiagnosticStep(
                 step_number=1,
@@ -437,7 +470,13 @@ class WorkflowLibrary:
         ]
     
     def _create_advanced_connectivity_steps(self) -> List[DiagnosticStep]:
-        """Create advanced connectivity diagnostic steps"""
+        """
+        Return a list of diagnostic steps for advanced email connectivity troubleshooting.
+        
+        Includes both basic connectivity steps and additional advanced steps such as network diagnostics, SSL/TLS certificate validation, and OAuth authentication checks.
+        Returns:
+            List[DiagnosticStep]: Combined list of basic and advanced diagnostic steps for connectivity issues.
+        """
         basic_steps = self._create_basic_connectivity_steps()
         
         advanced_steps = [
@@ -497,7 +536,12 @@ class WorkflowLibrary:
         return basic_steps + advanced_steps
     
     def _create_account_setup_steps(self) -> List[DiagnosticStep]:
-        """Create account setup diagnostic steps"""
+        """
+        Create and return a list of diagnostic steps for guiding users through email account setup.
+        
+        Returns:
+            List of DiagnosticStep objects representing sequential actions for collecting account information, configuring the account, validating credentials, and performing an initial sync.
+        """
         return [
             DiagnosticStep(
                 step_number=1,
@@ -566,7 +610,12 @@ class WorkflowLibrary:
         ]
     
     def _create_sync_resolution_steps(self) -> List[DiagnosticStep]:
-        """Create sync resolution diagnostic steps"""
+        """
+        Generate a list of diagnostic steps for resolving email synchronization issues.
+        
+        Returns:
+            List of DiagnosticStep objects representing sequential actions to troubleshoot and resolve sync problems, including manual sync initiation, settings review, and cache clearing.
+        """
         return [
             DiagnosticStep(
                 step_number=1,
@@ -619,7 +668,12 @@ class WorkflowLibrary:
         ]
     
     def _create_performance_optimization_steps(self) -> List[DiagnosticStep]:
-        """Create performance optimization diagnostic steps"""
+        """
+        Generate a list of diagnostic steps for optimizing Mailbird performance.
+        
+        Returns:
+            List[DiagnosticStep]: Sequential steps for analyzing system resources, optimizing sync settings, and ensuring the application is up to date to improve performance.
+        """
         return [
             DiagnosticStep(
                 step_number=1,
@@ -672,7 +726,12 @@ class WorkflowLibrary:
         ]
     
     def _create_feature_education_steps(self) -> List[DiagnosticStep]:
-        """Create feature education diagnostic steps"""
+        """
+        Create a list of diagnostic steps for educating customers on Mailbird features.
+        
+        Returns:
+            List[DiagnosticStep]: Sequential steps guiding the customer through identifying a feature of interest, observing a demonstration, and practicing independent usage.
+        """
         return [
             DiagnosticStep(
                 step_number=1,
@@ -727,7 +786,12 @@ class WorkflowLibrary:
     # Verification checkpoint creation methods
     
     def _create_basic_verification_checkpoints(self) -> List[VerificationCheckpoint]:
-        """Create basic verification checkpoints"""
+        """
+        Generate a list of basic verification checkpoints to confirm successful email connection and synchronization.
+        
+        Returns:
+            List[VerificationCheckpoint]: A list containing a single checkpoint for verifying email connectivity and sync status.
+        """
         return [
             VerificationCheckpoint(
                 name="Connection Established",
@@ -744,7 +808,12 @@ class WorkflowLibrary:
         ]
     
     def _create_advanced_verification_checkpoints(self) -> List[VerificationCheckpoint]:
-        """Create advanced verification checkpoints"""
+        """
+        Create verification checkpoints for advanced connectivity troubleshooting.
+        
+        Returns:
+            List of VerificationCheckpoint objects assessing security protocol functionality and connection stability in advanced scenarios.
+        """
         return [
             VerificationCheckpoint(
                 name="Advanced Connectivity Verified",
@@ -761,7 +830,12 @@ class WorkflowLibrary:
         ]
     
     def _create_setup_verification_checkpoints(self) -> List[VerificationCheckpoint]:
-        """Create account setup verification checkpoints"""
+        """
+        Generate verification checkpoints to confirm successful email account setup.
+        
+        Returns:
+            List of VerificationCheckpoint objects for validating account configuration and email functionality.
+        """
         return [
             VerificationCheckpoint(
                 name="Account Setup Complete",
@@ -778,7 +852,12 @@ class WorkflowLibrary:
         ]
     
     def _create_sync_verification_checkpoints(self) -> List[VerificationCheckpoint]:
-        """Create sync verification checkpoints"""
+        """
+        Create verification checkpoints to confirm successful resolution of email synchronization issues.
+        
+        Returns:
+            List[VerificationCheckpoint]: A list containing checkpoints that assess whether email sync and folder updates are functioning as expected.
+        """
         return [
             VerificationCheckpoint(
                 name="Sync Resolution Verified",
@@ -795,7 +874,12 @@ class WorkflowLibrary:
         ]
     
     def _create_performance_verification_checkpoints(self) -> List[VerificationCheckpoint]:
-        """Create performance verification checkpoints"""
+        """
+        Create verification checkpoints to assess the effectiveness of performance optimization steps.
+        
+        Returns:
+            List of VerificationCheckpoint instances focused on confirming improved application speed and acceptable resource usage after performance troubleshooting.
+        """
         return [
             VerificationCheckpoint(
                 name="Performance Improved",
@@ -812,7 +896,12 @@ class WorkflowLibrary:
         ]
     
     def _create_education_verification_checkpoints(self) -> List[VerificationCheckpoint]:
-        """Create feature education verification checkpoints"""
+        """
+        Create verification checkpoints to assess whether the customer has effectively learned to use a Mailbird feature.
+        
+        Returns:
+            List[VerificationCheckpoint]: A list containing checkpoints that evaluate feature competency and understanding.
+        """
         return [
             VerificationCheckpoint(
                 name="Feature Learning Complete",
@@ -835,9 +924,24 @@ class WorkflowLibrary:
         workflows: List[TroubleshootingWorkflow],
         customer_emotion: EmotionalState
     ) -> List[TroubleshootingWorkflow]:
-        """Sort workflows by appropriateness for customer emotional state"""
+        """
+        Sorts a list of troubleshooting workflows by their suitability for the customer's emotional state.
+        
+        Workflows are scored based on estimated time, difficulty, and success rate, with weighting adjusted according to the customer's emotion. Shorter and simpler workflows are prioritized for frustrated, urgent, or confused customers, while more complex workflows may be favored for professional customers.
+        
+        Returns:
+            List[TroubleshootingWorkflow]: Workflows sorted from most to least appropriate for the given emotional state.
+        """
         
         def emotion_score(workflow: TroubleshootingWorkflow) -> float:
+            """
+            Calculates a suitability score for a troubleshooting workflow based on customer emotional state and workflow attributes.
+            
+            The score favors shorter and simpler workflows for frustrated, urgent, or confused customers, and allows more complex workflows for professional customers. The workflow's success rate also contributes to the final score.
+            
+            Returns:
+                score (float): The calculated suitability score for the workflow.
+            """
             score = 0.0
             
             # Prefer shorter workflows for frustrated/urgent customers
@@ -873,7 +977,20 @@ class WorkflowLibrary:
         customer_emotion: EmotionalState,
         complexity_adjustment: int
     ) -> Optional[DiagnosticStep]:
-        """Adapt diagnostic step for customer characteristics"""
+        """
+        Adapts a diagnostic step to match the customer's technical level and emotional state.
+        
+        Skips steps that are too advanced for the customer. Modifies instructions, troubleshooting tips, and time estimates to simplify or add detail based on the customer's skill and emotional context.
+        
+        Parameters:
+            step (DiagnosticStep): The diagnostic step to adapt.
+            customer_technical_level (int): The customer's technical proficiency level.
+            customer_emotion (EmotionalState): The customer's current emotional state.
+            complexity_adjustment (int): Adjustment to the step's difficulty.
+        
+        Returns:
+            Optional[DiagnosticStep]: The adapted diagnostic step, or None if the step is too advanced for the customer.
+        """
         
         # Skip steps that are too advanced for customer
         adjusted_difficulty = step.difficulty_level + complexity_adjustment
@@ -931,7 +1048,16 @@ class WorkflowLibrary:
         customer_technical_level: int,
         customer_emotion: EmotionalState
     ) -> float:
-        """Get time multiplier for workflow adaptation"""
+        """
+        Calculate a multiplier to adjust estimated workflow time based on customer technical skill and emotional state.
+        
+        Parameters:
+        	customer_technical_level (int): The customer's technical proficiency, where lower values indicate less experience.
+        	customer_emotion (EmotionalState): The customer's current emotional state.
+        
+        Returns:
+        	float: A multiplier to apply to workflow time estimates, increasing for beginners or confused customers and decreasing for advanced or urgent customers.
+        """
         
         multiplier = 1.0
         
@@ -950,7 +1076,17 @@ class WorkflowLibrary:
         return multiplier
     
     def _create_generic_workflow(self, problem_category: ProblemCategory) -> TroubleshootingWorkflow:
-        """Create generic workflow for unknown problem categories"""
+        """
+        Create a generic troubleshooting workflow for unspecified or unknown problem categories.
+        
+        This workflow provides a general approach to problem resolution, including initial information gathering, basic troubleshooting steps, and verification checkpoints. It is used as a fallback when no specific workflow exists for the given problem category.
+        
+        Parameters:
+            problem_category (ProblemCategory): The category of the problem for which the generic workflow is created.
+        
+        Returns:
+            TroubleshootingWorkflow: A generic workflow instance tailored to the specified problem category.
+        """
         
         return TroubleshootingWorkflow(
             name=f"Generic {problem_category.value.replace('_', ' ').title()} Resolution",

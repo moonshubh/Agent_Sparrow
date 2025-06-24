@@ -152,13 +152,9 @@ class ResponseFormatter:
     @classmethod
     def parse_response_structure(cls, response: str) -> ResponseStructure:
         """
-        Parse and analyze the structure of an Agent Sparrow response
+        Parses an Agent Sparrow response and extracts its structural components.
         
-        Args:
-            response: The response text to analyze
-            
-        Returns:
-            ResponseStructure object with parsed components
+        Splits the response into sections such as empathetic opening, primary heading, subsections, and closing, while detecting the presence of proper markdown formatting and numbered steps. Returns a ResponseStructure object containing all parsed elements.
         """
         lines = response.split('\n')
         
@@ -237,14 +233,16 @@ class ResponseFormatter:
     @classmethod
     def validate_response_quality(cls, response: str, emotion_result: Optional[EmotionDetectionResult] = None) -> QualityScore:
         """
-        Validate response against quality assurance checklist
+        Evaluates a response against quality assurance criteria and returns a detailed quality assessment.
         
-        Args:
-            response: The response text to validate
-            emotion_result: Optional emotion detection result for tone matching
-            
+        The method analyzes the response for the presence and quality of key sections such as empathetic opening, primary solution heading, detailed solution steps, pro tips, and supportive closing. It checks for proper markdown formatting and emotional tone alignment (if emotion detection results are provided). The assessment includes section scores, missing sections, improvement suggestions, and an overall pass/fail flag based on weighted criteria.
+        
+        Parameters:
+            response (str): The response text to be evaluated.
+            emotion_result (Optional[EmotionDetectionResult]): Optional emotion detection result for tone matching.
+        
         Returns:
-            QualityScore with detailed assessment
+            QualityScore: An object containing overall and per-section scores, missing sections, suggestions for improvement, and a quality check pass indicator.
         """
         structure = cls.parse_response_structure(response)
         section_scores = {}
@@ -357,15 +355,17 @@ class ResponseFormatter:
     @classmethod
     def generate_response_template(cls, emotion: EmotionalState, issue: str, solution_type: str = "technical") -> str:
         """
-        Generate a response template based on emotion and issue type
+        Generate a formatted response template tailored to the customer's emotional state, issue, and solution type.
         
-        Args:
-            emotion: Detected customer emotional state
-            issue: Specific issue being addressed
-            solution_type: Type of solution (technical, billing, feature, etc.)
-            
+        The template includes an empathy-driven opening, an action-oriented primary heading, placeholders for main content, quick fix, detailed solution steps, additional information, pro tips, and a supportive closing customized by emotion and issue context.
+        
+        Parameters:
+            emotion (EmotionalState): The detected emotional state of the customer.
+            issue (str): The specific issue being addressed.
+            solution_type (str, optional): The type of solution (e.g., "technical", "billing", "feature", "setup", "troubleshooting"). Defaults to "technical".
+        
         Returns:
-            Formatted response template ready for content insertion
+            str: A response template string ready for content insertion, structured according to Agent Sparrow's standards.
         """
         # Get emotion-specific empathy template
         from .emotion_templates import EmotionTemplates
@@ -423,13 +423,12 @@ class ResponseFormatter:
     @classmethod
     def apply_mandatory_formatting(cls, response: str) -> str:
         """
-        Apply mandatory formatting rules to ensure response meets standards
+        Format a response string to enforce mandatory spacing and markdown conventions.
         
-        Args:
-            response: Raw response text
-            
+        Ensures proper blank lines before and after markdown headers and limits consecutive blank lines to a maximum of two.
+        
         Returns:
-            Formatted response with mandatory structure applied
+            str: The formatted response string with required structure applied.
         """
         lines = response.split('\n')
         formatted_lines = []
@@ -465,15 +464,12 @@ class ResponseFormatter:
     @classmethod
     def enhance_response_with_structure(cls, raw_response: str, emotion_result: EmotionDetectionResult, issue: str) -> str:
         """
-        Enhance a raw LLM response with proper Agent Sparrow structure
+        Enhances a raw LLM-generated response by ensuring it follows the Agent Sparrow structural and quality standards.
         
-        Args:
-            raw_response: Raw response from LLM
-            emotion_result: Detected customer emotion
-            issue: Specific issue being addressed
-            
+        The method parses the input response, generates or replaces the empathetic opening and supportive closing based on detected customer emotion and issue if they are missing or insufficient, ensures the presence of a primary heading, and adds a Pro Tips section if absent. The final response is assembled with proper formatting and section order.
+        
         Returns:
-            Enhanced response with proper structure and formatting
+            str: The enhanced and formatted response string with all mandatory sections.
         """
         # Parse existing structure
         structure = cls.parse_response_structure(raw_response)

@@ -440,6 +440,13 @@ function TypewriterText({ text, isStreaming }: { text: string, isStreaming: bool
   )
 }
 
+/**
+ * Renders a chat message bubble with support for user, agent, and system messages, including streaming animation, markdown rendering, citations, log analysis results, and interactive actions.
+ *
+ * Displays avatars, message content, citations, analysis results, and message metadata. Provides copy, rate, and retry actions for agent and system messages. Handles specialized rendering for log analyst messages and legacy analysis formats. Filters out certain system status messages from display.
+ *
+ * @returns The rendered chat message bubble, or `null` for filtered system messages.
+ */
 export default function MessageBubble({ 
   id, 
   type, 
