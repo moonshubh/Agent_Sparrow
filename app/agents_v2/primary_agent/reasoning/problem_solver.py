@@ -37,10 +37,9 @@ class ProblemSolvingFramework:
     
     def __init__(self, config: ReasoningConfig):
         """
-        Initialize problem solving framework
+        Initialize the ProblemSolvingFramework with the provided reasoning configuration.
         
-        Args:
-            config: Reasoning configuration
+        Associates each problem category with its corresponding solution template method for structured solution generation.
         """
         self.config = config
         
@@ -65,18 +64,20 @@ class ProblemSolvingFramework:
         query_text: str
     ) -> List[SolutionCandidate]:
         """
-        Generate comprehensive solution candidates using 5-step framework
+        Asynchronously generates and ranks solution candidates for a given problem using a structured 5-step problem-solving framework.
         
-        Args:
-            problem_category: Categorized problem type
-            emotional_state: Customer emotional state
-            urgency_level: Urgency from 1-5
-            complexity_score: Complexity from 0-1
-            key_entities: Extracted entities from query
-            query_text: Original query text
-            
+        This method analyzes the problem context, gathers relevant information, generates hypotheses, plans solution implementations using category-specific templates, and enhances each solution with verification, prevention, and risk assessment. The resulting solution candidates are ranked by confidence and appropriateness, and the top candidates are returned.
+        
+        Parameters:
+            problem_category (ProblemCategory): The categorized type of the problem.
+            emotional_state (EmotionalState): The customer's emotional state.
+            urgency_level (int): The urgency of the problem on a scale from 1 to 5.
+            complexity_score (float): The complexity of the problem on a scale from 0 to 1.
+            key_entities (List[str]): Key entities extracted from the query.
+            query_text (str): The original query text.
+        
         Returns:
-            List of ranked solution candidates
+            List[SolutionCandidate]: A list of ranked solution candidates tailored to the problem context.
         """
         
         logger.info(f"Generating solutions for {problem_category.value} with urgency {urgency_level}")
@@ -123,7 +124,14 @@ class ProblemSolvingFramework:
         key_entities: List[str],
         query_text: str
     ) -> Dict[str, Any]:
-        """Step 1: Define the problem comprehensively"""
+        """
+        Constructs a comprehensive problem definition dictionary based on the provided context.
+        
+        The returned dictionary includes the problem category, extracted symptoms from the query, identified affected systems, user impact assessment, problem scope, and relevant constraints.
+         
+        Returns:
+            dict: A dictionary containing detailed problem definition fields for downstream reasoning steps.
+        """
         
         problem_definition = {
             'category': problem_category,
@@ -143,7 +151,11 @@ class ProblemSolvingFramework:
         key_entities: List[str],
         query_text: str
     ) -> Dict[str, Any]:
-        """Step 2: Gather relevant information systematically"""
+        """
+        Collects and organizes relevant information needed to analyze the defined problem.
+        
+        Returns a dictionary containing known factors, missing information, context clues, similar cases, and relevant documentation references based on the problem definition, key entities, and query text.
+        """
         
         information_analysis = {
             'known_factors': self._identify_known_factors(problem_definition, key_entities),
@@ -161,7 +173,17 @@ class ProblemSolvingFramework:
         information_analysis: Dict[str, Any],
         problem_category: ProblemCategory
     ) -> List[Dict[str, Any]]:
-        """Step 3: Generate ranked hypotheses (80%, 15%, 5% probability)"""
+        """
+        Generates a ranked list of hypotheses for the given problem, assigning probabilities and confidence levels to primary, alternative, and edge case scenarios.
+        
+        Parameters:
+            problem_definition (Dict[str, Any]): Structured details of the defined problem.
+            information_analysis (Dict[str, Any]): Collected and analyzed information relevant to the problem.
+            problem_category (ProblemCategory): The category of the problem being addressed.
+        
+        Returns:
+            List[Dict[str, Any]]: A list of hypothesis dictionaries, each containing the hypothesis, its probability, confidence score, and type (primary, alternative, or edge case).
+        """
         
         hypotheses = []
         
@@ -210,7 +232,14 @@ class ProblemSolvingFramework:
         urgency_level: int,
         complexity_score: float
     ) -> List[SolutionCandidate]:
-        """Step 4: Plan solution implementations for each hypothesis"""
+        """
+        Generates solution candidates for each hypothesis using category-specific templates.
+        
+        For each hypothesis, selects the appropriate solution template based on the problem category and asynchronously generates a `SolutionCandidate` tailored to the hypothesis and contextual factors.
+        
+        Returns:
+            List[SolutionCandidate]: A list of generated solution candidates for the provided hypotheses.
+        """
         
         solution_candidates = []
         
@@ -233,7 +262,14 @@ class ProblemSolvingFramework:
         solution_candidates: List[SolutionCandidate],
         problem_category: ProblemCategory
     ) -> List[SolutionCandidate]:
-        """Step 5: Enhance solutions with verification and prevention"""
+        """
+        Enhance solution candidates by adding verification steps, prevention measures, risk assessments, and fallback options.
+        
+        Each solution is updated with success indicators, appended prevention guidance, identified risk factors, and generated fallback options if not already present.
+        
+        Returns:
+            List[SolutionCandidate]: The list of enhanced solution candidates.
+        """
         
         enhanced_solutions = []
         
@@ -266,7 +302,14 @@ class ProblemSolvingFramework:
         urgency_level: int,
         complexity_score: float
     ) -> SolutionCandidate:
-        """Generate technical issue solution"""
+        """
+        Generate a solution candidate for technical issues such as connection, synchronization, or performance problems based on the provided hypothesis and user context.
+        
+        Selects and customizes a stepwise solution approach according to the hypothesis content, urgency level, and emotional state, returning a detailed solution candidate with summary, approach, expected outcome, confidence score, estimated resolution time, and required tools.
+        
+        Returns:
+            SolutionCandidate: A structured solution candidate tailored to the technical issue described in the hypothesis.
+        """
         
         base_solutions = {
             'connection_issue': {
@@ -363,7 +406,15 @@ class ProblemSolvingFramework:
         urgency_level: int,
         complexity_score: float
     ) -> SolutionCandidate:
-        """Generate account setup solution"""
+        """
+        Generates a detailed solution candidate for completing an email account setup process.
+        
+        Parameters:
+            hypothesis (Dict[str, Any]): The hypothesis guiding the solution approach, typically describing the likely account setup issue.
+        
+        Returns:
+            SolutionCandidate: A structured solution outlining step-by-step account setup, including both automatic and manual configuration, expected outcomes, estimated time, and required tools.
+        """
         
         return SolutionCandidate(
             solution_summary="Complete Email Account Setup",
@@ -399,7 +450,12 @@ class ProblemSolvingFramework:
         urgency_level: int,
         complexity_score: float
     ) -> SolutionCandidate:
-        """Generate feature education solution"""
+        """
+        Generates a solution candidate focused on educating the user about a specific Mailbird feature.
+        
+        Returns:
+            SolutionCandidate: A detailed, step-by-step educational plan including tutorials, practical examples, advanced tips, and troubleshooting guidance to help the user master and integrate the feature into their workflow.
+        """
         
         return SolutionCandidate(
             solution_summary="Master Mailbird Feature Usage",
@@ -435,7 +491,12 @@ class ProblemSolvingFramework:
         urgency_level: int,
         complexity_score: float
     ) -> SolutionCandidate:
-        """Generate billing inquiry solution"""
+        """
+        Generate a solution candidate for billing inquiries, addressing account review, pricing clarification, issue resolution, and future billing prevention.
+        
+        Returns:
+            SolutionCandidate: A structured solution for resolving billing-related questions and issues, including steps for review, clarification, resolution, and prevention.
+        """
         
         return SolutionCandidate(
             solution_summary="Resolve Billing Questions and Issues",
@@ -471,7 +532,12 @@ class ProblemSolvingFramework:
         urgency_level: int,
         complexity_score: float
     ) -> SolutionCandidate:
-        """Generate performance optimization solution"""
+        """
+        Generate a solution candidate focused on optimizing Mailbird's performance based on the provided hypothesis and contextual factors.
+        
+        Returns:
+            SolutionCandidate: A structured plan detailing assessment, configuration, system improvements, and maintenance steps to enhance Mailbird's speed and efficiency.
+        """
         
         return SolutionCandidate(
             solution_summary="Optimize Mailbird Performance",
@@ -507,7 +573,14 @@ class ProblemSolvingFramework:
         urgency_level: int,
         complexity_score: float
     ) -> SolutionCandidate:
-        """Generate general troubleshooting solution"""
+        """
+        Generates a structured troubleshooting solution candidate for general problem scenarios.
+        
+        The returned solution outlines a stepwise approach for isolating, testing, and resolving issues, including verification and documentation steps. The plan is tailored for systematic diagnosis and resolution, with an estimated time and required tools specified.
+        
+        Returns:
+            SolutionCandidate: A detailed troubleshooting plan with summary, approach, expected outcome, confidence score, estimated time, and required tools.
+        """
         
         return SolutionCandidate(
             solution_summary="Systematic Problem Troubleshooting",
@@ -543,7 +616,12 @@ class ProblemSolvingFramework:
         urgency_level: int,
         complexity_score: float
     ) -> SolutionCandidate:
-        """Generate general support solution"""
+        """
+        Generates a comprehensive general support solution candidate based on the provided hypothesis and user context.
+        
+        Returns:
+            SolutionCandidate: A structured support plan including needs assessment, tailored guidance, implementation support, and follow-up, with estimated time and required resources.
+        """
         
         return SolutionCandidate(
             solution_summary="Comprehensive Support Assistance",
@@ -575,7 +653,15 @@ class ProblemSolvingFramework:
     # Helper methods
     
     def _extract_symptoms(self, query_text: str) -> List[str]:
-        """Extract problem symptoms from query"""
+        """
+        Extracts symptom indicators from the query text based on predefined keywords.
+        
+        Parameters:
+            query_text (str): The user's query describing the problem.
+        
+        Returns:
+            List[str]: A list of detected symptom keywords present in the query.
+        """
         symptoms = []
         
         symptom_indicators = [
@@ -591,7 +677,15 @@ class ProblemSolvingFramework:
         return symptoms
     
     def _identify_affected_systems(self, key_entities: List[str]) -> List[str]:
-        """Identify affected systems from entities"""
+        """
+        Identifies affected systems based on labeled entities in the provided list.
+        
+        Parameters:
+            key_entities (List[str]): A list of entity strings labeled with prefixes such as 'email_provider:', 'feature:', or 'error:'.
+        
+        Returns:
+            List[str]: A list of human-readable descriptions of affected systems derived from the input entities.
+        """
         systems = []
         
         for entity in key_entities:
@@ -605,7 +699,12 @@ class ProblemSolvingFramework:
         return systems
     
     def _assess_user_impact(self, emotional_state: EmotionalState, urgency_level: int) -> str:
-        """Assess impact on user"""
+        """
+        Evaluates and categorizes the impact of the problem on the user based on emotional state and urgency level.
+        
+        Returns:
+            str: A description of user impact as 'High', 'Medium', or 'Low', reflecting the severity of disruption to the user's workflow.
+        """
         if urgency_level >= 4 or emotional_state == EmotionalState.URGENT:
             return "High impact - blocking critical workflow"
         elif urgency_level >= 2 or emotional_state == EmotionalState.FRUSTRATED:
@@ -614,7 +713,16 @@ class ProblemSolvingFramework:
             return "Low impact - minor disruption to workflow"
     
     def _determine_problem_scope(self, complexity_score: float, key_entities: List[str]) -> str:
-        """Determine scope of the problem"""
+        """
+        Determines the scope of a problem based on its complexity score and involved entities.
+        
+        Parameters:
+            complexity_score (float): Numeric value representing the assessed complexity of the problem.
+            key_entities (List[str]): Entities involved in or affected by the problem.
+        
+        Returns:
+            str: A description of the problem's scope, categorized as complex, moderate, or focused.
+        """
         if complexity_score > 0.8:
             return "Complex multi-system issue"
         elif complexity_score > 0.5:
@@ -623,7 +731,16 @@ class ProblemSolvingFramework:
             return "Focused issue with limited scope"
     
     def _identify_constraints(self, emotional_state: EmotionalState, urgency_level: int) -> List[str]:
-        """Identify solution constraints"""
+        """
+        Identifies constraints that should be considered when generating solutions based on the user's emotional state and urgency level.
+        
+        Parameters:
+        	emotional_state (EmotionalState): The user's current emotional state, influencing the type of guidance needed.
+        	urgency_level (int): The urgency of the problem, affecting time sensitivity.
+        
+        Returns:
+        	List[str]: A list of constraint descriptions relevant to the solution approach.
+        """
         constraints = []
         
         if urgency_level >= 4:
@@ -637,7 +754,12 @@ class ProblemSolvingFramework:
         return constraints
     
     def _identify_known_factors(self, problem_definition: Dict[str, Any], key_entities: List[str]) -> List[str]:
-        """Identify known factors about the problem"""
+        """
+        Identifies and summarizes known factors related to the problem based on its definition and key entities.
+        
+        Returns:
+            List of descriptive strings outlining the problem category, user impact, and affected systems if available.
+        """
         known_factors = []
         
         known_factors.append(f"Problem category: {problem_definition['category'].value}")
@@ -649,7 +771,15 @@ class ProblemSolvingFramework:
         return known_factors
     
     def _identify_missing_information(self, problem_definition: Dict[str, Any]) -> List[str]:
-        """Identify missing information needed for complete solution"""
+        """
+        Identify information gaps in the problem definition that are required for a complete solution.
+        
+        Parameters:
+            problem_definition (Dict[str, Any]): The structured problem definition to analyze.
+        
+        Returns:
+            List[str]: A list of missing information items needed to fully address the problem.
+        """
         missing_info = []
         
         if not problem_definition.get('affected_systems'):
@@ -665,7 +795,12 @@ class ProblemSolvingFramework:
         return missing_info
     
     def _extract_context_clues(self, query_text: str) -> List[str]:
-        """Extract additional context clues"""
+        """
+        Extracts context clues from the query text indicating timing or frequency patterns.
+        
+        Returns:
+            List of context clues such as recent changes, intermittent issues, or consistent behavior patterns based on keywords found in the query text.
+        """
         clues = []
         
         if 'recently' in query_text.lower() or 'after' in query_text.lower():
@@ -680,14 +815,26 @@ class ProblemSolvingFramework:
         return clues
     
     def _find_similar_cases(self, problem_definition: Dict[str, Any]) -> List[str]:
-        """Find similar cases (placeholder for knowledge base integration)"""
+        """
+        Return example descriptions of similar cases relevant to the problem definition.
+        
+        This is a placeholder implementation intended for future integration with a knowledge base.
+        """
         return [
             "Similar cases found in knowledge base",
             "Common resolution patterns identified"
         ]
     
     def _identify_relevant_docs(self, problem_definition: Dict[str, Any]) -> List[str]:
-        """Identify relevant documentation"""
+        """
+        Returns a list of relevant documentation titles based on the problem category in the provided problem definition.
+        
+        Parameters:
+            problem_definition (Dict[str, Any]): Dictionary containing details about the problem, including its category.
+        
+        Returns:
+            List[str]: Titles of documentation relevant to the specified problem category.
+        """
         docs = []
         
         category = problem_definition['category']
@@ -701,7 +848,17 @@ class ProblemSolvingFramework:
     def _generate_primary_hypothesis(
         self, problem_definition: Dict[str, Any], information_analysis: Dict[str, Any], category: ProblemCategory
     ) -> str:
-        """Generate most likely hypothesis"""
+        """
+        Returns the most probable hypothesis for the given problem category based on the problem definition and analyzed information.
+        
+        Parameters:
+            problem_definition (Dict[str, Any]): Structured details about the problem.
+            information_analysis (Dict[str, Any]): Collected and analyzed information relevant to the problem.
+            category (ProblemCategory): The category of the problem.
+        
+        Returns:
+            str: The primary hypothesis describing the likely cause or nature of the problem.
+        """
         
         category_hypotheses = {
             ProblemCategory.TECHNICAL_ISSUE: "Configuration or connectivity issue with email account settings",
@@ -718,7 +875,17 @@ class ProblemSolvingFramework:
     def _generate_alternative_hypothesis(
         self, problem_definition: Dict[str, Any], information_analysis: Dict[str, Any], category: ProblemCategory
     ) -> Optional[str]:
-        """Generate alternative hypothesis"""
+        """
+        Returns an alternative hypothesis for the given problem category based on the problem definition and analyzed information.
+        
+        Parameters:
+            problem_definition (Dict[str, Any]): Structured details about the identified problem.
+            information_analysis (Dict[str, Any]): Collected and analyzed information relevant to the problem.
+            category (ProblemCategory): The category of the problem being addressed.
+        
+        Returns:
+            Optional[str]: An alternative hypothesis statement if available for the specified category; otherwise, None.
+        """
         
         alternative_hypotheses = {
             ProblemCategory.TECHNICAL_ISSUE: "Email provider policy change affecting authentication",
@@ -735,7 +902,17 @@ class ProblemSolvingFramework:
     def _generate_edge_case_hypothesis(
         self, problem_definition: Dict[str, Any], information_analysis: Dict[str, Any], category: ProblemCategory
     ) -> Optional[str]:
-        """Generate edge case hypothesis"""
+        """
+        Returns an edge case hypothesis string for the given problem category, if applicable.
+        
+        Parameters:
+            problem_definition (Dict[str, Any]): The structured definition of the problem.
+            information_analysis (Dict[str, Any]): Analysis of gathered information relevant to the problem.
+            category (ProblemCategory): The category of the problem.
+        
+        Returns:
+            Optional[str]: An edge case hypothesis description for the specified category, or None if not defined.
+        """
         
         edge_cases = {
             ProblemCategory.TECHNICAL_ISSUE: "Rare system compatibility or security software conflict",
@@ -749,7 +926,16 @@ class ProblemSolvingFramework:
         return edge_cases.get(category)
     
     def _generate_success_indicators(self, solution: SolutionCandidate, category: ProblemCategory) -> List[str]:
-        """Generate success indicators for solution verification"""
+        """
+        Generates a list of success indicators to verify whether a solution has effectively resolved the problem for a given category.
+        
+        Parameters:
+        	solution (SolutionCandidate): The proposed solution candidate.
+        	category (ProblemCategory): The category of the problem being addressed.
+        
+        Returns:
+        	List[str]: Success criteria that can be used to confirm the solution's effectiveness, including both general and category-specific indicators.
+        """
         
         base_indicators = [
             "Email functionality restored",
@@ -778,7 +964,15 @@ class ProblemSolvingFramework:
         return base_indicators + category_specific.get(category, [])
     
     def _generate_prevention_measures(self, solution: SolutionCandidate, category: ProblemCategory) -> str:
-        """Generate prevention measures"""
+        """
+        Returns recommended prevention measures for the given solution and problem category.
+        
+        Parameters:
+        	category (ProblemCategory): The category of the problem for which prevention measures are suggested.
+        
+        Returns:
+        	str: A string describing prevention strategies tailored to the problem category.
+        """
         
         prevention_measures = {
             ProblemCategory.TECHNICAL_ISSUE: "Keep Mailbird updated, monitor account settings changes, maintain stable network connection",
@@ -791,7 +985,16 @@ class ProblemSolvingFramework:
         return prevention_measures.get(category, "Regular maintenance and monitoring recommended")
     
     def _assess_solution_risks(self, solution: SolutionCandidate, category: ProblemCategory) -> List[str]:
-        """Assess risks associated with solution"""
+        """
+        Identifies potential risks associated with a solution candidate based on its detailed approach and problem category.
+        
+        Parameters:
+        	solution (SolutionCandidate): The solution candidate to assess.
+        	category (ProblemCategory): The category of the problem being addressed.
+        
+        Returns:
+        	List[str]: A list of risk descriptions relevant to the solution.
+        """
         
         risks = []
         
@@ -807,7 +1010,16 @@ class ProblemSolvingFramework:
         return risks
     
     def _generate_fallback_options(self, solution: SolutionCandidate, category: ProblemCategory) -> List[str]:
-        """Generate fallback options if primary solution fails"""
+        """
+        Generate a list of fallback options to suggest if the primary solution for a given problem category fails.
+        
+        Parameters:
+            solution (SolutionCandidate): The primary solution candidate for which fallbacks are being generated.
+            category (ProblemCategory): The category of the problem to tailor fallback options.
+        
+        Returns:
+            List[str]: A list of fallback strategies, including both general and category-specific options.
+        """
         
         fallback_options = [
             "Contact Mailbird support for personalized assistance",
@@ -837,7 +1049,18 @@ class ProblemSolvingFramework:
         urgency_level: int,
         complexity_score: float
     ) -> List[SolutionCandidate]:
-        """Rank solutions by appropriateness and confidence"""
+        """
+        Rank solution candidates by adjusting their confidence scores based on urgency, emotional state, and complexity, then return them sorted from highest to lowest score.
+        
+        Parameters:
+            solutions (List[SolutionCandidate]): The list of solution candidates to rank.
+            emotional_state (EmotionalState): The user's current emotional state, influencing ranking adjustments.
+            urgency_level (int): The urgency of the problem, affecting preference for faster solutions.
+            complexity_score (float): The assessed complexity of the problem.
+        
+        Returns:
+            List[SolutionCandidate]: The ranked list of solution candidates, sorted by adjusted confidence score.
+        """
         
         for solution in solutions:
             # Calculate ranking score

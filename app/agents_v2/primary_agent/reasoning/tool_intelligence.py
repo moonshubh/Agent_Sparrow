@@ -37,10 +37,10 @@ class ToolIntelligence:
     
     def __init__(self, config: ReasoningConfig):
         """
-        Initialize tool intelligence system
+        Initialize the ToolIntelligence engine with reasoning configuration and predefined analysis heuristics.
         
-        Args:
-            config: Reasoning configuration
+        Parameters:
+            config (ReasoningConfig): Configuration object specifying reasoning parameters for tool decision logic.
         """
         self.config = config
         
@@ -74,14 +74,16 @@ class ToolIntelligence:
         solution_candidates: Optional[List[SolutionCandidate]] = None
     ) -> ToolDecisionReasoning:
         """
-        Make intelligent tool usage decision with detailed reasoning
+        Asynchronously determines the optimal tool usage strategy for a given customer query, providing detailed reasoning, confidence assessment, and supporting metadata.
         
-        Args:
-            query_analysis: Analysis of the customer query
-            solution_candidates: Optional list of solution candidates
-            
+        Analyzes the query for temporal needs, error codes, external service involvement, problem category, emotional urgency, and solution candidate confidence. Synthesizes these factors to select the appropriate tool decision type (internal knowledge base, web search, both, or escalation), and generates transparent reasoning, required information, temporal factors, knowledge gaps, and—if applicable—a targeted search strategy and expected information sources.
+        
+        Parameters:
+            query_analysis (QueryAnalysis): The analyzed customer query containing extracted features and context.
+            solution_candidates (Optional[List[SolutionCandidate]]): Optional list of proposed solutions to evaluate for sufficiency and confidence.
+        
         Returns:
-            Detailed tool decision with reasoning
+            ToolDecisionReasoning: An object containing the tool decision type, reasoning narrative, confidence score, required information, temporal factors, knowledge gaps, search strategy, and expected sources.
         """
         
         # Initialize decision reasoning
@@ -164,7 +166,12 @@ class ToolIntelligence:
         )
     
     def _analyze_temporal_needs(self, query_analysis: QueryAnalysis) -> Dict[str, Any]:
-        """Analyze if query requires current/temporal information"""
+        """
+        Determines whether the query requires current or real-time information based on temporal indicators.
+        
+        Returns:
+            dict: Contains whether current information is needed (`needs_current_info`), the temporal indicators found (`indicators`), and specific types of current information required (`info_needed`), such as service status, latest version, or pricing.
+        """
         query_text = query_analysis.query_text.lower()
         
         temporal_indicators_found = []
@@ -190,7 +197,19 @@ class ToolIntelligence:
         }
     
     def _analyze_error_codes(self, query_analysis: QueryAnalysis) -> Dict[str, Any]:
-        """Analyze error codes in the query"""
+        """
+        Extracts error codes from the query text and classifies them as known or unknown based on heuristic matching.
+        
+        Parameters:
+            query_analysis (QueryAnalysis): The analysis object containing the query text.
+        
+        Returns:
+            Dict[str, Any]: A dictionary with keys:
+                - 'has_specific_errors' (bool): Whether any error codes were found.
+                - 'known_errors' (list): Error codes identified as commonly known.
+                - 'unknown_errors' (list): Error codes not matched to common patterns.
+                - 'all_errors' (list): All extracted error codes from the query.
+        """
         query_text = query_analysis.query_text
         
         error_codes = []
@@ -217,7 +236,12 @@ class ToolIntelligence:
         }
     
     def _analyze_external_services(self, query_analysis: QueryAnalysis) -> Dict[str, Any]:
-        """Analyze external service involvement"""
+        """
+        Detects whether the query involves external email services and identifies related policy or authentication concerns.
+        
+        Returns:
+            dict: Contains whether external services are involved, a list of identified services, and a flag for policy or authentication relevance.
+        """
         query_text = query_analysis.query_text.lower()
         
         involved_services = []
@@ -238,7 +262,11 @@ class ToolIntelligence:
         }
     
     def _analyze_problem_category(self, query_analysis: QueryAnalysis) -> Dict[str, Any]:
-        """Analyze problem category implications for tool usage"""
+        """
+        Analyzes the problem category of a query to determine its implications for tool usage.
+        
+        Returns a dictionary containing reasoning statements, confidence factors, and any additional information needed based on the query's problem category and complexity.
+        """
         category = query_analysis.problem_category
         reasoning = []
         confidence_factors = []
@@ -278,7 +306,12 @@ class ToolIntelligence:
         }
     
     def _analyze_emotional_urgency(self, query_analysis: QueryAnalysis) -> Dict[str, Any]:
-        """Analyze emotional urgency factors"""
+        """
+        Assesses the emotional state and urgency level of the query to determine if an immediate response is required.
+        
+        Returns:
+            dict: Contains whether immediate response is needed (`requires_immediate_response`), the detected emotional state (`emotion`), and the urgency level (`urgency_level`).
+        """
         emotion = query_analysis.emotional_state
         urgency = query_analysis.urgency_level
         
@@ -298,7 +331,12 @@ class ToolIntelligence:
         }
     
     def _analyze_solution_confidence(self, solution_candidates: Optional[List[SolutionCandidate]]) -> Dict[str, Any]:
-        """Analyze confidence in available solutions"""
+        """
+        Evaluates the confidence and completeness of provided solution candidates to determine if external research or validation is needed.
+        
+        Returns:
+            dict: Contains reasoning statements, confidence factors, and identified gaps in the available solutions.
+        """
         reasoning = []
         confidence_factors = []
         gaps = []
@@ -349,7 +387,14 @@ class ToolIntelligence:
         knowledge_gaps: List[str],
         query_analysis: QueryAnalysis
     ) -> Tuple[ToolDecisionType, str]:
-        """Make final tool usage decision"""
+        """
+        Determines the final tool usage decision and provides reasoning based on aggregated analysis factors.
+        
+        Evaluates reasoning factors, confidence scores, required information, temporal needs, knowledge gaps, and query urgency to select the most appropriate tool usage strategy. Returns the selected `ToolDecisionType` and a reasoning string explaining the decision.
+         
+        Returns:
+            Tuple[ToolDecisionType, str]: The chosen tool usage decision and the corresponding reasoning narrative.
+        """
         
         # Calculate decision weights
         needs_external_info = len(temporal_factors) > 0 or len(knowledge_gaps) > 0
@@ -413,7 +458,16 @@ class ToolIntelligence:
         return decision, reasoning
     
     def _generate_search_strategy(self, query_analysis: QueryAnalysis, required_information: List[str]) -> str:
-        """Generate targeted search strategy"""
+        """
+        Constructs a targeted search strategy string based on the query's key entities, problem category, required information, urgency, and complexity.
+        
+        Parameters:
+            query_analysis (QueryAnalysis): The analyzed query containing entities, category, urgency, and complexity.
+            required_information (List[str]): Specific information needs identified for the query.
+        
+        Returns:
+            str: A search strategy string with prioritized terms and guidance for source selection.
+        """
         search_terms = []
         
         # Add core entities
@@ -440,7 +494,12 @@ class ToolIntelligence:
         return strategy
     
     def _identify_expected_sources(self, query_analysis: QueryAnalysis, required_information: List[str]) -> List[str]:
-        """Identify expected source types for information"""
+        """
+        Determine the most relevant external information sources to consult based on the query's problem category, key entities, and required information.
+        
+        Returns:
+            A list of expected source types, such as official documentation, provider support pages, technical forums, pricing pages, or service status pages, tailored to the query context.
+        """
         expected_sources = []
         
         # Official documentation

@@ -248,13 +248,15 @@ class EmotionTemplates:
     @classmethod
     def detect_emotion(cls, message: str) -> EmotionDetectionResult:
         """
-        Detect customer emotional state from message content
+        Analyzes a customer message to detect the primary emotional state and related indicators.
         
-        Args:
-            message: Customer message text
-            
+        Evaluates the message using predefined keywords, regex patterns, and intensity multipliers for each emotional state. Returns an EmotionDetectionResult containing the most likely emotion, a normalized confidence score, detected indicators, and any secondary emotions with significant scores.
+        
+        Parameters:
+            message (str): The customer message text to analyze.
+        
         Returns:
-            EmotionDetectionResult with detected emotion and confidence
+            EmotionDetectionResult: The detected primary emotion, confidence score, matched indicators, and secondary emotions.
         """
         scores = {}
         detected_indicators = []
@@ -324,14 +326,14 @@ class EmotionTemplates:
     @classmethod
     def get_empathy_template(cls, emotion: EmotionalState, issue: str = "") -> str:
         """
-        Get appropriate empathy template for detected emotion
+        Returns an empathy template string tailored to the specified emotional state, with placeholders replaced by the provided issue if applicable.
         
-        Args:
-            emotion: Detected emotional state
-            issue: Specific issue to mention in template
-            
+        Parameters:
+            emotion (EmotionalState): The detected emotional state to select a template for.
+            issue (str, optional): The specific issue or topic to insert into the template.
+        
         Returns:
-            Formatted empathy template string
+            str: The formatted empathy template string for the given emotion.
         """
         templates = cls.EMPATHY_TEMPLATES.get(emotion, cls.EMPATHY_TEMPLATES[EmotionalState.NEUTRAL])
         
@@ -352,20 +354,23 @@ class EmotionTemplates:
     
     @classmethod
     def get_response_strategy(cls, emotion: EmotionalState) -> Dict[str, any]:
-        """Get response strategy guidelines for detected emotion"""
+        """
+        Retrieve the communication strategy guidelines for a specified emotional state.
+        
+        Returns:
+            A dictionary containing tone, pace, structure, language style, and additional elements for responding to the given emotion. Defaults to the NEUTRAL strategy if the emotion is not found.
+        """
         return cls.RESPONSE_STRATEGIES.get(emotion, cls.RESPONSE_STRATEGIES[EmotionalState.NEUTRAL])
     
     @classmethod
     def format_emotion_aware_opening(cls, emotion_result: EmotionDetectionResult, issue: str = "") -> str:
         """
-        Generate emotion-aware opening for response
+        Generates an empathetic opening message tailored to the detected emotional state and issue.
         
-        Args:
-            emotion_result: Result from emotion detection
-            issue: Specific issue to address
-            
+        If the detected emotion's confidence score is below 0.3, a neutral template is used; otherwise, the template matches the primary detected emotion. The issue parameter is inserted into the template where applicable.
+        
         Returns:
-            Formatted empathetic opening
+            str: The formatted empathetic opening message.
         """
         if emotion_result.confidence_score < 0.3:
             # Low confidence, use neutral opening

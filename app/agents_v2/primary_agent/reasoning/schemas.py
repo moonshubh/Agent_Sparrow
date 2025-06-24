@@ -69,7 +69,12 @@ class ReasoningStep:
     timestamp: datetime = field(default_factory=datetime.now)
     
     def get_confidence_level(self) -> ConfidenceLevel:
-        """Convert numeric confidence to enum level"""
+        """
+        Returns the confidence level as a ConfidenceLevel enum based on the numeric confidence score.
+        
+        Returns:
+            ConfidenceLevel: The corresponding confidence level enum value.
+        """
         if self.confidence < 0.3:
             return ConfidenceLevel.VERY_LOW
         elif self.confidence < 0.5:
@@ -191,28 +196,56 @@ class ReasoningState:
     escalation_reasons: List[str] = field(default_factory=list)
     
     def add_reasoning_step(self, step: ReasoningStep) -> None:
-        """Add a reasoning step to the process"""
+        """
+        Appends a new reasoning step to the list of reasoning steps in the process.
+        """
         self.reasoning_steps.append(step)
         
     def get_current_phase(self) -> Optional[ReasoningPhase]:
-        """Get the current reasoning phase"""
+        """
+        Returns the phase of the most recent reasoning step, or None if no steps have been recorded.
+        
+        Returns:
+            ReasoningPhase or None: The current reasoning phase, or None if there are no reasoning steps.
+        """
         if not self.reasoning_steps:
             return None
         return self.reasoning_steps[-1].phase
     
     def get_phase_confidence(self, phase: ReasoningPhase) -> float:
-        """Get average confidence for a specific phase"""
+        """
+        Calculate the average confidence score for all reasoning steps within a specified reasoning phase.
+        
+        Parameters:
+        	phase (ReasoningPhase): The reasoning phase for which to compute the average confidence.
+        
+        Returns:
+        	float: The average confidence score for the specified phase, or 0.0 if no steps exist for that phase.
+        """
         phase_steps = [step for step in self.reasoning_steps if step.phase == phase]
         if not phase_steps:
             return 0.0
         return sum(step.confidence for step in phase_steps) / len(phase_steps)
     
     def is_high_confidence(self, threshold: float = 0.8) -> bool:
-        """Check if overall reasoning confidence meets threshold"""
+        """
+        Determine whether the overall reasoning confidence meets or exceeds a specified threshold.
+        
+        Parameters:
+            threshold (float): The minimum confidence value required to be considered high confidence. Defaults to 0.8.
+        
+        Returns:
+            bool: True if overall confidence is greater than or equal to the threshold, otherwise False.
+        """
         return self.overall_confidence >= threshold
     
     def get_reasoning_trace(self) -> str:
-        """Generate human-readable reasoning trace"""
+        """
+        Generate a human-readable summary of the reasoning process, including session metadata, query analysis, reasoning steps, selected solution, and tool usage decisions.
+        
+        Returns:
+            str: A formatted string detailing the reasoning workflow and key decision points for the session.
+        """
         trace_lines = []
         trace_lines.append(f"# Reasoning Trace for Query Analysis")
         trace_lines.append(f"**Session ID**: {self.session_id}")
