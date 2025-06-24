@@ -28,6 +28,7 @@ from app.agents_v2.primary_agent.prompts import (
     PromptLoadConfig, 
     PromptVersion,
     EmotionTemplates,
+    ProblemCategory,
     ResponseFormatter
 )
 
@@ -170,14 +171,15 @@ async def run_primary_agent(state: PrimaryAgentState) -> AsyncIterator[AIMessage
             reasoning_state = None
             with tracer.start_as_current_span("agent_sparrow.reasoning") as reasoning_span:
                 try:
-                    # Initialize reasoning engine
+                    # Initialize reasoning engine with configuration from settings
+                    from app.core.settings import settings
                     reasoning_config = ReasoningConfig(
-                        enable_chain_of_thought=True,
-                        enable_problem_solving_framework=True,
-                        enable_tool_intelligence=True,
-                        enable_quality_assessment=True,
-                        enable_reasoning_transparency=True,
-                        debug_mode=False  # Set to True for development
+                        enable_chain_of_thought=settings.reasoning_enable_chain_of_thought,
+                        enable_problem_solving_framework=settings.reasoning_enable_problem_solving,
+                        enable_tool_intelligence=settings.reasoning_enable_tool_intelligence,
+                        enable_quality_assessment=settings.reasoning_enable_quality_assessment,
+                        enable_reasoning_transparency=settings.reasoning_enable_reasoning_transparency,
+                        debug_mode=settings.reasoning_debug_mode
                     )
                     reasoning_engine = ReasoningEngine(reasoning_config)
                     
@@ -220,9 +222,9 @@ async def run_primary_agent(state: PrimaryAgentState) -> AsyncIterator[AIMessage
                         # Check if this is a complex technical issue that would benefit from structured troubleshooting
                         should_use_troubleshooting = (
                             qa.problem_category in [
-                                reasoning_state.query_analysis.problem_category.TECHNICAL_ISSUE,
-                                reasoning_state.query_analysis.problem_category.ACCOUNT_SETUP,
-                                reasoning_state.query_analysis.problem_category.PERFORMANCE_OPTIMIZATION
+                                ProblemCategory.TECHNICAL_ISSUE,
+                                ProblemCategory.ACCOUNT_SETUP,
+                                ProblemCategory.PERFORMANCE_OPTIMIZATION
                             ] and
                             (qa.complexity_score >= 0.5 or qa.urgency_level >= 3 or 
                              len(qa.key_entities) >= 2)
@@ -472,13 +474,15 @@ async def run_primary_agent(state: PrimaryAgentState) -> AsyncIterator[AIMessage
 **Workflow Description**: {active_troubleshooting_session.workflow.description}
 """
                 
-            refined_system_prompt = (
-                agent_sparrow_prompt + 
-                "\n\n## Context from Knowledge Base and Web Search:\n" +
-                f"{context_text}" + 
-                troubleshooting_context +
+            # Build system prompt parts in a list for efficient string joining
+            prompt_parts = [
+                agent_sparrow_prompt,
+                "\n\n## Context from Knowledge Base and Web Search:\n",
+                context_text,
+                troubleshooting_context,
                 correction_note
-            )
+            ]
+            refined_system_prompt = "".join(part for part in prompt_parts if part)
             system_msg = SystemMessage(content=refined_system_prompt)
             # Ensure messages list doesn't grow indefinitely if state is reused across turns in a single graph invocation (though typically not the case for primary agent)
             # For this agent, state.messages usually contains the current user query as the last message.

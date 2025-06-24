@@ -40,7 +40,10 @@ class TroubleshootingSessionManager:
     
     def __init__(self, config: TroubleshootingConfig):
         """
-        Initializes the TroubleshootingSessionManager with the provided configuration, setting up session storage and analytics tracking.
+        Initialize session manager
+        
+        Args:
+            config: Troubleshooting configuration
         """
         self.config = config
         
@@ -48,6 +51,10 @@ class TroubleshootingSessionManager:
         self.active_sessions: Dict[str, TroubleshootingSession] = {}
         self.completed_sessions: Dict[str, TroubleshootingSession] = {}
         self.session_history: List[str] = []  # Session IDs in chronological order
+        
+        # Session limits configuration
+        self.max_completed_sessions: int = getattr(config, 'max_completed_sessions', 1000)
+        self.session_retention_days: int = getattr(config, 'session_retention_days', 30)
         
         # Session analytics
         self.session_analytics: Dict[str, Any] = {
@@ -70,12 +77,17 @@ class TroubleshootingSessionManager:
         context: Optional[Dict[str, Any]] = None
     ) -> TroubleshootingSession:
         """
-        Asynchronously creates and initializes a new troubleshooting session with the specified workflow, customer emotional state, technical level, and optional context.
+        Create new troubleshooting session
         
-        If no session ID is provided, a unique one is generated. The session is initialized with the given workflow and customer attributes, optional context (system context, environmental factors, customer preferences), and set to the initial assessment phase with zero progress. The session is stored as active, added to the session history, and analytics are updated.
-        
+        Args:
+            workflow: Troubleshooting workflow to use
+            customer_emotional_state: Customer's emotional state
+            customer_technical_level: Customer's technical skill level
+            session_id: Optional specific session ID
+            context: Optional additional context
+            
         Returns:
-            TroubleshootingSession: The newly created troubleshooting session.
+            New troubleshooting session
         """
         
         # Generate session ID if not provided
@@ -113,12 +125,7 @@ class TroubleshootingSessionManager:
         return session
     
     async def get_session(self, session_id: str) -> Optional[TroubleshootingSession]:
-        """
-        Retrieve a troubleshooting session by its ID from active or completed sessions.
-        
-        Returns:
-            TroubleshootingSession or None: The session if found; otherwise, None.
-        """
+        """Get active or completed session by ID"""
         
         # Check active sessions first
         if session_id in self.active_sessions:
@@ -138,12 +145,16 @@ class TroubleshootingSessionManager:
         customer_feedback: Optional[str] = None
     ) -> TroubleshootingSession:
         """
-        Updates the progress of an active troubleshooting session after a diagnostic step is completed.
+        Update session progress after step completion
         
-        If customer feedback is provided, analyzes it for emotional state changes and updates the session accordingly. Progress metrics are recalculated, and session optimization is triggered if enabled. Raises a ValueError if the session is not found.
-        
+        Args:
+            session_id: Session identifier
+            completed_step: The completed diagnostic step
+            step_successful: Whether the step was successful
+            customer_feedback: Optional customer feedback
+            
         Returns:
-            TroubleshootingSession: The updated session object.
+            Updated session
         """
         
         session = self.active_sessions.get(session_id)
@@ -184,49 +195,30 @@ class TroubleshootingSessionManager:
         follow_up_actions: Optional[List[str]] = None
     ) -> TroubleshootingSession:
         """
-        Marks an active troubleshooting session as completed, finalizes its outcome, and updates analytics and learning records.
+        Complete troubleshooting session
         
-        Parameters:
-            session_id (str): Unique identifier of the session to complete.
-            outcome (TroubleshootingOutcome): The final outcome of the session.
-            resolution_summary (str, optional): Summary describing the session's resolution.
-            follow_up_actions (List[str], optional): Additional actions to be taken after session completion.
-        
-        Returns:
-            TroubleshootingSession: The completed session object with updated metrics and outcome.
-        
-        Raises:
-            ValueError: If the specified session is not found among active sessions.
+        Args:
         """
-        
-        session = self.active_sessions.get(session_id)
-        if not session:
-            raise ValueError(f"Active session {session_id} not found")
-        
-        # Update session completion
+        if session_id not in self.active_sessions:
+            raise ValueError(f"No active session found with ID: {session_id}")
+            
+        session = self.active_sessions.pop(session_id)
         session.end_time = datetime.now()
         session.outcome = outcome
-        session.resolution_summary = resolution_summary
-        
-        if follow_up_actions:
-            session.follow_up_actions.extend(follow_up_actions)
-        
-        # Calculate final metrics
-        await self._calculate_final_session_metrics(session)
+        session.state = TroubleshootingState.COMPLETED
         
         # Move to completed sessions
-        del self.active_sessions[session_id]
         self.completed_sessions[session_id] = session
+        self.session_history.append(session_id)
+        
+        # Clean up old sessions if we're over the limit
+        if len(self.completed_sessions) > self.max_completed_sessions:
+            await self._cleanup_old_sessions()
         
         # Update analytics
         await self._update_session_analytics(session)
         
-        # Record session learning
-        if self.config.enable_session_learning:
-            await self._record_session_learning(session)
-        
-        logger.info(f"Completed session {session_id} with outcome: {outcome.value}")
-        
+        logger.info(f"Session {session_id} completed with outcome: {outcome}")
         return session
     
     async def pause_session(
@@ -235,13 +227,14 @@ class TroubleshootingSessionManager:
         pause_reason: str = "User requested pause"
     ) -> TroubleshootingSession:
         """
-        Pauses an active troubleshooting session and records the reason for the pause.
+        Pause active troubleshooting session
         
-        Raises:
-            ValueError: If the session with the specified ID is not found.
-        
+        Args:
+            session_id: Session identifier
+            pause_reason: Reason for pausing
+            
         Returns:
-            TroubleshootingSession: The paused session with updated notes.
+            Paused session
         """
         
         session = self.active_sessions.get(session_id)
@@ -265,17 +258,14 @@ class TroubleshootingSessionManager:
         resume_context: Optional[Dict[str, Any]] = None
     ) -> TroubleshootingSession:
         """
-        Resumes a paused troubleshooting session, optionally updating system context and environmental factors.
+        Resume paused troubleshooting session
         
-        Parameters:
-            session_id (str): The unique identifier of the session to resume.
-            resume_context (Optional[Dict[str, Any]]): Optional context updates for system or environmental factors.
-        
+        Args:
+            session_id: Session identifier
+            resume_context: Optional context for resumption
+            
         Returns:
-            TroubleshootingSession: The resumed session object.
-        
-        Raises:
-            ValueError: If the session with the given ID is not found.
+            Resumed session
         """
         
         session = self.active_sessions.get(session_id)
@@ -303,18 +293,13 @@ class TroubleshootingSessionManager:
         session_id: str
     ) -> Dict[str, Any]:
         """
-        Generate recommendations to improve the effectiveness of a troubleshooting session based on its performance metrics.
+        Get recommendations for improving session effectiveness
         
-        Analyzes session failure rate, workflow complexity relative to customer technical level, session duration, customer emotional state, and escalation likelihood to provide actionable suggestions for workflow adjustments, complexity changes, timing optimizations, customer adaptations, and escalation considerations.
-        
-        Parameters:
-            session_id (str): The unique identifier of the troubleshooting session.
-        
+        Args:
+            session_id: Session identifier
+            
         Returns:
-            Dict[str, Any]: A dictionary containing categorized recommendations for the session.
-        
-        Raises:
-            ValueError: If the session with the specified ID is not found.
+            Session recommendations
         """
         
         session = await self.get_session(session_id)
@@ -367,14 +352,7 @@ class TroubleshootingSessionManager:
         return recommendations
     
     async def get_session_analytics(self) -> Dict[str, Any]:
-        """
-        Return a comprehensive summary of troubleshooting session analytics.
-        
-        The analytics include overall session counts, calculated success and escalation rates, counts of active and completed sessions, and recent session trends such as average duration, success rate, and common workflows.
-         
-        Returns:
-            Dict[str, Any]: A dictionary containing aggregate session analytics and recent trends.
-        """
+        """Get comprehensive session analytics"""
         
         analytics = self.session_analytics.copy()
         
@@ -396,12 +374,7 @@ class TroubleshootingSessionManager:
     # Private helper methods
     
     async def _analyze_feedback_emotion(self, feedback: str) -> Optional[EmotionalState]:
-        """
-        Analyzes customer feedback text to infer the customer's emotional state.
-        
-        Returns:
-            EmotionalState or None: The detected emotional state based on feedback content, or None if no clear emotion is identified.
-        """
+        """Analyze customer feedback for emotional state changes"""
         
         feedback_lower = feedback.lower()
         
@@ -428,11 +401,7 @@ class TroubleshootingSessionManager:
         session: TroubleshootingSession,
         new_emotion: EmotionalState
     ) -> None:
-        """
-        Update the customer's emotional state in the session and apply adaptive changes based on the new emotion.
-        
-        If the emotional state changes to 'frustrated', the session complexity is reduced. If it improves to 'satisfied' from a negative state, a note is added to maintain the current approach.
-        """
+        """Update customer emotional state and adapt session accordingly"""
         
         old_emotion = session.customer_emotional_state
         session.customer_emotional_state = new_emotion
@@ -451,11 +420,7 @@ class TroubleshootingSessionManager:
         logger.info(f"Session {session.session_id} emotion changed: {old_emotion.value} → {new_emotion.value}")
     
     async def _update_progress_metrics(self, session: TroubleshootingSession) -> None:
-        """
-        Updates the overall and per-phase progress metrics for a troubleshooting session.
-        
-        Calculates the ratio of completed diagnostic steps to total steps for overall progress, and updates progress for each workflow phase based on completed steps within that phase.
-        """
+        """Update session progress metrics"""
         
         total_steps = len(session.workflow.diagnostic_steps)
         completed_steps = len(session.completed_steps)
@@ -477,11 +442,7 @@ class TroubleshootingSessionManager:
                 session.phase_progress[phase] = phase_completed / len(phase_steps)
     
     async def _optimize_session_if_needed(self, session: TroubleshootingSession) -> None:
-        """
-        Evaluates the session for high failure rate, extended duration, or customer frustration, and applies appropriate optimizations if any triggers are met.
-        
-        If optimization is needed, updates the session's difficulty adjustments and notes to reflect the changes.
-        """
+        """Check and apply session optimizations if needed"""
         
         # Check for optimization triggers
         optimization_needed = False
@@ -505,59 +466,67 @@ class TroubleshootingSessionManager:
             optimization_needed = True
             optimizations.append("Prioritize quick resolution due to customer frustration")
         
-        if optimization_needed:
-            session.difficulty_adjustments.extend(optimizations)
-            session.session_notes.append(f"Applied optimizations: {', '.join(optimizations)}")
-            logger.info(f"Applied session optimizations for {session.session_id}")
     
-    async def _calculate_final_session_metrics(self, session: TroubleshootingSession) -> None:
+    async def _cleanup_old_sessions(self) -> None:
         """
-        Calculates and assigns final metrics for a completed troubleshooting session, including total duration, success score based on outcome, and efficiency score relative to expected and actual steps.
+        Clean up old sessions based on retention policy.
+        Removes sessions that exceed max_completed_sessions or are older than session_retention_days.
         """
+        if not self.completed_sessions:
+            return
+            
+        now = datetime.now()
+        sessions_to_remove = set()
         
-        if session.end_time and session.start_time:
-            duration = session.end_time - session.start_time
-            session.total_duration_minutes = duration.total_seconds() / 60
+        # Check for sessions older than retention period
+        for session_id, session in list(self.completed_sessions.items()):
+            if session.end_time and (now - session.end_time).days > self.session_retention_days:
+                sessions_to_remove.add(session_id)
         
-        # Calculate success metrics
-        if session.outcome == TroubleshootingOutcome.RESOLVED:
-            session.success_score = 1.0
-        elif session.outcome == TroubleshootingOutcome.PARTIALLY_RESOLVED:
-            session.success_score = 0.7
-        elif session.outcome == TroubleshootingOutcome.ESCALATED:
-            session.success_score = 0.4
-        else:
-            session.success_score = 0.2
+        # If we still have too many sessions, remove the oldest ones
+        remaining_sessions = len(self.completed_sessions) - len(sessions_to_remove)
+        if remaining_sessions > self.max_completed_sessions:
+            # Get sessions not already marked for removal, sorted by end_time (oldest first)
+            sessions_by_age = [
+                (session_id, session) 
+                for session_id, session in self.completed_sessions.items()
+                if session_id not in sessions_to_remove and session.end_time is not None
+            ]
+            sessions_by_age.sort(key=lambda x: x[1].end_time)  # type: ignore
+            
+            # Add oldest sessions to removal set until we're under the limit
+            excess_sessions = remaining_sessions - self.max_completed_sessions
+            for session_id, _ in sessions_by_age[:excess_sessions]:
+                sessions_to_remove.add(session_id)
         
-        # Calculate efficiency score
-        expected_steps = len(session.workflow.diagnostic_steps)
-        actual_steps = len(session.completed_steps) + len(session.failed_steps)
+        # Remove the sessions
+        for session_id in sessions_to_remove:
+            self.completed_sessions.pop(session_id, None)
+            logger.debug(f"Removed old session {session_id} during cleanup")
         
-        if expected_steps > 0:
-            session.efficiency_score = min(1.0, expected_steps / max(1, actual_steps))
-        else:
-            session.efficiency_score = 0.5
+        # Clean up session_history
+        self.session_history = [sid for sid in self.session_history if sid not in sessions_to_remove]
+        
+        if sessions_to_remove:
+            logger.info(f"Cleaned up {len(sessions_to_remove)} old sessions")
     
     async def _update_session_analytics(self, session: TroubleshootingSession) -> None:
-        """
-        Updates aggregate session analytics with the latest session outcome, duration, and workflow-specific performance metrics.
+        """Update session analytics with data from completed session"""
+        self.session_analytics['total_sessions'] += 1
         
-        This includes incrementing counts for successful and escalated sessions, recalculating average session duration, and updating workflow usage statistics such as total uses, successful resolutions, average duration, and success rate.
-        """
-        
-        # Update outcome counts
         if session.outcome == TroubleshootingOutcome.RESOLVED:
             self.session_analytics['successful_sessions'] += 1
         elif session.outcome == TroubleshootingOutcome.ESCALATED:
             self.session_analytics['escalated_sessions'] += 1
-        
+            
         # Update average duration
-        if hasattr(session, 'total_duration_minutes'):
-            total_duration = self.session_analytics['average_duration'] * (self.session_analytics['total_sessions'] - 1)
-            total_duration += session.total_duration_minutes
-            self.session_analytics['average_duration'] = total_duration / self.session_analytics['total_sessions']
-        
-        # Update workflow performance
+        if session.start_time and session.end_time:
+            duration = (session.end_time - session.start_time).total_seconds()
+            total_sessions = self.session_analytics['total_sessions']
+            current_avg = self.session_analytics['average_duration']
+            self.session_analytics['average_duration'] = (
+                (current_avg * (total_sessions - 1) + duration) / total_sessions
+            )     # Update workflow performance
         workflow_name = session.workflow.name
         if workflow_name not in self.session_analytics['workflow_performance']:
             self.session_analytics['workflow_performance'][workflow_name] = {
@@ -581,9 +550,7 @@ class TroubleshootingSessionManager:
             workflow_stats['average_duration'] = total_workflow_duration / workflow_stats['total_uses']
     
     async def _record_session_learning(self, session: TroubleshootingSession) -> None:
-        """
-        Records learning insights from a troubleshooting session, including successful and failed step patterns, effective difficulty adaptations, customer emotional state, and technical level. Updates the session's learning insights for future system improvement.
-        """
+        """Record session insights for system learning"""
         
         learning_insights = []
         
@@ -610,14 +577,7 @@ class TroubleshootingSessionManager:
         logger.debug(f"Recorded learning insights for session {session.session_id}")
     
     async def _calculate_escalation_score(self, session: TroubleshootingSession) -> float:
-        """
-        Compute a probability score estimating the likelihood of session escalation.
-        
-        The score is based on weighted factors including failure rate, session duration relative to workflow estimates, customer emotional state, and the gap between workflow difficulty and customer technical level. The result is capped between 0 and 1.
-        
-        Returns:
-            float: Escalation probability score between 0 (unlikely) and 1 (highly likely).
-        """
+        """Calculate escalation probability score for session"""
         
         score = 0.0
         
@@ -654,12 +614,7 @@ class TroubleshootingSessionManager:
         return min(1.0, score)
     
     async def _get_recent_session_trends(self) -> Dict[str, Any]:
-        """
-        Analyze the last 10 sessions to extract recent trends such as average duration, success rate, and most commonly used workflows.
-        
-        Returns:
-            trends (Dict[str, Any]): A dictionary containing recent session trends, including success rate, common workflow usage, and placeholders for average duration and improvement areas.
-        """
+        """Get trends from recent sessions"""
         
         # Get last 10 sessions
         recent_session_ids = self.session_history[-10:] if len(self.session_history) >= 10 else self.session_history

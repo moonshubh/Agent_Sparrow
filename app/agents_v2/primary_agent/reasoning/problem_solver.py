@@ -371,17 +371,24 @@ class ProblemSolvingFramework:
             }
         }
         
+        # Define issue type mappings with their associated keywords
+        issue_type_mappings = {
+            'connection_issue': ['connection', 'connect', 'server', 'authentication'],
+            'sync_issue': ['sync', 'synchronization', 'folder', 'emails missing'],
+            'performance_issue': ['slow', 'performance', 'crash', 'freeze']
+        }
+        
         # Select most appropriate solution based on hypothesis
         hypothesis_text = hypothesis['hypothesis'].lower()
+        solution_key = 'connection_issue'  # Default fallback
         
-        if any(term in hypothesis_text for term in ['connection', 'connect', 'server', 'authentication']):
-            solution_data = base_solutions['connection_issue']
-        elif any(term in hypothesis_text for term in ['sync', 'synchronization', 'folder', 'emails missing']):
-            solution_data = base_solutions['sync_issue']
-        elif any(term in hypothesis_text for term in ['slow', 'performance', 'crash', 'freeze']):
-            solution_data = base_solutions['performance_issue']
-        else:
-            solution_data = base_solutions['connection_issue']  # Default
+        # Find the first matching issue type
+        for issue_type, keywords in issue_type_mappings.items():
+            if any(term in hypothesis_text for term in keywords):
+                solution_key = issue_type
+                break
+                
+        solution_data = base_solutions[solution_key]
         
         # Adjust for urgency and emotion
         if urgency_level >= 4:
