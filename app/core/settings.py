@@ -37,7 +37,11 @@ class Settings(BaseSettings):
 
 @lru_cache()
 def get_settings() -> Settings:
-    """Return a cached Settings instance."""
+    """
+    Return a singleton instance of the application settings.
+    
+    Uses an internal cache to ensure the same Settings instance is returned on each call.
+    """
     return Settings()
 
 # Instantiate settings at import time for convenience
