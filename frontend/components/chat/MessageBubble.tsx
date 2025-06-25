@@ -32,6 +32,7 @@ import {
 import { cn } from '@/lib/utils'
 import { toast } from 'sonner'
 import { EnhancedLogAnalysisContainer } from '@/components/log-analysis/EnhancedLogAnalysisContainer'
+import { LogAnalysisContainer } from '@/components/log-analysis/LogAnalysisContainer'
 import { type LogAnalysisData, type EnhancedLogAnalysisData } from '@/lib/log-analysis-utils'
 import { ExecutiveSummaryRenderer } from '@/components/markdown/ExecutiveSummaryRenderer'
 
