@@ -15,7 +15,6 @@ from typing import Dict, Any, List, Optional, Tuple
 from datetime import datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor
 from langchain_google_genai import ChatGoogleGenerativeAI
-from app.core.logging_config import get_logger
 from app.core.settings import settings
 from collections import defaultdict
 
@@ -78,12 +77,10 @@ class OptimizedLogAnalyzer:
         
         # Enhanced caching system
         self.analysis_cache = {}
-        self.pattern_cache = {}
         self.cache_ttl = 3600  # 1 hour
         
         # Incremental analysis state
         self.incremental_state = {}
-        self.processed_content_hashes = {}
         
         # Performance monitoring
         self.performance_metrics = {
@@ -108,7 +105,6 @@ Response format: JSON only, no extra text.
         """
         Perform high-speed optimized analysis with progress tracking.
         """
-        logger = get_logger("optimized_analyzer")
         start_time = time.time()
         
         if progress_callback:
@@ -535,6 +531,10 @@ Analysis encountered an error: {str(e)}
         self.MAX_CHUNK_SIZE = profile['MAX_CHUNK_SIZE']
         self.MAX_CONTEXT_CHARS = profile['MAX_CONTEXT_CHARS']
         self.PARALLEL_CHUNKS = profile['PARALLEL_CHUNKS']
+        self.sampling_rate = profile.get('sampling_rate')
+        self.use_cache_aggressively = profile.get('use_cache_aggressively')
+        self.skip_deep_analysis = profile.get('skip_deep_analysis')
+        self.model_preference = profile.get('model_preference')
 
     def set_performance_profile(self, profile_name: str):
         """Set performance profile dynamically."""
@@ -566,6 +566,9 @@ Analysis encountered an error: {str(e)}
         """
         try:
             logger.info(f"Starting incremental analysis for session {session_id}")
+
+            if len(self.incremental_state) > 100:
+                self.cleanup_expired_sessions()
             
             # Initialize session state if needed
             if session_id not in self.incremental_state:
@@ -797,7 +800,7 @@ Analysis encountered an error: {str(e)}
         logger.info(f"Cleaned up {len(expired_sessions)} expired sessions")
 
 # Main entry point with enhanced capabilities
-async def perform_optimized_log_analysis(raw_log_content: str, basic_parsed_data: Dict[str, Any], 
+async def perform_optimized_log_analysis(raw_log_content: str, basic_parsed_data: Dict[str, Any],
                                        progress_callback: Optional[callable] = None,
                                        performance_profile: Optional[str] = None,
                                        time_constraint: Optional[int] = None) -> Dict[str, Any]:
@@ -806,19 +809,31 @@ async def perform_optimized_log_analysis(raw_log_content: str, basic_parsed_data
     Enhanced with adaptive profiles and performance optimization.
     """
     analyzer = OptimizedLogAnalyzer()
-    
-    # Auto-adjust performance profile if needed
-    if performance_profile:
-        analyzer.set_performance_profile(performance_profile)
-    elif time_constraint or len(raw_log_content) > 10000:
-        analyzer.auto_adjust_profile(len(raw_log_content.split('\n')), time_constraint)
-    
-    result = await analyzer.perform_optimized_analysis(raw_log_content, basic_parsed_data, progress_callback)
-    
-    # Add performance stats to result
-    result['performance_stats'] = analyzer.get_performance_stats()
-    
-    return result
+
+    try:
+        # Auto-adjust performance profile if needed
+        if performance_profile:
+            analyzer.set_performance_profile(performance_profile)
+        elif time_constraint or len(raw_log_content) > 10000:
+            analyzer.auto_adjust_profile(len(raw_log_content.split('\n')), time_constraint)
+
+        result = await analyzer.perform_optimized_analysis(raw_log_content, basic_parsed_data, progress_callback)
+
+        # Add performance stats to result
+        result['performance_stats'] = analyzer.get_performance_stats()
+
+        return result
+    except Exception as e:
+        logger.error(f"Optimized log analysis failed: {e}")
+        return {
+            'basic_analysis': {},
+            'deep_analysis': {},
+            'optimized_solutions': [],
+            'executive_summary': {},
+            'performance_metrics': {},
+            'performance_stats': {},
+            'error': str(e)
+        }
 
 # Incremental analysis entry point
 async def perform_incremental_analysis(new_log_lines: List[str], session_id: str) -> Dict[str, Any]:
