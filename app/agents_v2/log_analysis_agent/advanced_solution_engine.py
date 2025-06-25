@@ -586,6 +586,7 @@ class AdvancedSolutionEngine:
                         'platform_specific': 'windows',
                         'automated_script': 'reg query "HKEY_CURRENT_USER\\Software\\Mailbird" /s',
                         'rollback_procedure': 'No changes made, safe to continue',
+                        'safety_note': 'Registry queries are generally safe but review system configuration carefully before proceeding.',
                         'estimated_time_minutes': 3
                     }
                 ]

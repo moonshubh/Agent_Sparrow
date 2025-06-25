@@ -103,8 +103,8 @@ class TranscriptUploadRequest(BaseModel):
         """
         if len(v.strip()) < 10:
             raise ValueError('Transcript content must be at least 10 characters long')
-        # Assuming FEEDME_MAX_FILE_SIZE_MB from settings translates to character limit
-        max_chars = 10 * 1024 * 1024  # 10MB approximate character limit
+        # Max size configured via settings.FEEDME_MAX_FILE_SIZE_MB
+        max_chars = settings.feedme_max_file_size_mb * 1024 * 1024
         if len(v) > max_chars:
             raise ValueError(f'Transcript content exceeds maximum size of {max_chars} characters')
         return v.strip()

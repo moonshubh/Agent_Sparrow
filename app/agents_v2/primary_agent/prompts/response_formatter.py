@@ -448,14 +448,12 @@ class ResponseFormatter:
             
             # Handle header spacing
             if stripped.startswith('#'):
-                # Add blank line before header if needed
-                if i > 0 and formatted_lines and formatted_lines[-1].strip() and (i == 0 or lines[i-1].strip() != ''):
+                if formatted_lines and formatted_lines[-1].strip() != '':
                     formatted_lines.append('')
-                
+
                 formatted_lines.append(line)
-                
-                # Add blank line after header if needed
-                if i < len(lines) - 1 and (i + 1 >= len(lines) or lines[i+1].strip() != ''):
+
+                if i < len(lines) - 1 and lines[i+1].strip() != '':
                     formatted_lines.append('')
             else:
                 formatted_lines.append(line)

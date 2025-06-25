@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { Upload } from 'lucide-react'
 import { FeedMeModal } from '@/components/feedme/FeedMeModal'
+import { ErrorBoundary } from '@/components/ui/ErrorBoundary'
 
 interface FeedMeButtonProps {
   onClick?: () => void
@@ -46,10 +47,12 @@ export function FeedMeButton({ onClick }: FeedMeButtonProps) {
         </Tooltip>
       </TooltipProvider>
       
-      <FeedMeModal 
-        isOpen={isModalOpen} 
-        onClose={() => setIsModalOpen(false)} 
-      />
+      <ErrorBoundary>
+        <FeedMeModal
+          isOpen={isModalOpen}
+          onClose={() => setIsModalOpen(false)}
+        />
+      </ErrorBoundary>
     </>
   )
 }

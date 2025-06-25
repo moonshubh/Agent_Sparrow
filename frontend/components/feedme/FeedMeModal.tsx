@@ -47,6 +47,8 @@ export function FeedMeModal({ isOpen, onClose }: FeedMeModalProps) {
     success: false
   })
 
+  const userId = process.env.NEXT_PUBLIC_FEEDME_USER_ID || 'web-user'
+
   // File validation helper
   const validateFile = (file: File) => {
     // Validate file type (text files and HTML)
@@ -85,9 +87,16 @@ export function FeedMeModal({ isOpen, onClose }: FeedMeModalProps) {
       const doc = parser.parseFromString(content, 'text/html')
       
       // Check if it's a Zendesk ticket
-      const isZendeskTicket = content.includes('zd-comment') || 
-                             content.includes('zendesk') ||
-                             doc.querySelector('.zd-comment') !== null
+      const zendeskSelectors = [
+        '.zd-comment',
+        '[data-test-id="ticket-title"]',
+        '[data-creator-name]',
+        'meta[name="generator"][content*="Zendesk"]',
+        '#zendesk',
+        '.zendesk'
+      ]
+      const hasZendeskMarker = zendeskSelectors.some(sel => doc.querySelector(sel))
+      const isZendeskTicket = hasZendeskMarker || /zendesk|zd-comment/i.test(content)
       
       if (isZendeskTicket) {
         // Count zd-comment divs (support messages)
@@ -252,11 +261,11 @@ export function FeedMeModal({ isOpen, onClose }: FeedMeModalProps) {
       if (activeTab === 'file' && uploadedFile) {
         // Upload file
         setUploadState(prev => ({ ...prev, progress: 40 }))
-        uploadResponse = await uploadTranscriptFile(title, uploadedFile, 'web-user', true)
+        uploadResponse = await uploadTranscriptFile(title, uploadedFile, userId, true)
       } else if (activeTab === 'text' && textContent) {
         // Upload text content
         setUploadState(prev => ({ ...prev, progress: 40 }))
-        uploadResponse = await uploadTranscriptText(title, textContent, 'web-user', true)
+        uploadResponse = await uploadTranscriptText(title, textContent, userId, true)
       } else {
         throw new Error('Invalid upload data')
       }

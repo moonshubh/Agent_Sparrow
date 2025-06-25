@@ -3,7 +3,7 @@ Enhanced schemas for comprehensive log analysis with detailed system profiling a
 Updated for v3.0 with predictive analysis, correlation detection, and automated remediation.
 """
 
-from typing import TypedDict, List, Optional, Any, Dict, Union
+from typing import TypedDict, List, Optional, Any, Dict
 from langchain_core.messages import BaseMessage
 from pydantic import BaseModel, Field
 from datetime import datetime

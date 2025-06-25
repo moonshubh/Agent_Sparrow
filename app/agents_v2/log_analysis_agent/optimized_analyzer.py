@@ -9,7 +9,6 @@ import json
 import time
 import asyncio
 import hashlib
-import pickle
 import logging
 from typing import Dict, Any, List, Optional, Tuple
 from datetime import datetime, timedelta
@@ -652,7 +651,12 @@ Analysis encountered an error: {str(e)}
         
         return new_issues
 
-    def _intelligent_log_sampling(self, log_lines: List[str], target_size: int) -> List[str]:
+    def _intelligent_log_sampling(
+        self,
+        log_lines: List[str],
+        target_size: int,
+        allocation_pct: Optional[Dict[str, float]] = None
+    ) -> List[str]:
         """
         Intelligently sample log lines to maintain representative coverage:
         - Prioritize error/warning lines
@@ -680,12 +684,18 @@ Analysis encountered an error: {str(e)}
             else:
                 other_lines.append((i, line))
         
-        # Sampling strategy
+        allocation_pct = allocation_pct or {
+            'errors': 0.5,
+            'warnings': 0.25,
+            'info': 0.17,
+            'other': 0.08,
+        }
+
         sample_allocation = {
-            'errors': min(len(error_lines), target_size // 2),  # 50% for errors
-            'warnings': min(len(warning_lines), target_size // 4),  # 25% for warnings
-            'info': min(len(info_lines), target_size // 6),  # ~17% for info
-            'other': target_size // 12  # ~8% for other
+            'errors': min(len(error_lines), int(target_size * allocation_pct.get('errors', 0)) ),
+            'warnings': min(len(warning_lines), int(target_size * allocation_pct.get('warnings', 0)) ),
+            'info': min(len(info_lines), int(target_size * allocation_pct.get('info', 0)) ),
+            'other': int(target_size * allocation_pct.get('other', 0))
         }
         
         sampled_lines = []
