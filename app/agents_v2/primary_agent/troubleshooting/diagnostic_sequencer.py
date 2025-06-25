@@ -6,6 +6,7 @@ complexity handling, adaptive branching, and customer-specific optimization.
 """
 
 import logging
+import uuid
 from typing import Dict, List, Optional, Any, Tuple
 from datetime import datetime
 import asyncio
@@ -492,10 +493,10 @@ class DiagnosticSequencer:
     
     def _build_step_lookup(self, workflow) -> None:
         """Build or rebuild the step lookup dictionary for a workflow"""
-        if not hasattr(workflow, 'workflow_id'):
-            workflow_id = str(id(workflow))
-        else:
-            workflow_id = workflow.workflow_id
+        workflow_id = getattr(workflow, 'workflow_id', None)
+        if not workflow_id:
+            workflow_id = str(uuid.uuid4())
+            setattr(workflow, 'workflow_id', workflow_id)
             
         self._step_lookup[workflow_id] = {}
         
@@ -518,10 +519,10 @@ class DiagnosticSequencer:
         
         Uses a dictionary for O(1) lookup after the first access to a workflow.
         """
-        if not hasattr(workflow, 'workflow_id'):
-            workflow_id = str(id(workflow))
-        else:
-            workflow_id = workflow.workflow_id
+        workflow_id = getattr(workflow, 'workflow_id', None)
+        if not workflow_id:
+            workflow_id = str(uuid.uuid4())
+            setattr(workflow, 'workflow_id', workflow_id)
         
         # Build lookup if this is the first time seeing this workflow
         if workflow_id not in self._step_lookup:

@@ -80,6 +80,10 @@ class WorkflowLibrary:
             List of suitable workflows ordered by appropriateness
         """
         
+        # Ensure workflows are loaded when lazy loading is enabled
+        if not self._initialized:
+            self._initialize_all_workflows()
+
         # Filter workflows by category
         category_workflows = [
             workflow for workflow in self.workflows.values()
@@ -99,6 +103,8 @@ class WorkflowLibrary:
     
     async def get_workflow_by_name(self, workflow_name: str) -> Optional[TroubleshootingWorkflow]:
         """Get specific workflow by name"""
+        if not self._initialized:
+            self._initialize_all_workflows()
         return self.workflows.get(workflow_name)
     
     async def create_adaptive_workflow(
