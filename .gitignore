@@ -666,3 +666,4 @@ dev-debug.log
 *.sw?
 # OS specific
 !frontend/lib/api.ts
+frontend/tsconfig.tsbuildinfo
