@@ -11,6 +11,7 @@ import logging
 from typing import Dict, List, Optional, Any, Tuple
 from datetime import datetime
 import os
+import re
 from langchain_google_genai import ChatGoogleGenerativeAI
 
 from app.core.settings import settings
@@ -21,6 +22,26 @@ from pydantic import BaseModel, Field
 from app.agents_v2.primary_agent.tools import tavily_web_search
 
 logger = logging.getLogger(__name__)
+
+# Precompiled command patterns
+SAFE_COMMAND_PATTERNS = [
+    re.compile(r'^reg query.*$', re.IGNORECASE),
+    re.compile(r'^powershell -Command "Get-Process.*"$', re.IGNORECASE),
+    re.compile(r'^systemctl status.*$', re.IGNORECASE),
+    re.compile(r'^ls -la.*$', re.IGNORECASE),
+    re.compile(r'^stat .*$', re.IGNORECASE),
+    re.compile(r'^echo \$.*$', re.IGNORECASE),
+    re.compile(r'^security find-.*$', re.IGNORECASE),
+]
+
+DANGEROUS_COMMAND_PATTERNS = [
+    re.compile(r'.*rm -rf.*', re.IGNORECASE),
+    re.compile(r'.*del /f.*', re.IGNORECASE),
+    re.compile(r'.*format.*', re.IGNORECASE),
+    re.compile(r'.*shutdown.*', re.IGNORECASE),
+    re.compile(r'.*reboot.*', re.IGNORECASE),
+    re.compile(r'.*mkfs.*', re.IGNORECASE),
+]
 
 
 class DetailedSolutionStep(BaseModel):
@@ -95,7 +116,9 @@ class AdvancedSolutionEngine:
         
         # Solution validation tracking
         self.validation_history = {}
+        self.effectiveness_file = os.path.join(os.path.dirname(__file__), "solution_effectiveness_data.json")
         self.solution_effectiveness = {}
+        self._load_effectiveness_data()
         
         # Platform-specific solution templates
         self.platform_solutions = {
@@ -643,7 +666,7 @@ class AdvancedSolutionEngine:
                         'description': 'Restart D-Bus service',
                         'expected_outcome': 'D-Bus communication restored',
                         'platform_specific': 'linux',
-                        'automated_script': 'sudo systemctl restart dbus',
+                        'automated_script': 'if [ $(id -u) -eq 0 ]; then systemctl restart dbus; else echo "Requires root privileges to restart dbus"; fi',
                         'validation_command': 'systemctl status dbus',
                         'estimated_time_minutes': 2
                     },
@@ -846,7 +869,8 @@ class AdvancedSolutionEngine:
                 })
             
             logger.info(f"Learning data updated for solution {solution_id}")
-            
+            self._save_effectiveness_data()
+
         except Exception as e:
             logger.error(f"Learning from resolution failed: {str(e)}")
 
@@ -894,40 +918,14 @@ class AdvancedSolutionEngine:
 
     def _is_command_safe(self, command: str) -> bool:
         """Check if a command is safe to execute."""
-        # Whitelist of safe commands and patterns
-        safe_patterns = [
-            r'^reg query.*',  # Registry queries (read-only)
-            r'^powershell -Command "Get-Process.*"',  # Process listing
-            r'^systemctl status.*',  # Service status
-            r'^ls -la.*',  # File listing
-            r'^stat .*',  # File statistics
-            r'^echo \$.*',  # Environment variable echo
-            r'^security find-.*',  # macOS security queries (read-only)
-        ]
-        
-        # Dangerous patterns to block
-        dangerous_patterns = [
-            r'.*rm -rf.*',  # Dangerous file deletion
-            r'.*del /f.*',  # Windows force delete
-            r'.*format.*',  # Disk formatting
-            r'.*shutdown.*',  # System shutdown
-            r'.*reboot.*',  # System reboot
-            r'.*mkfs.*',  # Filesystem creation
-        ]
-        
-        import re
-        
-        # Check against dangerous patterns first
-        for pattern in dangerous_patterns:
-            if re.match(pattern, command, re.IGNORECASE):
+        for pattern in DANGEROUS_COMMAND_PATTERNS:
+            if pattern.match(command):
                 return False
-        
-        # Check against safe patterns
-        for pattern in safe_patterns:
-            if re.match(pattern, command, re.IGNORECASE):
+
+        for pattern in SAFE_COMMAND_PATTERNS:
+            if pattern.match(command):
                 return True
-        
-        # Default to safe for simple, basic commands
+
         basic_safe_commands = ['echo', 'ls', 'dir', 'cat', 'type', 'whoami']
         first_word = command.split()[0] if command.split() else ''
         return first_word in basic_safe_commands
@@ -948,6 +946,24 @@ class AdvancedSolutionEngine:
             return matches >= len(key_terms) // 2  # At least half the key terms should match
         
         return True  # If no specific terms to check, assume success
+
+    def _load_effectiveness_data(self) -> None:
+        """Load solution effectiveness data from disk."""
+        if os.path.exists(self.effectiveness_file):
+            try:
+                with open(self.effectiveness_file, "r") as f:
+                    self.solution_effectiveness = json.load(f)
+            except Exception as e:
+                logger.error(f"Failed to load effectiveness data: {e}")
+                self.solution_effectiveness = {}
+
+    def _save_effectiveness_data(self) -> None:
+        """Persist solution effectiveness data to disk."""
+        try:
+            with open(self.effectiveness_file, "w") as f:
+                json.dump(self.solution_effectiveness, f)
+        except Exception as e:
+            logger.error(f"Failed to save effectiveness data: {e}")
 
     async def _run_automated_test(self, test: AutomatedTest) -> Dict[str, Any]:
         """Run an automated test and evaluate results."""
