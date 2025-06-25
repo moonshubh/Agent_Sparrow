@@ -876,46 +876,17 @@ class AdvancedSolutionEngine:
             logger.error(f"Learning from resolution failed: {str(e)}")
 
     async def _execute_command_safely(self, command: str) -> Dict[str, Any]:
-        """Execute a command safely with proper error handling."""
-        try:
-            # Security check - only allow whitelisted commands
-            if not self._is_command_safe(command):
-                return {
-                    'success': False,
-                    'error': 'Command not in whitelist for security reasons',
-                    'output': ''
-                }
-            
-            # Execute command with timeout
-            process = await asyncio.create_subprocess_shell(
-                command,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE
-            )
-            
-            try:
-                stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=30)
-                
-                return {
-                    'success': process.returncode == 0,
-                    'output': stdout.decode('utf-8', errors='replace'),
-                    'error': stderr.decode('utf-8', errors='replace') if stderr else None,
-                    'return_code': process.returncode
-                }
-            except asyncio.TimeoutError:
-                process.kill()
-                return {
-                    'success': False,
-                    'error': 'Command timed out after 30 seconds',
-                    'output': ''
-                }
-                
-        except Exception as e:
-            return {
-                'success': False,
-                'error': str(e),
-                'output': ''
-            }
+        """SECURITY DISABLED: Command execution disabled for security reasons."""
+        # CRITICAL SECURITY: Command execution has been permanently disabled
+        # This prevents potential security vulnerabilities from arbitrary command execution
+        
+        return {
+            'success': False,
+            'error': 'SECURITY: Command execution disabled - automated remediation not available for safety',
+            'output': 'Command execution has been disabled for security reasons. Manual execution required.',
+            'command_suggested': command,
+            'manual_execution_required': True
+        }
 
     def _is_command_safe(self, command: str) -> bool:
         """Check if a command is safe to execute."""

@@ -21,13 +21,23 @@ from .enhanced_schemas import (
     DetailedSystemMetadata,
     DetailedIssue,
     ComprehensiveSolution,
+    EnhancedSolution,
+    EnhancedSolutionStep,
+    AutomatedTest,
     ResearchRecommendation,
-    AnalysisMetrics
+    AnalysisMetrics,
+    EnvironmentalContext,
+    CorrelationAnalysis,
+    DependencyAnalysis,
+    PredictiveInsight,
+    MLPatternDiscovery,
+    ValidationSummary
 )
-from .advanced_parser import enhanced_parse_log_content
-from .advanced_solution_engine import generate_comprehensive_solutions
-from .intelligent_analyzer import perform_intelligent_log_analysis
-from .optimized_analyzer import perform_optimized_log_analysis
+from .edge_case_handler import EdgeCaseHandler
+from .advanced_parser import AdvancedMailbirdAnalyzer
+from .advanced_solution_engine import AdvancedSolutionEngine
+from .intelligent_analyzer import IntelligentLogAnalyzer
+from .optimized_analyzer import OptimizedLogAnalyzer
 
 # Load environment variables
 load_dotenv()
@@ -38,7 +48,7 @@ if not settings.gemini_api_key:
 
 
 class EnhancedLogAnalysisAgent:
-    """Production-grade log analysis agent with comprehensive profiling and solution generation."""
+    """Production-grade log analysis agent with comprehensive profiling and solution generation v3.0."""
     
     def __init__(self):
         self.primary_llm = ChatGoogleGenerativeAI(
@@ -53,9 +63,26 @@ class EnhancedLogAnalysisAgent:
             google_api_key=settings.gemini_api_key,
         )
         
+        # Initialize enhanced components
+        self.edge_case_handler = EdgeCaseHandler()
+        self.advanced_parser = AdvancedMailbirdAnalyzer()
+        self.intelligent_analyzer = IntelligentLogAnalyzer()
+        self.optimized_analyzer = OptimizedLogAnalyzer()
+        self.solution_engine = AdvancedSolutionEngine()
+        
+        # Initialize state tracking for consistent access patterns
+        self._current_state = {}
+        
         # Performance configuration
         self.use_optimized_analysis = os.getenv("USE_OPTIMIZED_ANALYSIS", "true").lower() == "true"
+        self.use_enhanced_log_analysis = os.getenv("USE_ENHANCED_LOG_ANALYSIS", "true").lower() == "true"
         self.optimization_threshold = int(os.getenv("OPTIMIZATION_THRESHOLD_LINES", "500"))
+        
+        # Enhanced analysis features
+        self.enable_ml_pattern_discovery = os.getenv("ENABLE_ML_PATTERN_DISCOVERY", "true").lower() == "true"
+        self.enable_predictive_analysis = os.getenv("ENABLE_PREDICTIVE_ANALYSIS", "true").lower() == "true"
+        self.enable_correlation_analysis = os.getenv("ENABLE_CORRELATION_ANALYSIS", "true").lower() == "true"
+        self.enable_automated_remediation = os.getenv("ENABLE_AUTOMATED_REMEDIATION", "false").lower() == "true"
     
     async def analyze_logs(self, state: EnhancedLogAnalysisAgentState) -> Dict[str, Any]:
         """
@@ -74,38 +101,92 @@ class EnhancedLogAnalysisAgent:
                 logger.error("validation_error", reason="'raw_log_content' is missing.")
                 raise ValueError("'raw_log_content' is missing from the agent state.")
             
-            # Phase 1: Enhanced Log Parsing and System Profiling
-            print("Phase 1: Advanced log parsing and system profiling...")
+            # Phase 1: Enhanced Log Preprocessing and Validation
+            print("Phase 1: Enhanced log preprocessing with edge case handling...")
+            logger.info("preprocessing_phase_start")
+            
+            # Use enhanced edge case handler for preprocessing
+            try:
+                preprocessed_content = await self.edge_case_handler.preprocess_log_content(raw_log_content)
+                validation_summary = self.edge_case_handler.validate_analysis_input(preprocessed_content)
+                
+                # Detect platform and language
+                detected_platform = await self.edge_case_handler.detect_platform(preprocessed_content)
+                detected_language = await self.edge_case_handler.detect_log_language(preprocessed_content)
+                
+                logger.info("preprocessing_complete", 
+                           content_length=len(preprocessed_content),
+                           detected_platform=detected_platform,
+                           detected_language=detected_language,
+                           validation_issues=len(validation_summary.get('issues', [])))
+                
+            except Exception as e:
+                logger.warning("preprocessing_failed", error=str(e))
+                preprocessed_content = raw_log_content
+                detected_platform = 'unknown'
+                detected_language = 'en'
+                validation_summary = {'is_valid': True, 'warnings': []}
+            
+            # Phase 2: Advanced Log Parsing with Enhanced Features
+            print("Phase 2: Advanced log parsing with cross-platform and multi-language support...")
             logger.info("parsing_phase_start")
             
-            parsed_data = enhanced_parse_log_content(raw_log_content)
+            try:
+                # Use enhanced parser with platform and language detection
+                parsed_data = await self.advanced_parser.analyze_logs(
+                    preprocessed_content, 
+                    platform=detected_platform,
+                    language=detected_language
+                )
+                
+                state['parsed_log_data'] = parsed_data["entries"]
+                state['system_profile'] = parsed_data["system_profile"]
+                state['detected_issues'] = parsed_data["detected_issues"]
+                state['validation_summary'] = validation_summary
+                state['environmental_context'] = {
+                    'platform': detected_platform,
+                    'language': detected_language,
+                    'preprocessing_applied': preprocessed_content != raw_log_content
+                }
+                
+                logger.info("parsing_complete", 
+                           entries=len(parsed_data["entries"]),
+                           issues_detected=len(parsed_data["detected_issues"]),
+                           system_version=parsed_data["system_profile"].get("mailbird_version", "Unknown"),
+                           platform=detected_platform,
+                           language=detected_language,
+                           ml_patterns_discovered=len(parsed_data.get("ml_discovered_patterns", [])))
+                
+            except Exception as e:
+                logger.error("parsing_failed", error=str(e))
+                # Fallback to basic parsing
+                parsed_data = {
+                    "entries": [],
+                    "system_profile": {"mailbird_version": "Unknown"},
+                    "detected_issues": [],
+                    "metadata": {"total_entries_parsed": 0}
+                }
+                state['parsed_log_data'] = parsed_data["entries"]
+                state['system_profile'] = parsed_data["system_profile"]
+                state['detected_issues'] = parsed_data["detected_issues"]
             
-            state['parsed_log_data'] = parsed_data["entries"]
-            state['system_profile'] = parsed_data["system_profile"]
-            state['detected_issues'] = parsed_data["detected_issues"]
-            
-            logger.info("parsing_complete", 
-                       entries=len(parsed_data["entries"]),
-                       issues_detected=len(parsed_data["detected_issues"]),
-                       system_version=parsed_data["system_profile"].get("mailbird_version", "Unknown"))
-            
-            # Phase 2: Intelligent Analysis with Performance Optimization
-            log_line_count = len(raw_log_content.split('\n'))
+            # Phase 3: Enhanced Intelligent Analysis with v3.0 Features
+            log_line_count = len(preprocessed_content.split('\n'))
             
             # Choose analysis approach based on log size and configuration
             if self.use_optimized_analysis and log_line_count > self.optimization_threshold:
-                print(f"Phase 2: High-performance optimized analysis ({log_line_count} lines)...")
+                print(f"Phase 3: High-performance optimized analysis ({log_line_count} lines)...")
                 logger.info("optimized_analysis_start", log_lines=log_line_count)
                 
                 try:
-                    # Use optimized analyzer for large logs
-                    optimized_analysis = await perform_optimized_log_analysis(
-                        raw_log_content, parsed_data
+                    # Use enhanced optimized analyzer
+                    optimized_analysis = await self.optimized_analyzer.perform_optimized_analysis(
+                        preprocessed_content, parsed_data
                     )
                     
                     state['optimized_analysis'] = optimized_analysis
                     logger.info("optimized_analysis_complete", 
-                               analyzer_version="4.0-optimized",
+                               analyzer_version="4.0-enhanced-optimized",
                                performance_features=optimized_analysis.get('performance_metrics', {}).get('optimization_features', []))
                     
                     # Extract enhanced issues from optimized analysis
@@ -115,27 +196,42 @@ class EnhancedLogAnalysisAgent:
                     
                 except Exception as e:
                     logger.warning("optimized_analysis_failed", error=str(e))
-                    print(f"Optimized analysis failed, falling back to standard analysis: {e}")
-                    enhanced_issues = await self._fallback_to_basic_analysis(parsed_data, e)
+                    print(f"Optimized analysis failed, falling back to intelligent analysis: {e}")
+                    enhanced_issues = await self._fallback_to_intelligent_analysis(parsed_data, preprocessed_content, e)
                     
             else:
-                print("Phase 2: AI-powered intelligent analysis with Gemini 2.5 Pro...")
+                print("Phase 3: AI-powered intelligent analysis with enhanced v3.0 features...")
                 logger.info("intelligent_analysis_start")
                 
                 try:
-                    # Use the intelligent analyzer for smaller logs or when optimization is disabled
-                    intelligent_analysis = await perform_intelligent_log_analysis(
-                        raw_log_content, parsed_data
+                    # Use enhanced intelligent analyzer with full v3.0 features
+                    historical_data = state.get('historical_data', [])  # For predictive analysis
+                    
+                    intelligent_analysis = await self.intelligent_analyzer.perform_intelligent_analysis(
+                        preprocessed_content, 
+                        parsed_data,
+                        historical_data=historical_data if self.enable_predictive_analysis else None
                     )
                     
                     state['intelligent_analysis'] = intelligent_analysis
+                    
+                    # Log enhanced features used
+                    features_used = []
+                    if intelligent_analysis.get('correlation_analysis'):
+                        features_used.append('correlation_analysis')
+                    if intelligent_analysis.get('dependency_analysis'):
+                        features_used.append('dependency_analysis')
+                    if intelligent_analysis.get('predictive_analysis'):
+                        features_used.append('predictive_analysis')
+                    
                     logger.info("intelligent_analysis_complete", 
                                ai_model="gemini-2.5-pro",
-                               reasoning_approach="step-by-step-thinking")
+                               reasoning_approach="multi-phase-comprehensive",
+                               enhanced_features=features_used)
                     
                     # Extract enhanced issues from intelligent analysis
-                    enhanced_issues = self._convert_intelligent_issues_to_legacy_format(
-                        intelligent_analysis.get('issues_analysis', {}),
+                    enhanced_issues = self._convert_enhanced_intelligent_issues_to_legacy_format(
+                        intelligent_analysis,
                         parsed_data["detected_issues"]
                     )
                     
@@ -147,8 +243,8 @@ class EnhancedLogAnalysisAgent:
             state['detected_issues'] = enhanced_issues
             logger.info("issue_analysis_complete", enhanced_issues_count=len(enhanced_issues))
             
-            # Phase 3: Intelligent Solution Generation
-            print("Phase 3: Generating AI-powered solutions...")
+            # Phase 4: Enhanced Solution Generation with Automation Support
+            print("Phase 4: Generating enhanced AI-powered solutions with automation...")
             logger.info("solution_generation_start")
             
             # Use solutions from appropriate analysis method
@@ -160,24 +256,57 @@ class EnhancedLogAnalysisAgent:
             elif 'intelligent_analysis' in state and 'intelligent_solutions' in state['intelligent_analysis']:
                 # Use intelligent solutions
                 intelligent_solutions = state['intelligent_analysis']['intelligent_solutions']
-                solutions = self._convert_intelligent_solutions_to_legacy_format(intelligent_solutions)
-                logger.info("using_intelligent_solutions", count=len(solutions))
+                solutions = self._convert_enhanced_intelligent_solutions_to_legacy_format(intelligent_solutions)
+                logger.info("using_enhanced_intelligent_solutions", count=len(solutions))
             else:
-                # Fallback to template-based solution generation
-                account_analysis = parsed_data.get("account_analysis", [])
-                solutions = await generate_comprehensive_solutions(
-                    enhanced_issues, 
-                    parsed_data["system_profile"], 
-                    account_analysis
-                )
-                solutions = [solution.model_dump() if hasattr(solution, 'model_dump') else solution for solution in solutions]
-                logger.info("using_fallback_solutions", count=len(solutions))
+                # Use enhanced solution engine for comprehensive solution generation
+                try:
+                    print("Generating comprehensive solutions with enhanced engine...")
+                    account_analysis = parsed_data.get("account_analysis", [])
+                    
+                    # Use enhanced solution engine
+                    enhanced_solutions = await self.solution_engine.generate_comprehensive_solutions(
+                        enhanced_issues, 
+                        parsed_data["system_profile"], 
+                        account_analysis
+                    )
+                    
+                    # Convert to consistent format
+                    solutions = []
+                    for solution in enhanced_solutions:
+                        if hasattr(solution, 'model_dump'):
+                            solutions.append(solution.model_dump())
+                        elif hasattr(solution, 'dict'):
+                            solutions.append(solution.dict())
+                        elif isinstance(solution, dict):
+                            solutions.append(solution)
+                        else:
+                            # Convert object to dict
+                            solutions.append({
+                                'issue_id': getattr(solution, 'issue_id', 'unknown'),
+                                'solution_summary': getattr(solution, 'solution_summary', 'Unknown'),
+                                'priority': getattr(solution, 'priority', 'Medium'),
+                                'solution_steps': getattr(solution, 'solution_steps', []),
+                                'estimated_total_time_minutes': getattr(solution, 'estimated_total_time_minutes', 30)
+                            })
+                    
+                    logger.info("using_enhanced_solution_engine", count=len(solutions))
+                    
+                    # Add automation capabilities if enabled
+                    if self.enable_automated_remediation:
+                        solutions = await self._add_automation_capabilities(solutions)
+                        logger.info("automation_capabilities_added")
+                    
+                except Exception as e:
+                    logger.warning("enhanced_solution_generation_failed", error=str(e))
+                    print(f"Enhanced solution generation failed, using basic solutions: {e}")
+                    solutions = []
             
             state['generated_solutions'] = solutions
             logger.info("solution_generation_complete", solutions_count=len(solutions))
             
-            # Phase 4: Comprehensive Report Generation
-            print("Phase 4: Compiling comprehensive analysis report...")
+            # Phase 5: Comprehensive Report Generation with Enhanced Features
+            print("Phase 5: Compiling comprehensive analysis report with v3.0 enhancements...")
             logger.info("report_generation_start")
             
             # Store state for report generation
@@ -538,13 +667,7 @@ Return a JSON object with:
                 print(f"Processing solution type: {type(solution)}, keys: {getattr(solution, 'keys', lambda: 'no keys')() if hasattr(solution, 'keys') else 'no keys method'}")
                 
                 # Convert all solutions to dictionary format first for consistency
-                if hasattr(solution, 'model_dump'):
-                    # Convert Pydantic models to dict
-                    solution_dict = solution.model_dump()
-                elif hasattr(solution, 'dict'):
-                    # Convert Pydantic models (older version) to dict
-                    solution_dict = solution.dict()
-                elif isinstance(solution, dict):
+                if isinstance(solution, dict):
                     # Already a dictionary - normalize field names for compatibility
                     solution_dict = {
                         'issue_id': solution.get('issue_id', solution.get('solution_id', 'unknown')),
@@ -557,6 +680,12 @@ Return a JSON object with:
                         'alternative_approaches': solution.get('alternative_approaches', []),
                         'references': solution.get('references', [])
                     }
+                elif hasattr(solution, 'model_dump'):
+                    # Convert Pydantic models to dict
+                    solution_dict = solution.model_dump()
+                elif hasattr(solution, 'dict'):
+                    # Convert Pydantic models (older version) to dict
+                    solution_dict = solution.dict()
                 else:
                     # Convert object to dictionary using getattr
                     solution_dict = {
@@ -571,50 +700,63 @@ Return a JSON object with:
                         'references': getattr(solution, 'references', [])
                     }
                 
-                # Now handle the dictionary format consistently
-                solution_steps_dicts = []
+                # Now handle the dictionary format consistently and create EnhancedSolutionStep objects
+                enhanced_solution_steps = []
                 raw_steps = solution_dict.get('solution_steps', [])
                 
                 for i, step in enumerate(raw_steps):
                     if isinstance(step, dict):
-                        step_dict = {
-                            "step_number": step.get('step_number', i + 1),
-                            "description": step.get('action', step.get('description', 'No description')),
-                            "expected_outcome": step.get('expected_outcome', step.get('expected_result', 'Unknown outcome')),
-                            "troubleshooting_note": step.get('troubleshooting_note', '')
-                        }
+                        enhanced_step = EnhancedSolutionStep(
+                            step_number=step.get('step_number', i + 1),
+                            description=step.get('action', step.get('description', 'No description')),
+                            expected_outcome=step.get('expected_outcome', step.get('expected_result', 'Unknown outcome')),
+                            troubleshooting_note=step.get('troubleshooting_note', ''),
+                            estimated_time_minutes=step.get('estimated_time_minutes', 5),
+                            risk_level=step.get('risk_level', 'Low'),
+                            platform_specific=step.get('platform_specific'),
+                            automated_script=step.get('automated_script'),
+                            validation_command=step.get('validation_command'),
+                            rollback_procedure=step.get('rollback_procedure')
+                        )
                     else:
                         # Handle string steps or object steps
                         if hasattr(step, 'description'):
                             # Object step
-                            step_dict = {
-                                "step_number": getattr(step, 'step_number', i + 1),
-                                "description": getattr(step, 'description', str(step)),
-                                "expected_outcome": getattr(step, 'expected_outcome', 'Complete step successfully'),
-                                "troubleshooting_note": getattr(step, 'troubleshooting_note', '')
-                            }
+                            enhanced_step = EnhancedSolutionStep(
+                                step_number=getattr(step, 'step_number', i + 1),
+                                description=getattr(step, 'description', str(step)),
+                                expected_outcome=getattr(step, 'expected_outcome', 'Complete step successfully'),
+                                troubleshooting_note=getattr(step, 'troubleshooting_note', ''),
+                                estimated_time_minutes=getattr(step, 'estimated_time_minutes', 5),
+                                risk_level=getattr(step, 'risk_level', 'Low')
+                            )
                         else:
                             # String step
-                            step_dict = {
-                                "step_number": i + 1,
-                                "description": str(step),
-                                "expected_outcome": "Complete step successfully",
-                                "troubleshooting_note": ""
-                            }
-                    solution_steps_dicts.append(step_dict)
+                            enhanced_step = EnhancedSolutionStep(
+                                step_number=i + 1,
+                                description=str(step),
+                                expected_outcome="Complete step successfully",
+                                troubleshooting_note="",
+                                estimated_time_minutes=5,
+                                risk_level="Low"
+                            )
+                    enhanced_solution_steps.append(enhanced_step)
                 
-                comprehensive_solution = ComprehensiveSolution(
+                comprehensive_solution = EnhancedSolution(
                     issue_id=solution_dict.get('issue_id', 'unknown'),
                     solution_summary=solution_dict.get('solution_summary', solution_dict.get('title', 'No summary')),
                     confidence_level=solution_dict.get('confidence_level', 'Medium'),
-                    solution_steps=solution_steps_dicts,
+                    solution_steps=enhanced_solution_steps,
                     prerequisites=solution_dict.get('prerequisites', []),
                     estimated_total_time_minutes=solution_dict.get('estimated_total_time_minutes', 30),
                     success_probability=solution_dict.get('success_probability', 'Medium'),
                     alternative_approaches=solution_dict.get('alternative_approaches', []),
                     references=solution_dict.get('references', []),
                     requires_restart=any("restart" in str(step).lower() for step in raw_steps),
-                    data_backup_required=any("backup" in str(step).lower() for step in raw_steps)
+                    data_backup_required=any("backup" in str(step).lower() for step in raw_steps),
+                    platform_compatibility=["windows", "macos", "linux"],  # Default to all platforms
+                    automated_tests=[],  # No automated tests by default
+                    success_criteria=[f"Issue '{solution_dict.get('issue_id', 'unknown')}' is resolved"]
                 )
                     
                 comprehensive_solutions.append(comprehensive_solution)
@@ -622,13 +764,13 @@ Return a JSON object with:
                 # If validation fails, create a minimal fallback solution
                 print(f"Failed to create ComprehensiveSolution: {e}, creating fallback solution")
                 
-                # Extract basic info safely using the same conversion pattern
-                if hasattr(solution, 'model_dump'):
+                # Extract basic info safely - avoid calling model_dump on dict
+                if isinstance(solution, dict):
+                    solution_dict = solution
+                elif hasattr(solution, 'model_dump'):
                     solution_dict = solution.model_dump()
                 elif hasattr(solution, 'dict'):
                     solution_dict = solution.dict()
-                elif isinstance(solution, dict):
-                    solution_dict = solution
                 else:
                     solution_dict = {
                         'issue_id': getattr(solution, 'issue_id', 'unknown'),
@@ -639,23 +781,31 @@ Return a JSON object with:
                 issue_id = solution_dict.get('issue_id', 'unknown')
                 summary = solution_dict.get('solution_summary', solution_dict.get('title', 'Unknown issue'))
                 
-                fallback_solution = ComprehensiveSolution(
+                # Create fallback solution step as EnhancedSolutionStep
+                fallback_step = EnhancedSolutionStep(
+                    step_number=1,
+                    description="Contact technical support with log file details",
+                    expected_outcome="Professional assistance for issue resolution",
+                    troubleshooting_note="",
+                    estimated_time_minutes=15,
+                    risk_level="Low"
+                )
+                
+                fallback_solution = EnhancedSolution(
                     issue_id=issue_id,
                     solution_summary=summary,
                     confidence_level="Low",
-                    solution_steps=[{
-                        "step_number": 1,
-                        "description": "Contact technical support with log file details",
-                        "expected_outcome": "Professional assistance for issue resolution",
-                        "troubleshooting_note": ""
-                    }],
+                    solution_steps=[fallback_step],
                     prerequisites=[],
                     estimated_total_time_minutes=15,
                     success_probability="Medium",
                     alternative_approaches=[],
                     references=[],
                     requires_restart=False,
-                    data_backup_required=False
+                    data_backup_required=False,
+                    platform_compatibility=["windows", "macos", "linux"],
+                    automated_tests=[],
+                    success_criteria=["Contact support successfully"]
                 )
                 comprehensive_solutions.append(fallback_solution)
         
@@ -738,17 +888,75 @@ Return a JSON object with:
         else:
             overall_summary = f"Analysis of Mailbird {system_metadata.mailbird_version} identified {len(issues)} issues across {len(parsed_data['entries'])} log entries. System health: {health_status}."
         
+        # Create required environmental context
+        environmental_context = EnvironmentalContext(
+            os_version=getattr(self, '_current_state', {}).get('environmental_context', {}).get('platform', 'unknown'),
+            platform=getattr(self, '_current_state', {}).get('environmental_context', {}).get('platform', 'unknown'),
+            antivirus_software=[],
+            firewall_status="unknown",
+            network_type="unknown", 
+            proxy_configured=False,
+            system_locale="en-US",
+            timezone="UTC"
+        )
+        
+        # Create required correlation analysis
+        correlation_analysis = CorrelationAnalysis(
+            temporal_correlations=[],
+            account_correlations=[],
+            issue_type_correlations=[],
+            correlation_matrix={},
+            analysis_summary={"status": "basic_analysis", "correlations_found": 0}
+        )
+        
+        # Create required dependency analysis
+        dependency_analysis = DependencyAnalysis(
+            graph_summary={"total_nodes": len(issues), "total_edges": 0},
+            root_causes=[issue.get("issue_id", "unknown") for issue in issues[:3] if issue.get("severity") == "High"],
+            primary_symptoms=[issue.get("issue_id", "unknown") for issue in issues if issue.get("severity") in ["Medium", "Low"]],
+            cyclical_dependencies=[],
+            centrality_measures={},
+            issue_relationships=[]
+        )
+        
+        # Create required predictive insights
+        predictive_insights = []
+        
+        # Create required ML pattern discovery  
+        ml_pattern_discovery = MLPatternDiscovery(
+            patterns_discovered=[],
+            pattern_confidence={},
+            clustering_summary={"clusters_found": 0, "method": "basic"},
+            recommendations=["Enable ML analysis for enhanced pattern discovery"]
+        )
+        
+        # Create required validation summary
+        validation_summary = ValidationSummary(
+            is_valid=True,
+            issues_found=[],
+            warnings=[],
+            suggestions=[],
+            preprocessing_applied=getattr(self, '_current_state', {}).get('environmental_context', {}).get('preprocessing_applied', False),
+            detected_language=getattr(self, '_current_state', {}).get('environmental_context', {}).get('language', 'en'),
+            detected_platform=getattr(self, '_current_state', {}).get('environmental_context', {}).get('platform', 'unknown')
+        )
+        
         return ComprehensiveLogAnalysisOutput(
             overall_summary=overall_summary,
             health_status=health_status,
             priority_concerns=[issue.get("category", "unknown") for issue in issues[:3] if issue.get("severity") == "High"],
             system_metadata=system_metadata,
+            environmental_context=environmental_context,
             identified_issues=detailed_issues,
             issue_summary_by_severity={
                 "High": high_severity_count,
                 "Medium": medium_severity_count,
                 "Low": low_severity_count
             },
+            correlation_analysis=correlation_analysis,
+            dependency_analysis=dependency_analysis,
+            predictive_insights=predictive_insights,
+            ml_pattern_discovery=ml_pattern_discovery,
             proposed_solutions=comprehensive_solutions,
             supplemental_research=ResearchRecommendation(
                 rationale="Additional research recommended for complex issues",
@@ -757,9 +965,11 @@ Return a JSON object with:
                 expected_information="Version-specific fixes and updates"
             ) if any(check_requires_web_search(solution) for solution in solutions) else None,
             analysis_metrics=analysis_metrics,
+            validation_summary=validation_summary,
             immediate_actions=immediate_actions,
             preventive_measures=preventive_measures,
-            monitoring_recommendations=monitoring_recommendations
+            monitoring_recommendations=monitoring_recommendations,
+            automated_remediation_available=self.enable_automated_remediation
         )
     
     async def _generate_error_report(self, state: Dict, error: str, start_time: float) -> ComprehensiveLogAnalysisOutput:
@@ -793,13 +1003,64 @@ Return a JSON object with:
             completeness_score=0.0
         )
         
+        # Create required fields for error report
+        environmental_context = EnvironmentalContext(
+            os_version="unknown",
+            platform="unknown",
+            antivirus_software=[],
+            firewall_status="unknown",
+            network_type="unknown",
+            proxy_configured=False,
+            system_locale="en-US", 
+            timezone="UTC"
+        )
+        
+        correlation_analysis = CorrelationAnalysis(
+            temporal_correlations=[],
+            account_correlations=[],
+            issue_type_correlations=[],
+            correlation_matrix={},
+            analysis_summary={"status": "error", "correlations_found": 0}
+        )
+        
+        dependency_analysis = DependencyAnalysis(
+            graph_summary={"total_nodes": 0, "total_edges": 0},
+            root_causes=[],
+            primary_symptoms=[],
+            cyclical_dependencies=[],
+            centrality_measures={},
+            issue_relationships=[]
+        )
+        
+        ml_pattern_discovery = MLPatternDiscovery(
+            patterns_discovered=[],
+            pattern_confidence={},
+            clustering_summary={"clusters_found": 0, "method": "error"},
+            recommendations=["Analysis failed - manual review required"]
+        )
+        
+        validation_summary = ValidationSummary(
+            is_valid=False,
+            issues_found=["Analysis system error"],
+            warnings=[str(error)],
+            suggestions=["Contact technical support"],
+            preprocessing_applied=False,
+            detected_language="unknown",
+            detected_platform="unknown"
+        )
+        
         return ComprehensiveLogAnalysisOutput(
             overall_summary=f"Log analysis failed due to system error: {error}",
             health_status="Unknown",
             priority_concerns=["Analysis system error"],
             system_metadata=system_metadata,
+            environmental_context=environmental_context,
             identified_issues=[],
             issue_summary_by_severity={"High": 0, "Medium": 0, "Low": 0},
+            correlation_analysis=correlation_analysis,
+            dependency_analysis=dependency_analysis,
+            predictive_insights=[],
+            ml_pattern_discovery=ml_pattern_discovery,
             proposed_solutions=[],
             supplemental_research=ResearchRecommendation(
                 rationale="Manual analysis required due to system error",
@@ -808,10 +1069,218 @@ Return a JSON object with:
                 expected_information="Professional technical support"
             ),
             analysis_metrics=analysis_metrics,
+            validation_summary=validation_summary,
             immediate_actions=["Contact technical support with log file"],
             preventive_measures=["Ensure proper log file format"],
-            monitoring_recommendations=["Monitor system resources during log analysis"]
+            monitoring_recommendations=["Monitor system resources during log analysis"],
+            automated_remediation_available=False
         )
+
+    async def _fallback_to_intelligent_analysis(self, parsed_data: Dict, preprocessed_content: str, error: Exception) -> List[Dict]:
+        """Fallback to intelligent analysis when optimized analysis fails."""
+        try:
+            logger.info("fallback_to_intelligent_analysis", reason=str(error))
+            print("Falling back to intelligent analysis...")
+            
+            # Use intelligent analyzer as fallback
+            historical_data = []  # No historical data for fallback
+            intelligent_analysis = await self.intelligent_analyzer.perform_intelligent_analysis(
+                preprocessed_content,
+                parsed_data,
+                historical_data=historical_data
+            )
+            
+            # Store the fallback analysis
+            if hasattr(self, '_current_state'):
+                self._current_state['intelligent_analysis'] = intelligent_analysis
+            
+            # Convert issues
+            enhanced_issues = self._convert_enhanced_intelligent_issues_to_legacy_format(
+                intelligent_analysis,
+                parsed_data["detected_issues"]
+            )
+            
+            return enhanced_issues
+            
+        except Exception as fallback_error:
+            logger.error("intelligent_fallback_failed", error=str(fallback_error))
+            return await self._fallback_to_basic_analysis(parsed_data, fallback_error)
+
+    def _convert_enhanced_intelligent_issues_to_legacy_format(self, intelligent_analysis: Dict, fallback_issues: List[Dict]) -> List[Dict]:
+        """Convert enhanced intelligent analysis issues to legacy format for compatibility."""
+        try:
+            converted_issues = []
+            
+            # Extract from account analysis
+            account_analysis = intelligent_analysis.get('issues_analysis', {}).get('account_analysis', [])
+            for account in account_analysis:
+                for error_pattern in account.get('error_patterns', []):
+                    issue = {
+                        'issue_id': f"ai_{error_pattern.get('error_type', 'unknown').replace(' ', '_')}",
+                        'category': error_pattern.get('error_type', 'Unknown').replace('_', ' ').title(),
+                        'signature': error_pattern.get('error_type', ''),
+                        'severity': account.get('issue_severity', 'Medium').title(),
+                        'root_cause': f"Account-specific issue affecting {account.get('email_address', 'unknown account')}",
+                        'user_impact': f"Affects {account.get('email_address', 'account')} with {error_pattern.get('frequency', 0)} occurrences",
+                        'affected_accounts': [account.get('email_address', 'unknown')],
+                        'occurrences': error_pattern.get('frequency', 1),
+                        'confidence_score': 0.95,  # High confidence for intelligent analysis
+                        'first_occurrence': error_pattern.get('first_occurrence'),
+                        'last_occurrence': error_pattern.get('last_occurrence'),
+                        'ai_generated': True,
+                        'analysis_method': 'intelligent_enhanced'
+                    }
+                    converted_issues.append(issue)
+            
+            # Extract from technical patterns
+            technical_patterns = intelligent_analysis.get('issues_analysis', {}).get('technical_patterns', [])
+            for pattern in technical_patterns:
+                issue = {
+                    'issue_id': f"ai_pattern_{pattern.get('pattern_name', 'unknown').replace(' ', '_')}",
+                    'category': pattern.get('pattern_name', 'Technical Pattern'),
+                    'signature': pattern.get('technical_signature', ''),
+                    'severity': 'High' if 'critical' in pattern.get('pattern_name', '').lower() else 'Medium',
+                    'root_cause': pattern.get('root_cause', 'Pattern-based detection'),
+                    'user_impact': pattern.get('impact_assessment', 'Technical impact detected'),
+                    'affected_accounts': pattern.get('affected_accounts', []),
+                    'occurrences': 1,  # Pattern-level occurrence
+                    'frequency_pattern': pattern.get('frequency_analysis', 'Unknown'),
+                    'confidence_score': 0.9,
+                    'ai_generated': True,
+                    'analysis_method': 'intelligent_pattern'
+                }
+                converted_issues.append(issue)
+            
+            # Extract from critical findings
+            critical_findings = intelligent_analysis.get('issues_analysis', {}).get('critical_findings', [])
+            for finding in critical_findings:
+                issue = {
+                    'issue_id': f"ai_critical_{finding.get('finding', 'unknown').replace(' ', '_')}",
+                    'category': 'Critical Finding',
+                    'signature': finding.get('finding', ''),
+                    'severity': 'Critical',
+                    'root_cause': finding.get('technical_details', 'Critical issue detected'),
+                    'user_impact': finding.get('business_impact', 'Critical business impact'),
+                    'affected_accounts': finding.get('affected_accounts', []),
+                    'occurrences': len(finding.get('evidence', [])),
+                    'confidence_score': 0.98,  # Very high confidence for critical findings
+                    'ai_generated': True,
+                    'analysis_method': 'intelligent_critical'
+                }
+                converted_issues.append(issue)
+            
+            return converted_issues if converted_issues else fallback_issues
+            
+        except Exception as e:
+            logger.error("enhanced_intelligent_issues_conversion_failed", error=str(e))
+            return fallback_issues
+
+    def _convert_enhanced_intelligent_solutions_to_legacy_format(self, intelligent_solutions: List[Dict]) -> List[Dict]:
+        """Convert enhanced intelligent solutions to legacy format for compatibility."""
+        try:
+            converted_solutions = []
+            
+            for solution in intelligent_solutions:
+                # Handle both direct solutions and nested solution structures
+                if isinstance(solution, dict):
+                    # Convert enhanced solution format
+                    converted_solution = {
+                        'issue_id': solution.get('solution_id', solution.get('issue_id', 'unknown')),
+                        'solution_summary': solution.get('title', solution.get('solution_summary', '')),
+                        'priority': solution.get('priority', 'Medium'),
+                        'implementation_timeline': solution.get('estimated_resolution_time', solution.get('implementation_timeline', 'Unknown')),
+                        'success_probability': solution.get('success_probability', 'Medium'),
+                        'solution_steps': self._convert_solution_steps(solution.get('implementation_steps', solution.get('solution_steps', []))),
+                        'prerequisites': solution.get('prerequisites', []),
+                        'estimated_total_time_minutes': self._extract_time_minutes(
+                            solution.get('estimated_resolution_time', '15 minutes')
+                        ),
+                        'alternative_approaches': solution.get('alternative_approaches', []),
+                        'expected_outcome': solution.get('expected_outcome', f"Resolves {solution.get('title', 'issue')}"),
+                        'ai_generated': True,
+                        'technical_notes': solution.get('technical_notes', ''),
+                        'success_metrics': solution.get('success_metrics', []),
+                        'risks': solution.get('risks', []),
+                        'correlation_insights': solution.get('correlation_insights', []),
+                        'predictive_actions': solution.get('predictive_actions', [])
+                    }
+                    converted_solutions.append(converted_solution)
+            
+            return converted_solutions
+            
+        except Exception as e:
+            logger.error("enhanced_intelligent_solutions_conversion_failed", error=str(e))
+            return []
+
+    def _convert_solution_steps(self, steps: List) -> List[Dict]:
+        """Convert solution steps to consistent format."""
+        converted_steps = []
+        
+        for i, step in enumerate(steps):
+            if isinstance(step, dict):
+                converted_step = {
+                    'step_number': step.get('step_number', i + 1),
+                    'description': step.get('action', step.get('description', 'No description')),
+                    'expected_outcome': step.get('expected_outcome', step.get('expected_result', 'Complete step')),
+                    'troubleshooting_note': step.get('troubleshooting_note', ''),
+                    'estimated_time_minutes': step.get('estimated_time', step.get('estimated_time_minutes', 5))
+                }
+            else:
+                # Handle string or other formats
+                converted_step = {
+                    'step_number': i + 1,
+                    'description': str(step),
+                    'expected_outcome': 'Complete step successfully',
+                    'troubleshooting_note': '',
+                    'estimated_time_minutes': 5
+                }
+            
+            converted_steps.append(converted_step)
+        
+        return converted_steps
+
+    async def _add_automation_capabilities(self, solutions: List[Dict]) -> List[Dict]:
+        """Add automation capabilities to solutions when enabled."""
+        try:
+            enhanced_solutions = []
+            
+            for solution in solutions:
+                # Add automation fields
+                enhanced_solution = solution.copy()
+                enhanced_solution.update({
+                    'automation_available': True,
+                    'can_auto_execute': False,  # Conservative default
+                    'validation_commands': [],
+                    'rollback_procedures': [],
+                    'safety_checks': ['Manual review required before execution']
+                })
+                
+                # Analyze solution steps for automation potential
+                steps = solution.get('solution_steps', [])
+                automated_steps = []
+                
+                for step in steps:
+                    step_dict = step if isinstance(step, dict) else {'description': str(step)}
+                    
+                    # Check if step can be automated safely
+                    description = step_dict.get('description', '').lower()
+                    if any(safe_keyword in description for safe_keyword in ['check', 'verify', 'view', 'review']):
+                        step_dict['can_automate'] = True
+                        step_dict['automation_risk'] = 'Low'
+                    else:
+                        step_dict['can_automate'] = False
+                        step_dict['automation_risk'] = 'High'
+                    
+                    automated_steps.append(step_dict)
+                
+                enhanced_solution['solution_steps'] = automated_steps
+                enhanced_solutions.append(enhanced_solution)
+            
+            return enhanced_solutions
+            
+        except Exception as e:
+            logger.error("automation_enhancement_failed", error=str(e))
+            return solutions
 
 
 # Main entry point function
