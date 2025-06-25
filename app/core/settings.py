@@ -24,10 +24,12 @@ class Settings(BaseSettings):
     
     # FeedMe Configuration
     feedme_enabled: bool = Field(default=True, alias="FEEDME_ENABLED")
+    feedme_html_enabled: bool = Field(default=True, alias="FEEDME_HTML_ENABLED")
     feedme_max_file_size_mb: int = Field(default=10, alias="FEEDME_MAX_FILE_SIZE_MB")
     feedme_max_examples_per_conversation: int = Field(default=20, alias="FEEDME_MAX_EXAMPLES_PER_CONVERSATION")
     feedme_embedding_batch_size: int = Field(default=10, alias="FEEDME_EMBEDDING_BATCH_SIZE")
     feedme_similarity_threshold: float = Field(default=0.7, alias="FEEDME_SIMILARITY_THRESHOLD")
+    feedme_max_retrieval_results: int = Field(default=3, alias="FEEDME_MAX_RETRIEVAL_RESULTS")
     
     # Reasoning Engine Configuration
     reasoning_enable_chain_of_thought: bool = Field(default=True, alias="REASONING_ENABLE_CHAIN_OF_THOUGHT")
@@ -36,7 +38,6 @@ class Settings(BaseSettings):
     reasoning_enable_quality_assessment: bool = Field(default=True, alias="REASONING_ENABLE_QUALITY_ASSESSMENT")
     reasoning_enable_reasoning_transparency: bool = Field(default=True, alias="REASONING_ENABLE_REASONING_TRANSPARENCY")
     reasoning_debug_mode: bool = Field(default=False, alias="REASONING_DEBUG_MODE")
-    feedme_max_retrieval_results: int = Field(default=3, alias="FEEDME_MAX_RETRIEVAL_RESULTS")
 
     class Config:
         case_sensitive = False
