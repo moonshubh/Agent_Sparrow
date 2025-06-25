@@ -5,6 +5,9 @@ Provides detailed, actionable solutions with priority-based recommendations and 
 
 import asyncio
 import json
+import subprocess
+import platform
+import logging
 from typing import Dict, List, Optional, Any, Tuple
 from datetime import datetime
 import os
@@ -16,6 +19,8 @@ from pydantic import BaseModel, Field
 
 # Import search tools for enhanced solutions
 from app.agents_v2.primary_agent.tools import tavily_web_search
+
+logger = logging.getLogger(__name__)
 
 
 class DetailedSolutionStep(BaseModel):
@@ -29,7 +34,28 @@ class DetailedSolutionStep(BaseModel):
     requires_restart: bool = False
     account_specific: bool = False
     specific_settings: Optional[Dict[str, str]] = None
+    platform_specific: Optional[str] = None  # windows, macos, linux
+    automated_script: Optional[str] = None  # Script for automated execution
+    validation_command: Optional[str] = None  # Command to validate step completion
+    rollback_procedure: Optional[str] = None  # How to undo this step if needed
 
+
+class ValidationResult(BaseModel):
+    """Result of solution validation."""
+    step_number: int
+    is_successful: bool
+    validation_output: str
+    error_message: Optional[str] = None
+    requires_manual_verification: bool = False
+
+class AutomatedTest(BaseModel):
+    """Automated test for solution validation."""
+    test_id: str
+    test_name: str
+    test_script: str
+    expected_result: str
+    platform_requirements: List[str]
+    timeout_seconds: int = 30
 
 class AccountSpecificSolution(BaseModel):
     """Complete solution tailored to specific account and issue type."""
@@ -47,6 +73,11 @@ class AccountSpecificSolution(BaseModel):
     requires_web_search: bool = False
     implementation_timeline: str  # "Immediate", "Day 1", "Week 1", etc.
     expected_outcome: str
+    platform_compatibility: List[str] = ["windows", "macos", "linux"]
+    automated_tests: List[AutomatedTest] = []
+    remediation_script: Optional[str] = None  # Complete remediation script
+    rollback_script: Optional[str] = None  # Complete rollback script
+    success_criteria: List[str] = []  # How to verify solution worked
 
 
 class AdvancedSolutionEngine:
@@ -58,6 +89,20 @@ class AdvancedSolutionEngine:
             temperature=0.1,
             google_api_key=settings.gemini_api_key,
         )
+        
+        # Platform detection
+        self.current_platform = self._detect_platform()
+        
+        # Solution validation tracking
+        self.validation_history = {}
+        self.solution_effectiveness = {}
+        
+        # Platform-specific solution templates
+        self.platform_solutions = {
+            'windows': self._get_windows_solutions(),
+            'macos': self._get_macos_solutions(),
+            'linux': self._get_linux_solutions()
+        }
         
         # Account-specific solution templates
         self.solution_templates = {
@@ -481,6 +526,581 @@ class AdvancedSolutionEngine:
             expected_outcome="Basic troubleshooting completed, issue escalated if unresolved"
         )
 
+
+    def _detect_platform(self) -> str:
+        """Detect the current platform."""
+        system = platform.system().lower()
+        if system == 'darwin':
+            return 'macos'
+        elif system == 'windows':
+            return 'windows'
+        elif system == 'linux':
+            return 'linux'
+        else:
+            return 'unknown'
+
+    def _get_windows_solutions(self) -> Dict[str, Dict]:
+        """Get Windows-specific solutions."""
+        return {
+            'registry_access_failure': {
+                'priority': 'High',
+                'timeline': 'Immediate',
+                'platform_compatibility': ['windows'],
+                'base_steps': [
+                    {
+                        'step_number': 1,
+                        'description': 'Run Mailbird as Administrator',
+                        'expected_outcome': 'Elevated permissions for registry access',
+                        'platform_specific': 'windows',
+                        'automated_script': 'powershell -Command "Start-Process mailbird.exe -Verb RunAs"',
+                        'validation_command': 'powershell -Command "Get-Process mailbird | Select-Object ProcessName,Id"',
+                        'estimated_time_minutes': 2
+                    },
+                    {
+                        'step_number': 2,
+                        'description': 'Check registry permissions for HKEY_CURRENT_USER\\Software\\Mailbird',
+                        'expected_outcome': 'Registry access permissions verified',
+                        'platform_specific': 'windows',
+                        'automated_script': 'reg query "HKEY_CURRENT_USER\\Software\\Mailbird" /s',
+                        'rollback_procedure': 'No changes made, safe to continue',
+                        'estimated_time_minutes': 3
+                    }
+                ]
+            },
+            'com_activation_failure': {
+                'priority': 'Medium',
+                'timeline': 'Day 1',
+                'platform_compatibility': ['windows'],
+                'base_steps': [
+                    {
+                        'step_number': 1,
+                        'description': 'Re-register Mailbird COM components',
+                        'expected_outcome': 'COM components properly registered',
+                        'platform_specific': 'windows',
+                        'automated_script': 'regsvr32 /s "C:\\Program Files\\Mailbird\\mailbird.dll"',
+                        'validation_command': 'reg query "HKEY_CLASSES_ROOT\\Mailbird" /f "Mailbird"',
+                        'estimated_time_minutes': 5
+                    }
+                ]
+            }
+        }
+
+    def _get_macos_solutions(self) -> Dict[str, Dict]:
+        """Get macOS-specific solutions."""
+        return {
+            'keychain_access_failure': {
+                'priority': 'High',
+                'timeline': 'Immediate',
+                'platform_compatibility': ['macos'],
+                'base_steps': [
+                    {
+                        'step_number': 1,
+                        'description': 'Reset Keychain access for Mailbird',
+                        'expected_outcome': 'Mailbird can access stored credentials',
+                        'platform_specific': 'macos',
+                        'automated_script': 'security delete-generic-password -s "Mailbird"',
+                        'validation_command': 'security find-generic-password -s "Mailbird"',
+                        'rollback_procedure': 'Re-add credentials manually if needed',
+                        'estimated_time_minutes': 5
+                    },
+                    {
+                        'step_number': 2,
+                        'description': 'Grant Mailbird access to Keychain',
+                        'expected_outcome': 'Keychain access permissions restored',
+                        'platform_specific': 'macos',
+                        'troubleshooting_note': 'May require manual authorization in Keychain Access app',
+                        'estimated_time_minutes': 3
+                    }
+                ]
+            },
+            'sandbox_violation': {
+                'priority': 'Critical',
+                'timeline': 'Immediate',
+                'platform_compatibility': ['macos'],
+                'base_steps': [
+                    {
+                        'step_number': 1,
+                        'description': 'Check and update Mailbird permissions in System Preferences',
+                        'expected_outcome': 'Full disk access and file permissions granted',
+                        'platform_specific': 'macos',
+                        'troubleshooting_note': 'Go to System Preferences > Security & Privacy > Privacy tab',
+                        'estimated_time_minutes': 5
+                    }
+                ]
+            }
+        }
+
+    def _get_linux_solutions(self) -> Dict[str, Dict]:
+        """Get Linux-specific solutions."""
+        return {
+            'dbus_connection_failure': {
+                'priority': 'Medium',
+                'timeline': 'Day 1',
+                'platform_compatibility': ['linux'],
+                'base_steps': [
+                    {
+                        'step_number': 1,
+                        'description': 'Restart D-Bus service',
+                        'expected_outcome': 'D-Bus communication restored',
+                        'platform_specific': 'linux',
+                        'automated_script': 'sudo systemctl restart dbus',
+                        'validation_command': 'systemctl status dbus',
+                        'estimated_time_minutes': 2
+                    },
+                    {
+                        'step_number': 2,
+                        'description': 'Check D-Bus session for user',
+                        'expected_outcome': 'User D-Bus session is active',
+                        'platform_specific': 'linux',
+                        'automated_script': 'dbus-launch --exit-with-session',
+                        'validation_command': 'echo $DBUS_SESSION_BUS_ADDRESS',
+                        'estimated_time_minutes': 3
+                    }
+                ]
+            },
+            'permission_denied': {
+                'priority': 'High',
+                'timeline': 'Immediate',
+                'platform_compatibility': ['linux'],
+                'base_steps': [
+                    {
+                        'step_number': 1,
+                        'description': 'Check file permissions for Mailbird directory',
+                        'expected_outcome': 'Correct file permissions verified',
+                        'platform_specific': 'linux',
+                        'automated_script': 'ls -la ~/.mailbird',
+                        'validation_command': 'stat ~/.mailbird',
+                        'estimated_time_minutes': 2
+                    },
+                    {
+                        'step_number': 2,
+                        'description': 'Fix file permissions if needed',
+                        'expected_outcome': 'File permissions corrected',
+                        'platform_specific': 'linux',
+                        'automated_script': 'chmod -R 755 ~/.mailbird',
+                        'rollback_procedure': 'chmod -R 644 ~/.mailbird (if needed)',
+                        'estimated_time_minutes': 1
+                    }
+                ]
+            }
+        }
+
+    async def validate_solution_step(self, step: DetailedSolutionStep) -> ValidationResult:
+        """Validate that a solution step was executed successfully."""
+        try:
+            if not step.validation_command:
+                return ValidationResult(
+                    step_number=step.step_number,
+                    is_successful=True,
+                    validation_output="No validation command provided",
+                    requires_manual_verification=True
+                )
+            
+            # Execute validation command
+            result = await self._execute_command_safely(step.validation_command)
+            
+            # Determine success based on command output and expected outcome
+            is_successful = self._evaluate_validation_result(result, step.expected_outcome)
+            
+            return ValidationResult(
+                step_number=step.step_number,
+                is_successful=is_successful,
+                validation_output=result.get('output', ''),
+                error_message=result.get('error') if not is_successful else None,
+                requires_manual_verification=False
+            )
+            
+        except Exception as e:
+            logger.error(f"Validation failed for step {step.step_number}: {str(e)}")
+            return ValidationResult(
+                step_number=step.step_number,
+                is_successful=False,
+                validation_output="",
+                error_message=str(e),
+                requires_manual_verification=True
+            )
+
+    async def execute_automated_remediation(self, solution: AccountSpecificSolution) -> Dict[str, Any]:
+        """Execute automated remediation for a solution."""
+        try:
+            logger.info(f"Starting automated remediation for {solution.issue_id}")
+            
+            execution_results = []
+            overall_success = True
+            
+            for step in solution.solution_steps:
+                if step.automated_script and step.platform_specific == self.current_platform:
+                    logger.info(f"Executing step {step.step_number}: {step.description}")
+                    
+                    # Execute the automated script
+                    execution_result = await self._execute_command_safely(step.automated_script)
+                    
+                    if execution_result.get('success', False):
+                        # Validate the step
+                        validation_result = await self.validate_solution_step(step)
+                        execution_results.append({
+                            'step_number': step.step_number,
+                            'executed': True,
+                            'execution_output': execution_result.get('output', ''),
+                            'validation_result': validation_result.dict(),
+                            'success': validation_result.is_successful
+                        })
+                        
+                        if not validation_result.is_successful:
+                            overall_success = False
+                            logger.warning(f"Step {step.step_number} execution succeeded but validation failed")
+                    else:
+                        execution_results.append({
+                            'step_number': step.step_number,
+                            'executed': False,
+                            'error': execution_result.get('error', 'Unknown error'),
+                            'success': False
+                        })
+                        overall_success = False
+                        logger.error(f"Step {step.step_number} execution failed")
+                else:
+                    execution_results.append({
+                        'step_number': step.step_number,
+                        'executed': False,
+                        'reason': f'No automated script for platform {self.current_platform}',
+                        'success': None
+                    })
+            
+            # Run automated tests if available
+            test_results = []
+            if solution.automated_tests:
+                for test in solution.automated_tests:
+                    if self.current_platform in test.platform_requirements:
+                        test_result = await self._run_automated_test(test)
+                        test_results.append(test_result)
+            
+            return {
+                'overall_success': overall_success,
+                'execution_results': execution_results,
+                'test_results': test_results,
+                'remediation_completed': overall_success,
+                'next_steps': self._generate_next_steps(overall_success, execution_results)
+            }
+            
+        except Exception as e:
+            logger.error(f"Automated remediation failed: {str(e)}")
+            return {
+                'overall_success': False,
+                'error': str(e),
+                'execution_results': [],
+                'test_results': [],
+                'remediation_completed': False
+            }
+
+    async def generate_remediation_script(self, solution: AccountSpecificSolution, target_platform: str) -> str:
+        """Generate a complete remediation script for the specified platform."""
+        try:
+            if target_platform == 'windows':
+                return await self._generate_windows_script(solution)
+            elif target_platform == 'macos':
+                return await self._generate_macos_script(solution)
+            elif target_platform == 'linux':
+                return await self._generate_linux_script(solution)
+            else:
+                return "# Unsupported platform"
+        except Exception as e:
+            logger.error(f"Script generation failed: {str(e)}")
+            return f"# Error generating script: {str(e)}"
+
+    async def learn_from_resolution(self, solution_id: str, execution_results: Dict[str, Any], 
+                                   user_feedback: Optional[Dict] = None):
+        """Learn from solution execution results to improve future recommendations."""
+        try:
+            overall_success = execution_results.get('overall_success', False)
+            
+            # Update solution effectiveness tracking
+            if solution_id not in self.solution_effectiveness:
+                self.solution_effectiveness[solution_id] = {
+                    'total_attempts': 0,
+                    'successful_attempts': 0,
+                    'common_failures': [],
+                    'user_feedback_scores': []
+                }
+            
+            self.solution_effectiveness[solution_id]['total_attempts'] += 1
+            
+            if overall_success:
+                self.solution_effectiveness[solution_id]['successful_attempts'] += 1
+            else:
+                # Analyze failure patterns
+                failed_steps = [r for r in execution_results.get('execution_results', []) 
+                              if not r.get('success', True)]
+                for failure in failed_steps:
+                    self.solution_effectiveness[solution_id]['common_failures'].append({
+                        'step_number': failure.get('step_number'),
+                        'error': failure.get('error', 'Unknown'),
+                        'timestamp': datetime.now().isoformat()
+                    })
+            
+            # Store user feedback if provided
+            if user_feedback:
+                self.solution_effectiveness[solution_id]['user_feedback_scores'].append({
+                    'score': user_feedback.get('effectiveness_score', 0),
+                    'comments': user_feedback.get('comments', ''),
+                    'timestamp': datetime.now().isoformat()
+                })
+            
+            logger.info(f"Learning data updated for solution {solution_id}")
+            
+        except Exception as e:
+            logger.error(f"Learning from resolution failed: {str(e)}")
+
+    async def _execute_command_safely(self, command: str) -> Dict[str, Any]:
+        """Execute a command safely with proper error handling."""
+        try:
+            # Security check - only allow whitelisted commands
+            if not self._is_command_safe(command):
+                return {
+                    'success': False,
+                    'error': 'Command not in whitelist for security reasons',
+                    'output': ''
+                }
+            
+            # Execute command with timeout
+            process = await asyncio.create_subprocess_shell(
+                command,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            
+            try:
+                stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=30)
+                
+                return {
+                    'success': process.returncode == 0,
+                    'output': stdout.decode('utf-8', errors='replace'),
+                    'error': stderr.decode('utf-8', errors='replace') if stderr else None,
+                    'return_code': process.returncode
+                }
+            except asyncio.TimeoutError:
+                process.kill()
+                return {
+                    'success': False,
+                    'error': 'Command timed out after 30 seconds',
+                    'output': ''
+                }
+                
+        except Exception as e:
+            return {
+                'success': False,
+                'error': str(e),
+                'output': ''
+            }
+
+    def _is_command_safe(self, command: str) -> bool:
+        """Check if a command is safe to execute."""
+        # Whitelist of safe commands and patterns
+        safe_patterns = [
+            r'^reg query.*',  # Registry queries (read-only)
+            r'^powershell -Command "Get-Process.*"',  # Process listing
+            r'^systemctl status.*',  # Service status
+            r'^ls -la.*',  # File listing
+            r'^stat .*',  # File statistics
+            r'^echo \$.*',  # Environment variable echo
+            r'^security find-.*',  # macOS security queries (read-only)
+        ]
+        
+        # Dangerous patterns to block
+        dangerous_patterns = [
+            r'.*rm -rf.*',  # Dangerous file deletion
+            r'.*del /f.*',  # Windows force delete
+            r'.*format.*',  # Disk formatting
+            r'.*shutdown.*',  # System shutdown
+            r'.*reboot.*',  # System reboot
+            r'.*mkfs.*',  # Filesystem creation
+        ]
+        
+        import re
+        
+        # Check against dangerous patterns first
+        for pattern in dangerous_patterns:
+            if re.match(pattern, command, re.IGNORECASE):
+                return False
+        
+        # Check against safe patterns
+        for pattern in safe_patterns:
+            if re.match(pattern, command, re.IGNORECASE):
+                return True
+        
+        # Default to safe for simple, basic commands
+        basic_safe_commands = ['echo', 'ls', 'dir', 'cat', 'type', 'whoami']
+        first_word = command.split()[0] if command.split() else ''
+        return first_word in basic_safe_commands
+
+    def _evaluate_validation_result(self, result: Dict[str, Any], expected_outcome: str) -> bool:
+        """Evaluate if validation result indicates success."""
+        if not result.get('success', False):
+            return False
+        
+        output = result.get('output', '').lower()
+        expected = expected_outcome.lower()
+        
+        # Simple heuristic - check if key terms from expected outcome appear in output
+        key_terms = [word for word in expected.split() if len(word) > 3]
+        
+        if key_terms:
+            matches = sum(1 for term in key_terms if term in output)
+            return matches >= len(key_terms) // 2  # At least half the key terms should match
+        
+        return True  # If no specific terms to check, assume success
+
+    async def _run_automated_test(self, test: AutomatedTest) -> Dict[str, Any]:
+        """Run an automated test and evaluate results."""
+        try:
+            result = await self._execute_command_safely(test.test_script)
+            
+            # Simple evaluation - check if expected result appears in output
+            success = test.expected_result.lower() in result.get('output', '').lower()
+            
+            return {
+                'test_id': test.test_id,
+                'test_name': test.test_name,
+                'executed': True,
+                'success': success,
+                'output': result.get('output', ''),
+                'error': result.get('error') if not success else None
+            }
+            
+        except Exception as e:
+            return {
+                'test_id': test.test_id,
+                'test_name': test.test_name,
+                'executed': False,
+                'success': False,
+                'error': str(e)
+            }
+
+    def _generate_next_steps(self, overall_success: bool, execution_results: List[Dict]) -> List[str]:
+        """Generate next steps based on execution results."""
+        if overall_success:
+            return [
+                "Monitor system for 24-48 hours to ensure issue resolution",
+                "Test email functionality with affected accounts",
+                "Document successful resolution for future reference"
+            ]
+        else:
+            failed_steps = [r for r in execution_results if not r.get('success', True)]
+            
+            next_steps = ["Review failed automated steps:"]
+            for failure in failed_steps:
+                next_steps.append(f"- Manually execute step {failure.get('step_number', 'unknown')}")
+            
+            next_steps.extend([
+                "Contact technical support if manual steps also fail",
+                "Provide execution logs for further analysis"
+            ])
+            
+            return next_steps
+
+    async def _generate_windows_script(self, solution: AccountSpecificSolution) -> str:
+        """Generate PowerShell script for Windows."""
+        script_lines = [
+            "# Mailbird Issue Resolution Script - Windows",
+            f"# Generated for issue: {solution.issue_id}",
+            f"# Priority: {solution.priority}",
+            "",
+            "# Check if running as administrator",
+            "if (-NOT ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole] \"Administrator\")) {",
+            "    Write-Host \"This script requires administrator privileges. Please run as administrator.\" -ForegroundColor Red",
+            "    exit 1",
+            "}",
+            "",
+            "Write-Host \"Starting Mailbird issue resolution...\" -ForegroundColor Green",
+            ""
+        ]
+        
+        for step in solution.solution_steps:
+            if step.platform_specific == 'windows' and step.automated_script:
+                script_lines.extend([
+                    f"# Step {step.step_number}: {step.description}",
+                    f"Write-Host \"Executing: {step.description}\" -ForegroundColor Yellow",
+                    step.automated_script,
+                    ""
+                ])
+                
+                if step.validation_command:
+                    script_lines.extend([
+                        f"# Validation for step {step.step_number}",
+                        step.validation_command,
+                        ""
+                    ])
+        
+        script_lines.append("Write-Host \"Script execution completed.\" -ForegroundColor Green")
+        
+        return "\n".join(script_lines)
+
+    async def _generate_macos_script(self, solution: AccountSpecificSolution) -> str:
+        """Generate bash script for macOS."""
+        script_lines = [
+            "#!/bin/bash",
+            "# Mailbird Issue Resolution Script - macOS",
+            f"# Generated for issue: {solution.issue_id}",
+            f"# Priority: {solution.priority}",
+            "",
+            "set -e  # Exit on any error",
+            "",
+            "echo \"Starting Mailbird issue resolution...\"",
+            ""
+        ]
+        
+        for step in solution.solution_steps:
+            if step.platform_specific == 'macos' and step.automated_script:
+                script_lines.extend([
+                    f"# Step {step.step_number}: {step.description}",
+                    f"echo \"Executing: {step.description}\"",
+                    step.automated_script,
+                    ""
+                ])
+                
+                if step.validation_command:
+                    script_lines.extend([
+                        f"# Validation for step {step.step_number}",
+                        step.validation_command,
+                        ""
+                    ])
+        
+        script_lines.append("echo \"Script execution completed.\"")
+        
+        return "\n".join(script_lines)
+
+    async def _generate_linux_script(self, solution: AccountSpecificSolution) -> str:
+        """Generate bash script for Linux."""
+        script_lines = [
+            "#!/bin/bash",
+            "# Mailbird Issue Resolution Script - Linux", 
+            f"# Generated for issue: {solution.issue_id}",
+            f"# Priority: {solution.priority}",
+            "",
+            "set -e  # Exit on any error",
+            "",
+            "echo \"Starting Mailbird issue resolution...\"",
+            ""
+        ]
+        
+        for step in solution.solution_steps:
+            if step.platform_specific == 'linux' and step.automated_script:
+                script_lines.extend([
+                    f"# Step {step.step_number}: {step.description}",
+                    f"echo \"Executing: {step.description}\"",
+                    step.automated_script,
+                    ""
+                ])
+                
+                if step.validation_command:
+                    script_lines.extend([
+                        f"# Validation for step {step.step_number}",
+                        step.validation_command,
+                        ""
+                    ])
+        
+        script_lines.append("echo \"Script execution completed.\"")
+        
+        return "\n".join(script_lines)
 
 # Main entry point
 async def generate_comprehensive_solutions(detected_issues: List[Dict[str, Any]], system_metadata: Dict[str, Any], account_analysis: List[Dict] = None) -> List[AccountSpecificSolution]:

@@ -9,6 +9,14 @@ from typing import Dict, List, Optional, Any, Tuple
 from datetime import datetime, timedelta
 from collections import Counter, defaultdict
 import hashlib
+import asyncio
+import logging
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.cluster import DBSCAN
+import numpy as np
+from .edge_case_handler import EdgeCaseHandler
+
+logger = logging.getLogger(__name__)
 
 class AdvancedMailbirdAnalyzer:
     """
@@ -20,6 +28,120 @@ class AdvancedMailbirdAnalyzer:
         self.accounts = {}  # Track per-account issues
         self.temporal_patterns = []  # Track time-based patterns
         self.issue_correlations = {}  # Track related issues
+        
+        # Initialize edge case handler for preprocessing
+        self.edge_case_handler = EdgeCaseHandler()
+        
+        # Dynamic pattern learning
+        self.learned_patterns = {}
+        self.pattern_confidence_threshold = 0.85
+        
+        # Cross-platform patterns
+        self.platform_specific_patterns = {
+            'windows': {
+                'registry_access_failure': {
+                    'patterns': [
+                        re.compile(r"registry.*key.*not.*found.*([^@\s]+@[^@\s]+)", re.IGNORECASE),
+                        re.compile(r"access.*denied.*registry.*([^@\s]+@[^@\s]+)", re.IGNORECASE),
+                        re.compile(r"HKEY_.*error.*([^@\s]+@[^@\s]+)", re.IGNORECASE),
+                    ],
+                    'severity': 'high',
+                    'category': 'Windows Registry Access Issues',
+                    'impact': 'Unable to store or retrieve account settings from Windows Registry'
+                },
+                'com_activation_failure': {
+                    'patterns': [
+                        re.compile(r"COM.*activation.*failed.*([^@\s]+@[^@\s]+)", re.IGNORECASE),
+                        re.compile(r"CLSID.*not.*registered.*([^@\s]+@[^@\s]+)", re.IGNORECASE),
+                    ],
+                    'severity': 'medium',
+                    'category': 'Windows COM Component Issues',
+                    'impact': 'Features requiring COM components may not function properly'
+                }
+            },
+            'macos': {
+                'keychain_access_failure': {
+                    'patterns': [
+                        re.compile(r"Keychain.*access.*denied.*([^@\s]+@[^@\s]+)", re.IGNORECASE),
+                        re.compile(r"errSecAuthFailed.*([^@\s]+@[^@\s]+)", re.IGNORECASE),
+                        re.compile(r"security.*framework.*error.*([^@\s]+@[^@\s]+)", re.IGNORECASE),
+                    ],
+                    'severity': 'high',
+                    'category': 'macOS Keychain Authentication Issues',
+                    'impact': 'Unable to retrieve stored passwords from macOS Keychain'
+                },
+                'sandbox_violation': {
+                    'patterns': [
+                        re.compile(r"sandbox.*violation.*mailbird.*([^@\s]+@[^@\s]+)", re.IGNORECASE),
+                        re.compile(r"operation.*not.*permitted.*mail.*([^@\s]+@[^@\s]+)", re.IGNORECASE),
+                        re.compile(r"code.*signing.*error.*([^@\s]+@[^@\s]+)", re.IGNORECASE),
+                    ],
+                    'severity': 'critical',
+                    'category': 'macOS Sandbox Restrictions',
+                    'impact': 'Limited file system access affecting attachments and data storage'
+                }
+            },
+            'linux': {
+                'dbus_connection_failure': {
+                    'patterns': [
+                        re.compile(r"dbus.*connection.*failed.*([^@\s]+@[^@\s]+)", re.IGNORECASE),
+                        re.compile(r"failed.*to.*connect.*dbus.*([^@\s]+@[^@\s]+)", re.IGNORECASE),
+                    ],
+                    'severity': 'medium',
+                    'category': 'Linux D-Bus Communication Issues',
+                    'impact': 'Desktop integration features may not work properly'
+                },
+                'permission_denied': {
+                    'patterns': [
+                        re.compile(r"permission.*denied.*([^@\s]+@[^@\s]+)", re.IGNORECASE),
+                        re.compile(r"operation.*not.*permitted.*([^@\s]+@[^@\s]+)", re.IGNORECASE),
+                    ],
+                    'severity': 'high',
+                    'category': 'Linux Permission Issues',
+                    'impact': 'Unable to access required files or directories'
+                }
+            }
+        }
+        
+        # Multi-language support
+        self.multi_language_patterns = {
+            'connection_errors': {
+                'en': [r"connection.*failed", r"unable.*connect", r"timeout.*connect", r"network.*unreachable"],
+                'es': [r"conexión.*fallida", r"no.*puede.*conectar", r"tiempo.*agotado", r"red.*inalcanzable"],
+                'de': [r"verbindung.*fehlgeschlagen", r"kann.*nicht.*verbinden", r"zeitüberschreitung", r"netzwerk.*nicht.*erreichbar"],
+                'fr': [r"connexion.*échouée", r"impossible.*connecter", r"délai.*dépassé", r"réseau.*inaccessible"],
+                'pt': [r"conexão.*falhou", r"não.*consegue.*conectar", r"tempo.*esgotado", r"rede.*inacessível"],
+                'it': [r"connessione.*fallita", r"impossibile.*connettere", r"timeout.*connessione", r"rete.*irraggiungibile"],
+                'zh': [r"连接.*失败", r"无法.*连接", r"连接.*超时", r"网络.*不可达"],
+                'ja': [r"接続.*失敗", r"接続.*できません", r"接続.*タイムアウト", r"ネットワーク.*到達不可"],
+                'ko': [r"연결.*실패", r"연결.*할.*수.*없음", r"연결.*시간.*초과", r"네트워크.*도달.*불가"],
+                'ru': [r"соединение.*не.*удалось", r"невозможно.*подключиться", r"тайм-аут.*соединения", r"сеть.*недоступна"]
+            },
+            'authentication_errors': {
+                'en': [r"auth.*failed", r"authentication.*error", r"login.*failed", r"invalid.*credentials"],
+                'es': [r"autenticación.*falló", r"error.*autenticación", r"inicio.*sesión.*falló", r"credenciales.*inválidas"],
+                'de': [r"authentifizierung.*fehlgeschlagen", r"anmeldung.*fehler", r"ungültige.*anmeldedaten"],
+                'fr': [r"authentification.*échouée", r"erreur.*authentification", r"connexion.*échouée", r"identifiants.*invalides"],
+                'pt': [r"autenticação.*falhou", r"erro.*autenticação", r"login.*falhou", r"credenciais.*inválidas"],
+                'it': [r"autenticazione.*fallita", r"errore.*autenticazione", r"accesso.*fallito", r"credenziali.*non.*valide"],
+                'zh': [r"认证.*失败", r"验证.*错误", r"登录.*失败", r"凭据.*无效"],
+                'ja': [r"認証.*失敗", r"認証.*エラー", r"ログイン.*失敗", r"資格情報.*無効"],
+                'ko': [r"인증.*실패", r"인증.*오류", r"로그인.*실패", r"자격.*증명.*유효하지.*않음"],
+                'ru': [r"аутентификация.*не.*удалась", r"ошибка.*аутентификации", r"вход.*не.*удался", r"неверные.*учетные.*данные"]
+            },
+            'email_send_errors': {
+                'en': [r"send.*failed", r"message.*not.*sent", r"delivery.*failed", r"smtp.*error"],
+                'es': [r"envío.*falló", r"mensaje.*no.*enviado", r"entrega.*falló", r"error.*smtp"],
+                'de': [r"senden.*fehlgeschlagen", r"nachricht.*nicht.*gesendet", r"zustellung.*fehler", r"smtp.*fehler"],
+                'fr': [r"envoi.*échoué", r"message.*non.*envoyé", r"livraison.*échouée", r"erreur.*smtp"],
+                'pt': [r"envio.*falhou", r"mensagem.*não.*enviada", r"entrega.*falhou", r"erro.*smtp"],
+                'it': [r"invio.*fallito", r"messaggio.*non.*inviato", r"consegna.*fallita", r"errore.*smtp"],
+                'zh': [r"发送.*失败", r"消息.*未.*发送", r"投递.*失败", r"smtp.*错误"],
+                'ja': [r"送信.*失敗", r"メッセージ.*送信.*されませんでした", r"配信.*失敗", r"smtp.*エラー"],
+                'ko': [r"전송.*실패", r"메시지.*전송.*안됨", r"배달.*실패", r"smtp.*오류"],
+                'ru': [r"отправка.*не.*удалась", r"сообщение.*не.*отправлено", r"доставка.*не.*удалась", r"ошибка.*smtp"]
+            }
+        }
         
         # Account extraction patterns
         self.account_patterns = [
@@ -177,11 +299,31 @@ class AdvancedMailbirdAnalyzer:
             ]
         }
 
-    def analyze_logs(self, raw_log_content: str) -> Dict[str, Any]:
+    async def analyze_logs(self, raw_log_content: str, platform: str = 'unknown', language: str = 'en') -> Dict[str, Any]:
         """
         Perform comprehensive log analysis with account-specific tracking and temporal patterns.
+        Enhanced with cross-platform support, ML pattern discovery, and multi-language support.
         """
-        lines = raw_log_content.strip().split('\n')
+        # Preprocess log content using edge case handler
+        try:
+            processed_content = await self.edge_case_handler.preprocess_log_content(raw_log_content)
+            validation_result = self.edge_case_handler.validate_analysis_input(processed_content)
+            
+            if not validation_result['is_valid']:
+                logger.warning(f"Log validation issues: {validation_result['issues']}")
+            
+            # Use detected platform and language if not specified
+            if platform == 'unknown':
+                platform = validation_result.get('detected_platform', 'unknown')
+            if language == 'en':
+                language = validation_result.get('detected_language', 'en')
+                
+        except Exception as e:
+            logger.error(f"Log preprocessing failed: {str(e)}")
+            processed_content = raw_log_content
+            validation_result = {'is_valid': True, 'warnings': []}
+        
+        lines = processed_content.strip().split('\n')
         
         # Parse each line and extract detailed information
         parsed_entries = []
@@ -190,7 +332,7 @@ class AdvancedMailbirdAnalyzer:
         positive_observations = []
         
         for line_num, line in enumerate(lines, 1):
-            entry = self._parse_log_line(line, line_num)
+            entry = await self._parse_log_line(line, line_num, platform, language)
             if entry:
                 parsed_entries.append(entry)
                 
@@ -205,6 +347,18 @@ class AdvancedMailbirdAnalyzer:
                 # Track positive observations
                 if entry.get('status') == 'success':
                     positive_observations.append(entry)
+        
+        # Perform ML-based pattern discovery on unmatched entries
+        unmatched_entries = [entry for entry in parsed_entries if not entry.get('issue_type')]
+        if len(unmatched_entries) > 10:  # Only run ML if we have enough data
+            try:
+                ml_discovered_patterns = await self.discover_patterns_with_ml(unmatched_entries)
+                logger.info(f"ML discovered {len(ml_discovered_patterns)} new patterns")
+            except Exception as e:
+                logger.error(f"ML pattern discovery failed: {str(e)}")
+                ml_discovered_patterns = []
+        else:
+            ml_discovered_patterns = []
         
         # Extract system information
         system_profile = self._extract_system_info(raw_log_content)
@@ -228,17 +382,28 @@ class AdvancedMailbirdAnalyzer:
             'account_analysis': account_analysis,
             'temporal_analysis': temporal_analysis,
             'positive_observations': positive_analysis,
+            'ml_discovered_patterns': ml_discovered_patterns,
+            'platform_specific_issues': self._analyze_platform_specific_issues(parsed_entries, platform),
+            'language_analysis': {
+                'detected_language': language,
+                'multi_language_errors': self._detect_multi_language_errors(parsed_entries, language)
+            },
+            'validation_results': validation_result,
             'metadata': {
                 'total_entries_parsed': len(parsed_entries),
                 'unique_accounts': len(account_issues),
                 'error_rate_percentage': self._calculate_error_rate(parsed_entries),
                 'log_timeframe': self._extract_timeframe(parsed_entries),
-                'analysis_timestamp': datetime.utcnow().isoformat()
+                'analysis_timestamp': datetime.utcnow().isoformat(),
+                'platform': platform,
+                'language': language,
+                'preprocessing_applied': processed_content != raw_log_content,
+                'ml_patterns_discovered': len(ml_discovered_patterns)
             }
         }
 
-    def _parse_log_line(self, line: str, line_num: int) -> Optional[Dict[str, Any]]:
-        """Parse individual log line with comprehensive pattern matching."""
+    async def _parse_log_line(self, line: str, line_num: int, platform: str = 'unknown', language: str = 'en') -> Optional[Dict[str, Any]]:
+        """Parse individual log line with comprehensive pattern matching including cross-platform and multi-language support."""
         if not line.strip():
             return None
             
@@ -250,13 +415,16 @@ class AdvancedMailbirdAnalyzer:
             'account': None,
             'issue_type': None,
             'severity': 'info',
-            'status': 'unknown'
+            'status': 'unknown',
+            'platform': platform,
+            'language': language
         }
         
         # Extract account information
         entry['account'] = self._extract_account(line)
         
-        # Detect issue patterns
+        # First check standard issue patterns
+        issue_found = False
         for issue_type, config in self.issue_patterns.items():
             for pattern in config['patterns']:
                 match = pattern.search(line)
@@ -272,14 +440,55 @@ class AdvancedMailbirdAnalyzer:
                         if match.groups() and len(match.groups()) > 0:
                             entry['extracted_account'] = match.group(1)
                     except (IndexError, AttributeError):
-                        # If group access fails, use the account from _extract_account
                         entry['extracted_account'] = entry.get('account')
+                    issue_found = True
                     break
-            if entry['issue_type']:
+            if issue_found:
                 break
         
-        # Detect success patterns
-        if any(keyword in line.lower() for keyword in ['success', 'connected', 'authenticated', 'sync complete']):
+        # Check platform-specific patterns if no standard issue found
+        if not issue_found and platform in self.platform_specific_patterns:
+            for issue_type, config in self.platform_specific_patterns[platform].items():
+                for pattern in config['patterns']:
+                    match = pattern.search(line)
+                    if match:
+                        entry['issue_type'] = f"{platform}_{issue_type}"
+                        entry['severity'] = config['severity']
+                        entry['category'] = config['category']
+                        entry['impact'] = config['impact']
+                        entry['status'] = 'error'
+                        entry['platform_specific'] = True
+                        
+                        try:
+                            if match.groups() and len(match.groups()) > 0:
+                                entry['extracted_account'] = match.group(1)
+                        except (IndexError, AttributeError):
+                            entry['extracted_account'] = entry.get('account')
+                        issue_found = True
+                        break
+                if issue_found:
+                    break
+        
+        # Check multi-language patterns if no issue found yet
+        if not issue_found:
+            await self._check_multi_language_patterns(line, entry, language)
+        
+        # Detect success patterns (multi-language)
+        success_keywords = {
+            'en': ['success', 'connected', 'authenticated', 'sync complete', 'login successful'],
+            'es': ['éxito', 'conectado', 'autenticado', 'sincronización completa'],
+            'de': ['erfolg', 'verbunden', 'authentifiziert', 'synchronisation abgeschlossen'],
+            'fr': ['succès', 'connecté', 'authentifié', 'synchronisation terminée'],
+            'pt': ['sucesso', 'conectado', 'autenticado', 'sincronização completa'],
+            'it': ['successo', 'connesso', 'autenticato', 'sincronizzazione completata'],
+            'zh': ['成功', '已连接', '已认证', '同步完成'],
+            'ja': ['成功', '接続済み', '認証済み', '同期完了'],
+            'ko': ['성공', '연결됨', '인증됨', '동기화 완료'],
+            'ru': ['успех', 'подключено', 'аутентифицировано', 'синхронизация завершена']
+        }
+        
+        keywords = success_keywords.get(language, success_keywords['en'])
+        if any(keyword in line.lower() for keyword in keywords):
             entry['status'] = 'success'
         
         return entry
@@ -551,10 +760,281 @@ class AdvancedMailbirdAnalyzer:
         
         return f"{min(timestamps)} to {max(timestamps)}"
 
+    async def discover_patterns_with_ml(self, unmatched_entries: List[Dict]) -> List[Dict]:
+        """
+        Use machine learning techniques to discover new error patterns.
+        Identifies clusters of similar errors that don't match existing patterns.
+        """
+        try:
+            if len(unmatched_entries) < 10:
+                return []
+            
+            # Extract text content for analysis
+            texts = [entry['raw_content'] for entry in unmatched_entries]
+            
+            # Use TF-IDF vectorization
+            vectorizer = TfidfVectorizer(
+                max_features=1000,
+                stop_words='english',
+                ngram_range=(1, 3),
+                min_df=2,
+                max_df=0.8
+            )
+            
+            tfidf_matrix = vectorizer.fit_transform(texts)
+            
+            # Use DBSCAN clustering to find similar patterns
+            clustering = DBSCAN(eps=0.3, min_samples=3, metric='cosine')
+            cluster_labels = clustering.fit_predict(tfidf_matrix.toarray())
+            
+            # Analyze clusters to identify new patterns
+            discovered_patterns = []
+            unique_labels = set(cluster_labels)
+            
+            for label in unique_labels:
+                if label == -1:  # Noise cluster
+                    continue
+                
+                cluster_entries = [entry for i, entry in enumerate(unmatched_entries) if cluster_labels[i] == label]
+                if len(cluster_entries) < 3:
+                    continue
+                
+                # Extract common pattern from cluster
+                pattern_analysis = await self._analyze_cluster_pattern(cluster_entries, vectorizer, tfidf_matrix, cluster_labels == label)
+                
+                if pattern_analysis and pattern_analysis['confidence'] > self.pattern_confidence_threshold:
+                    discovered_patterns.append({
+                        'pattern_id': f"ml_discovered_{label}",
+                        'pattern_regex': pattern_analysis['suggested_regex'],
+                        'category': pattern_analysis['category'],
+                        'severity': pattern_analysis['severity'],
+                        'sample_entries': [entry['raw_content'] for entry in cluster_entries[:3]],
+                        'occurrences': len(cluster_entries),
+                        'confidence': pattern_analysis['confidence'],
+                        'keywords': pattern_analysis['keywords']
+                    })
+            
+            # Store learned patterns for future use
+            for pattern in discovered_patterns:
+                self.learned_patterns[pattern['pattern_id']] = pattern
+            
+            logger.info(f"ML discovered {len(discovered_patterns)} new patterns")
+            return discovered_patterns
+            
+        except Exception as e:
+            logger.error(f"ML pattern discovery failed: {str(e)}")
+            return []
 
-def enhanced_parse_log_content(raw_log_content: str) -> Dict[str, Any]:
+    async def _analyze_cluster_pattern(self, cluster_entries: List[Dict], vectorizer, tfidf_matrix: np.ndarray, cluster_mask: np.ndarray) -> Optional[Dict]:
+        """Analyze a cluster of similar entries to extract pattern information."""
+        try:
+            # Get feature names and TF-IDF scores for the cluster
+            feature_names = vectorizer.get_feature_names_out()
+            cluster_tfidf = tfidf_matrix[cluster_mask]
+            mean_scores = np.mean(cluster_tfidf, axis=0).A1
+            
+            # Get top keywords for this cluster
+            top_indices = np.argsort(mean_scores)[-10:]
+            top_keywords = [feature_names[i] for i in top_indices if mean_scores[i] > 0.1]
+            
+            if len(top_keywords) < 2:
+                return None
+            
+            # Analyze entry content to determine category and severity
+            sample_texts = [entry['raw_content'].lower() for entry in cluster_entries]
+            
+            # Determine category based on keywords
+            category = "Unknown Issue"
+            severity = "medium"
+            
+            error_indicators = ['error', 'failed', 'failure', 'exception', 'timeout', 'denied']
+            warning_indicators = ['warning', 'warn', 'deprecated', 'slow']
+            critical_indicators = ['critical', 'fatal', 'crash', 'abort', 'corruption']
+            
+            if any(indicator in ' '.join(top_keywords) for indicator in critical_indicators):
+                severity = "critical"
+                category = "Critical System Issues"
+            elif any(indicator in ' '.join(top_keywords) for indicator in error_indicators):
+                severity = "high"
+                category = "Error Conditions"
+            elif any(indicator in ' '.join(top_keywords) for indicator in warning_indicators):
+                severity = "medium"
+                category = "Warning Conditions"
+            
+            # Generate suggested regex pattern
+            # This is a simplified approach - in production, more sophisticated pattern generation would be used
+            common_words = [word for word in top_keywords if len(word) > 3]
+            if common_words:
+                suggested_regex = r".*" + r".*".join(re.escape(word) for word in common_words[:3]) + r".*"
+            else:
+                suggested_regex = None
+            
+            confidence = min(0.95, len(cluster_entries) / 10.0 + len(top_keywords) / 20.0)
+            
+            return {
+                'category': category,
+                'severity': severity,
+                'keywords': top_keywords,
+                'suggested_regex': suggested_regex,
+                'confidence': confidence
+            }
+            
+        except Exception as e:
+            logger.error(f"Cluster analysis failed: {str(e)}")
+            return None
+
+    async def _check_multi_language_patterns(self, line: str, entry: Dict, language: str):
+        """Check line against multi-language error patterns."""
+        try:
+            line_lower = line.lower()
+            
+            for error_category, lang_patterns in self.multi_language_patterns.items():
+                patterns = lang_patterns.get(language, lang_patterns.get('en', []))
+                
+                for pattern_str in patterns:
+                    try:
+                        pattern = re.compile(pattern_str, re.IGNORECASE)
+                        if pattern.search(line):
+                            entry['issue_type'] = f"multi_lang_{error_category}"
+                            entry['category'] = f"Multi-Language {error_category.replace('_', ' ').title()}"
+                            entry['severity'] = 'medium'
+                            entry['status'] = 'error'
+                            entry['language_specific'] = True
+                            entry['impact'] = f"Language-specific error in {language}"
+                            break
+                    except re.error:
+                        continue
+                
+                if entry.get('issue_type'):
+                    break
+                    
+        except Exception as e:
+            logger.error(f"Multi-language pattern check failed: {str(e)}")
+
+    def _analyze_platform_specific_issues(self, parsed_entries: List[Dict], platform: str) -> Dict[str, Any]:
+        """Analyze platform-specific issues found in the log."""
+        platform_issues = [entry for entry in parsed_entries if entry.get('platform_specific', False)]
+        
+        if not platform_issues:
+            return {'platform': platform, 'issues_found': 0, 'recommendations': []}
+        
+        issue_types = Counter([entry['issue_type'] for entry in platform_issues])
+        
+        recommendations = []
+        if platform == 'windows':
+            if any('registry' in issue_type for issue_type in issue_types):
+                recommendations.append("Run Mailbird as administrator to resolve registry access issues")
+            if any('com' in issue_type for issue_type in issue_types):
+                recommendations.append("Re-register COM components or repair Windows installation")
+        elif platform == 'macos':
+            if any('keychain' in issue_type for issue_type in issue_types):
+                recommendations.append("Reset Keychain permissions or create new Keychain entry")
+            if any('sandbox' in issue_type for issue_type in issue_types):
+                recommendations.append("Check application permissions in System Preferences > Security & Privacy")
+        elif platform == 'linux':
+            if any('dbus' in issue_type for issue_type in issue_types):
+                recommendations.append("Restart D-Bus service or check desktop environment compatibility")
+            if any('permission' in issue_type for issue_type in issue_types):
+                recommendations.append("Check file permissions and user group memberships")
+        
+        return {
+            'platform': platform,
+            'issues_found': len(platform_issues),
+            'issue_breakdown': dict(issue_types),
+            'recommendations': recommendations,
+            'severity_distribution': Counter([entry['severity'] for entry in platform_issues])
+        }
+
+    def _detect_multi_language_errors(self, parsed_entries: List[Dict], language: str) -> Dict[str, Any]:
+        """Analyze multi-language specific errors."""
+        lang_issues = [entry for entry in parsed_entries if entry.get('language_specific', False)]
+        
+        if not lang_issues:
+            return {'language': language, 'issues_found': 0}
+        
+        issue_categories = Counter([entry['issue_type'].replace('multi_lang_', '') for entry in lang_issues])
+        
+        return {
+            'language': language,
+            'issues_found': len(lang_issues),
+            'categories': dict(issue_categories),
+            'common_patterns': list(issue_categories.most_common(3))
+        }
+
+    async def repair_corrupted_log_entries(self, raw_content: str) -> str:
+        """
+        Attempt to repair corrupted or truncated log entries using:
+        - Pattern-based reconstruction
+        - Statistical inference from similar entries
+        - Partial entry completion
+        """
+        try:
+            lines = raw_content.split('\n')
+            repaired_lines = []
+            
+            for i, line in enumerate(lines):
+                if not line.strip():
+                    continue
+                
+                # Check if line appears corrupted (e.g., incomplete timestamp, truncated)
+                if self._is_corrupted_line(line):
+                    repaired_line = await self._attempt_line_repair(line, lines, i)
+                    repaired_lines.append(repaired_line)
+                else:
+                    repaired_lines.append(line)
+            
+            return '\n'.join(repaired_lines)
+            
+        except Exception as e:
+            logger.error(f"Log repair failed: {str(e)}")
+            return raw_content
+
+    def _is_corrupted_line(self, line: str) -> bool:
+        """Check if a log line appears corrupted."""
+        # Check for incomplete timestamps
+        if re.match(r'^\d{4}-\d{2}-\d{2}\s\d{2}:\d{2}$', line.strip()):
+            return True
+        
+        # Check for truncated lines (no message part)
+        if re.match(r'^\d{4}-\d{2}-\d{2}\s\d{2}:\d{2}:\d{2}\.\d+\|[A-Z]+\|\d+\|\d+\|\d+\|$', line):
+            return True
+        
+        # Check for lines with too many consecutive special characters (corruption)
+        if re.search(r'[^\w\s]{10,}', line):
+            return True
+        
+        return False
+
+    async def _attempt_line_repair(self, corrupted_line: str, all_lines: List[str], line_index: int) -> str:
+        """Attempt to repair a corrupted log line."""
+        try:
+            # Strategy 1: If timestamp is incomplete, complete it with seconds
+            if re.match(r'^\d{4}-\d{2}-\d{2}\s\d{2}:\d{2}$', corrupted_line.strip()):
+                return corrupted_line + ":00.0000|INFO|0|0|0|[REPAIRED] Incomplete timestamp completed"
+            
+            # Strategy 2: If message is missing, check next line for continuation
+            if corrupted_line.endswith('|') and line_index + 1 < len(all_lines):
+                next_line = all_lines[line_index + 1].strip()
+                if not re.match(r'^\d{4}-\d{2}-\d{2}', next_line):  # Next line doesn't start with timestamp
+                    return corrupted_line + f"[REPAIRED] {next_line}"
+            
+            # Strategy 3: Remove excessive special characters
+            if re.search(r'[^\w\s]{10,}', corrupted_line):
+                cleaned = re.sub(r'[^\w\s|:.-]{3,}', '[CORRUPTED_DATA_REMOVED]', corrupted_line)
+                return cleaned
+            
+            # If no specific repair strategy works, mark as corrupted but keep
+            return corrupted_line + " [CORRUPTED_ENTRY]"
+            
+        except Exception as e:
+            logger.error(f"Line repair failed: {str(e)}")
+            return corrupted_line
+
+
+async def enhanced_parse_log_content(raw_log_content: str, platform: str = 'unknown', language: str = 'en') -> Dict[str, Any]:
     """
     Main entry point for enhanced log parsing with comprehensive analysis.
+    Enhanced with cross-platform support, ML pattern discovery, and multi-language support.
     """
     analyzer = AdvancedMailbirdAnalyzer()
-    return analyzer.analyze_logs(raw_log_content)
+    return await analyzer.analyze_logs(raw_log_content, platform, language)
