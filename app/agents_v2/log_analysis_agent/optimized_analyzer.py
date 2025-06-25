@@ -121,11 +121,25 @@ Response format: JSON only, no extra text.
         
         basic_analysis = await self._fast_basic_analysis(raw_log_content, basic_parsed_data)
         
-        # Phase 2: Parallel Deep Analysis (15-30 seconds)
-        if progress_callback:
-            await progress_callback("🔍 Running parallel deep analysis...")
-        
-        deep_analysis = await self._parallel_deep_analysis(raw_log_content, basic_analysis)
+        # Phase 2: Parallel Deep Analysis (15-30 seconds) - skip if configured
+        if self.skip_deep_analysis:
+            logger.info("Skipping deep analysis as per performance profile configuration")
+            if progress_callback:
+                await progress_callback("⏭️ Skipping deep analysis (performance mode)")
+            deep_analysis = {
+                "critical_patterns": [],
+                "root_causes": [],
+                "temporal_insights": {},
+                "chunks_analyzed": 0,
+                "chunks_failed": 0,
+                "analysis_skipped": True,
+                "reason": "Skipped as per performance profile configuration"
+            }
+        else:
+            if progress_callback:
+                await progress_callback("🔍 Running parallel deep analysis...")
+            
+            deep_analysis = await self._parallel_deep_analysis(raw_log_content, basic_analysis)
         
         # Phase 3: Smart Solution Generation (10-20 seconds)
         if progress_callback:
@@ -142,20 +156,34 @@ Response format: JSON only, no extra text.
         analysis_duration = time.time() - start_time
         logger.info(f"Optimized analysis completed in {analysis_duration:.2f}s")
         
+        # Update performance metrics
+        self.performance_metrics['analysis_times'].append(analysis_duration)
+        self.performance_metrics['log_sizes'].append(len(raw_log_content))
+        
+        # Keep only the last 1000 entries to prevent memory issues
+        if len(self.performance_metrics['analysis_times']) > 1000:
+            self.performance_metrics['analysis_times'] = self.performance_metrics['analysis_times'][-1000:]
+            self.performance_metrics['log_sizes'] = self.performance_metrics['log_sizes'][-1000:]
+        
         if progress_callback:
             await progress_callback(f"✅ Analysis complete in {analysis_duration:.1f}s")
+        
+        # Include performance metrics in the response
+        performance_metrics = {
+            'analysis_duration_seconds': analysis_duration,
+            'analyzer_version': '4.0-optimized',
+            'optimization_features': ['parallel_processing', 'smart_chunking', 'progressive_analysis'],
+            'analysis_timestamp': datetime.utcnow().isoformat(),
+            'total_analyses': len(self.performance_metrics['analysis_times']),
+            'average_analysis_time': sum(self.performance_metrics['analysis_times']) / max(1, len(self.performance_metrics['analysis_times']))
+        }
         
         return {
             'basic_analysis': basic_analysis,
             'deep_analysis': deep_analysis,
             'optimized_solutions': solutions,
             'executive_summary': executive_summary,
-            'performance_metrics': {
-                'analysis_duration_seconds': analysis_duration,
-                'analyzer_version': '4.0-optimized',
-                'optimization_features': ['parallel_processing', 'smart_chunking', 'progressive_analysis'],
-                'analysis_timestamp': datetime.utcnow().isoformat()
-            }
+            'performance_metrics': performance_metrics
         }
 
     async def _fast_basic_analysis(self, raw_log_content: str, basic_parsed_data: Dict) -> Dict[str, Any]:

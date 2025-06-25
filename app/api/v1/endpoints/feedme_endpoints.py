@@ -238,12 +238,16 @@ async def upload_transcript(
             )
         
         # Validate file type and content type
+        # Validate file type and content type
         allowed_content_types = ["text/plain", "text/html", "application/html", "text/csv", "application/octet-stream"]
         allowed_extensions = [".txt", ".log", ".html", ".htm", ".csv"]
         
-        # Check content type if provided
+        # Validate content type if provided
         if transcript_file.content_type and transcript_file.content_type not in allowed_content_types:
-            logger.warning(f"Unexpected content type {transcript_file.content_type} for file {transcript_file.filename}, but proceeding with upload")
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unsupported file type: {transcript_file.content_type}. Allowed types: {', '.join(allowed_content_types)}"
+            )
         
         # Check file extension and HTML support
         if transcript_file.filename:
@@ -260,8 +264,14 @@ async def upload_transcript(
                 )
             
             if file_extension and not any(transcript_file.filename.lower().endswith(ext) for ext in allowed_extensions):
-                logger.warning(f"Unexpected file extension .{file_extension} for file {transcript_file.filename}, but proceeding with upload")
-        
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Unsupported file extension: .{file_extension}. Allowed extensions: {', '.join(allowed_extensions)}"
+                )
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Unsupported file extension: .{file_extension}. Allowed extensions: {', '.join(allowed_extensions)}"
+                )
         # Read file content
         try:
             content_bytes = await transcript_file.read()
