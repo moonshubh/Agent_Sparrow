@@ -172,17 +172,9 @@ class EnhancedSolutionStep(BaseModel):
     validation_command: Optional[str] = Field(None, description="Command to validate completion")
     rollback_procedure: Optional[str] = Field(None, description="How to undo this step")
 
-class EnhancedSolution(BaseModel):
+class EnhancedSolution(ComprehensiveSolution):
     """Enhanced solution with automation and cross-platform support."""
-    issue_id: str = Field(description="ID of the issue this solution addresses")
-    solution_summary: str = Field(description="Brief summary of the solution approach")
-    confidence_level: str = Field(description="Confidence in solution: High, Medium, Low")
     solution_steps: List[EnhancedSolutionStep] = Field(description="Detailed step-by-step instructions")
-    prerequisites: List[str] = Field(default_factory=list, description="Required conditions or preparations")
-    estimated_total_time_minutes: int = Field(description="Total estimated time for complete solution")
-    success_probability: str = Field(description="Estimated probability of success: High, Medium, Low")
-    alternative_approaches: List[str] = Field(default_factory=list, description="Alternative solutions if primary fails")
-    references: List[str] = Field(default_factory=list, description="Documentation or support URLs")
     platform_compatibility: List[str] = Field(description="Supported platforms")
     automated_tests: List[AutomatedTest] = Field(description="Automated validation tests")
     remediation_script: Optional[str] = Field(None, description="Complete automated remediation script")
