@@ -6,6 +6,7 @@ Supports multiple transcript formats and uses AI to identify meaningful exchange
 """
 
 import logging
+import os
 import re
 import json
 from typing import List, Dict, Any, Optional, Tuple
@@ -74,9 +75,10 @@ class TranscriptParsingResult(BaseModel):
 
 class TranscriptParser:
     """Main transcript parser class"""
-    
-    def __init__(self):
+
+    def __init__(self, preview_char_limit: int | None = None):
         self.ai_model = None
+        self.preview_char_limit = preview_char_limit or int(os.getenv("FEEDME_TRANSCRIPT_PREVIEW_CHARS", "3000"))
         self._initialize_ai_model()
     
     def _initialize_ai_model(self):
@@ -341,7 +343,7 @@ class TranscriptParser:
             - issue_type (string)
             
             Transcript:
-            {transcript[:3000]}  # Limit to avoid token limits
+            {transcript[:self.preview_char_limit]}  # Limit to avoid token limits
             """
             
             response = self.ai_model.invoke(prompt)
@@ -462,19 +464,12 @@ class TranscriptParser:
             return ExtractionQuality.LOW
     
     def _questions_similar(self, q1: str, q2: str, threshold: float = 0.8) -> bool:
-        """Check if two questions are similar (simple word overlap)"""
-        
-        words1 = set(q1.lower().split())
-        words2 = set(q2.lower().split())
-        
-        if not words1 or not words2:
-            return False
-        
-        overlap = len(words1 & words2)
-        total = len(words1 | words2)
-        
-        similarity = overlap / total if total > 0 else 0
-        return similarity >= threshold
+        """Check semantic similarity between two questions."""
+
+        from difflib import SequenceMatcher
+
+        ratio = SequenceMatcher(None, q1.lower(), q2.lower()).ratio()
+        return ratio >= threshold
 
 
 class HtmlZendeskParser:

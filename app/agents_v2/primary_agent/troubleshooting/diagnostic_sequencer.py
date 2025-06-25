@@ -34,23 +34,6 @@ class DiagnosticSequencer:
     - Progressive complexity with safety checks
     """
     
-    # Scoring weights for step selection
-    _SCORE_BASE_STEP_POSITION = 0.1  # Weight for step position bonus
-    
-    # Emotional state weights
-    _SCORE_EMOTION_FRUSTRATED_DIFFICULTY = 0.3  # Weight for difficulty in frustrated state
-    _SCORE_EMOTION_FRUSTRATED_TIME = 0.2       # Weight for time in frustrated state
-    _SCORE_EMOTION_CONFUSED_DIFFICULTY = 0.4   # Weight for difficulty in confused state
-    _SCORE_EMOTION_CONFUSED_TIPS = 0.1         # Weight for tips in confused state
-    _SCORE_EMOTION_PROFESSIONAL = 0.2          # Weight for professional state
-    _SCORE_EMOTION_URGENT = 0.4                # Weight for urgent state
-    
-    # Technical level adjustments
-    _SCORE_TECH_LEVEL_APPROPRIATE = 0.3  # Bonus for appropriate difficulty
-    _SCORE_TECH_LEVEL_TOO_HARD = -0.5    # Penalty for too difficult
-    
-    # Success rate weight
-    _SCORE_SUCCESS_RATE = 0.2  # Weight for step success rate
     
     def __init__(self, config: TroubleshootingConfig):
         """
@@ -296,39 +279,39 @@ class DiagnosticSequencer:
             score = 0.0
             
             # Base score from step position (prefer earlier steps)
-            score += (10 - step.step_number) * self._SCORE_BASE_STEP_POSITION
+            score += (10 - step.step_number) * self.config.base_step_position_weight
             
             # Adjust for customer emotional state
             emotion = session.customer_emotional_state
             
             if emotion == EmotionalState.FRUSTRATED:
                 # Prefer quick, simple steps
-                score += (5 - step.difficulty_level) * self._SCORE_EMOTION_FRUSTRATED_DIFFICULTY
-                score += max(0, (10 - step.time_estimate_minutes)) * self._SCORE_EMOTION_FRUSTRATED_TIME
+                score += (5 - step.difficulty_level) * self.config.emotion_frustrated_difficulty_weight
+                score += max(0, (10 - step.time_estimate_minutes)) * self.config.emotion_frustrated_time_weight
                 
             elif emotion == EmotionalState.CONFUSED:
                 # Prefer simple, well-documented steps
-                score += (5 - step.difficulty_level) * self._SCORE_EMOTION_CONFUSED_DIFFICULTY
-                score += len(step.troubleshooting_tips) * self._SCORE_EMOTION_CONFUSED_TIPS
+                score += (5 - step.difficulty_level) * self.config.emotion_confused_difficulty_weight
+                score += len(step.troubleshooting_tips) * self.config.emotion_confused_tips_weight
                 
             elif emotion == EmotionalState.PROFESSIONAL:
                 # Allow more complex steps
-                score += min(step.difficulty_level, session.customer_technical_level) * self._SCORE_EMOTION_PROFESSIONAL
+                score += min(step.difficulty_level, session.customer_technical_level) * self.config.emotion_professional_weight
                 
             elif emotion == EmotionalState.URGENT:
                 # Prefer fast steps
-                score += max(0, (5 - step.time_estimate_minutes)) * self._SCORE_EMOTION_URGENT
+                score += max(0, (5 - step.time_estimate_minutes)) * self.config.emotion_urgent_weight
             
             # Adjust for customer technical level
             tech_level = session.customer_technical_level
             if step.difficulty_level <= tech_level:
-                score += self._SCORE_TECH_LEVEL_APPROPRIATE  # Bonus for appropriate difficulty
+                score += self.config.tech_level_appropriate_weight  # Bonus for appropriate difficulty
             elif step.difficulty_level > tech_level + 1:
-                score += self._SCORE_TECH_LEVEL_TOO_HARD  # Penalty for too difficult
+                score += self.config.tech_level_too_hard_weight  # Penalty for too difficult
             
             # Prefer steps with higher success rates
             if hasattr(step, 'success_rate'):
-                score += getattr(step, 'success_rate', 0.8) * self._SCORE_SUCCESS_RATE
+                score += getattr(step, 'success_rate', 0.8) * self.config.success_rate_weight
             
             step_scores.append((step, score))
         

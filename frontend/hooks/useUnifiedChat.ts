@@ -71,6 +71,15 @@ export function useUnifiedChat(): UseUnifiedChatReturn {
     }
   })
 
+  /**
+   * Determine the agent route for a user query.
+   *
+   * Detection priority is:
+   * 1. Uploaded files -> always log analyst
+   * 2. Explicit log analysis keywords
+   * 3. Research intent keywords
+   * 4. Default to primary agent
+   */
   const detectQueryType = (content: string, files?: File[]): "primary" | "log_analyst" | "researcher" => {
     // Only classify as log_analyst when files are actually uploaded
     if (files && files.length > 0) {
