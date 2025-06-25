@@ -23,11 +23,9 @@ import {
 } from '@/lib/log-analysis-utils'
 
 // Enhanced Components
-import { EnhancedSystemOverviewCard } from './EnhancedSystemOverviewCard'
-import { EnvironmentalContextCard } from './EnvironmentalContextCard'
+import { SystemAndAnalysisOverviewCard } from './SystemAndAnalysisOverviewCard'
 import { PredictiveInsightsCard } from './PredictiveInsightsCard'
 import { MLPatternDiscoveryCard } from './MLPatternDiscoveryCard'
-import { AnalysisMetricsCard } from './AnalysisMetricsCard'
 import { EnhancedRecommendationsCard } from './EnhancedRecommendationsCard'
 import { CorrelationAnalysisCard } from './CorrelationAnalysisCard'
 import { DependencyAnalysisCard } from './DependencyAnalysisCard'
@@ -89,7 +87,7 @@ export function EnhancedLogAnalysisContainer({ data, className }: EnhancedLogAna
     return (
       <div className={cn("w-full space-y-6", className)}>
         {/* Enhanced System Overview */}
-        <EnhancedSystemOverviewCard metadata={system_metadata} />
+        <SystemAndAnalysisOverviewCard metadata={system_metadata} metrics={analysis_metrics} />
         
         {/* Critical Issues Banner */}
         {hasCriticalIssues && (
@@ -147,10 +145,9 @@ export function EnhancedLogAnalysisContainer({ data, className }: EnhancedLogAna
           {/* Overview Tab */}
           <TabsContent value="overview" className="space-y-4">
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-              <EnvironmentalContextCard context={environmental_context} />
-              <AnalysisMetricsCard 
-                metrics={analysis_metrics} 
-                validation={validation_summary} 
+              <SystemAndAnalysisOverviewCard
+                metadata={system_metadata}
+                metrics={analysis_metrics}
               />
             </div>
           </TabsContent>
@@ -172,8 +169,9 @@ export function EnhancedLogAnalysisContainer({ data, className }: EnhancedLogAna
                 )}
 
                 {/* Issues List */}
+                const filteredIssues = identified_issues.filter(i => i.schemaVersion === 'enhanced_v3')
                 <div className="space-y-3">
-                  {identified_issues.map((issue, idx) => {
+                  {filteredIssues.map((issue, idx) => {
                     // Find related solutions
                     const relatedSolutions = proposed_solutions?.filter(solution => 
                       solution.issue_id === issue.id || 
