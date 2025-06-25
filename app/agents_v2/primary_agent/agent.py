@@ -20,7 +20,12 @@ from langchain_google_genai import embeddings as gen_embeddings
 from opentelemetry import trace
 import anyio
 from opentelemetry.trace import Status, StatusCode
-from app.db.embedding_utils import find_similar_documents, SearchResult as InternalSearchResult # Added for internal search
+from app.db.embedding_utils import (
+    find_similar_documents, 
+    find_combined_similar_content,
+    SearchResult as InternalSearchResult,
+    CombinedSearchResult
+) # Added for internal search and FeedMe integration
 
 # Import Agent Sparrow modular prompt system
 from app.agents_v2.primary_agent.prompts import (
@@ -30,6 +35,7 @@ from app.agents_v2.primary_agent.prompts import (
     EmotionTemplates,
     ResponseFormatter
 )
+from app.agents_v2.primary_agent.reasoning.schemas import ProblemCategory
 
 # Import Agent Sparrow reasoning framework
 from app.agents_v2.primary_agent.reasoning import (
@@ -170,14 +176,15 @@ async def run_primary_agent(state: PrimaryAgentState) -> AsyncIterator[AIMessage
             reasoning_state = None
             with tracer.start_as_current_span("agent_sparrow.reasoning") as reasoning_span:
                 try:
-                    # Initialize reasoning engine
+                    # Initialize reasoning engine with configuration from settings
+                    from app.core.settings import settings
                     reasoning_config = ReasoningConfig(
-                        enable_chain_of_thought=True,
-                        enable_problem_solving_framework=True,
-                        enable_tool_intelligence=True,
-                        enable_quality_assessment=True,
-                        enable_reasoning_transparency=True,
-                        debug_mode=False  # Set to True for development
+                        enable_chain_of_thought=settings.reasoning_enable_chain_of_thought,
+                        enable_problem_solving_framework=settings.reasoning_enable_problem_solving,
+                        enable_tool_intelligence=settings.reasoning_enable_tool_intelligence,
+                        enable_quality_assessment=settings.reasoning_enable_quality_assessment,
+                        enable_reasoning_transparency=settings.reasoning_enable_reasoning_transparency,
+                        debug_mode=settings.reasoning_debug_mode
                     )
                     reasoning_engine = ReasoningEngine(reasoning_config)
                     
@@ -220,9 +227,9 @@ async def run_primary_agent(state: PrimaryAgentState) -> AsyncIterator[AIMessage
                         # Check if this is a complex technical issue that would benefit from structured troubleshooting
                         should_use_troubleshooting = (
                             qa.problem_category in [
-                                reasoning_state.query_analysis.problem_category.TECHNICAL_ISSUE,
-                                reasoning_state.query_analysis.problem_category.ACCOUNT_SETUP,
-                                reasoning_state.query_analysis.problem_category.PERFORMANCE_OPTIMIZATION
+                                ProblemCategory.TECHNICAL_ISSUE,
+                                ProblemCategory.ACCOUNT_SETUP,
+                                ProblemCategory.PERFORMANCE_OPTIMIZATION
                             ] and
                             (qa.complexity_score >= 0.5 or qa.urgency_level >= 3 or 
                              len(qa.key_entities) >= 2)
@@ -281,30 +288,91 @@ async def run_primary_agent(state: PrimaryAgentState) -> AsyncIterator[AIMessage
                         troubleshooting_state = None
                         active_troubleshooting_session = None
 
-            # 1. Internal Knowledge Base Search (PostgreSQL + pgvector)
+            # 1. Combined Knowledge Base + FeedMe Search (PostgreSQL + pgvector)
             context_chunks = []
             best_internal_score = 0.0
-            internal_docs_count = 0
+            total_results_count = 0
+            kb_results_count = 0
+            feedme_results_count = 0
 
-            with tracer.start_as_current_span("primary_agent.internal_db_search") as internal_search_span:
+            with tracer.start_as_current_span("primary_agent.combined_search") as search_span:
                 try:
-                    internal_docs: List[InternalSearchResult] = find_similar_documents(user_query, top_k=4)
-                    internal_docs_count = len(internal_docs)
-                    if internal_docs:
-                        best_internal_score = internal_docs[0].similarity_score # Assuming results are sorted by score desc
-                        for doc in internal_docs:
-                            content_to_add = doc.markdown if doc.markdown else doc.content
-                            if content_to_add:
-                                context_chunks.append(f"Source: Internal KB ({doc.url})\nContent: {content_to_add}")
-                    logger.info(f"Internal search found {internal_docs_count} documents. Best score: {best_internal_score:.4f}")
+                    # Use combined search to get both KB and FeedMe results
+                    combined_results: List[CombinedSearchResult] = find_combined_similar_content(
+                        query=user_query,
+                        top_k_total=6,  # Slightly more than before to account for both sources
+                        kb_weight=0.6,  # Favor KB slightly
+                        feedme_weight=0.4,  # But include FeedMe examples
+                        min_kb_similarity=0.25,  # Keep existing threshold
+                        min_feedme_similarity=0.7  # Higher threshold for FeedMe (more specific)
+                    )
+                    
+                    total_results_count = len(combined_results)
+                    
+                    if combined_results:
+                        best_internal_score = combined_results[0].similarity_score
+                        
+                        for result in combined_results:
+                            if result.source_type == "knowledge_base":
+                                kb_results_count += 1
+                                content_to_add = result.content
+                                if content_to_add:
+                                    context_chunks.append(f"Source: Knowledge Base ({result.url})\nContent: {content_to_add}")
+                            
+                            elif result.source_type == "feedme":
+                                feedme_results_count += 1
+                                # Format FeedMe content with Q&A structure
+                                additional_data = result.additional_data or {}
+                                question = additional_data.get('question', '')
+                                answer = additional_data.get('answer', '')
+                                
+                                # Determine if this is from HTML source
+                                source_format = "FeedMe"
+                                if result.title and ("html" in result.title.lower() or "zendesk" in result.title.lower()):
+                                    source_format = "FeedMe (HTML ticket)"
+                                elif result.metadata and result.metadata.get('conversation_id'):
+                                    # Check conversation title for HTML indicators
+                                    conv_title = str(result.metadata.get('conversation_title', ''))
+                                    if any(term in conv_title.lower() for term in ['html', 'zendesk', 'ticket']):
+                                        source_format = "FeedMe (HTML ticket)"
+                                
+                                if question and answer:
+                                    feedme_content = f"Q: {question}\n\nA: {answer}"
+                                    context_chunks.append(f"Source: {source_format} ({result.title})\nContent: {feedme_content}")
+                    
+                    logger.info(f"Combined search found {total_results_count} results "
+                              f"({kb_results_count} KB, {feedme_results_count} FeedMe). "
+                              f"Best score: {best_internal_score:.4f}")
+                    
                 except Exception as e:
-                    logger.error(f"Error during internal knowledge base search: {e}")
-                    internal_search_span.record_exception(e)
-                    internal_search_span.set_status(Status(StatusCode.ERROR, f"Internal DB search failed: {e}"))
+                    logger.error(f"Error during combined knowledge search: {e}")
+                    search_span.record_exception(e)
+                    search_span.set_status(Status(StatusCode.ERROR, f"Combined search failed: {e}"))
+                    
+                    # Fallback to legacy KB-only search
+                    try:
+                        logger.info("Falling back to legacy KB-only search")
+                        internal_docs: List[InternalSearchResult] = find_similar_documents(user_query, top_k=4)
+                        total_results_count = len(internal_docs)
+                        kb_results_count = total_results_count
+                        
+                        if internal_docs:
+                            best_internal_score = internal_docs[0].similarity_score
+                            for doc in internal_docs:
+                                content_to_add = doc.markdown if doc.markdown else doc.content
+                                if content_to_add:
+                                    context_chunks.append(f"Source: Knowledge Base ({doc.url})\nContent: {content_to_add}")
+                        
+                        logger.info(f"Fallback search found {total_results_count} KB documents")
+                    except Exception as fallback_error:
+                        logger.error(f"Fallback search also failed: {fallback_error}")
                 
-                internal_search_span.set_attribute("internal_search.document_count", internal_docs_count)
-                if internal_docs_count > 0:
-                    internal_search_span.set_attribute("internal_search.top_score", best_internal_score)
+                # Set telemetry attributes
+                search_span.set_attribute("search.total_results", total_results_count)
+                search_span.set_attribute("search.kb_results", kb_results_count)
+                search_span.set_attribute("search.feedme_results", feedme_results_count)
+                if total_results_count > 0:
+                    search_span.set_attribute("search.top_score", best_internal_score)
 
             # 2. Enhanced tool decision using Agent Sparrow reasoning
             should_web_search = False
@@ -337,17 +405,17 @@ async def run_primary_agent(state: PrimaryAgentState) -> AsyncIterator[AIMessage
                 
             else:
                 # Fallback to legacy logic if reasoning failed
-                if internal_docs_count == 0:
+                if total_results_count == 0:
                     should_web_search = True
                     web_search_reasoning = "No internal results found, proceeding to web search."
                     logger.info(web_search_reasoning)
                 elif best_internal_score < INTERNAL_SEARCH_SIMILARITY_THRESHOLD:
                     should_web_search = True
-                    web_search_reasoning = f"Best internal score {best_internal_score:.4f} < {INTERNAL_SEARCH_SIMILARITY_THRESHOLD}, proceeding to web search."
+                    web_search_reasoning = f"Best search score {best_internal_score:.4f} < {INTERNAL_SEARCH_SIMILARITY_THRESHOLD}, proceeding to web search."
                     logger.info(web_search_reasoning)
-                elif internal_docs_count < MIN_INTERNAL_RESULTS_FOR_NO_WEB_SEARCH:
+                elif total_results_count < MIN_INTERNAL_RESULTS_FOR_NO_WEB_SEARCH:
                     should_web_search = True
-                    web_search_reasoning = f"Number of internal results {internal_docs_count} < {MIN_INTERNAL_RESULTS_FOR_NO_WEB_SEARCH}, proceeding to web search."
+                    web_search_reasoning = f"Number of search results {total_results_count} < {MIN_INTERNAL_RESULTS_FOR_NO_WEB_SEARCH}, proceeding to web search."
                     logger.info(web_search_reasoning)
                 else:
                     web_search_reasoning = "Sufficient internal knowledge available, skipping web search."
@@ -472,13 +540,16 @@ async def run_primary_agent(state: PrimaryAgentState) -> AsyncIterator[AIMessage
 **Workflow Description**: {active_troubleshooting_session.workflow.description}
 """
                 
-            refined_system_prompt = (
-                agent_sparrow_prompt + 
-                "\n\n## Context from Knowledge Base and Web Search:\n" +
-                f"{context_text}" + 
-                troubleshooting_context +
+            # Build system prompt parts in a list for efficient string joining
+            prompt_parts = [
+                agent_sparrow_prompt,
+                "\n\n## Context from Knowledge Base, FeedMe References (plain+html), and Web Search:\n",
+                "<!-- FeedMe HTML examples come from real tickets. They are reference-only.\nWeigh them against KB accuracy before finalising your answer. -->\n\n",
+                context_text,
+                troubleshooting_context,
                 correction_note
-            )
+            ]
+            refined_system_prompt = "".join(part for part in prompt_parts if part)
             system_msg = SystemMessage(content=refined_system_prompt)
             # Ensure messages list doesn't grow indefinitely if state is reused across turns in a single graph invocation (though typically not the case for primary agent)
             # For this agent, state.messages usually contains the current user query as the last message.

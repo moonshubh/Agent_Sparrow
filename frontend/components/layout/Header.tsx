@@ -3,6 +3,7 @@
 import React from 'react'
 import { Avatar, AvatarImage, AvatarFallback } from '@/components/ui/avatar'
 import { LightDarkToggle } from '@/components/ui/LightDarkToggle'
+import { FeedMeButton } from '@/components/ui/FeedMeButton'
 
 export function Header() {
   return (
@@ -17,7 +18,10 @@ export function Header() {
         </Avatar>
         Agent Sparrow
       </div>
-      <LightDarkToggle />
+      <div className="flex items-center gap-3">
+        <FeedMeButton />
+        <LightDarkToggle />
+      </div>
     </header>
   )
 }

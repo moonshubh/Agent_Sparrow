@@ -1,5 +1,6 @@
 """
 Enhanced schemas for comprehensive log analysis with detailed system profiling and solution generation.
+Updated for v3.0 with predictive analysis, correlation detection, and automated remediation.
 """
 
 from typing import TypedDict, List, Optional, Any, Dict
@@ -102,8 +103,103 @@ class AnalysisMetrics(BaseModel):
     completeness_score: Optional[float] = Field(None, description="Completeness of analysis (0-1)")
 
 
+# New schemas for v3.0 enhancements
+
+class PredictiveInsight(BaseModel):
+    """Predictive analysis results for future issue forecasting."""
+    issue_type: str = Field(description="Type of predicted issue")
+    probability: float = Field(description="Probability of occurrence (0-1)")
+    timeframe: str = Field(description="Expected timeframe for issue occurrence")
+    early_indicators: List[str] = Field(description="Early warning signs to monitor")
+    preventive_actions: List[str] = Field(description="Actions to prevent the issue")
+    confidence_score: float = Field(description="Confidence in prediction (0-1)")
+
+class EnvironmentalContext(BaseModel):
+    """System environmental context for enhanced analysis."""
+    os_version: str = Field(description="Operating system version")
+    platform: str = Field(description="Platform: windows, macos, linux")
+    antivirus_software: List[str] = Field(default_factory=list, description="Detected antivirus software")
+    firewall_status: str = Field(description="Firewall configuration status")
+    network_type: str = Field(description="Network connection type")
+    proxy_configured: bool = Field(description="Whether proxy is configured")
+    system_locale: str = Field(description="System language and locale")
+    timezone: str = Field(description="System timezone")
+
+class CorrelationAnalysis(BaseModel):
+    """Results of correlation analysis between issues."""
+    temporal_correlations: List[Dict[str, Any]] = Field(description="Time-based correlations")
+    account_correlations: List[Dict[str, Any]] = Field(description="Account-specific correlations")
+    issue_type_correlations: List[Dict[str, Any]] = Field(description="Issue type co-occurrence")
+    correlation_matrix: Dict[str, Any] = Field(description="Correlation strength matrix")
+    analysis_summary: Dict[str, Any] = Field(description="Summary of correlation findings")
+
+class DependencyAnalysis(BaseModel):
+    """Issue dependency graph analysis results."""
+    graph_summary: Dict[str, Any] = Field(description="Graph structure summary")
+    root_causes: List[str] = Field(description="Issues identified as root causes")
+    primary_symptoms: List[str] = Field(description="Issues identified as symptoms")
+    cyclical_dependencies: List[List[str]] = Field(description="Circular dependency chains")
+    centrality_measures: Dict[str, Any] = Field(description="Issue centrality calculations")
+    issue_relationships: List[Dict[str, Any]] = Field(description="Direct issue relationships")
+
+class AutomatedTest(BaseModel):
+    """Automated test for solution validation."""
+    test_id: str = Field(description="Unique test identifier")
+    test_name: str = Field(description="Human-readable test name")
+    test_script: str = Field(description="Executable test script")
+    expected_result: str = Field(description="Expected test outcome")
+    platform_requirements: List[str] = Field(description="Required platforms")
+    timeout_seconds: int = Field(default=30, description="Test timeout")
+
+class ValidationResult(BaseModel):
+    """Result of solution step validation."""
+    step_number: int = Field(description="Step number validated")
+    is_successful: bool = Field(description="Whether validation passed")
+    validation_output: str = Field(description="Validation command output")
+    error_message: Optional[str] = Field(None, description="Error if validation failed")
+    requires_manual_verification: bool = Field(description="Whether manual check needed")
+
+class EnhancedSolutionStep(BaseModel):
+    """Enhanced solution step with automation and validation."""
+    step_number: int = Field(description="Sequential step number")
+    description: str = Field(description="Detailed description of the action to take")
+    expected_outcome: str = Field(description="What the user should see after completing this step")
+    troubleshooting_note: Optional[str] = Field(None, description="Additional help if step fails")
+    estimated_time_minutes: Optional[int] = Field(None, description="Estimated time for this step")
+    risk_level: Optional[str] = Field(None, description="Risk level: Low, Medium, High")
+    platform_specific: Optional[str] = Field(None, description="Platform: windows, macos, linux")
+    automated_script: Optional[str] = Field(None, description="Script for automated execution")
+    validation_command: Optional[str] = Field(None, description="Command to validate completion")
+    rollback_procedure: Optional[str] = Field(None, description="How to undo this step")
+
+class EnhancedSolution(ComprehensiveSolution):
+    """Enhanced solution with automation and cross-platform support."""
+    solution_steps: List[EnhancedSolutionStep] = Field(description="Detailed step-by-step instructions")
+    platform_compatibility: List[str] = Field(description="Supported platforms")
+    automated_tests: List[AutomatedTest] = Field(description="Automated validation tests")
+    remediation_script: Optional[str] = Field(None, description="Complete automated remediation script")
+    rollback_script: Optional[str] = Field(None, description="Complete rollback script")
+    success_criteria: List[str] = Field(description="How to verify solution worked")
+
+class MLPatternDiscovery(BaseModel):
+    """Machine learning pattern discovery results."""
+    patterns_discovered: List[Dict[str, Any]] = Field(description="New patterns found by ML")
+    pattern_confidence: Dict[str, float] = Field(description="Confidence scores for patterns")
+    clustering_summary: Dict[str, Any] = Field(description="Clustering analysis results")
+    recommendations: List[str] = Field(description="Recommendations based on discoveries")
+
+class ValidationSummary(BaseModel):
+    """Log validation and preprocessing summary."""
+    is_valid: bool = Field(description="Whether log passed validation")
+    issues_found: List[str] = Field(description="Validation issues detected")
+    warnings: List[str] = Field(description="Non-critical warnings")
+    suggestions: List[str] = Field(description="Improvement suggestions")
+    preprocessing_applied: bool = Field(description="Whether preprocessing was needed")
+    detected_language: str = Field(description="Detected log language")
+    detected_platform: str = Field(description="Detected platform")
+
 class ComprehensiveLogAnalysisOutput(BaseModel):
-    """The final comprehensive output with all analysis results."""
+    """The final comprehensive output with all v3.0 analysis results."""
     
     # Executive Summary
     overall_summary: str = Field(description="Executive summary of system health and findings")
@@ -112,24 +208,33 @@ class ComprehensiveLogAnalysisOutput(BaseModel):
     
     # Detailed System Information
     system_metadata: DetailedSystemMetadata = Field(description="Comprehensive system information")
+    environmental_context: EnvironmentalContext = Field(description="System environment details")
     
     # Issue Analysis
     identified_issues: List[DetailedIssue] = Field(description="All detected issues with detailed analysis")
     issue_summary_by_severity: Dict[str, int] = Field(description="Count of issues by severity level")
     
+    # Enhanced Analysis (v3.0)
+    correlation_analysis: CorrelationAnalysis = Field(description="Issue correlation analysis")
+    dependency_analysis: DependencyAnalysis = Field(description="Issue dependency mapping")
+    predictive_insights: List[PredictiveInsight] = Field(description="Predicted future issues")
+    ml_pattern_discovery: MLPatternDiscovery = Field(description="ML-discovered patterns")
+    
     # Solution Guidance
-    proposed_solutions: List[ComprehensiveSolution] = Field(description="Detailed solutions for all issues")
+    proposed_solutions: List[EnhancedSolution] = Field(description="Enhanced solutions with automation")
     
     # Research Recommendations
     supplemental_research: Optional[ResearchRecommendation] = Field(None, description="Additional research recommendations")
     
     # Analysis Metadata
     analysis_metrics: AnalysisMetrics = Field(description="Metadata about the analysis process")
+    validation_summary: ValidationSummary = Field(description="Input validation results")
     
     # Recommendations
     immediate_actions: List[str] = Field(description="Actions that should be taken immediately")
     preventive_measures: List[str] = Field(description="Steps to prevent future issues")
     monitoring_recommendations: List[str] = Field(description="What to monitor going forward")
+    automated_remediation_available: bool = Field(description="Whether automated fixes are available")
     
     class Config:
         populate_by_name = True

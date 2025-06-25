@@ -550,7 +550,12 @@ class ReasoningEngine:
         
         # Technical term density
         technical_terms = ['imap', 'smtp', 'oauth', 'ssl', 'port', 'server', 'protocol', 'authentication']
-        tech_density = sum(1 for term in technical_terms if term in query.lower()) / len(query.split())
+        query_terms = query.split()
+        if not query_terms:  # Handle empty query case
+            tech_density = 0.0
+        else:
+            tech_term_count = sum(1 for term in technical_terms if term in query.lower())
+            tech_density = tech_term_count / len(query_terms)
         complexity_factors.append(min(tech_density * 2, 0.4))
         
         # Multiple problems indicator

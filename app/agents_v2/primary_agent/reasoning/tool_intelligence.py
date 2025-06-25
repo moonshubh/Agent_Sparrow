@@ -481,7 +481,7 @@ class ToolIntelligence:
         
         # Add temporal modifiers if needed
         if any("current" in info for info in required_information):
-            search_terms.append("2024")
+            search_terms.append(str(datetime.now().year))
         
         strategy = f"Target search terms: {', '.join(search_terms[:5])}. "
         
