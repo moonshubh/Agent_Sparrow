@@ -453,7 +453,33 @@ class EdgeCaseHandler:
                         return datetime.strptime(timestamp_str, fmt)
                     except ValueError:
                         continue
-        
+
+        return None
+
+    def _extract_timestamp_flexible_sync(self, line: str) -> Optional[datetime]:
+        """Synchronous helper for timestamp extraction."""
+        for pattern in self.timestamp_patterns:
+            match = pattern.search(line)
+            if match:
+                timestamp_str = match.group(1)
+
+                formats = [
+                    "%Y-%m-%d %H:%M:%S.%f",
+                    "%Y-%m-%d %H:%M:%S",
+                    "%Y-%m-%dT%H:%M:%S.%fZ",
+                    "%Y-%m-%dT%H:%M:%SZ",
+                    "%Y-%m-%dT%H:%M:%S",
+                    "%d/%m/%Y %H:%M:%S",
+                    "%m/%d/%Y %H:%M:%S",
+                    "%Y/%m/%d %H:%M:%S",
+                ]
+
+                for fmt in formats:
+                    try:
+                        return datetime.strptime(timestamp_str, fmt)
+                    except ValueError:
+                        continue
+
         return None
     
     async def _sanitize_content(self, content: str) -> str:
@@ -657,7 +683,7 @@ class EdgeCaseHandler:
             
             for line in lines:
                 if line.strip():
-                    timestamp = asyncio.run(self._extract_timestamp_flexible(line))
+                    timestamp = self._extract_timestamp_flexible_sync(line)
                     if timestamp:
                         timestamps.append(timestamp)
             

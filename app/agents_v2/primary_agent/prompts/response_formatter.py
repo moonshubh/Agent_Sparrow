@@ -10,8 +10,11 @@ from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass
 from enum import Enum
 import re
+import logging
 
 from .emotion_templates import EmotionalState, EmotionDetectionResult
+
+logger = logging.getLogger(__name__)
 
 
 class ResponseSection(Enum):

@@ -9,6 +9,7 @@ import logging
 import os
 import tempfile
 import time
+import gzip
 from datetime import datetime, timedelta
 from typing import Dict, Any, List, Optional, Tuple
 import pytest
@@ -74,7 +75,7 @@ class LogAnalysisTestFramework:
                 'expected_decoding': '[ERROR] Connection failed for test@example.com'
             },
             'compressed_gzip': {
-                'content': b'\x1f\x8b\x08\x00\x00\x00\x00\x00\x00\xff',  # Gzipped content
+                'content': gzip.compress(b'[ERROR] Connection failed for test@example.com'),
                 'expected_preprocessing': True,
                 'expected_decompression': True
             },
@@ -211,7 +212,7 @@ class LogAnalysisTestFramework:
             current_time = base_time + timedelta(hours=hour)
             
             # Increasing error rate over time
-            error_rate = min(0.1 + (hour * 0.02), 0.8)  # 10% to 80% error rate
+            error_rate = min(0.1 + (hour * 0.03), 0.8)  # 10% to 80% error rate
             
             for minute in range(0, 60, 5):  # Every 5 minutes
                 timestamp = current_time + timedelta(minutes=minute)

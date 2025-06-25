@@ -268,24 +268,33 @@ export function FeedMeModal({ isOpen, onClose }: FeedMeModalProps) {
         processingStatus: uploadResponse.processing_status
       }))
 
-      // Check processing status
+      // Poll for processing completion with exponential backoff
       setUploadState(prev => ({ ...prev, progress: 80 }))
-      
-      // Poll for processing completion (simplified - just wait a bit and check once)
-      await new Promise(resolve => setTimeout(resolve, 1000))
-      
-      try {
-        const statusResponse = await getProcessingStatus(uploadResponse.id)
-        setUploadState(prev => ({ 
-          ...prev, 
-          progress: 100,
-          processingStatus: statusResponse.status
-        }))
-      } catch (statusError) {
-        // Status check failed, but upload succeeded
-        console.warn('Status check failed:', statusError)
-        setUploadState(prev => ({ ...prev, progress: 100 }))
+      let delay = 1000
+      let statusResponse
+      while (true) {
+        try {
+          statusResponse = await getProcessingStatus(uploadResponse.id)
+          setUploadState(prev => ({
+            ...prev,
+            processingStatus: statusResponse.status
+          }))
+          if (statusResponse.status !== 'processing') {
+            break
+          }
+        } catch (statusError) {
+          console.warn('Status check failed:', statusError)
+          break
+        }
+        await new Promise(resolve => setTimeout(resolve, delay))
+        delay = Math.min(delay * 2, 10000)
       }
+
+      setUploadState(prev => ({
+        ...prev,
+        progress: 100,
+        processingStatus: statusResponse?.status || prev.processingStatus
+      }))
 
       setUploadState(prev => ({
         ...prev,
@@ -310,7 +319,14 @@ export function FeedMeModal({ isOpen, onClose }: FeedMeModalProps) {
   }
 
   return (
-    <Dialog open={isOpen} onOpenChange={handleClose}>
+    <Dialog
+      open={isOpen}
+      onOpenChange={(open) => {
+        if (!open && !uploadState.isUploading) {
+          handleClose()
+        }
+      }}
+    >
       <DialogContent className="sm:max-w-[600px] max-h-[80vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2 text-accent">

@@ -6,6 +6,7 @@ Provides functionality for uploading transcripts, managing conversations, and se
 """
 
 import logging
+import os
 from typing import List, Optional, Dict, Any
 from datetime import datetime
 from fastapi import APIRouter, HTTPException, Depends, UploadFile, File, Form, Query, BackgroundTasks
@@ -243,11 +244,14 @@ async def upload_transcript(
         
         # Check content type if provided
         if transcript_file.content_type and transcript_file.content_type not in allowed_content_types:
-            logger.warning(f"Unexpected content type {transcript_file.content_type} for file {transcript_file.filename}, but proceeding with upload")
+            logger.warning(
+                f"Unexpected content type {transcript_file.content_type} for file {transcript_file.filename}"
+            )
+            raise HTTPException(status_code=400, detail="Invalid file content type")
         
         # Check file extension and HTML support
         if transcript_file.filename:
-            file_extension = transcript_file.filename.lower().split('.')[-1] if '.' in transcript_file.filename else ''
+            file_extension = os.path.splitext(transcript_file.filename.lower())[1]
             
             # Check if HTML file and HTML support is enabled
             is_html_file = transcript_file.filename.lower().endswith(('.html', '.htm')) or \
@@ -259,8 +263,11 @@ async def upload_transcript(
                     detail="HTML file uploads are not enabled. Please contact your administrator to enable FEEDME_HTML_ENABLED."
                 )
             
-            if file_extension and not any(transcript_file.filename.lower().endswith(ext) for ext in allowed_extensions):
-                logger.warning(f"Unexpected file extension .{file_extension} for file {transcript_file.filename}, but proceeding with upload")
+            if file_extension and file_extension not in allowed_extensions:
+                logger.warning(
+                    f"Unexpected file extension {file_extension} for file {transcript_file.filename}"
+                )
+                raise HTTPException(status_code=400, detail="Invalid file extension")
         
         # Read file content
         try:
