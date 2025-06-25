@@ -11,6 +11,8 @@ from enum import Enum
 from pydantic import BaseModel, Field, validator
 import uuid
 
+from app.core.settings import settings
+
 
 class ProcessingStatus(str, Enum):
     """Status of transcript processing"""
@@ -101,8 +103,11 @@ class TranscriptUploadRequest(BaseModel):
         """
         if len(v.strip()) < 10:
             raise ValueError('Transcript content must be at least 10 characters long')
+        # Max size configured via settings.FEEDME_MAX_FILE_SIZE_MB
+        max_chars = settings.feedme_max_file_size_mb * 1024 * 1024
+        if len(v) > max_chars:
+            raise ValueError(f'Transcript content exceeds maximum size of {max_chars} characters')
         return v.strip()
-
 
 # Update Models (for API requests)
 
@@ -215,7 +220,12 @@ class ProcessingStatusResponse(BaseModel):
 class SearchQuery(BaseModel):
     """Model for FeedMe search requests"""
     query: str = Field(..., min_length=1, description="Search query text")
-    max_results: int = Field(default=5, ge=1, le=20, description="Maximum number of results")
+    max_results: int = Field(
+        default=5,
+        ge=1,
+        le=settings.feedme_max_retrieval_results,
+        description=f"Maximum number of results (up to {settings.feedme_max_retrieval_results})"
+    )
     min_similarity: float = Field(default=0.7, ge=0.0, le=1.0, description="Minimum similarity threshold")
     issue_types: Optional[List[IssueType]] = Field(None, description="Filter by issue types")
     tags: Optional[List[str]] = Field(None, description="Filter by tags")

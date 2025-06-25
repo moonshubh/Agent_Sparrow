@@ -243,9 +243,9 @@ async def unified_agent_stream_generator(request: UnifiedAgentRequest) -> AsyncI
         # Determine agent type
         if request.agent_type:
             agent_type = request.agent_type
-        elif any(keyword in message_lower for keyword in ['error', 'log', 'crash', 'issue', 'problem', 'debug', 'analyze', 'not working', 'failed', 'exception']):
+        elif any(keyword in message_lower for keyword in ['analyze this log', 'parse log file', 'debug this log', 'log analysis', 'examine log entries', 'review log output', 'check log errors']):
             agent_type = "log_analyst"
-        elif any(keyword in message_lower for keyword in ['research', 'find information', 'latest', 'compare', 'what is new', 'how does', 'explain', 'investigate']):
+        elif any(keyword in message_lower for keyword in ['research', 'find information about', 'latest news', 'compare products', 'what is new in', 'investigate', 'gather sources', 'comprehensive overview', 'detailed research']):
             agent_type = "researcher"  
         else:
             agent_type = "primary_agent"

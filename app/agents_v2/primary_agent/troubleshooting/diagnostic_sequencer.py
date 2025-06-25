@@ -6,6 +6,7 @@ complexity handling, adaptive branching, and customer-specific optimization.
 """
 
 import logging
+import uuid
 from typing import Dict, List, Optional, Any, Tuple
 from datetime import datetime
 import asyncio
@@ -33,9 +34,13 @@ class DiagnosticSequencer:
     - Progressive complexity with safety checks
     """
     
+    
     def __init__(self, config: TroubleshootingConfig):
         """
-        Initializes the DiagnosticSequencer with the provided troubleshooting configuration and defines progressive complexity levels for diagnostic steps.
+        Initialize diagnostic sequencer
+        
+        Args:
+            config: Troubleshooting configuration
         """
         self.config = config
         
@@ -48,6 +53,9 @@ class DiagnosticSequencer:
             5: "Specialist intervention required"
         }
         
+        # Initialize step lookup cache
+        self._step_lookup: Dict[str, Dict[str, DiagnosticStep]] = {}
+        
         logger.info("DiagnosticSequencer initialized with progressive complexity handling")
     
     async def get_next_step(
@@ -56,37 +64,61 @@ class DiagnosticSequencer:
         previous_step_successful: Optional[bool] = None
     ) -> Optional[DiagnosticStep]:
         """
-        Determines and returns the next diagnostic step for a troubleshooting session.
+        Get the next optimal diagnostic step for the session
         
-        Selects the next step based on session progress and the outcome of the previous step, adapting to customer context and workflow state. Returns `None` if no further steps are available, indicating workflow completion or escalation.
-         
+        Args:
+            session: Current troubleshooting session
+            previous_step_successful: Result of previous step execution
+            
         Returns:
-            The next `DiagnosticStep` to perform, or `None` if the workflow is complete.
+            Next diagnostic step, None if workflow complete, or None if error occurs
+            
+        Note:
+            This method includes comprehensive error handling to ensure the troubleshooting
+            flow continues even if individual step generation fails.
         """
-        
-        # Handle first step (session initialization)
-        if not session.completed_steps and not session.failed_steps:
-            return await self._get_initial_diagnostic_step(session)
-        
-        # Handle progression based on previous step result
-        if previous_step_successful is not None:
-            return await self._get_next_step_based_on_result(
-                session, previous_step_successful
-            )
-        
-        # Fallback: get next sequential step
-        return await self._get_next_sequential_step(session)
+        try:
+            # Handle first step (session initialization)
+            if not session.completed_steps and not session.failed_steps:
+                try:
+                    return await self._get_initial_diagnostic_step(session)
+                except Exception as e:
+                    logger.error(f"Error getting initial diagnostic step: {str(e)}", 
+                               exc_info=True)
+                    return None
+            
+            # Handle progression based on previous step result
+            if previous_step_successful is not None:
+                try:
+                    return await self._get_next_step_based_on_result(
+                        session, previous_step_successful
+                    )
+                except Exception as e:
+                    logger.error(
+                        f"Error getting next step based on result (success={previous_step_successful}): {str(e)}",
+                        exc_info=True
+                    )
+                    # Fall through to sequential step on error
+            
+            # Fallback: get next sequential step
+            try:
+                return await self._get_next_sequential_step(session)
+            except Exception as e:
+                logger.error(f"Error getting next sequential step: {str(e)}", 
+                           exc_info=True)
+                return None
+                
+        except Exception as e:
+            # Catch any unexpected errors at the top level
+            logger.critical(f"Unexpected error in get_next_step: {str(e)}", 
+                          exc_info=True)
+            return None
     
     async def _get_initial_diagnostic_step(
         self,
         session: TroubleshootingSession
     ) -> Optional[DiagnosticStep]:
-        """
-        Selects and returns the most suitable initial diagnostic step for a troubleshooting session, adapting it to the customer's characteristics.
-        
-        Returns:
-            The adapted initial diagnostic step, or None if no suitable step is available.
-        """
+        """Get the first diagnostic step for the session"""
         
         workflow = session.workflow
         
@@ -118,14 +150,7 @@ class DiagnosticSequencer:
         session: TroubleshootingSession,
         previous_step_successful: bool
     ) -> Optional[DiagnosticStep]:
-        """
-        Determines and returns the next diagnostic step based on the outcome of the previous step.
-        
-        If the current step defines explicit next steps for success or failure, selects and adapts the corresponding step for the customer. Otherwise, advances to a higher complexity level on success or handles failure by seeking alternative or simpler approaches.
-        
-        Returns:
-            The next DiagnosticStep to perform, or None if no suitable step is found.
-        """
+        """Get next step based on previous step result"""
         
         current_step = session.current_step
         if not current_step:
@@ -154,11 +179,7 @@ class DiagnosticSequencer:
         self,
         session: TroubleshootingSession
     ) -> Optional[DiagnosticStep]:
-        """
-        Returns the next appropriate diagnostic step in the workflow that has not yet been completed or failed, filtered by the customer's current phase and maximum allowed difficulty.
-        
-        If no suitable steps remain, returns None to indicate workflow completion or escalation.
-        """
+        """Get next step in sequential order"""
         
         workflow = session.workflow
         completed_step_ids = {step.step_id for step in session.completed_steps}
@@ -197,13 +218,7 @@ class DiagnosticSequencer:
         self,
         session: TroubleshootingSession
     ) -> Optional[DiagnosticStep]:
-        """
-        Advances the troubleshooting session to a higher complexity level if appropriate and returns the next diagnostic step.
-        
-        If criteria for increasing complexity are met, updates the session to the next troubleshooting phase before selecting the next suitable step.
-        Returns:
-            The next diagnostic step for the session, or None if no further steps are available.
-        """
+        """Progress to next complexity level after successful step"""
         
         # Determine if we should increase complexity
         should_increase = await self._should_increase_complexity(session)
@@ -222,12 +237,7 @@ class DiagnosticSequencer:
         self,
         session: TroubleshootingSession
     ) -> Optional[DiagnosticStep]:
-        """
-        Attempts to recover from a failed diagnostic step by selecting an alternative or simpler approach, or proceeds to the next sequential step if none are available.
-        
-        Returns:
-            The next DiagnosticStep to attempt, or None if no suitable step is found.
-        """
+        """Handle failed diagnostic step with alternative approaches"""
         
         failed_step = session.current_step
         if not failed_step:
@@ -257,11 +267,7 @@ class DiagnosticSequencer:
         available_steps: List[DiagnosticStep],
         session: TroubleshootingSession
     ) -> DiagnosticStep:
-        """
-        Selects the most suitable diagnostic step from a list based on customer characteristics and session context.
-        
-        Scores each available step using factors such as step order, customer emotional state, technical level, estimated time, troubleshooting tips, and historical success rate. Returns the step with the highest score as the optimal choice for the current customer and troubleshooting session.
-        """
+        """Select most appropriate step for customer characteristics"""
         
         if len(available_steps) == 1:
             return available_steps[0]
@@ -273,39 +279,39 @@ class DiagnosticSequencer:
             score = 0.0
             
             # Base score from step position (prefer earlier steps)
-            score += (10 - step.step_number) * 0.1
+            score += (10 - step.step_number) * self.config.base_step_position_weight
             
             # Adjust for customer emotional state
             emotion = session.customer_emotional_state
             
             if emotion == EmotionalState.FRUSTRATED:
                 # Prefer quick, simple steps
-                score += (5 - step.difficulty_level) * 0.3
-                score += max(0, (10 - step.time_estimate_minutes)) * 0.2
+                score += (5 - step.difficulty_level) * self.config.emotion_frustrated_difficulty_weight
+                score += max(0, (10 - step.time_estimate_minutes)) * self.config.emotion_frustrated_time_weight
                 
             elif emotion == EmotionalState.CONFUSED:
                 # Prefer simple, well-documented steps
-                score += (5 - step.difficulty_level) * 0.4
-                score += len(step.troubleshooting_tips) * 0.1
+                score += (5 - step.difficulty_level) * self.config.emotion_confused_difficulty_weight
+                score += len(step.troubleshooting_tips) * self.config.emotion_confused_tips_weight
                 
             elif emotion == EmotionalState.PROFESSIONAL:
                 # Allow more complex steps
-                score += min(step.difficulty_level, session.customer_technical_level) * 0.2
+                score += min(step.difficulty_level, session.customer_technical_level) * self.config.emotion_professional_weight
                 
             elif emotion == EmotionalState.URGENT:
                 # Prefer fast steps
-                score += max(0, (5 - step.time_estimate_minutes)) * 0.4
+                score += max(0, (5 - step.time_estimate_minutes)) * self.config.emotion_urgent_weight
             
             # Adjust for customer technical level
             tech_level = session.customer_technical_level
             if step.difficulty_level <= tech_level:
-                score += 0.3  # Bonus for appropriate difficulty
+                score += self.config.tech_level_appropriate_weight  # Bonus for appropriate difficulty
             elif step.difficulty_level > tech_level + 1:
-                score -= 0.5  # Penalty for too difficult
+                score += self.config.tech_level_too_hard_weight  # Penalty for too difficult
             
             # Prefer steps with higher success rates
             if hasattr(step, 'success_rate'):
-                score += getattr(step, 'success_rate', 0.8) * 0.2
+                score += getattr(step, 'success_rate', 0.8) * self.config.success_rate_weight
             
             step_scores.append((step, score))
         
@@ -321,16 +327,7 @@ class DiagnosticSequencer:
         step: DiagnosticStep,
         session: TroubleshootingSession
     ) -> DiagnosticStep:
-        """
-        Create a customized version of a diagnostic step by adapting its instructions and troubleshooting tips to the customer's emotional state, technical level, and session context.
-        
-        Parameters:
-        	step (DiagnosticStep): The diagnostic step to be adapted.
-        	session (TroubleshootingSession): The current troubleshooting session containing customer characteristics.
-        
-        Returns:
-        	DiagnosticStep: A new diagnostic step instance with instructions and tips tailored to the customer's needs and session context.
-        """
+        """Adapt diagnostic step for specific customer characteristics"""
         
         # Create adapted copy of step
         adapted_step = DiagnosticStep(
@@ -393,15 +390,7 @@ class DiagnosticSequencer:
         return adapted_step
     
     def _get_max_difficulty_for_phase(self, phase: TroubleshootingPhase) -> int:
-        """
-        Returns the maximum allowed diagnostic step difficulty for a given troubleshooting phase.
-        
-        Parameters:
-        	phase (TroubleshootingPhase): The current phase of the troubleshooting workflow.
-        
-        Returns:
-        	int: The highest difficulty level permitted for the specified phase.
-        """
+        """Get maximum difficulty level for troubleshooting phase"""
         
         phase_difficulty_map = {
             TroubleshootingPhase.INITIAL_ASSESSMENT: 2,
@@ -416,13 +405,11 @@ class DiagnosticSequencer:
         return phase_difficulty_map.get(phase, 3)
     
     def _get_max_difficulty_for_customer(self, session: TroubleshootingSession) -> int:
-        """
-        Determine the maximum diagnostic step difficulty suitable for the customer, factoring in their technical level, emotional state, failure history, and current troubleshooting phase.
+        """Get maximum difficulty level appropriate for customer
         
         Returns:
-            int: The highest allowed difficulty level for the next diagnostic step.
+            int: Difficulty level between 1 and 5 (inclusive)
         """
-        
         base_max = session.customer_technical_level
         
         # Adjust based on emotional state
@@ -442,15 +429,11 @@ class DiagnosticSequencer:
         # Phase limitations
         phase_max = self._get_max_difficulty_for_phase(session.current_phase)
         
-        return min(base_max, phase_max)
+        # Ensure final difficulty is between 1 and 5 (inclusive)
+        return max(1, min(base_max, phase_max))
     
     async def _should_increase_complexity(self, session: TroubleshootingSession) -> bool:
-        """
-        Determines whether the troubleshooting session should progress to a higher complexity level.
-        
-        Returns:
-            bool: True if conditions indicate readiness to increase complexity, otherwise False.
-        """
+        """Determine if complexity should be increased"""
         
         # Don't increase if customer is struggling
         if len(session.failed_steps) >= 2:
@@ -471,11 +454,7 @@ class DiagnosticSequencer:
         return False
     
     def _get_next_phase(self, current_phase: TroubleshootingPhase) -> Optional[TroubleshootingPhase]:
-        """
-        Returns the next troubleshooting phase following the given current phase.
-        
-        If the current phase is the last in the progression or unrecognized, returns None.
-        """
+        """Get next phase in troubleshooting progression"""
         
         phase_progression = [
             TroubleshootingPhase.INITIAL_ASSESSMENT,
@@ -495,35 +474,52 @@ class DiagnosticSequencer:
         
         return None
     
+    def _build_step_lookup(self, workflow) -> None:
+        """Build or rebuild the step lookup dictionary for a workflow"""
+        workflow_id = getattr(workflow, 'workflow_id', None)
+        if not workflow_id:
+            workflow_id = str(uuid.uuid4())
+            setattr(workflow, 'workflow_id', workflow_id)
+            
+        self._step_lookup[workflow_id] = {}
+        
+        for step in workflow.diagnostic_steps:
+            # Store by step_id
+            self._step_lookup[workflow_id][step.step_id] = step
+            
+            # Also store by normalized title for backward compatibility
+            normalized_title = step.title.lower().replace(' ', '_')
+            if normalized_title not in self._step_lookup[workflow_id]:
+                self._step_lookup[workflow_id][normalized_title] = step
+    
     def _find_step_by_id(
         self,
         workflow,
         step_id: str
     ) -> Optional[DiagnosticStep]:
         """
-        Locate a diagnostic step within the workflow by its step ID or normalized title.
+        Find diagnostic step by ID or normalized title in workflow
         
-        Returns:
-            The matching DiagnosticStep if found; otherwise, None.
+        Uses a dictionary for O(1) lookup after the first access to a workflow.
         """
+        workflow_id = getattr(workflow, 'workflow_id', None)
+        if not workflow_id:
+            workflow_id = str(uuid.uuid4())
+            setattr(workflow, 'workflow_id', workflow_id)
         
-        for step in workflow.diagnostic_steps:
-            if step.step_id == step_id or step.title.lower().replace(' ', '_') == step_id:
-                return step
+        # Build lookup if this is the first time seeing this workflow
+        if workflow_id not in self._step_lookup:
+            self._build_step_lookup(workflow)
         
-        return None
+        # Try to get from lookup
+        return self._step_lookup.get(workflow_id, {}).get(step_id)
     
     async def _find_alternative_approach(
         self,
         session: TroubleshootingSession,
         failed_step: DiagnosticStep
     ) -> Optional[DiagnosticStep]:
-        """
-        Searches for an alternative diagnostic step of the same type as a failed step that has not yet been attempted in the current session.
-        
-        Returns:
-            A suitable alternative DiagnosticStep if available; otherwise, None.
-        """
+        """Find alternative approach for failed step"""
         
         workflow = session.workflow
         completed_ids = {step.step_id for step in session.completed_steps}
@@ -549,12 +545,7 @@ class DiagnosticSequencer:
         session: TroubleshootingSession,
         failed_step: DiagnosticStep
     ) -> Optional[DiagnosticStep]:
-        """
-        Searches for a simpler diagnostic step to attempt after a failure, prioritizing steps 1–2 difficulty levels lower than the failed step and not previously attempted.
-        
-        Returns:
-            A suitable simpler DiagnosticStep if available; otherwise, None.
-        """
+        """Find simpler approach after step failure"""
         
         workflow = session.workflow
         completed_ids = {step.step_id for step in session.completed_steps}

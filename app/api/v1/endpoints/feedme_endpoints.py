@@ -6,6 +6,7 @@ Provides functionality for uploading transcripts, managing conversations, and se
 """
 
 import logging
+import os
 from typing import List, Optional, Dict, Any
 from datetime import datetime
 from fastapi import APIRouter, HTTPException, Depends, UploadFile, File, Form, Query, BackgroundTasks
@@ -38,8 +39,6 @@ from app.feedme.schemas import (
 from app.db.embedding_utils import get_db_connection, get_embedding_model
 import psycopg2
 import psycopg2.extras as psycopg2_extras
-from pgvector.psycopg2 import register_vector
-
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
@@ -238,6 +237,37 @@ async def upload_transcript(
                 status_code=413,
                 detail=f"File size exceeds maximum allowed size of {settings.feedme_max_file_size_mb}MB"
             )
+        
+        # Validate file type and content type
+        allowed_content_types = ["text/plain", "text/html", "application/html", "text/csv", "application/octet-stream"]
+        allowed_extensions = [".txt", ".log", ".html", ".htm", ".csv"]
+        
+        # Check content type if provided
+        if transcript_file.content_type and transcript_file.content_type not in allowed_content_types:
+            logger.warning(
+                f"Unexpected content type {transcript_file.content_type} for file {transcript_file.filename}"
+            )
+            raise HTTPException(status_code=400, detail="Invalid file content type")
+        
+        # Check file extension and HTML support
+        if transcript_file.filename:
+            file_extension = os.path.splitext(transcript_file.filename.lower())[1]
+            
+            # Check if HTML file and HTML support is enabled
+            is_html_file = transcript_file.filename.lower().endswith(('.html', '.htm')) or \
+                          (transcript_file.content_type and transcript_file.content_type in ["text/html", "application/html"])
+            
+            if is_html_file and not settings.feedme_html_enabled:
+                raise HTTPException(
+                    status_code=400, 
+                    detail="HTML file uploads are not enabled. Please contact your administrator to enable FEEDME_HTML_ENABLED."
+                )
+            
+            if file_extension and file_extension not in allowed_extensions:
+                logger.warning(
+                    f"Unexpected file extension {file_extension} for file {transcript_file.filename}"
+                )
+                raise HTTPException(status_code=400, detail="Invalid file extension")
         
         # Read file content
         try:

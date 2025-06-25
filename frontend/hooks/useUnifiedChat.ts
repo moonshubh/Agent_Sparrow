@@ -71,36 +71,48 @@ export function useUnifiedChat(): UseUnifiedChatReturn {
     }
   })
 
+  /**
+   * Determine the agent route for a user query.
+   *
+   * Detection priority is:
+   * 1. Uploaded files -> always log analyst
+   * 2. Explicit log analysis keywords
+   * 3. Research intent keywords
+   * 4. Default to primary agent
+   */
   const detectQueryType = (content: string, files?: File[]): "primary" | "log_analyst" | "researcher" => {
-    // If files are present, likely log analysis
+    // Only classify as log_analyst when files are actually uploaded
     if (files && files.length > 0) {
       return "log_analyst"
     }
     
-    // Check for research indicators
+    // Check for explicit research indicators (more specific keywords)
     const researchKeywords = [
-      "research", "find information", "latest", "compare", "what's new",
-      "how does", "explain", "investigate", "sources", "references"
+      "research", "find information about", "latest news", "compare products", 
+      "what's new in", "investigate", "gather sources", "multiple sources",
+      "comprehensive overview", "detailed research"
     ]
     
-    const logKeywords = [
-      "error", "log", "crash", "issue", "problem", "debug", "analyze",
-      "not working", "failed", "exception", "trace"
+    // Only check for explicit log analysis requests (no files = text-only questions)
+    const explicitLogKeywords = [
+      "analyze this log", "parse log file", "debug this log", "log analysis",
+      "examine log entries", "review log output", "check log errors"
     ]
     
     const contentLower = content.toLowerCase()
     
-    // Check for log analysis indicators
-    if (logKeywords.some(keyword => contentLower.includes(keyword))) {
+    // Check for explicit log analysis requests (only when very specific)
+    if (explicitLogKeywords.some(keyword => contentLower.includes(keyword))) {
       return "log_analyst"
     }
     
-    // Check for research indicators
+    // Check for research indicators (be more specific)
     if (researchKeywords.some(keyword => contentLower.includes(keyword))) {
       return "researcher"
     }
     
-    // Default to primary agent
+    // Default to primary agent for all regular support questions
+    // Let the backend router handle the actual classification
     return "primary"
   }
 

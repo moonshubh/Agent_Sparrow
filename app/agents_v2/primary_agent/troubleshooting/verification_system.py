@@ -74,17 +74,40 @@ class VerificationSystem:
         # Create verification checkpoint
         checkpoint = await self._create_verification_checkpoint(session, checkpoint_type)
         
-        # Execute verification process
-        verification_result = await self._execute_verification(session, checkpoint)
-        
-        # Update checkpoint with results
-        checkpoint.status = verification_result['status']
-        checkpoint.verification_time = datetime.now()
-        checkpoint.verification_notes = verification_result['notes']
-        checkpoint.evidence_collected = verification_result['evidence']
-        checkpoint.confidence_score = verification_result['confidence']
-        
-        logger.info(f"Verification checkpoint completed with status: {checkpoint.status.value}")
+        try:
+            # Execute verification process with error handling
+            verification_result = await self._execute_verification(session, checkpoint)
+            
+            # Update checkpoint with results
+            checkpoint.status = verification_result['status']
+            checkpoint.verification_time = datetime.now()
+            checkpoint.verification_notes = verification_result['notes']
+            checkpoint.evidence_collected = verification_result['evidence']
+            checkpoint.confidence_score = verification_result['confidence']
+            
+            logger.info(f"Verification checkpoint completed with status: {checkpoint.status.value}")
+            
+        except Exception as e:
+            # Log the error with full context
+            logger.error(
+                f"Error during verification checkpoint for session {session.session_id}: {str(e)}",
+                exc_info=True
+            )
+            
+            # Update checkpoint with error state
+            checkpoint.status = VerificationStatus.FAILED
+            checkpoint.verification_time = datetime.now()
+            checkpoint.verification_notes = (
+                f"Verification failed due to an error: {str(e)}. "
+                "Please check logs for more details."
+            )
+            checkpoint.evidence_collected = []
+            checkpoint.confidence_score = 0.0
+            
+            logger.warning(
+                f"Verification checkpoint failed for session {session.session_id}. "
+                f"Checkpoint marked as {checkpoint.status.value}."
+            )
         
         return checkpoint
     
