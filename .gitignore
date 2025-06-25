@@ -62,6 +62,7 @@ downloads/
 eggs/
 .eggs/
 lib/
+!frontend/lib/
 lib64/
 parts/
 sdist/
@@ -103,6 +104,7 @@ downloads/
 eggs/
 .eggs/
 lib/
+!frontend/lib/
 lib64/
 parts/
 sdist/
@@ -666,4 +668,5 @@ dev-debug.log
 *.sw?
 # OS specific
 !frontend/lib/api.ts
+!frontend/lib/types/logAnalysis.ts
 frontend/tsconfig.tsbuildinfo
