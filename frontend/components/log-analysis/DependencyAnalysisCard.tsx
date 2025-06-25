@@ -26,23 +26,9 @@ interface DependencyAnalysisCardProps {
   className?: string
 }
 
-interface DependencyNode {
-  id: string
-  label: string
-  type: 'root_cause' | 'symptom' | 'intermediate'
-  centrality_score?: number
-  impact_level?: string
-}
-
-interface DependencyEdge {
-  source: string
-  target: string
-  relationship_type: string
-  strength: number
-}
 
 export function DependencyAnalysisCard({ analysis, className }: DependencyAnalysisCardProps) {
-  const [selectedTab, setSelectedTab] = useState<'overview' | 'relationships' | 'cycles'>('overview')
+  const [selectedTab, setSelectedTab] = useState<string>('overview')
   const [showDetails, setShowDetails] = useState(false)
   
   if (!analysis || !analysis.graph_summary) {
@@ -158,7 +144,7 @@ export function DependencyAnalysisCard({ analysis, className }: DependencyAnalys
         </div>
 
         {/* Analysis Tabs */}
-        <Tabs value={selectedTab} onValueChange={setSelectedTab as (value: string) => void} className="w-full">
+        <Tabs value={selectedTab} onValueChange={setSelectedTab} className="w-full">
           <TabsList className="grid w-full grid-cols-3">
             <TabsTrigger value="overview" className="flex items-center gap-2">
               <Eye className="h-3 w-3" />

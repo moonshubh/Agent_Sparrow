@@ -24,24 +24,9 @@ interface CorrelationAnalysisCardProps {
   className?: string
 }
 
-interface CorrelationNode {
-  id: string
-  label: string
-  strength: number
-  type: 'temporal' | 'account' | 'issue_type'
-  metadata?: Record<string, any>
-}
-
-interface CorrelationEdge {
-  source: string
-  target: string
-  strength: number
-  correlation_type: string
-  confidence: number
-}
 
 export function CorrelationAnalysisCard({ analysis, className }: CorrelationAnalysisCardProps) {
-  const [selectedTab, setSelectedTab] = useState<'temporal' | 'account' | 'issue_type'>('temporal')
+  const [selectedTab, setSelectedTab] = useState<string>('temporal')
   const [showDetails, setShowDetails] = useState(false)
   
   if (!analysis || !analysis.analysis_summary) {
@@ -159,7 +144,7 @@ export function CorrelationAnalysisCard({ analysis, className }: CorrelationAnal
         </div>
 
         {/* Correlation Type Tabs */}
-        <Tabs value={selectedTab} onValueChange={setSelectedTab as (value: string) => void} className="w-full">
+        <Tabs value={selectedTab} onValueChange={setSelectedTab} className="w-full">
           <TabsList className="grid w-full grid-cols-3">
             <TabsTrigger value="temporal" className="flex items-center gap-2">
               <Clock className="h-3 w-3" />
