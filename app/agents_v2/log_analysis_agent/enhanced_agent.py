@@ -380,7 +380,6 @@ SYSTEM CONTEXT:
 - Mailbird Version: {system_profile.get('mailbird_version', 'Unknown')}
 - Database Size: {system_profile.get('database_size_mb', 'Unknown')} MB
 - Account Count: {system_profile.get('account_count', 'Unknown')}
-- Memory Usage: {system_profile.get('memory_usage_mb', 'Unknown')} MB
 
 ANALYSIS REQUIREMENTS:
 1. Provide a confidence score (0.0-1.0) for issue detection accuracy
@@ -627,12 +626,9 @@ Return a JSON object with:
             database_size_mb=safe_float(parsed_data["system_profile"].get("database_size_mb", 0)),
             account_count=safe_int(parsed_data["system_profile"].get("account_count", 0)),
             folder_count=safe_int(parsed_data["system_profile"].get("folder_count", 0)),
-            memory_usage_mb=safe_float(parsed_data["system_profile"].get("memory_usage_mb")),
-            startup_time_ms=safe_float(parsed_data["system_profile"].get("startup_time_ms")),
             email_providers=parsed_data["system_profile"].get("email_providers", []),
             sync_status=parsed_data["system_profile"].get("sync_status"),
             os_version=parsed_data["system_profile"].get("os_version", "Unknown"),
-            system_architecture=parsed_data["system_profile"].get("system_architecture", "Unknown"),
             log_timeframe=parsed_data["metadata"].get("log_timeframe", "Unknown"),
             analysis_timestamp=datetime.utcnow().isoformat(),
             total_entries_parsed=len(parsed_data["entries"]),

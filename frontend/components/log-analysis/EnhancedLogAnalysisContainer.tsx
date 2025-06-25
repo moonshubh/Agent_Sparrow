@@ -23,12 +23,12 @@ import {
 } from '@/lib/log-analysis-utils'
 
 // Enhanced Components
-import { EnhancedSystemOverviewCard } from './EnhancedSystemOverviewCard'
-import { EnvironmentalContextCard } from './EnvironmentalContextCard'
+import { SystemAndAnalysisOverviewCard } from './SystemAndAnalysisOverviewCard'
 import { PredictiveInsightsCard } from './PredictiveInsightsCard'
 import { MLPatternDiscoveryCard } from './MLPatternDiscoveryCard'
-import { AnalysisMetricsCard } from './AnalysisMetricsCard'
 import { EnhancedRecommendationsCard } from './EnhancedRecommendationsCard'
+import { CorrelationAnalysisCard } from './CorrelationAnalysisCard'
+import { DependencyAnalysisCard } from './DependencyAnalysisCard'
 
 // Legacy Components (for backwards compatibility)
 import { SystemOverviewCard } from './SystemOverviewCard'
@@ -87,7 +87,7 @@ export function EnhancedLogAnalysisContainer({ data, className }: EnhancedLogAna
     return (
       <div className={cn("w-full space-y-6", className)}>
         {/* Enhanced System Overview */}
-        <EnhancedSystemOverviewCard metadata={system_metadata} />
+        <SystemAndAnalysisOverviewCard metadata={system_metadata} metrics={analysis_metrics} />
         
         {/* Critical Issues Banner */}
         {hasCriticalIssues && (
@@ -145,10 +145,9 @@ export function EnhancedLogAnalysisContainer({ data, className }: EnhancedLogAna
           {/* Overview Tab */}
           <TabsContent value="overview" className="space-y-4">
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-              <EnvironmentalContextCard context={environmental_context} />
-              <AnalysisMetricsCard 
-                metrics={analysis_metrics} 
-                validation={validation_summary} 
+              <SystemAndAnalysisOverviewCard
+                metadata={system_metadata}
+                metrics={analysis_metrics}
               />
             </div>
           </TabsContent>
@@ -170,8 +169,9 @@ export function EnhancedLogAnalysisContainer({ data, className }: EnhancedLogAna
                 )}
 
                 {/* Issues List */}
+                const filteredIssues = identified_issues.filter(i => i.schemaVersion === 'enhanced_v3')
                 <div className="space-y-3">
-                  {identified_issues.map((issue, idx) => {
+                  {filteredIssues.map((issue, idx) => {
                     // Find related solutions
                     const relatedSolutions = proposed_solutions?.filter(solution => 
                       solution.issue_id === issue.id || 
@@ -207,30 +207,13 @@ export function EnhancedLogAnalysisContainer({ data, className }: EnhancedLogAna
                 <PredictiveInsightsCard insights={predictive_insights || []} />
                 <MLPatternDiscoveryCard discovery={ml_pattern_discovery} />
                 
-                {/* TODO: Add Correlation and Dependency Analysis components */}
+                {/* Advanced Analysis Components */}
                 {correlation_analysis && (
-                  <div className="p-4 rounded-lg bg-muted/30 border border-border/50">
-                    <h4 className="text-sm font-medium text-foreground mb-2">Correlation Analysis</h4>
-                    <p className="text-xs text-muted-foreground">
-                      {correlation_analysis.analysis_summary?.correlations_found || 0} correlations found
-                    </p>
-                  </div>
+                  <CorrelationAnalysisCard analysis={correlation_analysis} />
                 )}
                 
                 {dependency_analysis && (
-                  <div className="p-4 rounded-lg bg-muted/30 border border-border/50">
-                    <h4 className="text-sm font-medium text-foreground mb-2">Dependency Analysis</h4>
-                    <div className="grid grid-cols-2 gap-3 text-xs">
-                      <div>
-                        <span className="text-muted-foreground">Root Causes: </span>
-                        <span className="font-medium">{dependency_analysis.root_causes?.length || 0}</span>
-                      </div>
-                      <div>
-                        <span className="text-muted-foreground">Symptoms: </span>
-                        <span className="font-medium">{dependency_analysis.primary_symptoms?.length || 0}</span>
-                      </div>
-                    </div>
-                  </div>
+                  <DependencyAnalysisCard analysis={dependency_analysis} />
                 )}
               </div>
             ) : (
