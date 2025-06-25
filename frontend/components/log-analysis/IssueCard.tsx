@@ -15,17 +15,14 @@ import {
   Clock
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
-import { 
+import {
   type LogIssue,
-  type LogSolution,
-  type EnhancedSolution, 
   severityClasses
 } from '@/lib/log-analysis-utils'
 import { SeverityBadge } from './SeverityBadge'
 
 interface IssueCardProps {
   issue: LogIssue
-  solutions?: Array<LogSolution | EnhancedSolution>  // Add solutions property for compatibility
   isExpanded?: boolean
   onToggle?: () => void
 }
