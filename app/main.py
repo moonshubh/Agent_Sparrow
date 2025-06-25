@@ -9,7 +9,8 @@ from app.agents_v2.orchestration.graph import app as agent_graph
 from app.agents_v2.orchestration.state import GraphState # Corrected import location
 from app.api.v1.endpoints import auth as auth_endpoints # Added for JWT auth
 from app.api.v1.endpoints import search_tools_endpoints # Added for search tools endpoints
-from app.api.v1.endpoints import agent_endpoints # Added for agent interaction endpoints
+from app.api.v1.endpoints import agent_endpoints  # Agent interaction endpoints
+from app.api.v1.endpoints import feedme_endpoints  # FeedMe transcript ingestion
 
 # OpenTelemetry Setup
 from opentelemetry import trace
@@ -66,7 +67,10 @@ app.add_middleware(
 # Include the authentication router
 app.include_router(auth_endpoints.router, prefix="/api/v1/auth", tags=["Authentication"])
 app.include_router(search_tools_endpoints.router, prefix="/api/v1/tools", tags=["Search Tools"])
-app.include_router(agent_endpoints.router, prefix="/api/v1", tags=["Agent Interaction"]) # Added agent_endpoints router
+app.include_router(agent_endpoints.router, prefix="/api/v1", tags=["Agent Interaction"])
+# Register FeedMe routes
+app.include_router(feedme_endpoints.router, prefix="/api/v1/feedme", tags=["FeedMe"])
+
 
 class AgentQueryRequest(BaseModel):
     query: str

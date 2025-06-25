@@ -15,7 +15,10 @@ from app.agents_v2.primary_agent.schemas import PrimaryAgentState
 from typing import Iterator, List, AsyncIterator # Added for streaming return type and List
 from app.agents_v2.primary_agent.tools import mailbird_kb_search, tavily_web_search
 from qdrant_client import QdrantClient
-from langchain_community.vectorstores.qdrant import Qdrant
+try:
+    from langchain_qdrant import Qdrant  # Preferred modern package
+except ImportError:
+    from langchain_community.vectorstores.qdrant import Qdrant  # Fallback
 from langchain_google_genai import embeddings as gen_embeddings
 from opentelemetry import trace
 import anyio
