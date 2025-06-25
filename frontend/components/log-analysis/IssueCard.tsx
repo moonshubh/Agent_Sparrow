@@ -15,8 +15,8 @@ import {
   Clock
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
-import { 
-  type LogIssue, 
+import {
+  type LogIssue,
   severityClasses
 } from '@/lib/log-analysis-utils'
 import { SeverityBadge } from './SeverityBadge'
