@@ -31,8 +31,8 @@ import {
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { toast } from 'sonner'
-import { LogAnalysisContainer } from '@/components/log-analysis/LogAnalysisContainer'
-import { type LogAnalysisData } from '@/lib/log-analysis-utils'
+import { EnhancedLogAnalysisContainer } from '@/components/log-analysis/EnhancedLogAnalysisContainer'
+import { type LogAnalysisData, type EnhancedLogAnalysisData } from '@/lib/log-analysis-utils'
 import { ExecutiveSummaryRenderer } from '@/components/markdown/ExecutiveSummaryRenderer'
 
 interface Source {
@@ -561,10 +561,10 @@ export default function MessageBubble({
             )
           )}
           
-          {/* New Log Analysis Container */}
+          {/* Enhanced Log Analysis Container */}
           {agentType === 'log_analyst' && metadata?.analysisResults && !streaming && (
-            <LogAnalysisContainer 
-              data={metadata.analysisResults as LogAnalysisData}
+            <EnhancedLogAnalysisContainer 
+              data={metadata.analysisResults as (EnhancedLogAnalysisData | LogAnalysisData)}
               className="mt-4"
             />
           )}

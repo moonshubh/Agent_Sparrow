@@ -129,7 +129,23 @@ async def analyze_logs(request: LogAnalysisRequest):
             raise HTTPException(status_code=500, detail="Log analysis agent did not return a final report.")
 
         # Return the structured report directly along with the trace_id
-        response_dict = final_report.model_dump()
+        # Handle both Pydantic models and dictionaries
+        if hasattr(final_report, 'model_dump'):
+            response_dict = final_report.model_dump()
+        elif hasattr(final_report, 'dict'):
+            response_dict = final_report.dict()
+        elif isinstance(final_report, dict):
+            response_dict = final_report
+        else:
+            # Fallback for other object types
+            response_dict = {
+                "overall_summary": str(final_report),
+                "health_status": "Unknown",
+                "system_metadata": {},
+                "identified_issues": [],
+                "proposed_solutions": []
+            }
+        
         response_dict["trace_id"] = returned_trace_id or request.trace_id
         return LogAnalysisV2Response(**response_dict)
     except Exception as e:
@@ -280,13 +296,32 @@ async def unified_agent_stream_generator(request: UnifiedAgentRequest) -> AsyncI
             final_report = result.get('final_report')
             
             if final_report:
-                content = f"Log analysis complete! {final_report.overall_summary}"
+                # Handle both Pydantic models and dictionaries for overall_summary
+                if hasattr(final_report, 'overall_summary'):
+                    summary = final_report.overall_summary
+                elif isinstance(final_report, dict):
+                    summary = final_report.get('overall_summary', 'Analysis complete')
+                else:
+                    summary = str(final_report)
+                
+                content = f"Log analysis complete! {summary}"
+                
+                # Handle serialization for analysis_results
+                if hasattr(final_report, 'model_dump'):
+                    analysis_results = final_report.model_dump()
+                elif hasattr(final_report, 'dict'):
+                    analysis_results = final_report.dict()
+                elif isinstance(final_report, dict):
+                    analysis_results = final_report
+                else:
+                    analysis_results = {"summary": str(final_report)}
+                
                 json_payload = json.dumps({
                     "role": "assistant", 
                     "content": content,
                     "agent_type": agent_type,
                     "trace_id": request.trace_id,
-                    "analysis_results": final_report.model_dump()
+                    "analysis_results": analysis_results
                 }, ensure_ascii=False)
                 yield f"data: {json_payload}\n\n"
             
