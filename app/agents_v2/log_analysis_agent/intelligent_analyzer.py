@@ -19,6 +19,7 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 
 from app.core.settings import settings
 from app.core.logging_config import get_logger
+from .prompts import INTELLIGENT_ANALYZER_SYSTEM_INSTRUCTIONS
 
 logger = logging.getLogger(__name__)
 
@@ -56,46 +57,7 @@ class IntelligentLogAnalyzer:
         }
         
         # Enhanced system instructions with predictive and correlation analysis
-        self.system_instructions = """
-You are a SENIOR MAILBIRD TECHNICAL SPECIALIST with 15+ years of experience in enterprise email systems. You have expertise in:
-
-**EXPANDED TECHNICAL DOMAINS:**
-- Cross-platform email clients: Windows, macOS, Linux compatibility
-- Advanced protocols: JMAP, CardDAV, CalDAV, alongside IMAP/SMTP/POP3
-- Cloud email services: Office 365, Google Workspace, iCloud, ProtonMail
-- Security: S/MIME, PGP, OAuth2, SAML, certificate management
-- Performance: Memory optimization, database indexing, connection pooling
-- Accessibility: Screen reader compatibility, keyboard navigation
-- Localization: Multi-language support, RTL text handling
-
-**ENHANCED ANALYSIS METHODOLOGY:**
-1. **PREDICTIVE ANALYSIS**: Identify patterns that predict future failures
-2. **CORRELATION ANALYSIS**: Find relationships between seemingly unrelated issues
-3. **DEPENDENCY MAPPING**: Build issue relationship graphs showing root causes vs symptoms
-4. **ENVIRONMENTAL CONTEXT**: Consider OS updates, antivirus, network topology
-5. **USER BEHAVIOR ANALYSIS**: Identify usage patterns affecting performance
-6. **TEMPORAL PATTERN RECOGNITION**: Detect time-based correlations and seasonal patterns
-7. **COMPARATIVE ANALYSIS**: Compare against baseline healthy system metrics
-
-**ADVANCED PATTERN RECOGNITION:**
-- Identify cascading failures and their trigger points
-- Detect performance degradation trends before critical failure
-- Recognize security vulnerability indicators
-- Identify compatibility issues with specific email providers
-- Detect resource exhaustion patterns
-
-**PREDICTIVE CAPABILITIES:**
-- Forecast potential issues based on current system state
-- Identify early warning indicators
-- Provide preventive maintenance recommendations
-- Calculate probability scores for future problems
-
-**SOLUTION VALIDATION:**
-- Each solution must include success criteria and verification steps
-- Provide rollback procedures for risky changes
-- Include automated test scripts where applicable
-- Specify compatibility requirements and limitations
-"""
+        self.system_instructions = INTELLIGENT_ANALYZER_SYSTEM_INSTRUCTIONS
 
     async def perform_intelligent_analysis(self, raw_log_content: str, basic_parsed_data: Dict[str, Any], 
                                           historical_data: Optional[List[Dict]] = None) -> Dict[str, Any]:
@@ -661,7 +623,8 @@ Please contact technical support for manual analysis.
                 'temporal_correlations': [],
                 'account_correlations': [],
                 'issue_type_correlations': [],
-                'correlation_matrix': {}
+                'correlation_matrix': {},
+                'analysis_summary': {}
             }
 
     async def _build_issue_dependency_graph(self, issues_analysis: Dict, correlation_analysis: Dict) -> Dict[str, Any]:
@@ -1091,12 +1054,12 @@ ANALYZE THE INTERCONNECTED NATURE OF ISSUES using correlation and dependency con
             # Calculate temporal patterns
             time_intervals = []
             for i in range(1, len(patterns)):
-                if isinstance(patterns[i]['timestamp'], str):
-                    curr_time = datetime.fromisoformat(patterns[i]['timestamp'])
-                    prev_time = datetime.fromisoformat(patterns[i-1]['timestamp'])
-                else:
-                    curr_time = patterns[i]['timestamp']
-                    prev_time = patterns[i-1]['timestamp']
+                curr_time = patterns[i]['timestamp']
+                prev_time = patterns[i-1]['timestamp']
+                if isinstance(curr_time, str):
+                    curr_time = self._parse_timestamp(curr_time)
+                if isinstance(prev_time, str):
+                    prev_time = self._parse_timestamp(prev_time)
                 
                 interval = (curr_time - prev_time).total_seconds()
                 time_intervals.append(interval)
@@ -1106,7 +1069,7 @@ ANALYZE THE INTERCONNECTED NATURE OF ISSUES using correlation and dependency con
                 avg_interval = sum(time_intervals) / len(time_intervals)
                 last_occurrence = patterns[-1]['timestamp']
                 if isinstance(last_occurrence, str):
-                    last_occurrence = datetime.fromisoformat(last_occurrence)
+                    last_occurrence = self._parse_timestamp(last_occurrence)
                 
                 predicted_time = last_occurrence + timedelta(seconds=avg_interval)
                 time_until_prediction = (predicted_time - current_time).total_seconds()
@@ -1240,23 +1203,52 @@ ANALYZE THE INTERCONNECTED NATURE OF ISSUES using correlation and dependency con
         """Calculate overall confidence in predictions."""
         if not predictions:
             return 0.0
-        
+
         confidences = [p.get('confidence', 0) for p in predictions]
         return sum(confidences) / len(confidences)
 
-    async def _generate_enhanced_solutions(self, issues_analysis: Dict, root_cause_analysis: Dict, 
+    def _extract_relevant_correlations(self, solution: Dict, correlation_analysis: Dict) -> List[str]:
+        """Extract correlation insights relevant to a solution."""
+        insights = []
+        target_causes = set(solution.get('target_root_causes', []))
+        for corr in correlation_analysis.get('temporal_correlations', []):
+            related = set(corr.get('related_issues', []))
+            if target_causes.intersection(related):
+                insights.append(corr.get('description', ''))
+        return insights
+
+    def _extract_predictive_actions(self, solution: Dict, predictive_analysis: Dict) -> List[str]:
+        """Extract predictive recommendations relevant to a solution."""
+        actions = []
+        targets = set(solution.get('target_root_causes', []))
+        for prediction in predictive_analysis.get('predictions', []):
+            if prediction.get('issue_type') in targets:
+                actions.append(
+                    f"Monitor for {prediction['issue_type']} around {prediction.get('predicted_time')}"
+                )
+        return actions
+
+    async def _generate_enhanced_solutions(self, issues_analysis: Dict, root_cause_analysis: Dict,
                                          correlation_analysis: Dict, predictive_analysis: Dict) -> List[Dict[str, Any]]:
         """Generate enhanced solutions considering correlations and predictions."""
-        # This would be the enhanced version of _generate_intelligent_solutions
-        return await self._generate_intelligent_solutions(issues_analysis, root_cause_analysis)
+        base_solutions = await self._generate_intelligent_solutions(issues_analysis, root_cause_analysis)
+        enhanced_solutions = []
+        for solution in base_solutions:
+            if correlation_analysis:
+                solution['correlation_insights'] = self._extract_relevant_correlations(solution, correlation_analysis)
+            if predictive_analysis:
+                solution['predictive_actions'] = self._extract_predictive_actions(solution, predictive_analysis)
+            enhanced_solutions.append(solution)
+        return enhanced_solutions
 
-    async def _create_enhanced_executive_summary(self, raw_log_content: str, issues_analysis: Dict, 
+    async def _create_enhanced_executive_summary(self, raw_log_content: str, issues_analysis: Dict,
                                                root_cause_analysis: Dict, solutions: List[Dict],
-                                               correlation_analysis: Dict, dependency_analysis: Dict, 
+                                               correlation_analysis: Dict, dependency_analysis: Dict,
                                                predictive_analysis: Dict) -> str:
         """Create enhanced executive summary with all analysis components."""
-        # This would be the enhanced version of _create_executive_summary
-        return await self._create_executive_summary(raw_log_content, issues_analysis, root_cause_analysis, solutions)
+        summary = await self._create_executive_summary(raw_log_content, issues_analysis, root_cause_analysis, solutions)
+        # TODO: incorporate correlation_analysis, dependency_analysis, and predictive_analysis into summary
+        return summary
 
 # Main entry point
 async def perform_intelligent_log_analysis(raw_log_content: str, basic_parsed_data: Dict[str, Any], 
