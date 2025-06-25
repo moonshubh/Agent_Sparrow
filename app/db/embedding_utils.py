@@ -176,7 +176,7 @@ class SearchResult(BaseModel):
     source_type: str = "knowledge_base"  # Source identifier
 
     class Config:
-        orm_mode = True # or from_attributes = True for Pydantic v2
+        from_attributes = True  # Updated for Pydantic v2
 
 
 class FeedMeSearchResult(BaseModel):
@@ -197,7 +197,7 @@ class FeedMeSearchResult(BaseModel):
     source_type: str = "feedme"  # Source identifier
 
     class Config:
-        orm_mode = True
+        from_attributes = True  # Updated for Pydantic v2
 
 
 class CombinedSearchResult(BaseModel):
@@ -212,7 +212,7 @@ class CombinedSearchResult(BaseModel):
     additional_data: Optional[Dict[str, Any]] = None  # Source-specific extra data
 
     class Config:
-        orm_mode = True
+        from_attributes = True  # Updated for Pydantic v2
 
 def find_similar_documents(query: str, top_k: int = 5) -> List[SearchResult]:
     """Finds documents similar to the query using pgvector cosine similarity."""

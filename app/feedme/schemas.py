@@ -150,7 +150,7 @@ class FeedMeConversation(FeedMeConversationBase):
     updated_at: datetime = Field(..., description="Last update timestamp")
 
     class Config:
-        orm_mode = True
+        from_attributes = True  # Updated for Pydantic v2
 
 
 class FeedMeExample(FeedMeExampleBase):
@@ -161,7 +161,7 @@ class FeedMeExample(FeedMeExampleBase):
     updated_at: datetime = Field(..., description="Last update timestamp")
 
     class Config:
-        orm_mode = True
+        from_attributes = True  # Updated for Pydantic v2
 
 
 # Search and Retrieval Models
@@ -184,7 +184,7 @@ class FeedMeSearchResult(BaseModel):
     source_type: str = Field(default="feedme", description="Source type identifier")
 
     class Config:
-        orm_mode = True
+        from_attributes = True  # Updated for Pydantic v2
 
 
 # API Response Models

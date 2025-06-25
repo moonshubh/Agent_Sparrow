@@ -1,7 +1,13 @@
-from langchain_core.pydantic_v1 import BaseModel, Field
+from pydantic import BaseModel, Field
 from langchain_core.tools import tool
 import os
-from langchain_community.tools.tavily_search import TavilySearchResults
+try:
+    from langchain_tavily import TavilySearch as _TavilySearch
+except ImportError:
+    from langchain_community.tools.tavily_search import TavilySearchResults as _TavilySearch  # Fallback (deprecated)
+
+# Alias consistent name regardless of import source
+TavilySearch = _TavilySearch
 
 class KBSearchInput(BaseModel):
     """Input for the Knowledge Base search tool."""
@@ -17,4 +23,4 @@ def mailbird_kb_search(query: str) -> str:
     print(f"Searching KB for: {query}")
     return "Placeholder: Found relevant articles about your query."
 
-tavily_web_search = TavilySearchResults(max_results=5)
+tavily_web_search = TavilySearch(max_results=5)
