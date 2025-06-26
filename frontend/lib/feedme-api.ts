@@ -5,8 +5,57 @@
  * Handles transcript upload, processing status, and conversation management.
  */
 
+// Retry and timeout utilities
+const fetchWithRetry = async (
+  url: string, 
+  options: RequestInit = {}, 
+  retries: number = 3,
+  timeout: number = 10000
+): Promise<Response> => {
+  const controller = new AbortController()
+  const timeoutId = setTimeout(() => controller.abort(), timeout)
+  
+  try {
+    const response = await fetch(url, {
+      ...options,
+      signal: controller.signal,
+    })
+    clearTimeout(timeoutId)
+    return response
+  } catch (error) {
+    clearTimeout(timeoutId)
+    
+    if (retries > 0 && (error instanceof Error && error.name !== 'AbortError')) {
+      // Wait before retry (exponential backoff)
+      const delay = Math.pow(2, 3 - retries) * 1000
+      await new Promise(resolve => setTimeout(resolve, delay))
+      return fetchWithRetry(url, options, retries - 1, timeout)
+    }
+    
+    throw error
+  }
+}
+
 // API Base Configuration
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
+const getApiBaseUrl = (): string => {
+  // Check for Next.js environment variable first
+  if (process.env.NEXT_PUBLIC_API_BASE) {
+    console.log('[FeedMe API] Using NEXT_PUBLIC_API_BASE:', process.env.NEXT_PUBLIC_API_BASE)
+    return process.env.NEXT_PUBLIC_API_BASE
+  }
+  
+  // Fallback for client-side when env var is missing
+  if (typeof window !== 'undefined') {
+    console.log('[FeedMe API] Using window.location.origin fallback:', window.location.origin)
+    return window.location.origin
+  }
+  
+  // Default for server-side
+  console.log('[FeedMe API] Using default server-side URL: http://localhost:8000')
+  return 'http://localhost:8000'
+}
+
+const API_BASE_URL = getApiBaseUrl()
 const FEEDME_API_BASE = `${API_BASE_URL}/api/v1/feedme`
 
 // Types
@@ -49,6 +98,7 @@ export class FeedMeApiClient {
 
   constructor(baseUrl: string = FEEDME_API_BASE) {
     this.baseUrl = baseUrl
+    console.log('[FeedMe API Client] Initialized with baseUrl:', this.baseUrl)
   }
 
   /**
@@ -69,13 +119,17 @@ export class FeedMeApiClient {
       formData.append('uploaded_by', uploadedBy)
     }
 
-    const response = await fetch(`${this.baseUrl}/conversations/upload`, {
+    console.log('[FeedMe API] Uploading to:', `${this.baseUrl}/conversations/upload`)
+    
+    const response = await fetchWithRetry(`${this.baseUrl}/conversations/upload`, {
       method: 'POST',
       body: formData,
     })
 
     if (!response.ok) {
+      console.error('[FeedMe API] Upload failed:', response.status, response.statusText)
       const errorData = await response.json().catch(() => ({}))
+      console.error('[FeedMe API] Error details:', errorData)
       throw new Error(errorData.detail || `Upload failed: ${response.status} ${response.statusText}`)
     }
 
@@ -100,13 +154,17 @@ export class FeedMeApiClient {
       formData.append('uploaded_by', uploadedBy)
     }
 
-    const response = await fetch(`${this.baseUrl}/conversations/upload`, {
+    console.log('[FeedMe API] Uploading to:', `${this.baseUrl}/conversations/upload`)
+    
+    const response = await fetchWithRetry(`${this.baseUrl}/conversations/upload`, {
       method: 'POST',
       body: formData,
     })
 
     if (!response.ok) {
+      console.error('[FeedMe API] Upload failed:', response.status, response.statusText)
       const errorData = await response.json().catch(() => ({}))
+      console.error('[FeedMe API] Error details:', errorData)
       throw new Error(errorData.detail || `Upload failed: ${response.status} ${response.statusText}`)
     }
 
@@ -117,7 +175,7 @@ export class FeedMeApiClient {
    * Get processing status for a conversation
    */
   async getProcessingStatus(conversationId: number): Promise<ProcessingStatusResponse> {
-    const response = await fetch(`${this.baseUrl}/conversations/${conversationId}/status`)
+    const response = await fetchWithRetry(`${this.baseUrl}/conversations/${conversationId}/status`)
 
     if (!response.ok) {
       const errorData = await response.json().catch(() => ({}))
@@ -149,7 +207,7 @@ export class FeedMeApiClient {
       params.append('uploaded_by', uploadedBy)
     }
 
-    const response = await fetch(`${this.baseUrl}/conversations?${params}`)
+    const response = await fetchWithRetry(`${this.baseUrl}/conversations?${params}`)
 
     if (!response.ok) {
       const errorData = await response.json().catch(() => ({}))
@@ -163,7 +221,7 @@ export class FeedMeApiClient {
    * Get a specific conversation
    */
   async getConversation(conversationId: number): Promise<UploadTranscriptResponse> {
-    const response = await fetch(`${this.baseUrl}/conversations/${conversationId}`)
+    const response = await fetchWithRetry(`${this.baseUrl}/conversations/${conversationId}`)
 
     if (!response.ok) {
       const errorData = await response.json().catch(() => ({}))
@@ -177,7 +235,7 @@ export class FeedMeApiClient {
    * Delete a conversation
    */
   async deleteConversation(conversationId: number): Promise<void> {
-    const response = await fetch(`${this.baseUrl}/conversations/${conversationId}`, {
+    const response = await fetchWithRetry(`${this.baseUrl}/conversations/${conversationId}`, {
       method: 'DELETE',
     })
 
@@ -191,7 +249,7 @@ export class FeedMeApiClient {
    * Reprocess a conversation
    */
   async reprocessConversation(conversationId: number): Promise<void> {
-    const response = await fetch(`${this.baseUrl}/conversations/${conversationId}/reprocess`, {
+    const response = await fetchWithRetry(`${this.baseUrl}/conversations/${conversationId}/reprocess`, {
       method: 'POST',
     })
 
@@ -206,9 +264,12 @@ export class FeedMeApiClient {
    */
   async healthCheck(): Promise<boolean> {
     try {
-      const response = await fetch(`${this.baseUrl}/analytics`)
+      console.log('[FeedMe API] Health check:', `${this.baseUrl}/analytics`)
+      const response = await fetchWithRetry(`${this.baseUrl}/analytics`)
+      console.log('[FeedMe API] Health check result:', response.ok, response.status)
       return response.ok
-    } catch {
+    } catch (error) {
+      console.error('[FeedMe API] Health check failed:', error)
       return false
     }
   }
@@ -263,4 +324,169 @@ export const simulateUploadProgress = (
       }
     }, stepDuration)
   })
+}
+
+// Phase 3: Versioning and Edit API Types
+
+export interface ConversationVersion {
+  id: number
+  conversation_id: number
+  version: number
+  title: string
+  raw_transcript: string
+  metadata: Record<string, any>
+  is_active: boolean
+  updated_by?: string
+  created_at: string
+  updated_at: string
+}
+
+export interface VersionListResponse {
+  versions: ConversationVersion[]
+  total_count: number
+  active_version: number
+}
+
+export interface ModifiedLine {
+  line_number: number
+  original: string
+  modified: string
+}
+
+export interface VersionDiff {
+  from_version: number
+  to_version: number
+  added_lines: string[]
+  removed_lines: string[]
+  modified_lines: ModifiedLine[]
+  unchanged_lines: string[]
+  stats: Record<string, number>
+}
+
+export interface ConversationEditRequest {
+  title?: string
+  raw_transcript?: string
+  metadata?: Record<string, any>
+  updated_by: string
+  reprocess?: boolean
+}
+
+export interface ConversationRevertRequest {
+  target_version: number
+  reverted_by: string
+  reason?: string
+  reprocess?: boolean
+}
+
+export interface EditResponse {
+  conversation: UploadTranscriptResponse
+  new_version: number
+  task_id?: string
+  reprocessing: boolean
+}
+
+export interface RevertResponse {
+  conversation: UploadTranscriptResponse
+  new_version: number
+  reverted_to_version: number
+  task_id?: string
+  reprocessing: boolean
+}
+
+// Phase 3: Versioning API Functions
+
+/**
+ * Edit a conversation and create a new version
+ */
+export async function editConversation(
+  conversationId: number, 
+  editRequest: ConversationEditRequest
+): Promise<EditResponse> {
+  const response = await fetchWithRetry(`${FEEDME_API_BASE}/conversations/${conversationId}/edit`, {
+    method: 'PUT',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(editRequest),
+  })
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}))
+    throw new Error(errorData.detail || `Failed to edit conversation: ${response.status} ${response.statusText}`)
+  }
+
+  return response.json()
+}
+
+/**
+ * Get all versions of a conversation
+ */
+export async function getConversationVersions(conversationId: number): Promise<VersionListResponse> {
+  const response = await fetchWithRetry(`${FEEDME_API_BASE}/conversations/${conversationId}/versions`)
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}))
+    throw new Error(errorData.detail || `Failed to get conversation versions: ${response.status} ${response.statusText}`)
+  }
+
+  return response.json()
+}
+
+/**
+ * Get a specific version of a conversation
+ */
+export async function getConversationVersion(
+  conversationId: number, 
+  versionNumber: number
+): Promise<ConversationVersion> {
+  const response = await fetchWithRetry(`${FEEDME_API_BASE}/conversations/${conversationId}/versions/${versionNumber}`)
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}))
+    throw new Error(errorData.detail || `Failed to get conversation version: ${response.status} ${response.statusText}`)
+  }
+
+  return response.json()
+}
+
+/**
+ * Generate diff between two versions
+ */
+export async function getVersionDiff(
+  conversationId: number, 
+  version1: number, 
+  version2: number
+): Promise<VersionDiff> {
+  const response = await fetchWithRetry(`${FEEDME_API_BASE}/conversations/${conversationId}/versions/${version1}/diff/${version2}`)
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}))
+    throw new Error(errorData.detail || `Failed to generate version diff: ${response.status} ${response.statusText}`)
+  }
+
+  return response.json()
+}
+
+/**
+ * Revert conversation to a previous version
+ */
+export async function revertConversation(
+  conversationId: number,
+  targetVersion: number,
+  revertRequest: ConversationRevertRequest
+): Promise<RevertResponse> {
+  const response = await fetchWithRetry(`${FEEDME_API_BASE}/conversations/${conversationId}/revert/${targetVersion}`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(revertRequest),
+  })
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}))
+    throw new Error(errorData.detail || `Failed to revert conversation: ${response.status} ${response.statusText}`)
+  }
+
+  return response.json()
 }
