@@ -25,6 +25,7 @@ from typing import List, Optional, Dict, Any # Removed Tuple
 from pydantic import BaseModel # Added Pydantic BaseModel
 
 from app.core.settings import settings
+from app.db.connection_manager import get_connection_manager, with_db_connection
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -38,45 +39,17 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 load_dotenv(PROJECT_ROOT / '.env')
 
 # --- Configuration ---
-DATABASE_URL = os.getenv("DATABASE_URL") # Added for Supabase compatibility
-
-# --- Configuration ---
-DB_HOST = os.getenv("DB_HOST", "localhost")
-DB_PORT = os.getenv("DB_PORT", "5432")
-DB_USER = os.getenv("DB_USER")
-DB_PASSWORD = os.getenv("DB_PASSWORD")
-DB_NAME = os.getenv("DB_NAME")
 GEMINI_API_KEY = settings.gemini_api_key
-
 EMBEDDING_MODEL_NAME = "models/embedding-001" # Google's embedding-001 has 768 dimensions
 
-# --- Database Connection ---
+# --- Database Connection (Updated for FeedMe v2.0) ---
 def get_db_connection():
-    """Establishes a connection to the PostgreSQL database.
-    Prioritizes DATABASE_URL if set, otherwise uses individual DB_HOST, etc.
     """
-    try:
-        if DATABASE_URL:
-            conn = psycopg2.connect(DATABASE_URL)
-            logger.info(f"Successfully connected to database using DATABASE_URL.")
-        else:
-            logger.info(f"DATABASE_URL not found, attempting connection using DB_HOST: {DB_HOST}, DB_PORT: {DB_PORT}, DB_NAME: {DB_NAME}, DB_USER: {DB_USER}")
-            conn = psycopg2.connect(
-                host=DB_HOST,
-                port=DB_PORT,
-                user=DB_USER,
-                password=DB_PASSWORD,
-                dbname=DB_NAME
-            )
-            logger.info("Successfully connected to database using individual DB parameters.")
-        
-        # Register pgvector types
-        register_vector(conn)
-        logger.info("Registered pgvector type with the connection using pgvector.psycopg2.")
-        return conn
-    except psycopg2.Error as e:
-        logger.error(f"Error connecting to PostgreSQL database: {e}")
-        raise
+    Legacy function for backward compatibility.
+    Uses the new unified connection manager.
+    """
+    manager = get_connection_manager()
+    return manager.get_connection(cursor_factory=psycopg2_extras.NamedTupleCursor)
 
 # --- Embedding Generation ---
 def get_embedding_model():

@@ -31,6 +31,20 @@ class Settings(BaseSettings):
     feedme_similarity_threshold: float = Field(default=0.7, alias="FEEDME_SIMILARITY_THRESHOLD")
     feedme_max_retrieval_results: int = Field(default=3, alias="FEEDME_MAX_RETRIEVAL_RESULTS")
     
+    # FeedMe v2.0 Configuration
+    feedme_min_db_connections: int = Field(default=2, alias="FEEDME_MIN_DB_CONNECTIONS")
+    feedme_max_db_connections: int = Field(default=20, alias="FEEDME_MAX_DB_CONNECTIONS")
+    feedme_db_timeout: int = Field(default=30, alias="FEEDME_DB_TIMEOUT")
+    feedme_db_retry_attempts: int = Field(default=3, alias="FEEDME_DB_RETRY_ATTEMPTS")
+    feedme_db_retry_delay: float = Field(default=1.0, alias="FEEDME_DB_RETRY_DELAY")
+    feedme_async_processing: bool = Field(default=True, alias="FEEDME_ASYNC_PROCESSING")
+    feedme_celery_broker: str = Field(default="redis://localhost:6379/1", alias="FEEDME_CELERY_BROKER")
+    feedme_result_backend: str = Field(default="redis://localhost:6379/2", alias="FEEDME_RESULT_BACKEND")
+    feedme_security_enabled: bool = Field(default=True, alias="FEEDME_SECURITY_ENABLED")
+    feedme_rate_limit_per_minute: int = Field(default=10, alias="FEEDME_RATE_LIMIT_PER_MINUTE")
+    feedme_version_control: bool = Field(default=True, alias="FEEDME_VERSION_CONTROL")
+    feedme_quality_threshold: float = Field(default=0.7, alias="FEEDME_QUALITY_THRESHOLD")
+    
     # Reasoning Engine Configuration
     reasoning_enable_chain_of_thought: bool = Field(default=True, alias="REASONING_ENABLE_CHAIN_OF_THOUGHT")
     reasoning_enable_problem_solving: bool = Field(default=True, alias="REASONING_ENABLE_PROBLEM_SOLVING")

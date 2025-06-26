@@ -520,7 +520,7 @@ export default function MessageBubble({
       aria-label={`${isUser ? 'Your message' : `${agentLabel} response`} sent at ${timestamp.toLocaleTimeString()}`}
     >
       <div className={cn(
-        "flex items-start gap-3 max-w-4xl w-full",
+        "flex items-start gap-3 max-w-4xl w-full mx-auto",
         isUser ? "flex-row-reverse justify-start" : "flex-row"
       )}>
         {/* Avatar */}
@@ -565,7 +565,7 @@ export default function MessageBubble({
           {agentType === 'log_analyst' && metadata?.analysisResults && !streaming && (
             <EnhancedLogAnalysisContainer 
               data={metadata.analysisResults as (EnhancedLogAnalysisData | LogAnalysisData)}
-              className="mt-4"
+              className="mt-4 w-full"
             />
           )}
           

@@ -3,8 +3,8 @@
 import React, { useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
-import { Upload } from 'lucide-react'
-import { FeedMeModal } from '@/components/feedme/FeedMeModal'
+import { FileText } from 'lucide-react'
+import { FeedMeConversationManager } from '@/components/feedme/FeedMeConversationManager'
 import { ErrorBoundary } from '@/components/ui/ErrorBoundary'
 
 interface FeedMeButtonProps {
@@ -32,9 +32,9 @@ export function FeedMeButton({ onClick }: FeedMeButtonProps) {
               onMouseEnter={() => setIsHovered(true)}
               onMouseLeave={() => setIsHovered(false)}
               onClick={handleClick}
-              aria-label="FeedMe - Upload customer support transcripts"
+              aria-label="FeedMe - Manage customer support transcripts"
             >
-              <Upload 
+              <FileText 
                 className={`h-4 w-4 transition-colors ${
                   isHovered ? 'text-accent' : 'text-muted-foreground'
                 }`}
@@ -42,13 +42,13 @@ export function FeedMeButton({ onClick }: FeedMeButtonProps) {
             </Button>
           </TooltipTrigger>
           <TooltipContent>
-            <p>FeedMe - Upload transcripts</p>
+            <p>FeedMe - Manage conversations</p>
           </TooltipContent>
         </Tooltip>
       </TooltipProvider>
       
       <ErrorBoundary>
-        <FeedMeModal
+        <FeedMeConversationManager
           isOpen={isModalOpen}
           onClose={() => setIsModalOpen(false)}
         />

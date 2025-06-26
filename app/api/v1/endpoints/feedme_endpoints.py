@@ -32,15 +32,30 @@ from app.feedme.schemas import (
     SearchQuery,
     SearchResponse,
     ConversationStats,
-    AnalyticsResponse
+    AnalyticsResponse,
+    # Phase 3: Versioning schemas
+    ConversationVersion,
+    VersionListResponse,
+    VersionDiff,
+    ConversationEditRequest,
+    ConversationRevertRequest,
+    EditResponse,
+    RevertResponse
 )
 
 # Import database utilities
-from app.db.embedding_utils import get_db_connection, get_embedding_model
+from app.db.connection_manager import get_connection_manager
+from app.db.embedding_utils import get_embedding_model
 import psycopg2
 import psycopg2.extras as psycopg2_extras
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+# Database connection helper
+def get_db_connection():
+    """Get a database connection from the connection manager"""
+    manager = get_connection_manager()
+    return manager.get_connection(cursor_factory=psycopg2_extras.RealDictCursor)
 
 # Database helper functions
 
@@ -54,23 +69,19 @@ async def get_conversation_by_id(conversation_id: int) -> Optional[FeedMeConvers
     Returns:
         Optional[FeedMeConversation]: The conversation object if found, otherwise None.
     """
-    conn = None
     try:
-        conn = get_db_connection()
-        with conn.cursor(cursor_factory=psycopg2_extras.RealDictCursor) as cur:
-            cur.execute("""
-                SELECT * FROM feedme_conversations WHERE id = %s
-            """, (conversation_id,))
-            row = cur.fetchone()
-            if row:
-                return FeedMeConversation(**dict(row))
-            return None
+        with get_db_connection() as conn:
+            with conn.cursor(cursor_factory=psycopg2_extras.RealDictCursor) as cur:
+                cur.execute("""
+                    SELECT * FROM feedme_conversations WHERE id = %s
+                """, (conversation_id,))
+                row = cur.fetchone()
+                if row:
+                    return FeedMeConversation(**dict(row))
+                return None
     except Exception as e:
         logger.error(f"Error fetching conversation {conversation_id}: {e}")
         return None
-    finally:
-        if conn:
-            conn.close()
 
 
 async def create_conversation_in_db(conversation_data: ConversationCreate) -> FeedMeConversation:
@@ -86,33 +97,27 @@ async def create_conversation_in_db(conversation_data: ConversationCreate) -> Fe
     Raises:
     	HTTPException: If the database operation fails, an HTTP 500 error is raised with details.
     """
-    conn = None
     try:
-        conn = get_db_connection()
-        with conn.cursor(cursor_factory=psycopg2_extras.RealDictCursor) as cur:
-            cur.execute("""
-                INSERT INTO feedme_conversations 
-                (title, original_filename, raw_transcript, metadata, uploaded_by)
-                VALUES (%s, %s, %s, %s, %s)
-                RETURNING *
-            """, (
-                conversation_data.title,
-                conversation_data.original_filename,
-                conversation_data.raw_transcript,
-                psycopg2.extras.Json(conversation_data.metadata),
-                conversation_data.uploaded_by
-            ))
-            row = cur.fetchone()
-            conn.commit()
-            return FeedMeConversation(**dict(row))
+        with get_db_connection() as conn:
+            with conn.cursor(cursor_factory=psycopg2_extras.RealDictCursor) as cur:
+                cur.execute("""
+                    INSERT INTO feedme_conversations 
+                    (title, original_filename, raw_transcript, metadata, uploaded_by)
+                    VALUES (%s, %s, %s, %s, %s)
+                    RETURNING *
+                """, (
+                    conversation_data.title,
+                    conversation_data.original_filename,
+                    conversation_data.raw_transcript,
+                    psycopg2.extras.Json(conversation_data.metadata),
+                    conversation_data.uploaded_by
+                ))
+                row = cur.fetchone()
+                conn.commit()
+                return FeedMeConversation(**dict(row))
     except Exception as e:
-        if conn:
-            conn.rollback()
         logger.error(f"Error creating conversation: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to create conversation: {str(e)}")
-    finally:
-        if conn:
-            conn.close()
 
 
 async def update_conversation_in_db(conversation_id: int, update_data: ConversationUpdate) -> Optional[FeedMeConversation]:
@@ -131,10 +136,7 @@ async def update_conversation_in_db(conversation_id: int, update_data: Conversat
     Raises:
         HTTPException: If a database error occurs during the update.
     """
-    conn = None
     try:
-        conn = get_db_connection()
-        
         # Build dynamic update query
         update_fields = []
         values = []
@@ -174,23 +176,19 @@ async def update_conversation_in_db(conversation_id: int, update_data: Conversat
             RETURNING *
         """
         
-        with conn.cursor(cursor_factory=psycopg2_extras.RealDictCursor) as cur:
-            cur.execute(query, values)
-            row = cur.fetchone()
-            conn.commit()
-            
-            if row:
-                return FeedMeConversation(**dict(row))
-            return None
-            
+        with get_db_connection() as conn:
+            with conn.cursor(cursor_factory=psycopg2_extras.RealDictCursor) as cur:
+                cur.execute(query, values)
+                row = cur.fetchone()
+                conn.commit()
+                
+                if row:
+                    return FeedMeConversation(**dict(row))
+                return None
+                
     except Exception as e:
-        if conn:
-            conn.rollback()
         logger.error(f"Error updating conversation {conversation_id}: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to update conversation: {str(e)}")
-    finally:
-        if conn:
-            conn.close()
 
 
 # API Endpoints
@@ -299,21 +297,81 @@ async def upload_transcript(
         conversation = await create_conversation_in_db(conversation_data)
         
         # Schedule background processing if auto_process is enabled
-        if auto_process:
-            # Note: This would integrate with Celery task in the next implementation chunk
-            # For now, we'll update the status to indicate processing will happen
+        async_processing_failed = False
+        if auto_process and settings.feedme_async_processing:
+            try:
+                # Import Celery task and trigger async processing
+                from app.feedme.tasks import process_transcript
+                
+                # Start async processing task
+                task = process_transcript.delay(conversation.id, uploaded_by)
+                
+                # Update conversation with task ID and processing status
+                await update_conversation_in_db(
+                    conversation.id,
+                    ConversationUpdate(
+                        processing_status=ProcessingStatus.PROCESSING,
+                        metadata={**conversation.metadata, "task_id": task.id}
+                    )
+                )
+                logger.info(f"Started async processing for conversation {conversation.id}, task_id={task.id}")
+                
+            except ImportError as e:
+                logger.warning(f"Celery not available for async processing: {e}. Falling back to manual processing.")
+                async_processing_failed = True
+            except Exception as e:
+                logger.error(f"Failed to start async processing: {e}. Falling back to manual processing.")
+                async_processing_failed = True
+            
+        if auto_process and (not settings.feedme_async_processing or async_processing_failed):
+            # Async processing disabled or failed, set to pending for manual processing
             await update_conversation_in_db(
                 conversation.id,
                 ConversationUpdate(processing_status=ProcessingStatus.PENDING)
             )
-            logger.info(f"Scheduled processing for conversation {conversation.id}")
+            if async_processing_failed:
+                logger.info(f"Set conversation {conversation.id} to pending (async processing failed, fallback to manual)")
+            else:
+                logger.info(f"Set conversation {conversation.id} to pending (async processing disabled)")
         
         logger.info(f"Successfully uploaded transcript: conversation_id={conversation.id}, title='{title}'")
-        return conversation
         
+        # Return appropriate response based on processing mode
+        if auto_process and settings.feedme_async_processing and not async_processing_failed:
+            # Return 202 Accepted for async processing
+            return JSONResponse(
+                status_code=202,
+                content={
+                    **conversation.model_dump(mode='json'),
+                    "message": "Transcript uploaded successfully. Processing started in background.",
+                    "processing_mode": "async"
+                }
+            )
+        else:
+            # Return 200 OK for synchronous or manual processing
+            # Use model_dump with mode='json' to properly serialize datetime objects
+            response_data = conversation.model_dump(mode='json')
+            if async_processing_failed:
+                response_data["message"] = "Transcript uploaded successfully. Async processing unavailable, set to manual processing."
+                response_data["processing_mode"] = "manual_fallback"
+            elif not auto_process:
+                response_data["message"] = "Transcript uploaded successfully. Auto-processing disabled."
+                response_data["processing_mode"] = "manual"
+            else:
+                response_data["message"] = "Transcript uploaded successfully. Async processing disabled, set to manual processing."
+                response_data["processing_mode"] = "manual"
+                
+            return JSONResponse(status_code=200, content=response_data)
+        
+    except HTTPException:
+        # Re-raise HTTP exceptions as-is
+        raise
+    except psycopg2.Error as e:
+        logger.error(f"Database error during upload: {e}")
+        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
     except Exception as e:
-        logger.error(f"Error uploading transcript: {e}")
-        raise HTTPException(status_code=500, detail="Failed to upload transcript")
+        logger.error(f"Unexpected error uploading transcript: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to upload transcript: {str(e)}")
 
 
 @router.get("/conversations", response_model=ConversationListResponse, tags=["FeedMe"])
@@ -342,60 +400,60 @@ async def list_conversations(
     if not settings.feedme_enabled:
         raise HTTPException(status_code=503, detail="FeedMe service is currently disabled")
     
-    conn = None
     try:
-        conn = get_db_connection()
-        
-        # Build query with filters
-        conditions = []
-        params = []
-        
-        if status:
-            conditions.append("processing_status = %s")
-            params.append(status.value)
-        
-        if uploaded_by:
-            conditions.append("uploaded_by = %s")
-            params.append(uploaded_by)
-        
-        where_clause = " WHERE " + " AND ".join(conditions) if conditions else ""
-        
-        # Count total items
-        count_query = f"SELECT COUNT(*) FROM feedme_conversations{where_clause}"
-        
-        # Get paginated results
-        offset = (page - 1) * page_size
-        data_query = f"""
-            SELECT * FROM feedme_conversations{where_clause}
-            ORDER BY created_at DESC
-            LIMIT %s OFFSET %s
-        """
-        
-        with conn.cursor(cursor_factory=psycopg2_extras.RealDictCursor) as cur:
-            # Get total count
-            cur.execute(count_query, params)
-            total_count = cur.fetchone()[0]
+        with get_db_connection() as conn:
+            # Build query with filters
+            conditions = []
+            params = []
             
-            # Get paginated data
-            cur.execute(data_query, params + [page_size, offset])
-            rows = cur.fetchall()
+            if status:
+                conditions.append("processing_status = %s")
+                params.append(status.value)
             
-            conversations = [FeedMeConversation(**dict(row)) for row in rows]
+            if uploaded_by:
+                conditions.append("uploaded_by = %s")
+                params.append(uploaded_by)
             
-            return ConversationListResponse(
-                conversations=conversations,
-                total_count=total_count,
-                page=page,
-                page_size=page_size,
-                has_next=offset + len(conversations) < total_count
-            )
+            where_clause = " WHERE " + " AND ".join(conditions) if conditions else ""
             
+            # Count total items
+            count_query = f"SELECT COUNT(*) as count FROM feedme_conversations{where_clause}"
+            
+            # Get paginated results
+            offset = (page - 1) * page_size
+            data_query = f"""
+                SELECT * FROM feedme_conversations{where_clause}
+                ORDER BY created_at DESC
+                LIMIT %s OFFSET %s
+            """
+            
+            with conn.cursor(cursor_factory=psycopg2_extras.RealDictCursor) as cur:
+                # Get total count
+                cur.execute(count_query, params)
+                count_result = cur.fetchone()
+                total_count = count_result['count'] if count_result else 0
+                
+                # Get paginated data
+                cur.execute(data_query, params + [page_size, offset])
+                rows = cur.fetchall()
+                
+                conversations = [FeedMeConversation(**dict(row)) for row in rows]
+                
+                return ConversationListResponse(
+                    conversations=conversations,
+                    total_count=total_count,
+                    page=page,
+                    page_size=page_size,
+                    has_next=offset + len(conversations) < total_count
+                )
+                
     except Exception as e:
         logger.error(f"Error listing conversations: {e}")
-        raise HTTPException(status_code=500, detail="Failed to list conversations")
-    finally:
-        if conn:
-            conn.close()
+        logger.error(f"Error type: {type(e).__name__}")
+        logger.error(f"Error details: {str(e)}")
+        import traceback
+        logger.error(f"Traceback: {traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=f"Failed to list conversations: {str(e)}")
 
 
 @router.get("/conversations/{conversation_id}", response_model=FeedMeConversation, tags=["FeedMe"])
@@ -463,33 +521,26 @@ async def delete_conversation(conversation_id: int):
     if not settings.feedme_enabled:
         raise HTTPException(status_code=503, detail="FeedMe service is currently disabled")
     
-    conn = None
     try:
-        conn = get_db_connection()
-        
-        with conn.cursor() as cur:
-            # Check if conversation exists
-            cur.execute("SELECT id FROM feedme_conversations WHERE id = %s", (conversation_id,))
-            if not cur.fetchone():
-                raise HTTPException(status_code=404, detail="Conversation not found")
-            
-            # Delete conversation (cascade will delete examples)
-            cur.execute("DELETE FROM feedme_conversations WHERE id = %s", (conversation_id,))
-            conn.commit()
-            
-            logger.info(f"Deleted conversation {conversation_id}")
-            return {"message": "Conversation deleted successfully"}
+        with get_db_connection() as conn:
+            with conn.cursor() as cur:
+                # Check if conversation exists
+                cur.execute("SELECT id FROM feedme_conversations WHERE id = %s", (conversation_id,))
+                if not cur.fetchone():
+                    raise HTTPException(status_code=404, detail="Conversation not found")
+                
+                # Delete conversation (cascade will delete examples)
+                cur.execute("DELETE FROM feedme_conversations WHERE id = %s", (conversation_id,))
+                conn.commit()
+                
+                logger.info(f"Deleted conversation {conversation_id}")
+                return {"message": "Conversation deleted successfully"}
             
     except HTTPException:
         raise
     except Exception as e:
-        if conn:
-            conn.rollback()
         logger.error(f"Error deleting conversation {conversation_id}: {e}")
         raise HTTPException(status_code=500, detail="Failed to delete conversation")
-    finally:
-        if conn:
-            conn.close()
 
 
 @router.get("/conversations/{conversation_id}/examples", response_model=ExampleListResponse, tags=["FeedMe"])
@@ -523,56 +574,52 @@ async def list_conversation_examples(
     if not conversation:
         raise HTTPException(status_code=404, detail="Conversation not found")
     
-    conn = None
     try:
-        conn = get_db_connection()
-        
-        # Build query with filters
-        conditions = ["conversation_id = %s"]
-        params = [conversation_id]
-        
-        if is_active is not None:
-            conditions.append("is_active = %s")
-            params.append(is_active)
-        
-        where_clause = " WHERE " + " AND ".join(conditions)
-        
-        # Count total items
-        count_query = f"SELECT COUNT(*) FROM feedme_examples{where_clause}"
-        
-        # Get paginated results
-        offset = (page - 1) * page_size
-        data_query = f"""
-            SELECT * FROM feedme_examples{where_clause}
-            ORDER BY created_at DESC
-            LIMIT %s OFFSET %s
-        """
-        
-        with conn.cursor(cursor_factory=psycopg2_extras.RealDictCursor) as cur:
-            # Get total count
-            cur.execute(count_query, params)
-            total_count = cur.fetchone()[0]
+        with get_db_connection() as conn:
+            # Build query with filters
+            conditions = ["conversation_id = %s"]
+            params = [conversation_id]
             
-            # Get paginated data
-            cur.execute(data_query, params + [page_size, offset])
-            rows = cur.fetchall()
+            if is_active is not None:
+                conditions.append("is_active = %s")
+                params.append(is_active)
             
-            examples = [FeedMeExample(**dict(row)) for row in rows]
+            where_clause = " WHERE " + " AND ".join(conditions)
             
-            return ExampleListResponse(
-                examples=examples,
-                total_count=total_count,
-                page=page,
-                page_size=page_size,
-                has_next=offset + len(examples) < total_count
-            )
+            # Count total items
+            count_query = f"SELECT COUNT(*) as count FROM feedme_examples{where_clause}"
+            
+            # Get paginated results
+            offset = (page - 1) * page_size
+            data_query = f"""
+                SELECT * FROM feedme_examples{where_clause}
+                ORDER BY created_at DESC
+                LIMIT %s OFFSET %s
+            """
+            
+            with conn.cursor(cursor_factory=psycopg2_extras.RealDictCursor) as cur:
+                # Get total count
+                cur.execute(count_query, params)
+                count_result = cur.fetchone()
+                total_count = count_result['count'] if count_result else 0
+                
+                # Get paginated data
+                cur.execute(data_query, params + [page_size, offset])
+                rows = cur.fetchall()
+                
+                examples = [FeedMeExample(**dict(row)) for row in rows]
+                
+                return ExampleListResponse(
+                    examples=examples,
+                    total_count=total_count,
+                    page=page,
+                    page_size=page_size,
+                    has_next=offset + len(examples) < total_count
+                )
             
     except Exception as e:
         logger.error(f"Error listing examples for conversation {conversation_id}: {e}")
         raise HTTPException(status_code=500, detail="Failed to list examples")
-    finally:
-        if conn:
-            conn.close()
 
 
 @router.get("/conversations/{conversation_id}/status", response_model=ProcessingStatusResponse, tags=["FeedMe"])
@@ -664,109 +711,104 @@ async def get_analytics():
     if not settings.feedme_enabled:
         raise HTTPException(status_code=503, detail="FeedMe service is currently disabled")
     
-    conn = None
     try:
-        conn = get_db_connection()
-        
-        with conn.cursor(cursor_factory=psycopg2_extras.RealDictCursor) as cur:
-            # Get conversation statistics
-            cur.execute("""
-                SELECT 
-                    COUNT(*) as total_conversations,
-                    COUNT(*) FILTER (WHERE processing_status = 'completed') as processed_conversations,
-                    COUNT(*) FILTER (WHERE processing_status = 'failed') as failed_conversations,
-                    COUNT(*) FILTER (WHERE processing_status = 'pending') as pending_conversations,
-                    AVG(total_examples) as average_examples_per_conversation
-                FROM feedme_conversations
-            """)
-            conv_stats = cur.fetchone()
-            
-            # Get example statistics
-            cur.execute("""
-                SELECT 
-                    COUNT(*) as total_examples,
-                    COUNT(*) FILTER (WHERE is_active = true) as active_examples
-                FROM feedme_examples
-            """)
-            example_stats = cur.fetchone()
-            
-            # Get top tags
-            cur.execute("""
-                SELECT tag, COUNT(*) as count
-                FROM feedme_examples, unnest(tags) as tag
-                WHERE is_active = true
-                GROUP BY tag
-                ORDER BY count DESC
-                LIMIT 10
-            """)
-            tag_rows = cur.fetchall()
-            
-            # Get issue type distribution
-            cur.execute("""
-                SELECT 
-                    issue_type,
-                    COUNT(*) as count,
-                    AVG(confidence_score) as average_confidence
-                FROM feedme_examples
-                WHERE is_active = true AND issue_type IS NOT NULL
-                GROUP BY issue_type
-                ORDER BY count DESC
-            """)
-            issue_type_rows = cur.fetchall()
-            
-            # Calculate percentages
-            total_examples = example_stats['total_examples'] or 1
-            
-            # Build response
-            conversation_stats = {
-                'total_conversations': conv_stats['total_conversations'] or 0,
-                'processed_conversations': conv_stats['processed_conversations'] or 0,
-                'failed_conversations': conv_stats['failed_conversations'] or 0,
-                'pending_conversations': conv_stats['pending_conversations'] or 0,
-                'average_examples_per_conversation': float(conv_stats['average_examples_per_conversation'] or 0),
-                'total_examples': total_examples,
-                'active_examples': example_stats['active_examples'] or 0
-            }
-            
-            top_tags = [
-                {
-                    'tag': row['tag'],
-                    'count': row['count'],
-                    'percentage': (row['count'] / total_examples) * 100
+        with get_db_connection() as conn:
+            with conn.cursor(cursor_factory=psycopg2_extras.RealDictCursor) as cur:
+                # Get conversation statistics
+                cur.execute("""
+                    SELECT 
+                        COUNT(*) as total_conversations,
+                        COUNT(*) FILTER (WHERE processing_status = 'completed') as processed_conversations,
+                        COUNT(*) FILTER (WHERE processing_status = 'failed') as failed_conversations,
+                        COUNT(*) FILTER (WHERE processing_status = 'pending') as pending_conversations,
+                        AVG(total_examples) as average_examples_per_conversation
+                    FROM feedme_conversations
+                """)
+                conv_stats = cur.fetchone()
+                
+                # Get example statistics
+                cur.execute("""
+                    SELECT 
+                        COUNT(*) as total_examples,
+                        COUNT(*) FILTER (WHERE is_active = true) as active_examples
+                    FROM feedme_examples
+                """)
+                example_stats = cur.fetchone()
+                
+                # Get top tags
+                cur.execute("""
+                    SELECT tag, COUNT(*) as count
+                    FROM feedme_examples, unnest(tags) as tag
+                    WHERE is_active = true
+                    GROUP BY tag
+                    ORDER BY count DESC
+                    LIMIT 10
+                """)
+                tag_rows = cur.fetchall()
+                
+                # Get issue type distribution
+                cur.execute("""
+                    SELECT 
+                        issue_type,
+                        COUNT(*) as count,
+                        AVG(confidence_score) as average_confidence
+                    FROM feedme_examples
+                    WHERE is_active = true AND issue_type IS NOT NULL
+                    GROUP BY issue_type
+                    ORDER BY count DESC
+                """)
+                issue_type_rows = cur.fetchall()
+                
+                # Calculate percentages
+                total_examples = example_stats['total_examples'] or 1
+                
+                # Build response
+                conversation_stats = {
+                    'total_conversations': conv_stats['total_conversations'] or 0,
+                    'processed_conversations': conv_stats['processed_conversations'] or 0,
+                    'failed_conversations': conv_stats['failed_conversations'] or 0,
+                    'pending_conversations': conv_stats['pending_conversations'] or 0,
+                    'average_examples_per_conversation': float(conv_stats['average_examples_per_conversation'] or 0),
+                    'total_examples': total_examples,
+                    'active_examples': example_stats['active_examples'] or 0
                 }
-                for row in tag_rows
-            ]
-            
-            issue_type_distribution = [
-                {
-                    'issue_type': row['issue_type'],
-                    'count': row['count'],
-                    'percentage': (row['count'] / total_examples) * 100,
-                    'average_confidence': float(row['average_confidence'] or 0)
+                
+                top_tags = [
+                    {
+                        'tag': row['tag'],
+                        'count': row['count'],
+                        'percentage': (row['count'] / total_examples) * 100
+                    }
+                    for row in tag_rows
+                ]
+                
+                issue_type_distribution = [
+                    {
+                        'issue_type': row['issue_type'],
+                        'count': row['count'],
+                        'percentage': (row['count'] / total_examples) * 100,
+                        'average_confidence': float(row['average_confidence'] or 0)
+                    }
+                    for row in issue_type_rows
+                ]
+                
+                quality_metrics = {
+                    'average_confidence_score': 0.0,  # Would be calculated from actual data
+                    'average_usefulness_score': 0.0,  # Would be calculated from actual data
+                    'processing_success_rate': 0.0    # Would be calculated from actual data
                 }
-                for row in issue_type_rows
-            ]
-            
-            quality_metrics = {
-                'average_confidence_score': 0.0,  # Would be calculated from actual data
-                'average_usefulness_score': 0.0,  # Would be calculated from actual data
-                'processing_success_rate': 0.0    # Would be calculated from actual data
-            }
-            
-            return AnalyticsResponse(
-                conversation_stats=conversation_stats,
-                top_tags=top_tags,
-                issue_type_distribution=issue_type_distribution,
-                quality_metrics=quality_metrics,
-                last_updated=datetime.now()
-            )
+                
+                return AnalyticsResponse(
+                    conversation_stats=conversation_stats,
+                    top_tags=top_tags,
+                    issue_type_distribution=issue_type_distribution,
+                    quality_metrics=quality_metrics,
+                    last_updated=datetime.now()
+                )
             
     except Exception as e:
         logger.error(f"Error generating analytics: {e}")
         raise HTTPException(status_code=500, detail="Failed to generate analytics")
-    finally:
-        if conn:
-            conn.close()
 
 
 @router.post("/conversations/{conversation_id}/reprocess", tags=["FeedMe"])
@@ -807,3 +849,463 @@ async def reprocess_conversation(conversation_id: int, background_tasks: Backgro
     except Exception as e:
         logger.error(f"Error scheduling reprocessing for conversation {conversation_id}: {e}")
         raise HTTPException(status_code=500, detail="Failed to schedule reprocessing")
+
+
+@router.post("/conversations/{conversation_id}/process", tags=["FeedMe"])
+async def manually_process_conversation(conversation_id: int):
+    """
+    Manually trigger processing for a conversation
+    
+    This endpoint allows manual triggering of Q&A extraction for conversations
+    that are stuck in pending status or failed processing. It will attempt to use
+    Celery if available, otherwise fall back to direct processing.
+    
+    Args:
+        conversation_id: ID of the conversation to process
+        
+    Returns:
+        Success message with processing status
+        
+    Raises:
+        HTTPException: If conversation not found or processing fails
+    """
+    try:
+        # Get the conversation to verify it exists
+        with get_db_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT id, title, raw_transcript, processing_status
+                    FROM feedme_conversations
+                    WHERE id = %s
+                """, (conversation_id,))
+                
+                conversation = cur.fetchone()
+                
+                if not conversation:
+                    raise HTTPException(status_code=404, detail=f"Conversation {conversation_id} not found")
+                
+                if conversation['processing_status'] == 'completed':
+                    return JSONResponse(
+                        status_code=200,
+                        content={
+                            "message": "Conversation already processed",
+                            "conversation_id": conversation_id,
+                            "status": "completed"
+                        }
+                    )
+        
+        # Try to use Celery first
+        task_id = None
+        try:
+            from app.feedme.tasks import process_transcript
+            
+            # Reset status to pending before queueing
+            with get_db_connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("""
+                        UPDATE feedme_conversations
+                        SET processing_status = %s, error_message = NULL, updated_at = %s
+                        WHERE id = %s
+                    """, (ProcessingStatus.PENDING.value, datetime.utcnow(), conversation_id))
+                    conn.commit()
+            
+            # Queue the task
+            result = process_transcript.delay(conversation_id, "manual_trigger")
+            task_id = result.id
+            
+            logger.info(f"Queued processing task {task_id} for conversation {conversation_id}")
+            
+            return JSONResponse(
+                status_code=202,
+                content={
+                    "message": "Processing queued successfully",
+                    "conversation_id": conversation_id,
+                    "task_id": task_id,
+                    "status": "queued"
+                }
+            )
+            
+        except Exception as celery_error:
+            logger.warning(f"Celery not available: {celery_error}. Falling back to direct processing.")
+            
+            # Fall back to direct processing
+            try:
+                from app.feedme.transcript_parser import TranscriptParser
+                from app.db.embedding_utils import generate_feedme_embeddings
+                
+                # Update status to processing
+                with get_db_connection() as conn:
+                    with conn.cursor() as cur:
+                        cur.execute("""
+                            UPDATE feedme_conversations
+                            SET processing_status = %s, updated_at = %s
+                            WHERE id = %s
+                        """, (ProcessingStatus.PROCESSING.value, datetime.utcnow(), conversation_id))
+                        conn.commit()
+                
+                parser = TranscriptParser()
+                
+                # Parse the transcript
+                examples = parser.parse_transcript(conversation['raw_transcript'])
+                
+                if not examples:
+                    # No examples found
+                    with get_db_connection() as conn:
+                        with conn.cursor() as cur:
+                            cur.execute("""
+                                UPDATE feedme_conversations
+                                SET processing_status = %s, processed_at = %s, 
+                                    total_examples = 0, updated_at = %s
+                                WHERE id = %s
+                            """, (ProcessingStatus.COMPLETED.value, datetime.utcnow(), 
+                                  datetime.utcnow(), conversation_id))
+                            conn.commit()
+                    
+                    return JSONResponse(
+                        status_code=200,
+                        content={
+                            "message": "Processing completed, no examples found",
+                            "conversation_id": conversation_id,
+                            "examples_extracted": 0,
+                            "status": "completed"
+                        }
+                    )
+                
+                # Generate embeddings
+                embedding_model = get_embedding_model()
+                examples_with_embeddings = generate_feedme_embeddings(examples, embedding_model)
+                
+                # Save examples to database
+                with get_db_connection() as conn:
+                    with conn.cursor() as cur:
+                        # Delete existing examples (in case of reprocessing)
+                        cur.execute("""
+                            DELETE FROM feedme_examples WHERE conversation_id = %s
+                        """, (conversation_id,))
+                        
+                        # Insert new examples
+                        for example in examples_with_embeddings:
+                            cur.execute("""
+                                INSERT INTO feedme_examples (
+                                    conversation_id, question_text, answer_text,
+                                    context_before, context_after,
+                                    question_embedding, answer_embedding, combined_embedding,
+                                    tags, issue_type, resolution_type,
+                                    confidence_score, usefulness_score, is_active
+                                ) VALUES (
+                                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                                )
+                            """, (
+                                conversation_id,
+                                example['question_text'],
+                                example['answer_text'],
+                                example.get('context_before'),
+                                example.get('context_after'),
+                                example['question_embedding'],
+                                example['answer_embedding'],
+                                example['combined_embedding'],
+                                example.get('tags', []),
+                                example.get('issue_type'),
+                                example.get('resolution_type'),
+                                example.get('confidence_score', 0.8),
+                                example.get('usefulness_score', 0.7),
+                                True
+                            ))
+                        
+                        # Update conversation status
+                        cur.execute("""
+                            UPDATE feedme_conversations
+                            SET processing_status = %s, processed_at = %s,
+                                total_examples = %s, updated_at = %s
+                            WHERE id = %s
+                        """, (ProcessingStatus.COMPLETED.value, datetime.utcnow(),
+                              len(examples), datetime.utcnow(), conversation_id))
+                        
+                        conn.commit()
+                
+                logger.info(f"Successfully processed conversation {conversation_id} with {len(examples)} examples")
+                
+                return JSONResponse(
+                    status_code=200,
+                    content={
+                        "message": "Processing completed successfully (direct mode)",
+                        "conversation_id": conversation_id,
+                        "examples_extracted": len(examples),
+                        "status": "completed"
+                    }
+                )
+                
+            except Exception as e:
+                logger.error(f"Error processing conversation {conversation_id}: {e}")
+                
+                # Update status to failed
+                with get_db_connection() as conn:
+                    with conn.cursor() as cur:
+                        cur.execute("""
+                            UPDATE feedme_conversations
+                            SET processing_status = %s, error_message = %s, updated_at = %s
+                            WHERE id = %s
+                        """, (ProcessingStatus.FAILED.value, str(e), datetime.utcnow(), conversation_id))
+                        conn.commit()
+                
+                raise HTTPException(status_code=500, detail=f"Processing failed: {str(e)}")
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected error processing conversation {conversation_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to process conversation")
+
+
+@router.get("/health", tags=["FeedMe"])
+async def feedme_health_check():
+    """
+    Comprehensive health check for FeedMe v2.0 system
+    
+    Checks:
+    - Database connectivity and schema
+    - Celery worker availability
+    - Redis connectivity
+    - Processing pipeline status
+    """
+    try:
+        health_status = {
+            "status": "healthy",
+            "timestamp": datetime.utcnow().isoformat(),
+            "version": "2.0",
+            "components": {}
+        }
+        
+        # Check database health
+        try:
+            from app.db.connection_manager import health_check
+            db_health = health_check()
+            health_status["components"]["database"] = db_health
+        except Exception as e:
+            health_status["components"]["database"] = {
+                "status": "unhealthy",
+                "error": str(e)
+            }
+            health_status["status"] = "degraded"
+        
+        # Check Celery health if async processing is enabled
+        if settings.feedme_async_processing:
+            try:
+                from app.feedme.celery_app import check_celery_health
+                celery_health = check_celery_health()
+                health_status["components"]["celery"] = celery_health
+                
+                if celery_health["status"] != "healthy":
+                    health_status["status"] = "degraded"
+                    
+            except Exception as e:
+                health_status["components"]["celery"] = {
+                    "status": "unhealthy",
+                    "error": str(e)
+                }
+                health_status["status"] = "degraded"
+        else:
+            health_status["components"]["celery"] = {
+                "status": "disabled",
+                "message": "Async processing is disabled"
+            }
+        
+        # Check configuration
+        health_status["components"]["configuration"] = {
+            "async_processing_enabled": settings.feedme_async_processing,
+            "max_file_size_mb": settings.feedme_max_file_size_mb,
+            "similarity_threshold": settings.feedme_similarity_threshold,
+            "version_control_enabled": settings.feedme_version_control
+        }
+        
+        # Overall status determination
+        component_statuses = [comp.get("status", "unknown") for comp in health_status["components"].values()]
+        if any(status == "unhealthy" for status in component_statuses):
+            health_status["status"] = "unhealthy"
+        elif any(status in ["degraded", "disabled"] for status in component_statuses):
+            health_status["status"] = "degraded"
+        
+        return health_status
+        
+    except Exception as e:
+        logger.error(f"Health check failed: {e}")
+        return JSONResponse(
+            status_code=503,
+            content={
+                "status": "unhealthy",
+                "timestamp": datetime.utcnow().isoformat(),
+                "error": str(e)
+            }
+        )
+
+
+# Phase 3: Versioning and Edit API Endpoints
+
+@router.put("/conversations/{conversation_id}/edit", response_model=EditResponse, tags=["FeedMe"])
+async def edit_conversation(
+    conversation_id: int,
+    edit_request: ConversationEditRequest
+):
+    """
+    Edit a conversation and create a new version
+    
+    Features:
+    - Creates new version with edited content
+    - Optionally triggers reprocessing
+    - Maintains version history
+    - Returns updated conversation and version info
+    """
+    try:
+        from app.feedme.versioning_service import get_versioning_service
+        
+        versioning_service = get_versioning_service()
+        result = await versioning_service.edit_conversation(conversation_id, edit_request)
+        
+        logger.info(f"Successfully edited conversation {conversation_id}, new version: {result.new_version}")
+        return result
+        
+    except ValueError as e:
+        logger.warning(f"Validation error editing conversation {conversation_id}: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"Error editing conversation {conversation_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to edit conversation")
+
+
+@router.get("/conversations/{conversation_id}/versions", response_model=VersionListResponse, tags=["FeedMe"])
+async def get_conversation_versions(conversation_id: int):
+    """
+    Get all versions of a conversation
+    
+    Returns:
+    - List of all versions ordered by version number (newest first)
+    - Total version count
+    - Currently active version number
+    """
+    try:
+        from app.feedme.versioning_service import get_versioning_service
+        
+        versioning_service = get_versioning_service()
+        result = versioning_service.get_conversation_versions(conversation_id)
+        
+        logger.info(f"Retrieved {result.total_count} versions for conversation {conversation_id}")
+        return result
+        
+    except ValueError as e:
+        logger.warning(f"Conversation {conversation_id} not found: {e}")
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    except Exception as e:
+        logger.error(f"Error getting versions for conversation {conversation_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to get conversation versions")
+
+
+@router.get("/conversations/{conversation_id}/versions/{version_1}/diff/{version_2}", 
+           response_model=VersionDiff, tags=["FeedMe"])
+async def get_version_diff(conversation_id: int, version_1: int, version_2: int):
+    """
+    Generate diff between two versions of a conversation
+    
+    Features:
+    - Shows added, removed, and modified lines
+    - Provides diff statistics
+    - Handles line-by-line comparison
+    - Returns structured diff data for UI display
+    """
+    try:
+        from app.feedme.versioning_service import get_versioning_service
+        
+        versioning_service = get_versioning_service()
+        
+        # Get both versions
+        v1 = versioning_service.get_version_by_number(conversation_id, version_1)
+        v2 = versioning_service.get_version_by_number(conversation_id, version_2)
+        
+        if not v1:
+            raise HTTPException(status_code=404, detail=f"Version {version_1} not found")
+        if not v2:
+            raise HTTPException(status_code=404, detail=f"Version {version_2} not found")
+        
+        # Generate diff
+        diff = versioning_service.generate_diff(v1, v2)
+        
+        logger.info(f"Generated diff between versions {version_1} and {version_2} for conversation {conversation_id}")
+        return diff
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error generating diff for conversation {conversation_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to generate version diff")
+
+
+@router.post("/conversations/{conversation_id}/revert/{target_version}", 
+            response_model=RevertResponse, tags=["FeedMe"])
+async def revert_conversation(
+    conversation_id: int,
+    target_version: int,
+    revert_request: ConversationRevertRequest
+):
+    """
+    Revert a conversation to a previous version
+    
+    Process:
+    - Creates new version with content from target version
+    - Maintains audit trail of revert operation
+    - Optionally triggers reprocessing
+    - Returns new version info
+    """
+    try:
+        from app.feedme.versioning_service import get_versioning_service
+        
+        # Validate target version matches path parameter
+        if revert_request.target_version != target_version:
+            raise HTTPException(
+                status_code=400, 
+                detail="Target version in path must match request body"
+            )
+        
+        versioning_service = get_versioning_service()
+        result = await versioning_service.revert_conversation(conversation_id, revert_request)
+        
+        logger.info(f"Successfully reverted conversation {conversation_id} to version {target_version}, new version: {result.new_version}")
+        return result
+        
+    except ValueError as e:
+        logger.warning(f"Validation error reverting conversation {conversation_id}: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"Error reverting conversation {conversation_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to revert conversation")
+
+
+@router.get("/conversations/{conversation_id}/versions/{version_number}", 
+           response_model=ConversationVersion, tags=["FeedMe"])
+async def get_specific_version(conversation_id: int, version_number: int):
+    """
+    Get a specific version of a conversation
+    
+    Returns:
+    - Complete version data including content and metadata
+    - Version creation and modification timestamps
+    - User information for tracking changes
+    """
+    try:
+        from app.feedme.versioning_service import get_versioning_service
+        
+        versioning_service = get_versioning_service()
+        version = versioning_service.get_version_by_number(conversation_id, version_number)
+        
+        if not version:
+            raise HTTPException(
+                status_code=404, 
+                detail=f"Version {version_number} not found for conversation {conversation_id}"
+            )
+        
+        logger.info(f"Retrieved version {version_number} for conversation {conversation_id}")
+        return version
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting version {version_number} for conversation {conversation_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to get conversation version")

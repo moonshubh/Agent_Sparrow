@@ -275,3 +275,112 @@ class AnalyticsResponse(BaseModel):
     issue_type_distribution: List[IssueTypeStats] = Field(..., description="Issue type distribution")
     quality_metrics: Dict[str, float] = Field(..., description="Quality and usefulness metrics")
     last_updated: datetime = Field(..., description="When analytics were last calculated")
+
+
+# Phase 3: Versioning and Edit UI Schemas
+
+class ConversationVersion(BaseModel):
+    """Individual version of a conversation"""
+    id: int = Field(..., description="Database ID")
+    conversation_id: int = Field(..., description="Parent conversation ID")
+    version: int = Field(..., description="Version number")
+    title: str = Field(..., description="Conversation title at this version")
+    raw_transcript: str = Field(..., description="Transcript content at this version")
+    metadata: Dict[str, Any] = Field(default_factory=dict, description="Version metadata")
+    is_active: bool = Field(..., description="Whether this is the active version")
+    updated_by: Optional[str] = Field(None, description="User who created this version")
+    created_at: datetime = Field(..., description="When this version was created")
+    updated_at: datetime = Field(..., description="When this version was last modified")
+    
+    class Config:
+        from_attributes = True
+
+
+class VersionListResponse(BaseModel):
+    """Response for listing conversation versions"""
+    versions: List[ConversationVersion] = Field(..., description="List of versions")
+    total_count: int = Field(..., description="Total number of versions")
+    active_version: int = Field(..., description="Currently active version number")
+
+
+class DiffLine(BaseModel):
+    """Individual line in a diff"""
+    line_number: Optional[int] = Field(None, description="Line number in source")
+    content: str = Field(..., description="Line content")
+    change_type: str = Field(..., description="Type of change: 'added', 'removed', 'modified', 'unchanged'")
+
+
+class ModifiedLine(BaseModel):
+    """Modified line showing before and after"""
+    line_number: int = Field(..., description="Line number")
+    original: str = Field(..., description="Original content")
+    modified: str = Field(..., description="Modified content")
+
+
+class VersionDiff(BaseModel):
+    """Diff between two conversation versions"""
+    from_version: int = Field(..., description="Source version number")
+    to_version: int = Field(..., description="Target version number")
+    added_lines: List[str] = Field(default_factory=list, description="Lines added in target version")
+    removed_lines: List[str] = Field(default_factory=list, description="Lines removed from source version")
+    modified_lines: List[ModifiedLine] = Field(default_factory=list, description="Lines modified between versions")
+    unchanged_lines: List[str] = Field(default_factory=list, description="Lines that remained the same")
+    stats: Dict[str, int] = Field(default_factory=dict, description="Diff statistics")
+
+
+class ConversationEditRequest(BaseModel):
+    """Request to edit a conversation"""
+    title: Optional[str] = Field(None, description="Updated title")
+    raw_transcript: Optional[str] = Field(None, description="Updated transcript content")
+    metadata: Optional[Dict[str, Any]] = Field(None, description="Updated metadata")
+    updated_by: str = Field(..., description="User making the edit")
+    reprocess: bool = Field(default=False, description="Whether to reprocess after edit")
+
+    @validator('raw_transcript')
+    def validate_transcript(cls, v):
+        if v is not None and len(v.strip()) == 0:
+            raise ValueError("Transcript content cannot be empty")
+        return v
+
+    @validator('updated_by')
+    def validate_updated_by(cls, v):
+        if not v or len(v.strip()) == 0:
+            raise ValueError("updated_by is required")
+        return v
+
+
+class ConversationRevertRequest(BaseModel):
+    """Request to revert a conversation to a previous version"""
+    target_version: int = Field(..., description="Version to revert to")
+    reverted_by: str = Field(..., description="User performing the revert")
+    reason: Optional[str] = Field(None, description="Reason for reverting")
+    reprocess: bool = Field(default=True, description="Whether to reprocess after revert")
+
+    @validator('target_version')
+    def validate_target_version(cls, v):
+        if v < 1:
+            raise ValueError("Target version must be 1 or greater")
+        return v
+
+    @validator('reverted_by')
+    def validate_reverted_by(cls, v):
+        if not v or len(v.strip()) == 0:
+            raise ValueError("reverted_by is required")
+        return v
+
+
+class EditResponse(BaseModel):
+    """Response after editing a conversation"""
+    conversation: FeedMeConversation = Field(..., description="Updated conversation")
+    new_version: int = Field(..., description="New version number created")
+    task_id: Optional[str] = Field(None, description="Celery task ID if reprocessing")
+    reprocessing: bool = Field(..., description="Whether reprocessing was triggered")
+
+
+class RevertResponse(BaseModel):
+    """Response after reverting a conversation"""
+    conversation: FeedMeConversation = Field(..., description="Reverted conversation")
+    new_version: int = Field(..., description="New version number created")
+    reverted_to_version: int = Field(..., description="Version that was reverted to")
+    task_id: Optional[str] = Field(None, description="Celery task ID if reprocessing")
+    reprocessing: bool = Field(..., description="Whether reprocessing was triggered")
