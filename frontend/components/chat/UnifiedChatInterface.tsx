@@ -93,6 +93,7 @@ export default function UnifiedChatInterface() {
   const [inputValue, setInputValue] = useState('')
   const [files, setFiles] = useState<File[]>([])
   const [isClient, setIsClient] = useState(false)
+  const [windowHeight, setWindowHeight] = useState(600) // Default height for SSR
   const [logAnalysisState, setLogAnalysisState] = useState<{
     isActive: boolean
     fileName?: string
@@ -103,9 +104,17 @@ export default function UnifiedChatInterface() {
   const scrollAreaRef = useRef<HTMLDivElement>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   
-  // Handle client-side rendering
+  // Handle client-side rendering and window dimensions
   useEffect(() => {
     setIsClient(true)
+    setWindowHeight(window.innerHeight)
+    
+    const handleResize = () => {
+      setWindowHeight(window.innerHeight)
+    }
+    
+    window.addEventListener('resize', handleResize)
+    return () => window.removeEventListener('resize', handleResize)
   }, [])
   
   // Auto-scroll to bottom when new messages arrive
@@ -234,7 +243,7 @@ export default function UnifiedChatInterface() {
                   messages={state.messages.slice(1)} // Skip welcome message
                   onRetry={retryLastMessage}
                   onRate={handleMessageRate}
-                  containerHeight={typeof window !== 'undefined' ? window.innerHeight - 200 : 600}
+                  containerHeight={windowHeight - 200}
                 />
               ) : (
                 <ScrollArea ref={scrollAreaRef} className="h-full">
