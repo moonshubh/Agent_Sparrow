@@ -97,6 +97,57 @@ class TranscriptParser:
             logger.error(f"Failed to initialize AI model: {e}")
             self.ai_model = None
     
+    def extract_qa_examples(
+        self,
+        transcript: str,
+        conversation_id: int,
+        metadata: Dict[str, Any] = None,
+        transcript_format: TranscriptFormat = TranscriptFormat.AUTO,
+        parsing_strategy: ParsingStrategy = ParsingStrategy.HYBRID,
+        max_examples: int = None
+    ) -> List[Dict[str, Any]]:
+        """
+        Extract Q&A examples from transcript for async processing
+        
+        Args:
+            transcript: Raw transcript content
+            conversation_id: ID of the conversation
+            metadata: Additional metadata for parsing
+            transcript_format: Expected format (auto-detect if AUTO)
+            parsing_strategy: Strategy to use for extraction
+            max_examples: Maximum number of examples to extract
+            
+        Returns:
+            List of example dictionaries ready for database insertion
+        """
+        parsing_result = self.parse_transcript(
+            transcript, transcript_format, parsing_strategy, max_examples
+        )
+        
+        # Convert ExtractedQA objects to database-ready dictionaries
+        examples = []
+        for qa in parsing_result.extracted_examples:
+            examples.append({
+                'question_text': qa.question,
+                'answer_text': qa.answer,
+                'context_before': qa.context_before,
+                'context_after': qa.context_after,
+                'tags': qa.tags,
+                'issue_type': qa.issue_type,
+                'resolution_type': qa.resolution_type,
+                'confidence_score': qa.confidence_score,
+                'extraction_method': 'ai' if self.ai_model else 'pattern',
+                'extraction_confidence': qa.confidence_score
+            })
+        
+        return examples
+    
+    def clean_transcript(self, transcript: str) -> str:
+        """Clean transcript for storage"""
+        # Detect format and clean
+        format_type = self._detect_format(transcript)
+        return self._preprocess_transcript(transcript, format_type)
+    
     def parse_transcript(
         self,
         transcript: str,

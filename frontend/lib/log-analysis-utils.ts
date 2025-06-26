@@ -181,6 +181,10 @@ export interface LogIssue {
   remediation_status?: 'pending' | 'in_progress' | 'resolved' | 'ignored'
   priority_score?: number
   related_issues?: string[]
+  // Active status field for filtering
+  active?: boolean
+  // Version identifier for enhanced schema
+  schemaVersion?: string
 }
 
 export interface LogSolution {

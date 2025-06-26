@@ -5,6 +5,14 @@
  * Handles transcript upload, processing status, and conversation management.
  */
 
+// Custom error class for API unreachable scenarios
+export class ApiUnreachableError extends Error {
+  constructor(message: string, public readonly originalError?: Error) {
+    super(message)
+    this.name = 'ApiUnreachableError'
+  }
+}
+
 // Retry and timeout utilities
 const fetchWithRetry = async (
   url: string, 
@@ -16,6 +24,7 @@ const fetchWithRetry = async (
   const timeoutId = setTimeout(() => controller.abort(), timeout)
   
   try {
+    console.log(`[FeedMe API] Attempting fetch to ${url} (retries left: ${retries})`)
     const response = await fetch(url, {
       ...options,
       signal: controller.signal,
@@ -24,39 +33,31 @@ const fetchWithRetry = async (
     return response
   } catch (error) {
     clearTimeout(timeoutId)
+    console.error(`[FeedMe API] Fetch failed for ${url}:`, error)
     
     if (retries > 0 && (error instanceof Error && error.name !== 'AbortError')) {
       // Wait before retry (exponential backoff)
       const delay = Math.pow(2, 3 - retries) * 1000
+      console.log(`[FeedMe API] Retrying in ${delay}ms...`)
       await new Promise(resolve => setTimeout(resolve, delay))
       return fetchWithRetry(url, options, retries - 1, timeout)
     }
     
-    throw error
+    // On final failure, throw ApiUnreachableError with friendly message
+    const message = error instanceof Error && error.name === 'AbortError' 
+      ? 'Request timed out - please check your internet connection'
+      : 'Unable to reach FeedMe service - please try again later'
+    
+    throw new ApiUnreachableError(message, error instanceof Error ? error : new Error(String(error)))
   }
 }
 
-// API Base Configuration
-const getApiBaseUrl = (): string => {
-  // Check for Next.js environment variable first
-  if (process.env.NEXT_PUBLIC_API_BASE) {
-    console.log('[FeedMe API] Using NEXT_PUBLIC_API_BASE:', process.env.NEXT_PUBLIC_API_BASE)
-    return process.env.NEXT_PUBLIC_API_BASE
-  }
-  
-  // Fallback for client-side when env var is missing
-  if (typeof window !== 'undefined') {
-    console.log('[FeedMe API] Using window.location.origin fallback:', window.location.origin)
-    return window.location.origin
-  }
-  
-  // Default for server-side
-  console.log('[FeedMe API] Using default server-side URL: http://localhost:8000')
-  return 'http://localhost:8000'
-}
+// API Base Configuration - Deterministic API base URL without typeof window checks
+const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? '/api/v1'
+const FEEDME_API_BASE = `${API_BASE}/feedme`
 
-const API_BASE_URL = getApiBaseUrl()
-const FEEDME_API_BASE = `${API_BASE_URL}/api/v1/feedme`
+console.log('[FeedMe API] Using API_BASE:', API_BASE)
+console.log('[FeedMe API] Using FEEDME_API_BASE:', FEEDME_API_BASE)
 
 // Types
 export interface UploadTranscriptRequest {
