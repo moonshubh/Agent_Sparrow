@@ -13,7 +13,7 @@ This module provides:
 import traceback
 import time
 from typing import Dict, Any, List, Optional
-from datetime import datetime
+from datetime import datetime, timezone
 import logging
 
 from celery.exceptions import Retry
@@ -230,7 +230,12 @@ def parse_conversation(self, conversation_id: int, raw_transcript: str, metadata
             )
         
         # Save examples to temporary table for preview/approval
-        examples_created = save_examples_to_temp_db(conversation_id, examples, is_html)
+        try:
+            store_temp_examples(conversation_id, examples)
+            examples_created = len(examples)
+        except Exception as e:
+            logger.error(f"Failed to store temp examples: {e}")
+            examples_created = 0
         
         # Update parsed content
         if is_html:
@@ -349,7 +354,7 @@ def health_check(self) -> Dict[str, Any]:
             "status": "healthy" if db_health["status"] == "healthy" and embedding_health["status"] == "healthy" else "unhealthy",
             "database": db_health,
             "embeddings": embedding_health,
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
             "task_id": self.request.id
         }
         
@@ -358,7 +363,7 @@ def health_check(self) -> Dict[str, Any]:
         return {
             "status": "unhealthy",
             "error": str(e),
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
             "task_id": self.request.id
         }
 
@@ -409,8 +414,9 @@ def update_conversation_status(
         
         # Add task_id to metadata if provided
         if task_id:
-            update_fields.append("metadata = COALESCE(metadata, '{}') || %s")
-            params.append(f'{{"task_id": "{task_id}"}}')
+            import json
+            update_fields.append("metadata = COALESCE(metadata, '{}') || %s::jsonb")
+            params.append(json.dumps({"task_id": task_id}))
         
         params.append(conversation_id)
         
@@ -426,13 +432,16 @@ def save_examples_to_temp_db(conn, conversation_id: int, examples: List[Dict[str
         return 0
     
     with conn.cursor() as cur:
-        # Update conversation with content type and extraction method
+        # Update conversation metadata with content type info
         content_type = 'html' if is_html else 'text'
         extraction_method = 'html' if is_html else 'ai'
         
+        # Store content type in metadata since there's no dedicated column
+        import json
+        metadata_update = json.dumps({"content_type": content_type, "extraction_method": extraction_method})
         cur.execute(
-            "UPDATE feedme_conversations SET content_type = %s, extraction_method = %s WHERE id = %s",
-            (content_type, extraction_method, conversation_id)
+            "UPDATE feedme_conversations SET metadata = COALESCE(metadata, '{}') || %s::jsonb WHERE id = %s",
+            (metadata_update, conversation_id)
         )
         
         # Insert into temporary table

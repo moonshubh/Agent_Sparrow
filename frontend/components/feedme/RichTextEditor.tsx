@@ -54,6 +54,9 @@ function ToolbarButton({ command, icon, title, isActive, onClick }: ToolbarButto
       )}
       onClick={onClick}
       title={title}
+      aria-label={title}
+      aria-pressed={isActive}
+      role="button"
     >
       {icon}
     </Button>
@@ -87,13 +90,38 @@ export function RichTextEditor({
     if (disabled) return
     
     try {
-      setToolbarState({
-        bold: document.queryCommandState('bold'),
-        italic: document.queryCommandState('italic'),
-        underline: document.queryCommandState('underline')
-      })
+      const selection = window.getSelection()
+      if (!selection || selection.rangeCount === 0) return
+      
+      const range = selection.getRangeAt(0)
+      const parentElement = range.commonAncestorContainer.nodeType === Node.TEXT_NODE 
+        ? range.commonAncestorContainer.parentElement 
+        : range.commonAncestorContainer as Element
+      
+      if (!parentElement) return
+      
+      // Check for formatting by traversing parent elements
+      let element = parentElement
+      const state = { bold: false, italic: false, underline: false }
+      
+      while (element && element !== editorRef.current) {
+        const style = window.getComputedStyle(element)
+        if (style.fontWeight === 'bold' || style.fontWeight === '700' || element.tagName === 'B' || element.tagName === 'STRONG') {
+          state.bold = true
+        }
+        if (style.fontStyle === 'italic' || element.tagName === 'I' || element.tagName === 'EM') {
+          state.italic = true
+        }
+        if (style.textDecoration.includes('underline') || element.tagName === 'U') {
+          state.underline = true
+        }
+        element = element.parentElement as Element
+      }
+      
+      setToolbarState(state)
     } catch (error) {
-      // Ignore errors in queryCommandState
+      // Ignore errors in selection detection
+      console.warn('Error updating toolbar state:', error)
     }
   }, [disabled])
 

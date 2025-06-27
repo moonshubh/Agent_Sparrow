@@ -106,13 +106,12 @@ export function ExecutiveSummary({ content, className }: ExecutiveSummaryProps) 
               ),
               
               // Custom code styling
-              code: ({ children, ...props }: { children?: React.ReactNode }) => {
-                const { node, ...restProps } = props as any
+              code: ({ children, node, ...props }: { children?: React.ReactNode; node?: any; [key: string]: any }) => {
                 const isInline = !node?.parent || node.parent.type !== 'pre'
                 
                 if (isInline) {
                   return (
-                    <code {...restProps} className="text-xs bg-muted text-foreground px-1 py-0.5 rounded font-mono">
+                    <code {...props} className="text-xs bg-muted text-foreground px-1 py-0.5 rounded font-mono">
                       {children}
                     </code>
                   )

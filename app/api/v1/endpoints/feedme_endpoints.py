@@ -8,7 +8,7 @@ Provides functionality for uploading transcripts, managing conversations, and se
 import logging
 import os
 from typing import List, Optional, Dict, Any
-from datetime import datetime
+from datetime import datetime, timezone
 from fastapi import APIRouter, HTTPException, Depends, UploadFile, File, Form, Query, BackgroundTasks, Body
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
@@ -1103,7 +1103,7 @@ async def manually_process_conversation(conversation_id: int):
                         UPDATE feedme_conversations
                         SET processing_status = %s, error_message = NULL, updated_at = %s
                         WHERE id = %s
-                    """, (ProcessingStatus.PENDING.value, datetime.utcnow(), conversation_id))
+                    """, (ProcessingStatus.PENDING.value, datetime.now(timezone.utc), conversation_id))
                     conn.commit()
             
             # Queue the task
@@ -1137,7 +1137,7 @@ async def manually_process_conversation(conversation_id: int):
                             UPDATE feedme_conversations
                             SET processing_status = %s, updated_at = %s
                             WHERE id = %s
-                        """, (ProcessingStatus.PROCESSING.value, datetime.utcnow(), conversation_id))
+                        """, (ProcessingStatus.PROCESSING.value, datetime.now(timezone.utc), conversation_id))
                         conn.commit()
                 
                 parser = TranscriptParser()
@@ -1154,8 +1154,8 @@ async def manually_process_conversation(conversation_id: int):
                                 SET processing_status = %s, processed_at = %s, 
                                     total_examples = 0, updated_at = %s
                                 WHERE id = %s
-                            """, (ProcessingStatus.COMPLETED.value, datetime.utcnow(), 
-                                  datetime.utcnow(), conversation_id))
+                            """, (ProcessingStatus.COMPLETED.value, datetime.now(timezone.utc), 
+                                  datetime.now(timezone.utc), conversation_id))
                             conn.commit()
                     
                     return JSONResponse(
@@ -1215,8 +1215,8 @@ async def manually_process_conversation(conversation_id: int):
                             SET processing_status = %s, processed_at = %s,
                                 total_examples = %s, updated_at = %s
                             WHERE id = %s
-                        """, (ProcessingStatus.COMPLETED.value, datetime.utcnow(),
-                              len(examples), datetime.utcnow(), conversation_id))
+                        """, (ProcessingStatus.COMPLETED.value, datetime.now(timezone.utc),
+                              len(examples), datetime.now(timezone.utc), conversation_id))
                         
                         conn.commit()
                 
@@ -1242,7 +1242,7 @@ async def manually_process_conversation(conversation_id: int):
                             UPDATE feedme_conversations
                             SET processing_status = %s, error_message = %s, updated_at = %s
                             WHERE id = %s
-                        """, (ProcessingStatus.FAILED.value, str(e), datetime.utcnow(), conversation_id))
+                        """, (ProcessingStatus.FAILED.value, str(e), datetime.now(timezone.utc), conversation_id))
                         conn.commit()
                 
                 raise HTTPException(status_code=500, detail=f"Processing failed: {str(e)}")
@@ -1268,7 +1268,7 @@ async def feedme_health_check():
     try:
         health_status = {
             "status": "healthy",
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
             "version": "2.0",
             "components": {}
         }
@@ -1330,7 +1330,7 @@ async def feedme_health_check():
             status_code=503,
             content={
                 "status": "unhealthy",
-                "timestamp": datetime.utcnow().isoformat(),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
                 "error": str(e)
             }
         )
@@ -1552,7 +1552,7 @@ async def approve_conversation(conversation_id: int, approval_request: ApprovalR
                     )
                 
                 # Update conversation to approved status
-                approval_time = datetime.utcnow()
+                approval_time = datetime.now(timezone.utc)
                 cur.execute("""
                     UPDATE feedme_conversations 
                     SET approval_status = %s, 
@@ -1647,7 +1647,7 @@ async def reject_conversation(conversation_id: int, rejection_request: Rejection
                     )
                 
                 # Update conversation to rejected status
-                rejection_time = datetime.utcnow()
+                rejection_time = datetime.now(timezone.utc)
                 cur.execute("""
                     UPDATE feedme_conversations 
                     SET approval_status = %s, 
@@ -1809,7 +1809,7 @@ async def bulk_approve_conversations(bulk_request: BulkApprovalRequest):
                             continue
                         
                         # Update conversation based on action
-                        action_time = datetime.utcnow()
+                        action_time = datetime.now(timezone.utc)
                         
                         if bulk_request.action == 'approve':
                             cur.execute("""
@@ -1949,8 +1949,8 @@ async def review_example(example_id: int, review_request: ExampleReviewRequest):
                 params = [
                     review_request.review_status.value,
                     review_request.reviewed_by,
-                    datetime.utcnow(),
-                    datetime.utcnow()
+                    datetime.now(timezone.utc),
+                    datetime.now(timezone.utc)
                 ]
                 
                 # Add optional edits
@@ -1992,7 +1992,7 @@ async def review_example(example_id: int, review_request: ExampleReviewRequest):
                 return ExampleReviewResponse(
                     example=FeedMeExample(**dict(updated_example)),
                     action=review_request.review_status.value,
-                    timestamp=datetime.utcnow()
+                    timestamp=datetime.now(timezone.utc)
                 )
             
     except HTTPException:
@@ -2149,7 +2149,7 @@ async def approve_conversation_examples(
                     "conversation_id": conversation_id,
                     "approved_examples": approved_count,
                     "approved_by": approved_by,
-                    "approved_at": datetime.utcnow().isoformat(),
+                    "approved_at": datetime.now(timezone.utc).isoformat(),
                     "approval_type": "selective" if selected_example_ids else "all"
                 }
                 
@@ -2221,7 +2221,7 @@ async def reject_conversation_examples(
                     "rejected_examples": rejected_count,
                     "rejected_by": rejected_by,
                     "rejection_reason": rejection_reason,
-                    "rejected_at": datetime.utcnow().isoformat()
+                    "rejected_at": datetime.now(timezone.utc).isoformat()
                 }
                 
     except HTTPException:

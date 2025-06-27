@@ -13,7 +13,7 @@ This module provides:
 import logging
 import difflib
 from typing import List, Dict, Any, Optional, Tuple
-from datetime import datetime
+from datetime import datetime, timezone
 import psycopg2.extras
 
 from app.db.connection_manager import get_connection_manager, with_db_connection
@@ -89,8 +89,8 @@ class VersioningService:
                     'version': next_version,
                     'is_active': True,
                     'updated_by': updated_by,
-                    'updated_at': datetime.utcnow(),
-                    'created_at': datetime.utcnow()  # New version creation time
+                    'updated_at': datetime.now(timezone.utc),
+                    'created_at': datetime.now(timezone.utc)  # New version creation time
                 })
                 
                 # Remove id to create new record
@@ -350,7 +350,7 @@ class VersioningService:
                     **target_version.metadata,
                     'reverted_from_version': revert_request.target_version,
                     'revert_reason': revert_request.reason,
-                    'revert_timestamp': datetime.utcnow().isoformat()
+                    'revert_timestamp': datetime.now(timezone.utc).isoformat()
                 }
             }
             
