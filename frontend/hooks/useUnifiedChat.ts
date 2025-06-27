@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useCallback, useRef } from "react"
+import { useState, useCallback, useRef, useEffect } from "react"
 import { toast } from "sonner"
 
 // Types for unified chat system
@@ -8,7 +8,7 @@ export interface UnifiedMessage {
   id: string
   type: "user" | "agent" | "system"
   content: string
-  timestamp: Date
+  timestamp: Date | string // Support both Date objects and string timestamps (from JSON deserialization)
   agentType?: "primary" | "log_analyst" | "researcher"
   streaming?: boolean
   metadata?: {
@@ -37,6 +37,15 @@ export interface UseUnifiedChatReturn {
   sendMessage: (content: string, files?: File[]) => Promise<void>
   clearConversation: () => void
   retryLastMessage: () => Promise<void>
+  loadSessionMessages: (messages: UnifiedMessage[], agentType?: 'primary' | 'log_analysis') => void
+}
+
+// Unique ID generator to prevent duplicate keys
+let messageIdCounter = 0
+const generateUniqueId = (prefix: string = ''): string => {
+  const timestamp = Date.now()
+  const counter = ++messageIdCounter
+  return prefix ? `${prefix}-${timestamp}-${counter}` : `${timestamp}-${counter}`
 }
 
 /**
@@ -49,6 +58,38 @@ export interface UseUnifiedChatReturn {
 export function useUnifiedChat(): UseUnifiedChatReturn {
   const apiBaseUrl = process.env.NEXT_PUBLIC_API_BASE_URL || ""
   const abortControllerRef = useRef<AbortController | null>(null)
+  
+  // Test backend connectivity on initialization
+  useEffect(() => {
+    const testConnection = async () => {
+      try {
+        console.log('🔌 Testing backend connectivity to:', apiBaseUrl)
+        const response = await fetch(`${apiBaseUrl}/health`, { 
+          method: 'GET',
+          signal: AbortSignal.timeout(5000) // 5 second timeout
+        })
+        if (response.ok) {
+          console.log('✅ Backend is reachable')
+        } else {
+          console.warn('⚠️ Backend responded with status:', response.status)
+        }
+      } catch (error) {
+        console.error('❌ Backend connectivity test failed:', error)
+        console.log('🔍 Checking if API_BASE_URL is set correctly:', {
+          apiBaseUrl,
+          NODE_ENV: process.env.NODE_ENV,
+          NEXT_PUBLIC_API_BASE_URL: process.env.NEXT_PUBLIC_API_BASE_URL
+        })
+      }
+    }
+    
+    if (apiBaseUrl) {
+      testConnection().catch(error => {
+        // Silently handle connection test errors to prevent unhandled promise rejections
+        console.debug('Backend connectivity test failed (expected during development):', error.message)
+      })
+    }
+  }, [apiBaseUrl])
   
   const [state, setState] = useState<UnifiedChatState>({
     messages: [
@@ -132,7 +173,7 @@ export function useUnifiedChat(): UseUnifiedChatReturn {
     
     // Add user message
     const userMessage: UnifiedMessage = {
-      id: Date.now().toString(),
+      id: generateUniqueId('user'),
       type: "user",
       content: content,
       timestamp: new Date()
@@ -161,7 +202,14 @@ export function useUnifiedChat(): UseUnifiedChatReturn {
       }
     } catch (error: any) {
       if (error.name !== 'AbortError') {
-        console.error('Chat error:', error)
+        console.error('💥 Chat error details:', {
+          message: error.message,
+          stack: error.stack,
+          name: error.name,
+          suggestedAgent,
+          apiBaseUrl,
+          contentLength: content.length
+        })
         setState(prev => ({
           ...prev,
           isProcessing: false,
@@ -174,6 +222,12 @@ export function useUnifiedChat(): UseUnifiedChatReturn {
   
   const handleUnifiedChat = async (content: string, suggestedAgent: string, abortController: AbortController) => {
     try {
+      console.log('🚀 Making API call to:', `${apiBaseUrl}/api/v1/agent/unified/stream`)
+      console.log('📤 Request payload:', { 
+        message: content,
+        agent_type: suggestedAgent === "primary" ? null : suggestedAgent
+      })
+      
       const response = await fetch(`${apiBaseUrl}/api/v1/agent/unified/stream`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -184,8 +238,13 @@ export function useUnifiedChat(): UseUnifiedChatReturn {
         signal: abortController.signal
       })
       
+      console.log('📡 Response status:', response.status, response.statusText)
+      console.log('📡 Response headers:', Object.fromEntries(response.headers.entries()))
+      
       if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`)
+        const errorText = await response.text()
+        console.error('❌ API Error Response:', errorText)
+        throw new Error(`HTTP ${response.status}: ${errorText}`)
       }
       
       const reader = response.body?.getReader()
@@ -193,7 +252,7 @@ export function useUnifiedChat(): UseUnifiedChatReturn {
       
       const decoder = new TextDecoder()
       let accumulatedContent = ""
-      let messageId = Date.now().toString()
+      let messageId = generateUniqueId('agent')
       
       while (true) {
         const { done, value } = await reader.read()
@@ -233,7 +292,7 @@ export function useUnifiedChat(): UseUnifiedChatReturn {
               
               // Handle system messages (routing notifications)
               const systemMessage: UnifiedMessage = {
-                id: `system-${Date.now()}`,
+                id: generateUniqueId('system'),
                 type: "system",
                 content: event.content,
                 timestamp: new Date(),
@@ -270,7 +329,7 @@ export function useUnifiedChat(): UseUnifiedChatReturn {
               })
             }
           } catch (e) {
-            // Ignore malformed JSON
+            console.warn('⚠️ Failed to parse JSON chunk:', jsonStr, e)
           }
         }
       }
@@ -289,7 +348,7 @@ export function useUnifiedChat(): UseUnifiedChatReturn {
     try {
       // Add progress message
       const progressMessage: UnifiedMessage = {
-        id: `progress-${Date.now()}`,
+        id: generateUniqueId('progress'),
         type: "system",
         content: "🔍 Analyzing log file... This may take several minutes for large files.",
         timestamp: new Date(),
@@ -306,7 +365,7 @@ export function useUnifiedChat(): UseUnifiedChatReturn {
       
       // Add file size info
       const sizeInfo: UnifiedMessage = {
-        id: `size-${Date.now()}`,
+        id: generateUniqueId('size'),
         type: "system", 
         content: `📁 Processing ${file.name} (${Math.round(file.size / 1024)}KB, ${fileContent.split('\n').length} lines)`,
         timestamp: new Date(),
@@ -346,7 +405,7 @@ export function useUnifiedChat(): UseUnifiedChatReturn {
         console.log('Solutions found:', result.proposed_solutions?.length || 0)
         
         const analysisMessage: UnifiedMessage = {
-          id: Date.now().toString(),
+          id: generateUniqueId('analysis'),
           type: "agent",
           content: `✅ Log analysis complete! ${result.overall_summary}`,
           timestamp: new Date(),
@@ -374,7 +433,7 @@ export function useUnifiedChat(): UseUnifiedChatReturn {
       // Handle timeouts and other errors gracefully
       if (error.name === 'AbortError') {
         const timeoutMessage: UnifiedMessage = {
-          id: `timeout-${Date.now()}`,
+          id: generateUniqueId('timeout'),
           type: "system",
           content: "⚠️ Analysis timed out after 10 minutes. Try with a smaller log file or contact support.",
           timestamp: new Date(),
@@ -439,7 +498,7 @@ export function useUnifiedChat(): UseUnifiedChatReturn {
               }))
             } else if (event.type === 'message') {
               const researchMessage: UnifiedMessage = {
-                id: Date.now().toString(),
+                id: generateUniqueId('research'),
                 type: "agent",
                 content: event.data.content,
                 timestamp: new Date(),
@@ -457,7 +516,7 @@ export function useUnifiedChat(): UseUnifiedChatReturn {
               return
             }
           } catch (e) {
-            // Ignore malformed JSON
+            console.warn('⚠️ Failed to parse JSON chunk:', jsonStr, e)
           }
         }
       }
@@ -490,19 +549,48 @@ export function useUnifiedChat(): UseUnifiedChatReturn {
   }, [])
   
   const retryLastMessage = useCallback(async () => {
-    const lastUserMessage = state.messages
-      .filter(m => m.type === "user")
-      .pop()
-    
-    if (lastUserMessage) {
-      await sendMessage(lastUserMessage.content)
+    try {
+      const lastUserMessage = state.messages
+        .filter(m => m.type === "user")
+        .pop()
+      
+      if (lastUserMessage) {
+        await sendMessage(lastUserMessage.content)
+      }
+    } catch (error) {
+      console.error('Failed to retry message:', error)
+      // The sendMessage function already handles errors, so this is just a safety net
     }
   }, [state.messages, sendMessage])
+  
+  const loadSessionMessages = useCallback((messages: UnifiedMessage[], agentType?: 'primary' | 'log_analysis') => {
+    const welcomeMessage: UnifiedMessage = {
+      id: "welcome",
+      type: "system",
+      content: "Hello! I'm your Mailbird support assistant. How can I help you today?",
+      timestamp: new Date(),
+      agentType: "primary"
+    }
+    
+    setState({
+      messages: [welcomeMessage, ...messages],
+      isProcessing: false,
+      currentAgent: agentType === 'log_analysis' ? 'log_analyst' : 'primary',
+      routingConfidence: 0,
+      error: null,
+      context: {
+        hasFiles: messages.some(msg => msg.metadata?.analysisResults || msg.type === 'user'),
+        isAnalyzing: false,
+        researchSteps: []
+      }
+    })
+  }, [])
   
   return {
     state,
     sendMessage,
     clearConversation,
-    retryLastMessage
+    retryLastMessage,
+    loadSessionMessages
   }
 }

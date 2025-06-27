@@ -22,6 +22,7 @@ import {
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { type DetailedSystemMetadata, type AnalysisMetrics, healthStatusClasses } from '@/lib/log-analysis-utils'
+import { CompletenessBadge } from './Badges/CompletenessBadge'
 
 interface SystemAndAnalysisOverviewCardProps {
   metadata: DetailedSystemMetadata
@@ -38,7 +39,11 @@ interface MetricItem {
   color?: string
 }
 
-export function SystemAndAnalysisOverviewCard({ metadata, metrics, className }: SystemAndAnalysisOverviewCardProps) {
+export function SystemAndAnalysisOverviewCard({ 
+  metadata, 
+  metrics, 
+  className
+}: SystemAndAnalysisOverviewCardProps) {
   const [showDetails, setShowDetails] = useState(false)
 
   if (!metadata) {
@@ -119,14 +124,14 @@ export function SystemAndAnalysisOverviewCard({ metadata, metrics, className }: 
           value: `v${metrics.parser_version}`,
           icon: Activity
         },
-        metrics.completeness_score !== undefined
-          ? {
+        ...(metrics.completeness_score !== undefined
+          ? [{
               label: 'Completeness',
               value: `${Math.round(metrics.completeness_score * 100)}%`,
               icon: BarChart3
-            }
-          : null
-      ].filter(Boolean as any)
+            }]
+          : [])
+      ]
     : []
 
   // Detailed metrics (shown when expanded)
@@ -155,7 +160,6 @@ export function SystemAndAnalysisOverviewCard({ metadata, metrics, className }: 
         <div className="flex items-center justify-between">
           <CardTitle className="text-base font-semibold flex items-center gap-2">
             <Activity className="h-4 w-4 text-primary" />
-            System Overview
           </CardTitle>
           <Button
             variant="ghost"
@@ -227,11 +231,18 @@ export function SystemAndAnalysisOverviewCard({ metadata, metrics, className }: 
           <div className="grid grid-cols-[repeat(auto-fit,minmax(8rem,1fr))] gap-4 pt-2">
             {analysisMetrics.map((item, index) => {
               const Icon = item.icon
+              const isCompleteness = item.label === 'Completeness'
               return (
                 <div key={index} className="flex items-center gap-2 p-2 rounded-lg bg-muted/30 border border-border/50">
                   <Icon className="h-4 w-4 text-muted-foreground" />
-                  <span className="text-xs font-medium text-muted-foreground">{item.label}</span>
-                  <span className="ml-auto text-sm font-semibold" aria-label={item.label}>{item.value}</span>
+                  {isCompleteness ? (
+                    <CompletenessBadge value={item.value} className="ml-auto" />
+                  ) : (
+                    <>
+                      <span className="text-xs font-medium text-muted-foreground">{item.label}</span>
+                      <span className="ml-auto text-sm font-semibold" aria-label={item.label}>{item.value}</span>
+                    </>
+                  )}
                 </div>
               )
             })}

@@ -17,17 +17,19 @@ import {
 import { cn } from '@/lib/utils'
 import {
   type LogIssue,
+  type LogSolution,
   severityClasses
 } from '@/lib/log-analysis-utils'
 import { SeverityBadge } from './SeverityBadge'
 
 interface IssueCardProps {
   issue: LogIssue
+  solutions?: LogSolution[]
   isExpanded?: boolean
   onToggle?: () => void
 }
 
-export function IssueCard({ issue, isExpanded = false, onToggle }: IssueCardProps) {
+export function IssueCard({ issue, solutions, isExpanded = false, onToggle }: IssueCardProps) {
   const [isOpen, setIsOpen] = useState(isExpanded)
   
   const handleToggle = () => {
@@ -40,8 +42,10 @@ export function IssueCard({ issue, isExpanded = false, onToggle }: IssueCardProp
   const affectedAccounts = issue.affected_accounts || []
   const occurrences = issue.occurrences || 0
   
-  const title = issue.title || issue.description || `${issue.category} Issue`
-  const impact = issue.impact || issue.user_impact
+  // Enhanced field mapping for backend compatibility
+  const title = issue.title || issue.signature || issue.description || `${issue.category} Issue`
+  const description = issue.description || issue.signature || ''
+  const impact = issue.impact || issue.user_impact || issue.business_impact
   const rootCause = issue.root_cause
   const pattern = issue.frequency_pattern
 
@@ -112,6 +116,16 @@ export function IssueCard({ issue, isExpanded = false, onToggle }: IssueCardProp
           <CardContent className="pt-0 space-y-4">
             {/* Issue Details */}
             <div className="grid gap-4">
+              {description && description !== title && (
+                <div>
+                  <div className="flex items-center gap-2 mb-2">
+                    <AlertTriangle className="h-3 w-3 text-muted-foreground" />
+                    <span className="text-xs font-medium text-foreground">Description</span>
+                  </div>
+                  <p className="text-xs text-muted-foreground pl-5">{description}</p>
+                </div>
+              )}
+
               {impact && (
                 <div>
                   <div className="flex items-center gap-2 mb-2">

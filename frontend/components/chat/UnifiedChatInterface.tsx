@@ -1,6 +1,6 @@
 "use client"
 
-import React, { useState, useRef, useEffect } from 'react'
+import React, { useState, useRef, useEffect, useCallback } from 'react'
 import { Button } from '@/components/ui/button'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Badge } from '@/components/ui/badge'
@@ -15,6 +15,7 @@ import {
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useUnifiedChat, UnifiedMessage } from '@/hooks/useUnifiedChat'
+import { useChatHistory } from '@/hooks/useChatHistory'
 import { toast } from 'sonner'
 import MessageBubble from './MessageBubble'
 import InputSystem from './InputSystem'
@@ -22,6 +23,7 @@ import VirtualizedMessageList from './VirtualizedMessageList'
 import SystemStatusMessage from './SystemStatusMessage'
 import { Header } from '@/components/layout/Header'
 import { Welcome } from '@/components/home/Welcome'
+import { ChatSidebar } from './ChatSidebar'
 
 interface AgentStatusProps {
   currentAgent: "primary" | "log_analyst" | "researcher" | null
@@ -89,10 +91,23 @@ function LoadingIndicator({ agentType }: { agentType?: "primary" | "log_analyst"
 }
 
 export default function UnifiedChatInterface() {
-  const { state, sendMessage, clearConversation, retryLastMessage } = useUnifiedChat()
+  const { state, sendMessage, clearConversation, retryLastMessage, loadSessionMessages } = useUnifiedChat()
+  const {
+    sessions,
+    currentSessionId,
+    currentSession,
+    createSession,
+    selectSession,
+    deleteSession,
+    renameSession,
+    addMessageToSession
+  } = useChatHistory()
+  
   const [inputValue, setInputValue] = useState('')
   const [files, setFiles] = useState<File[]>([])
   const [isClient, setIsClient] = useState(false)
+  const [windowHeight, setWindowHeight] = useState(600) // Default height for SSR
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false)
   const [logAnalysisState, setLogAnalysisState] = useState<{
     isActive: boolean
     fileName?: string
@@ -102,10 +117,19 @@ export default function UnifiedChatInterface() {
   }>({ isActive: false })
   const scrollAreaRef = useRef<HTMLDivElement>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
+  const lastProcessedMessageId = useRef<string | null>(null)
   
-  // Handle client-side rendering
+  // Handle client-side rendering and window dimensions
   useEffect(() => {
     setIsClient(true)
+    setWindowHeight(window.innerHeight)
+    
+    const handleResize = () => {
+      setWindowHeight(window.innerHeight)
+    }
+    
+    window.addEventListener('resize', handleResize)
+    return () => window.removeEventListener('resize', handleResize)
   }, [])
   
   // Auto-scroll to bottom when new messages arrive
@@ -154,7 +178,33 @@ export default function UnifiedChatInterface() {
     if (state.isProcessing) return
     
     try {
+      // Create a new session if needed
+      let sessionId = currentSessionId
+      if (!sessionId) {
+        // Determine agent type based on file upload
+        const agentType = messageFiles && messageFiles.length > 0 ? 'log_analysis' : 'primary'
+        sessionId = createSession(agentType, content)
+      }
+      
       await sendMessage(content, messageFiles)
+      
+      // Track the message in history and update title if it's the first message
+      if (sessionId) {
+        const userMessage: UnifiedMessage = {
+          id: `user-${Date.now()}-${Math.random().toString(36).slice(2, 11)}`,
+          type: 'user',
+          content,
+          timestamp: new Date(),
+          agentType: undefined
+        }
+        addMessageToSession(sessionId, userMessage)
+        
+        // Update session title if this is the first user message
+        const userMessages = state.messages.filter(m => m.type === 'user')
+        if (userMessages.length === 0) { // No user messages yet, this will be the first
+          updateSessionTitle(sessionId, content)
+        }
+      }
     } catch (error) {
       console.error('Failed to send message:', error)
       toast.error('Failed to send message. Please try again.')
@@ -164,6 +214,72 @@ export default function UnifiedChatInterface() {
   const handleMessageRate = (messageId: string, rating: 'up' | 'down') => {
     // TODO: Implement message rating API call
     console.log('Rating message:', messageId, rating)
+  }
+  
+  // Chat history handlers
+  const handleNewChat = (agentType: 'primary' | 'log_analysis') => {
+    clearConversation()
+    const sessionId = createSession(agentType)
+    selectSession(sessionId)
+  }
+  
+  const handleSelectSession = (sessionId: string) => {
+    const session = sessions.find(s => s.id === sessionId)
+    if (session) {
+      // Clear current conversation and load session messages
+      clearConversation()
+      selectSession(sessionId)
+      
+      // Load session messages into the chat state
+      loadSessionMessages(session.messages || [], session.agentType)
+    }
+  }
+  
+  
+  const handleDeleteSession = (sessionId: string) => {
+    deleteSession(sessionId)
+    if (currentSessionId === sessionId) {
+      clearConversation()
+    }
+  }
+  
+  // Memoized function to handle session sync
+  const syncMessageToSession = useCallback((message: UnifiedMessage, sessionId: string) => {
+    // Only sync user and agent messages
+    if (message.type === 'agent' || message.type === 'user') {
+      addMessageToSession(sessionId, message)
+    }
+  }, [addMessageToSession]) // Stable function dependencies
+
+  // Handle title updates when user sends first message
+  const updateSessionTitle = useCallback((sessionId: string, messageContent: string) => {
+    const currentSession = sessions.find(s => s.id === sessionId)
+    if (currentSession && (currentSession.title.startsWith('New ') || currentSession.title === 'New Chat' || currentSession.title === 'New Analysis')) {
+      const newTitle = generateSessionTitle(messageContent)
+      if (newTitle !== currentSession.title) {
+        renameSession(sessionId, newTitle)
+      }
+    }
+  }, [sessions, renameSession])
+
+  // Sync new messages to history (controlled to prevent infinite loops)
+  useEffect(() => {
+    if (currentSessionId && state.messages.length > 1) {
+      const lastMessage = state.messages[state.messages.length - 1]
+      
+      // Only process if this is a new message we haven't seen before
+      if (lastMessage.id !== lastProcessedMessageId.current) {
+        lastProcessedMessageId.current = lastMessage.id
+        syncMessageToSession(lastMessage, currentSessionId)
+      }
+    }
+  }, [state.messages.length, currentSessionId, syncMessageToSession]) // Stable dependencies
+  
+  // Helper function to generate a title from the first message
+  const generateSessionTitle = (message: string): string => {
+    const cleaned = message.replace(/[#*`_~\[\]]/g, '').trim()
+    const truncated = cleaned.length > 40 ? cleaned.slice(0, 37) + '...' : cleaned
+    return truncated || 'New Chat'
   }
   
   const hasMessages = state.messages.length > 1 // More than just welcome message
@@ -177,8 +293,22 @@ export default function UnifiedChatInterface() {
       {/* Header */}
       <Header />
       
-      {/* Main Content Area */}
-      <div className="flex-1 flex flex-col overflow-hidden">
+      {/* Main Content Area with Sidebar */}
+      <div className="flex-1 flex overflow-hidden">
+        {/* Chat Sidebar */}
+        <ChatSidebar
+          sessions={sessions}
+          currentSessionId={currentSessionId || undefined}
+          isCollapsed={isSidebarCollapsed}
+          onToggleCollapse={() => setIsSidebarCollapsed(!isSidebarCollapsed)}
+          onNewChat={handleNewChat}
+          onSelectSession={handleSelectSession}
+          onDeleteSession={handleDeleteSession}
+          onRenameSession={renameSession}
+        />
+        
+        {/* Chat Area */}
+        <div className="flex-1 flex flex-col overflow-hidden">
         {/* Welcome Hero (hidden when messages exist) */}
         <div className={cn(
           "flex-shrink-0 transition-all duration-500",
@@ -197,7 +327,7 @@ export default function UnifiedChatInterface() {
               {/* Agent Status Bar */}
               {(state.isProcessing || state.currentAgent) && (
                 <div className="flex-shrink-0 border-b border-border/50 bg-background/80 backdrop-blur-sm">
-                  <div className="max-w-4xl mx-auto px-4 py-2">
+                  <div className="w-full max-w-none mx-auto px-4 md:px-6 lg:px-8 py-2">
                     <div className="flex items-center justify-between">
                       <AgentStatus 
                         currentAgent={state.currentAgent} 
@@ -234,11 +364,11 @@ export default function UnifiedChatInterface() {
                   messages={state.messages.slice(1)} // Skip welcome message
                   onRetry={retryLastMessage}
                   onRate={handleMessageRate}
-                  containerHeight={typeof window !== 'undefined' ? window.innerHeight - 200 : 600}
+                  containerHeight={windowHeight - 200}
                 />
               ) : (
                 <ScrollArea ref={scrollAreaRef} className="h-full">
-                  <div className="max-w-4xl mx-auto px-4 py-6 space-y-6">
+                  <div className="w-full max-w-none mx-auto px-4 md:px-6 lg:px-8 py-6 space-y-6">
                     {/* Messages */}
                     {state.messages.slice(1).map((message) => ( // Skip welcome message
                       <MessageBubble
@@ -273,7 +403,7 @@ export default function UnifiedChatInterface() {
               {/* Loading Indicator - Fixed position */}
               {state.isProcessing && (
                 <div className="absolute bottom-0 left-0 right-0 p-4 bg-gradient-to-t from-chat-background to-transparent">
-                  <div className="max-w-4xl mx-auto">
+                  <div className="w-full max-w-none mx-auto">
                     <LoadingIndicator agentType={state.currentAgent || undefined} />
                   </div>
                 </div>
@@ -282,7 +412,7 @@ export default function UnifiedChatInterface() {
               {/* Error Display - Fixed position */}
               {state.error && (
                 <div className="absolute bottom-0 left-0 right-0 p-4 bg-gradient-to-t from-chat-background to-transparent">
-                  <div className="max-w-4xl mx-auto">
+                  <div className="w-full max-w-none mx-auto">
                     <div className="bg-destructive/10 border border-destructive/20 rounded-xl p-4">
                       <div className="flex items-center gap-2 text-destructive">
                         <div className="w-4 h-4 rounded-full bg-destructive/20 flex items-center justify-center">
@@ -310,8 +440,8 @@ export default function UnifiedChatInterface() {
         {/* Input Area */}
         <div className="flex-shrink-0 bg-background/95 backdrop-blur-sm">
           <div className={cn(
-            "mx-auto px-4 transition-all duration-500",
-            hasMessages ? "max-w-4xl py-4 mb-4" : "max-w-2xl py-4"
+            "mx-auto px-4 md:px-6 lg:px-8 transition-all duration-500",
+            hasMessages ? "w-full max-w-none py-4 mb-4" : "max-w-2xl py-4"
           )}>
             <InputSystem
               value={inputValue}
@@ -333,6 +463,7 @@ export default function UnifiedChatInterface() {
           </div>
         </div>
       </div>
+    </div>
       
       {/* Live region for screen readers */}
       <div 

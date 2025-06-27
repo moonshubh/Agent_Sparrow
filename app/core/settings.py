@@ -31,6 +31,20 @@ class Settings(BaseSettings):
     feedme_similarity_threshold: float = Field(default=0.7, alias="FEEDME_SIMILARITY_THRESHOLD")
     feedme_max_retrieval_results: int = Field(default=3, alias="FEEDME_MAX_RETRIEVAL_RESULTS")
     
+    # FeedMe v2.0 Configuration
+    feedme_min_db_connections: int = Field(default=2, alias="FEEDME_MIN_DB_CONNECTIONS")
+    feedme_max_db_connections: int = Field(default=20, alias="FEEDME_MAX_DB_CONNECTIONS")
+    feedme_db_timeout: int = Field(default=30, alias="FEEDME_DB_TIMEOUT")
+    feedme_db_retry_attempts: int = Field(default=3, alias="FEEDME_DB_RETRY_ATTEMPTS")
+    feedme_db_retry_delay: float = Field(default=1.0, alias="FEEDME_DB_RETRY_DELAY")
+    feedme_async_processing: bool = Field(default=True, alias="FEEDME_ASYNC_PROCESSING")
+    feedme_celery_broker: str = Field(default="redis://localhost:6379/1", alias="FEEDME_CELERY_BROKER")
+    feedme_result_backend: str = Field(default="redis://localhost:6379/2", alias="FEEDME_RESULT_BACKEND")
+    feedme_security_enabled: bool = Field(default=True, alias="FEEDME_SECURITY_ENABLED")
+    feedme_rate_limit_per_minute: int = Field(default=10, alias="FEEDME_RATE_LIMIT_PER_MINUTE")
+    feedme_version_control: bool = Field(default=True, alias="FEEDME_VERSION_CONTROL")
+    feedme_quality_threshold: float = Field(default=0.7, alias="FEEDME_QUALITY_THRESHOLD")
+    
     # Reasoning Engine Configuration
     reasoning_enable_chain_of_thought: bool = Field(default=True, alias="REASONING_ENABLE_CHAIN_OF_THOUGHT")
     reasoning_enable_problem_solving: bool = Field(default=True, alias="REASONING_ENABLE_PROBLEM_SOLVING")
@@ -63,6 +77,15 @@ class Settings(BaseSettings):
     log_analysis_enable_comprehensive_testing: bool = Field(default=False, alias="ENABLE_COMPREHENSIVE_TESTING")
     log_analysis_test_framework_enabled: bool = Field(default=False, alias="TEST_FRAMEWORK_ENABLED")
     log_analysis_validation_strict_mode: bool = Field(default=False, alias="VALIDATION_STRICT_MODE")
+    
+    # Chat Session Configuration
+    max_sessions_per_agent: int = Field(default=5, alias="MAX_SESSIONS_PER_AGENT")
+    chat_message_max_length: int = Field(default=10000, alias="CHAT_MESSAGE_MAX_LENGTH")
+    chat_title_max_length: int = Field(default=255, alias="CHAT_TITLE_MAX_LENGTH")
+    chat_session_cleanup_days: int = Field(default=30, alias="CHAT_SESSION_CLEANUP_DAYS")
+    chat_enable_message_history: bool = Field(default=True, alias="CHAT_ENABLE_MESSAGE_HISTORY")
+    chat_default_page_size: int = Field(default=10, alias="CHAT_DEFAULT_PAGE_SIZE")
+    chat_max_page_size: int = Field(default=100, alias="CHAT_MAX_PAGE_SIZE")
 
     class Config:
         case_sensitive = False

@@ -2,6 +2,7 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from typing import AsyncIterable, List
+from datetime import datetime
 
 from app.agents_v2.primary_agent.agent import run_primary_agent
 from app.agents_v2.primary_agent.schemas import PrimaryAgentState # Import PrimaryAgentState
@@ -16,6 +17,64 @@ from app.agents_v2.orchestration.graph import app as agent_graph
 from app.agents_v2.orchestration.state import GraphState
 
 router = APIRouter()
+
+# --- Helper Functions ---
+
+def safe_json_serializer(obj):
+    """
+    Custom JSON serializer that handles complex objects like datetime, Pydantic models, etc.
+    """
+    if isinstance(obj, datetime):
+        return obj.isoformat()
+    elif hasattr(obj, 'model_dump'):
+        # Handle Pydantic v2 models
+        return obj.model_dump()
+    elif hasattr(obj, 'dict'):
+        # Handle Pydantic v1 models
+        return obj.dict()
+    elif isinstance(obj, (list, tuple)):
+        return [safe_json_serializer(item) for item in obj]
+    elif isinstance(obj, dict):
+        return {key: safe_json_serializer(value) for key, value in obj.items()}
+    else:
+        # For other objects, try to convert to string as fallback
+        try:
+            # Check if it's already JSON serializable
+            json.dumps(obj)
+            return obj
+        except (TypeError, ValueError):
+            return str(obj)
+
+def serialize_analysis_results(final_report):
+    """
+    Safely serialize analysis results for JSON streaming response.
+    """
+    try:
+        if hasattr(final_report, 'model_dump'):
+            # Pydantic v2 model
+            serialized = final_report.model_dump()
+        elif hasattr(final_report, 'dict'):
+            # Pydantic v1 model
+            serialized = final_report.dict()
+        elif isinstance(final_report, dict):
+            # Already a dictionary
+            serialized = final_report
+        else:
+            # Fallback for other object types
+            serialized = {"summary": str(final_report)}
+        
+        # Recursively serialize any complex nested objects
+        return safe_json_serializer(serialized)
+    except Exception as e:
+        print(f"Error serializing analysis results: {e}")
+        # Return minimal fallback
+        return {
+            "overall_summary": "Analysis completed but serialization failed",
+            "error": str(e),
+            "system_metadata": {},
+            "identified_issues": [],
+            "proposed_solutions": []
+        }
 
 # --- Pydantic Models for Log Analysis Agent ---
 
@@ -129,25 +188,38 @@ async def analyze_logs(request: LogAnalysisRequest):
             raise HTTPException(status_code=500, detail="Log analysis agent did not return a final report.")
 
         # Return the structured report directly along with the trace_id
-        # Handle both Pydantic models and dictionaries
-        if hasattr(final_report, 'model_dump'):
-            response_dict = final_report.model_dump()
-        elif hasattr(final_report, 'dict'):
-            response_dict = final_report.dict()
-        elif isinstance(final_report, dict):
-            response_dict = final_report
-        else:
-            # Fallback for other object types
-            response_dict = {
-                "overall_summary": str(final_report),
-                "health_status": "Unknown",
-                "system_metadata": {},
-                "identified_issues": [],
-                "proposed_solutions": []
-            }
-        
+        # Use safe serialization for consistent handling
+        response_dict = serialize_analysis_results(final_report)
         response_dict["trace_id"] = returned_trace_id or request.trace_id
-        return LogAnalysisV2Response(**response_dict)
+        
+        try:
+            return LogAnalysisV2Response(**response_dict)
+        except Exception as validation_error:
+            print(f"LogAnalysisV2Response validation error: {validation_error}")
+            # Create a minimal response that will validate
+            fallback_response = {
+                "overall_summary": response_dict.get("overall_summary", "Analysis completed"),
+                "health_status": response_dict.get("health_status", "Unknown"),
+                "priority_concerns": response_dict.get("priority_concerns", []),
+                "system_metadata": response_dict.get("system_metadata", {}),
+                "environmental_context": response_dict.get("environmental_context", {}),
+                "identified_issues": response_dict.get("identified_issues", []),
+                "issue_summary_by_severity": response_dict.get("issue_summary_by_severity", {}),
+                "correlation_analysis": response_dict.get("correlation_analysis", {}),
+                "dependency_analysis": response_dict.get("dependency_analysis", {}),
+                "predictive_insights": response_dict.get("predictive_insights", []),
+                "ml_pattern_discovery": response_dict.get("ml_pattern_discovery", {}),
+                "proposed_solutions": response_dict.get("proposed_solutions", []),
+                "supplemental_research": response_dict.get("supplemental_research"),
+                "analysis_metrics": response_dict.get("analysis_metrics", {}),
+                "validation_summary": response_dict.get("validation_summary", {}),
+                "immediate_actions": response_dict.get("immediate_actions", []),
+                "preventive_measures": response_dict.get("preventive_measures", []),
+                "monitoring_recommendations": response_dict.get("monitoring_recommendations", []),
+                "automated_remediation_available": response_dict.get("automated_remediation_available", False),
+                "trace_id": returned_trace_id or request.trace_id
+            }
+            return LogAnalysisV2Response(**fallback_response)
     except Exception as e:
         # Log the exception details for debugging
         print(f"Error in Log Analysis Agent endpoint: {e}")
@@ -306,24 +378,38 @@ async def unified_agent_stream_generator(request: UnifiedAgentRequest) -> AsyncI
                 
                 content = f"Log analysis complete! {summary}"
                 
-                # Handle serialization for analysis_results
-                if hasattr(final_report, 'model_dump'):
-                    analysis_results = final_report.model_dump()
-                elif hasattr(final_report, 'dict'):
-                    analysis_results = final_report.dict()
-                elif isinstance(final_report, dict):
-                    analysis_results = final_report
-                else:
-                    analysis_results = {"summary": str(final_report)}
+                # Use safe serialization for analysis_results
+                analysis_results = serialize_analysis_results(final_report)
                 
-                json_payload = json.dumps({
-                    "role": "assistant", 
-                    "content": content,
-                    "agent_type": agent_type,
-                    "trace_id": request.trace_id,
-                    "analysis_results": analysis_results
-                }, ensure_ascii=False)
-                yield f"data: {json_payload}\n\n"
+                # Additional debug logging
+                print(f"Serialized analysis results keys: {list(analysis_results.keys()) if isinstance(analysis_results, dict) else 'not a dict'}")
+                
+                try:
+                    json_payload = json.dumps({
+                        "role": "assistant", 
+                        "content": content,
+                        "agent_type": agent_type,
+                        "trace_id": request.trace_id,
+                        "analysis_results": analysis_results
+                    }, ensure_ascii=False)
+                    yield f"data: {json_payload}\n\n"
+                except Exception as json_error:
+                    print(f"JSON serialization error: {json_error}")
+                    # Send a fallback response
+                    fallback_payload = json.dumps({
+                        "role": "assistant", 
+                        "content": f"Log analysis complete! {summary}",
+                        "agent_type": agent_type,
+                        "trace_id": request.trace_id,
+                        "analysis_results": {
+                            "overall_summary": summary,
+                            "error": f"Serialization failed: {str(json_error)}",
+                            "system_metadata": {},
+                            "identified_issues": [],
+                            "proposed_solutions": []
+                        }
+                    }, ensure_ascii=False)
+                    yield f"data: {fallback_payload}\n\n"
             
         elif agent_type == "researcher":
             # Handle research queries
