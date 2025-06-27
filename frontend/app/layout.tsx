@@ -11,13 +11,13 @@ export const metadata: Metadata = {
   generator: 'MB-Sparrow',
 }
 
-export default function RootLayout({
+export default async function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode
 }>) {
   // Read theme from cookies on server side for consistent SSR/CSR
-  const cookieStore = cookies();
+  const cookieStore = await cookies();
   const themeCookie = cookieStore.get('theme');
   const initialTheme = themeCookie?.value || 'light'; // Default to light for consistency
 

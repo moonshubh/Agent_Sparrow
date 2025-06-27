@@ -1,8 +1,8 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
-
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
 
 @layer utilities {
   .text-balance {
@@ -75,6 +75,53 @@
     -ms-overflow-style: none;
     scrollbar-width: none;
   }
+  
+  /* Responsive chat container utilities */
+  .chat-container-responsive {
+    width: 100%;
+    max-width: var(--container-max);
+    margin-left: auto;
+    margin-right: auto;
+  }
+  
+  @media (min-width: 768px) {
+    .chat-container-responsive {
+      width: var(--container-md);
+    }
+  }
+  
+  @media (min-width: 1024px) {
+    .chat-container-responsive {
+      width: var(--container-lg);
+    }
+  }
+  
+  @media (min-width: 1280px) {
+    .chat-container-responsive {
+      width: var(--container-xl);
+    }
+  }
+  
+  /* Enhanced log analysis container for full-width display */
+  .log-analysis-container {
+    width: 100%;
+    max-width: none;
+  }
+  
+  /* Content-aware message containers */
+  .message-container-primary {
+    width: 100%;
+    max-width: min(1200px, 90%);
+    margin-left: auto;
+    margin-right: auto;
+  }
+  
+  .message-container-log-analysis {
+    width: 100%;
+    max-width: min(1400px, 95%);
+    margin-left: auto;
+    margin-right: auto;
+  }
 }
 
 @layer base {
@@ -110,6 +157,13 @@
     --chat-input-bg: 0 0% 96.1%;
     --chat-input-text: 0 0% 3.9%;
     --chat-metadata: 0 0% 45.1%;
+    
+    /* Responsive container widths */
+    --container-sm: 100%;
+    --container-md: 90%;
+    --container-lg: 85%;
+    --container-xl: 80%;
+    --container-max: 1400px;
     
     /* Sidebar colors */
     --sidebar-background: 0 0% 98%;
@@ -162,6 +216,13 @@
     --chat-input-bg: 0 0% 16.5%;
     --chat-input-text: 0 0% 96.1%;
     --chat-metadata: 0 0% 62.8%;
+    
+    /* Responsive container widths (same as light theme) */
+    --container-sm: 100%;
+    --container-md: 90%;
+    --container-lg: 85%;
+    --container-xl: 80%;
+    --container-max: 1400px;
     
     /* Dark sidebar colors */
     --sidebar-background: 240 5.9% 10%;

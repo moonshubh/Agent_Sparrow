@@ -33,6 +33,11 @@ firecrawl-py # For data_importer.py
 beautifulsoup4==4.12.3
 lxml==5.3.0
 
+# Celery & Async Processing
+celery[redis]==5.3.4
+kombu==5.3.4
+flower==2.0.1  # Optional: For monitoring Celery tasks
+
 # Testing
 pytest
 pytest-asyncio==0.23.7

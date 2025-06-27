@@ -1,4 +1,6 @@
-from fastapi import FastAPI, HTTPException
+import logging
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Any, List
@@ -11,6 +13,7 @@ from app.api.v1.endpoints import auth as auth_endpoints # Added for JWT auth
 from app.api.v1.endpoints import search_tools_endpoints # Added for search tools endpoints
 from app.api.v1.endpoints import agent_endpoints  # Agent interaction endpoints
 from app.api.v1.endpoints import feedme_endpoints  # FeedMe transcript ingestion
+from app.api.v1.endpoints import chat_session_endpoints  # Chat session persistence
 
 # OpenTelemetry Setup
 from opentelemetry import trace
@@ -70,6 +73,26 @@ app.include_router(search_tools_endpoints.router, prefix="/api/v1/tools", tags=[
 app.include_router(agent_endpoints.router, prefix="/api/v1", tags=["Agent Interaction"])
 # Register FeedMe routes
 app.include_router(feedme_endpoints.router, prefix="/api/v1/feedme", tags=["FeedMe"])
+# Register Chat Session routes
+app.include_router(chat_session_endpoints.router, prefix="/api/v1", tags=["Chat Sessions"])
+
+# Global exception handler for sanitizing error messages
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    """
+    Catches any unhandled exceptions and returns a generic 500 error response.
+    This prevents sensitive application details from leaking in production.
+    """
+    # Log the full error for internal debugging
+    logging.error(f"Unhandled exception for request {request.url}: {exc}", exc_info=True)
+    
+    # Return a generic, sanitized error response to the client
+    return JSONResponse(
+        status_code=500,
+        content={
+            "detail": "An unexpected internal server error occurred. Please try again later."
+        },
+    )
 
 
 class AgentQueryRequest(BaseModel):
@@ -85,6 +108,27 @@ class AgentResponse(BaseModel):
 async def read_root():
     """Root endpoint, returns a welcome message."""
     return {"message": "Welcome to MB-Sparrow Agent API"}
+
+@app.get("/health", tags=["General"])
+async def health_check():
+    """Health check endpoint for monitoring and connectivity testing."""
+    try:
+        # Basic health check - can be expanded with database checks, etc.
+        return {
+            "status": "healthy",
+            "service": "mb-sparrow-agent-server",
+            "version": "1.0"
+        }
+    except Exception as e:
+        logging.error(f"Health check failed: {e}")
+        return JSONResponse(
+            status_code=503,
+            content={
+                "status": "unhealthy",
+                "service": "mb-sparrow-agent-server",
+                "error": "Service unavailable"
+            }
+        )
 
 @app.post("/agent", response_model=AgentResponse, tags=["Agent"])
 async def agent_invoke_endpoint(request: AgentQueryRequest):

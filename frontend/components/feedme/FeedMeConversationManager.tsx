@@ -12,8 +12,10 @@
 
 'use client'
 
-import React, { useState, useEffect } from 'react'
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import React, { useState, useEffect, useCallback, useRef } from 'react'
+import { useDebounce } from 'use-debounce'
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
@@ -31,17 +33,26 @@ import {
   CheckCircle2,
   AlertCircle,
   Loader2,
-  RefreshCw
+  RefreshCw,
+  Trash2,
+  Folder,
+  Settings,
+  Move
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { formatDistanceToNow } from 'date-fns'
 import {
   listConversations,
+  deleteConversation,
+  listFolders,
   type UploadTranscriptResponse,
-  type ConversationListResponse
+  type ConversationListResponse,
+  type DeleteConversationResponse,
+  type FeedMeFolder
 } from '@/lib/feedme-api'
 import { FeedMeModal } from './FeedMeModal'
 import { EditConversationModal } from './EditConversationModal'
+import { FolderManager } from './FolderManager'
 
 interface FeedMeConversationManagerProps {
   isOpen: boolean
@@ -51,10 +62,11 @@ interface FeedMeConversationManagerProps {
 interface ConversationCardProps {
   conversation: UploadTranscriptResponse
   onEdit: (conversation: UploadTranscriptResponse) => void
+  onDelete: (conversation: UploadTranscriptResponse) => void
   onRefresh: () => void
 }
 
-function ConversationCard({ conversation, onEdit, onRefresh }: ConversationCardProps) {
+function ConversationCard({ conversation, onEdit, onDelete, onRefresh }: ConversationCardProps) {
   const getStatusColor = (status: string) => {
     switch (status) {
       case 'completed':
@@ -151,6 +163,18 @@ function ConversationCard({ conversation, onEdit, onRefresh }: ConversationCardP
               <Edit3 className="h-4 w-4" />
               Edit
             </Button>
+            
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => onDelete(conversation)}
+              className="flex items-center gap-2 text-red-600 hover:text-red-700 hover:bg-red-50"
+              disabled={conversation.processing_status === 'processing'}
+              title="Delete conversation"
+            >
+              <Trash2 className="h-4 w-4" />
+              Delete
+            </Button>
           </div>
         </div>
       </CardContent>
@@ -159,56 +183,81 @@ function ConversationCard({ conversation, onEdit, onRefresh }: ConversationCardP
 }
 
 export function FeedMeConversationManager({ isOpen, onClose }: FeedMeConversationManagerProps) {
-  // State management
-  const [activeTab, setActiveTab] = useState<'conversations' | 'upload'>('conversations')
+  const [activeTab, setActiveTab] = useState('view')
   const [conversations, setConversations] = useState<UploadTranscriptResponse[]>([])
-  const [isLoading, setIsLoading] = useState(false)
+  const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [searchQuery, setSearchQuery] = useState('')
-  const [statusFilter, setStatusFilter] = useState<string>('all')
-  
-  // Modal states
+
   const [isUploadModalOpen, setIsUploadModalOpen] = useState(false)
   const [isEditModalOpen, setIsEditModalOpen] = useState(false)
   const [selectedConversation, setSelectedConversation] = useState<UploadTranscriptResponse | null>(null)
+  
+  // Delete confirmation state
+  const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false)
+  const [conversationToDelete, setConversationToDelete] = useState<UploadTranscriptResponse | null>(null)
+  const [isDeleting, setIsDeleting] = useState(false)
 
-  // Pagination state
+  // Folder management state
+  const [folders, setFolders] = useState<FeedMeFolder[]>([])
+  const [isFolderManagerOpen, setIsFolderManagerOpen] = useState(false)
+  const [selectedConversations, setSelectedConversations] = useState<number[]>([])
+  const [selectedFolderId, setSelectedFolderId] = useState<number | null>(null)
+
+  // Search and pagination state
+  const [searchTerm, setSearchTerm] = useState('')
+  const [debouncedSearchQuery] = useDebounce(searchTerm, 300)
   const [currentPage, setCurrentPage] = useState(1)
+  const [pageSize, setPageSize] = useState(10)
   const [totalCount, setTotalCount] = useState(0)
-  const pageSize = 10
+  const isInitialMount = useRef(true)
 
-  // Load conversations
+  // Reset page to 1 when search query changes, except on initial mount
   useEffect(() => {
-    if (isOpen && activeTab === 'conversations') {
-      loadConversations()
+    if (isInitialMount.current) {
+      isInitialMount.current = false
+      return
     }
-  }, [isOpen, activeTab, currentPage, statusFilter])
 
-  const loadConversations = async () => {
+    // To prevent an extra re-render, only reset if not already on page 1
+    if (currentPage !== 1) {
+      setCurrentPage(1)
+    }
+  }, [debouncedSearchQuery])
+
+  // Load folders from API
+  const loadFolders = useCallback(async () => {
     try {
-      setIsLoading(true)
-      setError(null)
-      
-      const response: ConversationListResponse = await listConversations(
-        currentPage,
-        pageSize,
-        statusFilter === 'all' ? undefined : statusFilter
-      )
-      
+      const response = await listFolders()
+      setFolders(response.folders)
+    } catch (err) {
+      console.error('Failed to load folders:', err)
+    }
+  }, [])
+
+  // Load conversations from API
+  const loadConversations = useCallback(async () => {
+    if (!isOpen) return
+    setIsLoading(true)
+    setError(null)
+    try {
+      const response = await listConversations(currentPage, pageSize, debouncedSearchQuery)
       setConversations(response.conversations)
       setTotalCount(response.total_count)
-    } catch (error) {
-      console.error('Failed to load conversations:', error)
-      setError(error instanceof Error ? error.message : 'Failed to load conversations')
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to load conversations')
+      setConversations([])
+      setTotalCount(0)
     } finally {
       setIsLoading(false)
     }
-  }
+  }, [isOpen, currentPage, pageSize, debouncedSearchQuery])
 
-  // Filter conversations by search query
-  const filteredConversations = conversations.filter(conversation =>
-    conversation.title.toLowerCase().includes(searchQuery.toLowerCase())
-  )
+  useEffect(() => {
+    if (isOpen) {
+      loadFolders()
+      loadConversations()
+    }
+  }, [isOpen, loadFolders, loadConversations])
 
   // Handle edit conversation
   const handleEditConversation = (conversation: UploadTranscriptResponse) => {
@@ -225,19 +274,55 @@ export function FeedMeConversationManager({ isOpen, onClose }: FeedMeConversatio
     )
   }
 
+  // Handle delete conversation
+  const handleDeleteConversation = (conversation: UploadTranscriptResponse) => {
+    setConversationToDelete(conversation)
+    setIsDeleteDialogOpen(true)
+  }
+
+  // Confirm delete conversation
+  const confirmDeleteConversation = async () => {
+    if (!conversationToDelete) return
+
+    setIsDeleting(true)
+    try {
+      await deleteConversation(conversationToDelete.id)
+      
+      // Remove from local state
+      setConversations(prev => 
+        prev.filter(conv => conv.id !== conversationToDelete.id)
+      )
+      
+      // Update total count
+      setTotalCount(prev => Math.max(0, prev - 1))
+      
+      setIsDeleteDialogOpen(false)
+      setConversationToDelete(null)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to delete conversation')
+    } finally {
+      setIsDeleting(false)
+    }
+  }
+
+  // Cancel delete
+  const cancelDelete = () => {
+    setIsDeleteDialogOpen(false)
+    setConversationToDelete(null)
+  }
+
   // Refresh conversations when upload modal closes
   useEffect(() => {
-    if (!isUploadModalOpen && isOpen && activeTab === 'conversations') {
+    if (!isUploadModalOpen && isOpen) {
       // Refresh conversations list after upload
       loadConversations()
     }
-  }, [isUploadModalOpen, isOpen, activeTab])
+  }, [isUploadModalOpen, isOpen, loadConversations])
 
   // Handle close
   const handleClose = () => {
-    setActiveTab('conversations')
-    setSearchQuery('')
-    setStatusFilter('all')
+    setActiveTab('view')
+    setSearchTerm('')
     setCurrentPage(1)
     onClose()
   }
@@ -250,19 +335,26 @@ export function FeedMeConversationManager({ isOpen, onClose }: FeedMeConversatio
             <DialogTitle className="flex items-center gap-2">
               <FileText className="h-5 w-5" />
               FeedMe Conversation Manager
-              {totalCount > 0 && (
-                <Badge variant="secondary" className="ml-2">
-                  {totalCount} conversations
-                </Badge>
-              )}
             </DialogTitle>
+            <DialogDescription>
+              View, search, and manage your FeedMe conversations. You can also upload new transcripts for processing.
+            </DialogDescription>
+            {totalCount > 0 && (
+              <Badge variant="secondary" className="ml-2">
+                {totalCount} conversations
+              </Badge>
+            )}
           </DialogHeader>
 
           <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as any)} className="flex-1 flex flex-col overflow-hidden">
-            <TabsList className="grid w-full grid-cols-2">
-              <TabsTrigger value="conversations" className="flex items-center gap-2">
+            <TabsList className="grid w-full grid-cols-3">
+              <TabsTrigger value="view" className="flex items-center gap-2">
                 <FileText className="h-4 w-4" />
                 Conversations ({totalCount})
+              </TabsTrigger>
+              <TabsTrigger value="folders" className="flex items-center gap-2">
+                <Folder className="h-4 w-4" />
+                Folders ({folders.length})
               </TabsTrigger>
               <TabsTrigger value="upload" className="flex items-center gap-2">
                 <Plus className="h-4 w-4" />
@@ -271,34 +363,19 @@ export function FeedMeConversationManager({ isOpen, onClose }: FeedMeConversatio
             </TabsList>
 
             {/* Conversations Tab */}
-            <TabsContent value="conversations" className="flex-1 flex flex-col overflow-hidden mt-4">
+            <TabsContent value="view" className="flex-1 flex flex-col overflow-hidden mt-4">
               {/* Search and Filters */}
               <div className="flex items-center gap-4 mb-4">
                 <div className="relative flex-1">
                   <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                   <Input
                     placeholder="Search conversations..."
-                    value={searchQuery}
-                    onChange={(e) => setSearchQuery(e.target.value)}
+                    value={searchTerm}
+                    onChange={(e) => setSearchTerm(e.target.value)}
                     className="pl-10"
                   />
                 </div>
                 
-                <div className="flex items-center gap-2">
-                  <Filter className="h-4 w-4 text-muted-foreground" />
-                  <select
-                    value={statusFilter}
-                    onChange={(e) => setStatusFilter(e.target.value)}
-                    className="px-3 py-1 border rounded-md text-sm"
-                  >
-                    <option value="all">All Status</option>
-                    <option value="completed">Completed</option>
-                    <option value="processing">Processing</option>
-                    <option value="failed">Failed</option>
-                    <option value="pending">Pending</option>
-                  </select>
-                </div>
-
                 <Button
                   variant="outline"
                   onClick={loadConversations}
@@ -330,15 +407,14 @@ export function FeedMeConversationManager({ isOpen, onClose }: FeedMeConversatio
                       <p className="text-sm text-muted-foreground">Loading conversations...</p>
                     </div>
                   </div>
-                ) : filteredConversations.length === 0 ? (
+                ) : conversations.length === 0 ? (
                   <div className="flex items-center justify-center h-64">
                     <div className="text-center">
-                      <FileText className="h-8 w-8 mx-auto mb-2 text-muted-foreground" />
                       <p className="text-lg font-medium mb-2">No conversations found</p>
                       <p className="text-sm text-muted-foreground mb-4">
-                        {searchQuery ? 'Try adjusting your search query' : 'Upload your first conversation to get started'}
+                        {debouncedSearchQuery ? 'Try adjusting your search query' : 'Upload your first conversation to get started'}
                       </p>
-                      {!searchQuery && (
+                      {!debouncedSearchQuery && !isLoading && (
                         <Button onClick={() => setActiveTab('upload')}>
                           <Plus className="h-4 w-4 mr-2" />
                           Upload Conversation
@@ -349,11 +425,12 @@ export function FeedMeConversationManager({ isOpen, onClose }: FeedMeConversatio
                 ) : (
                   <ScrollArea className="h-[400px]">
                     <div className="space-y-4 pr-4">
-                      {filteredConversations.map((conversation) => (
+                      {conversations.map((conversation) => (
                         <ConversationCard
                           key={conversation.id}
                           conversation={conversation}
                           onEdit={handleEditConversation}
+                          onDelete={handleDeleteConversation}
                           onRefresh={loadConversations}
                         />
                       ))}
@@ -391,6 +468,91 @@ export function FeedMeConversationManager({ isOpen, onClose }: FeedMeConversatio
               )}
             </TabsContent>
 
+            {/* Folders Tab */}
+            <TabsContent value="folders" className="flex-1 overflow-hidden mt-4">
+              <div className="h-full flex flex-col">
+                {/* Folder Management Header */}
+                <div className="flex items-center justify-between mb-4">
+                  <div>
+                    <h3 className="text-lg font-semibold">Folder Organization</h3>
+                    <p className="text-sm text-muted-foreground">
+                      Organize conversations with colored folders for better management
+                    </p>
+                  </div>
+                  <Button 
+                    onClick={() => setIsFolderManagerOpen(true)}
+                    className="flex items-center gap-2"
+                  >
+                    <Settings className="h-4 w-4" />
+                    Manage Folders
+                  </Button>
+                </div>
+
+                {/* Folder Grid */}
+                <div className="flex-1 overflow-auto">
+                  {folders.length === 0 ? (
+                    <div className="flex items-center justify-center h-64">
+                      <div className="text-center">
+                        <Folder className="h-12 w-12 mx-auto mb-4 text-muted-foreground" />
+                        <h3 className="text-lg font-medium mb-2">No folders yet</h3>
+                        <p className="text-sm text-muted-foreground mb-4">
+                          Create your first folder to organize conversations
+                        </p>
+                        <Button onClick={() => setIsFolderManagerOpen(true)}>
+                          <Plus className="h-4 w-4 mr-2" />
+                          Create Folder
+                        </Button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                      {folders.map((folder) => (
+                        <Card key={folder.id} className="hover:shadow-md transition-shadow cursor-pointer">
+                          <CardHeader className="pb-2">
+                            <div className="flex items-center justify-between">
+                              <div className="flex items-center gap-2">
+                                <div 
+                                  className="w-4 h-4 rounded-full border border-gray-300"
+                                  style={{ backgroundColor: folder.color }}
+                                />
+                                <CardTitle className="text-base">{folder.name}</CardTitle>
+                              </div>
+                              <Badge variant="secondary" className="text-xs">
+                                {folder.conversation_count}
+                              </Badge>
+                            </div>
+                            {folder.description && (
+                              <p className="text-xs text-muted-foreground mt-1">
+                                {folder.description}
+                              </p>
+                            )}
+                          </CardHeader>
+                          <CardContent className="pt-0">
+                            <div className="flex items-center justify-between text-sm">
+                              <div className="flex items-center gap-1 text-muted-foreground">
+                                <FileText className="h-3 w-3" />
+                                {folder.conversation_count} conversations
+                              </div>
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => {
+                                  setSelectedFolderId(folder.id)
+                                  setActiveTab('view')
+                                }}
+                              >
+                                View
+                              </Button>
+                            </div>
+                          </CardContent>
+                        </Card>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </TabsContent>
+
             {/* Upload Tab */}
             <TabsContent value="upload" className="flex-1 overflow-hidden mt-4">
               <div className="h-full flex items-center justify-center">
@@ -402,7 +564,7 @@ export function FeedMeConversationManager({ isOpen, onClose }: FeedMeConversatio
                   </p>
                   <Button 
                     onClick={() => setIsUploadModalOpen(true)}
-                    className="flex items-center gap-2"
+                    className="flex items-center gap-2 mx-auto bg-accent hover:bg-accent/90 text-accent-foreground"
                   >
                     <Plus className="h-4 w-4" />
                     Upload Transcript
@@ -432,6 +594,51 @@ export function FeedMeConversationManager({ isOpen, onClose }: FeedMeConversatio
           onConversationUpdated={handleConversationUpdated}
         />
       )}
+
+      {/* Folder Manager Modal */}
+      <FolderManager
+        isOpen={isFolderManagerOpen}
+        onClose={() => setIsFolderManagerOpen(false)}
+        onFolderCreated={loadFolders}
+        onFolderUpdated={loadFolders}
+        onFolderDeleted={loadFolders}
+      />
+
+      {/* Delete Confirmation Dialog */}
+      <AlertDialog open={isDeleteDialogOpen} onOpenChange={setIsDeleteDialogOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete Conversation</AlertDialogTitle>
+            <AlertDialogDescription>
+              Are you sure you want to delete "{conversationToDelete?.title}"? 
+              This will permanently remove the conversation and all associated examples ({conversationToDelete?.total_examples} examples).
+              This action cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel onClick={cancelDelete} disabled={isDeleting}>
+              Cancel
+            </AlertDialogCancel>
+            <AlertDialogAction 
+              onClick={confirmDeleteConversation}
+              disabled={isDeleting}
+              className="bg-red-600 hover:bg-red-700 focus:ring-red-600"
+            >
+              {isDeleting ? (
+                <>
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  Deleting...
+                </>
+              ) : (
+                <>
+                  <Trash2 className="h-4 w-4 mr-2" />
+                  Delete
+                </>
+              )}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </>
   )
 }

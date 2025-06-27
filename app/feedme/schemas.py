@@ -6,6 +6,7 @@ These models correspond to the database tables and API request/response formats.
 """
 
 from typing import Dict, List, Optional, Any
+from uuid import UUID
 from datetime import datetime
 from enum import Enum
 from pydantic import BaseModel, Field, validator
@@ -20,6 +21,23 @@ class ProcessingStatus(str, Enum):
     PROCESSING = "processing"
     COMPLETED = "completed"
     FAILED = "failed"
+
+
+class ApprovalStatus(str, Enum):
+    """Status of conversation approval workflow"""
+    PENDING = "pending"
+    PROCESSED = "processed"
+    APPROVED = "approved"
+    REJECTED = "rejected"
+    PUBLISHED = "published"
+
+
+class ReviewStatus(str, Enum):
+    """Status of example review"""
+    PENDING = "pending"
+    APPROVED = "approved"
+    REJECTED = "rejected"
+    EDITED = "edited"
 
 
 class IssueType(str, Enum):
@@ -139,6 +157,7 @@ class ExampleUpdate(BaseModel):
 class FeedMeConversation(FeedMeConversationBase):
     """Complete FeedMe conversation model"""
     id: int = Field(..., description="Unique conversation ID")
+    uuid: UUID = Field(..., description="Globally unique identifier for the conversation")
     raw_transcript: str = Field(..., description="Full transcript content")
     parsed_content: Optional[str] = Field(None, description="Cleaned/parsed transcript")
     uploaded_at: datetime = Field(..., description="Upload timestamp")
@@ -146,6 +165,26 @@ class FeedMeConversation(FeedMeConversationBase):
     processing_status: ProcessingStatus = Field(default=ProcessingStatus.PENDING, description="Processing status")
     error_message: Optional[str] = Field(None, description="Error details if processing failed")
     total_examples: int = Field(default=0, ge=0, description="Number of examples extracted")
+    
+    # Approval workflow fields
+    approval_status: ApprovalStatus = Field(default=ApprovalStatus.PENDING, description="Approval workflow status")
+    approved_by: Optional[str] = Field(None, description="User who approved/rejected the conversation")
+    approved_at: Optional[datetime] = Field(None, description="Approval timestamp")
+    rejected_at: Optional[datetime] = Field(None, description="Rejection timestamp")
+    reviewer_notes: Optional[str] = Field(None, description="Notes from the reviewer")
+    
+    # Processing timeline fields
+    processing_started_at: Optional[datetime] = Field(None, description="When processing started")
+    processing_completed_at: Optional[datetime] = Field(None, description="When processing completed")
+    processing_error: Optional[str] = Field(None, description="Detailed processing error information")
+    processing_time_ms: Optional[int] = Field(None, description="Processing time in milliseconds")
+    
+    # Quality metrics
+    quality_score: float = Field(default=0.0, ge=0.0, le=1.0, description="Average quality score of examples")
+    high_quality_examples: int = Field(default=0, ge=0, description="Number of high-quality examples")
+    medium_quality_examples: int = Field(default=0, ge=0, description="Number of medium-quality examples")
+    low_quality_examples: int = Field(default=0, ge=0, description="Number of low-quality examples")
+    
     created_at: datetime = Field(..., description="Creation timestamp")
     updated_at: datetime = Field(..., description="Last update timestamp")
 
@@ -157,6 +196,17 @@ class FeedMeExample(FeedMeExampleBase):
     """Complete FeedMe example model"""
     id: int = Field(..., description="Unique example ID")
     conversation_id: int = Field(..., description="Parent conversation ID")
+    
+    # Extraction fields
+    extraction_method: str = Field(default="ai", description="Method used for extraction")
+    extraction_confidence: float = Field(default=0.0, ge=0.0, le=1.0, description="Extraction confidence")
+    source_position: int = Field(default=0, description="Position in source transcript")
+    
+    # Review fields
+    reviewed_by: Optional[str] = Field(None, description="User who reviewed this example")
+    reviewed_at: Optional[datetime] = Field(None, description="Review timestamp")
+    review_status: ReviewStatus = Field(default=ReviewStatus.PENDING, description="Review status")
+    
     created_at: datetime = Field(..., description="Creation timestamp")
     updated_at: datetime = Field(..., description="Last update timestamp")
 
@@ -384,3 +434,120 @@ class RevertResponse(BaseModel):
     reverted_to_version: int = Field(..., description="Version that was reverted to")
     task_id: Optional[str] = Field(None, description="Celery task ID if reprocessing")
     reprocessing: bool = Field(..., description="Whether reprocessing was triggered")
+
+
+# Approval Workflow Models
+
+class ApprovalRequest(BaseModel):
+    """Request to approve a conversation"""
+    approved_by: str = Field(..., description="User approving the conversation")
+    reviewer_notes: Optional[str] = Field(None, description="Optional notes about the approval")
+    
+    @validator('approved_by')
+    def validate_approved_by(cls, v):
+        if not v or len(v.strip()) == 0:
+            raise ValueError("approved_by is required")
+        return v
+
+
+class RejectionRequest(BaseModel):
+    """Request to reject a conversation"""
+    rejected_by: str = Field(..., description="User rejecting the conversation")
+    reviewer_notes: str = Field(..., description="Required notes about the rejection")
+    
+    @validator('rejected_by')
+    def validate_rejected_by(cls, v):
+        if not v or len(v.strip()) == 0:
+            raise ValueError("rejected_by is required")
+        return v
+    
+    @validator('reviewer_notes')
+    def validate_reviewer_notes(cls, v):
+        if not v or len(v.strip()) == 0:
+            raise ValueError("reviewer_notes is required for rejections")
+        return v
+
+
+class ApprovalResponse(BaseModel):
+    """Response after approving/rejecting a conversation"""
+    conversation: FeedMeConversation = Field(..., description="Updated conversation")
+    action: str = Field(..., description="Action taken (approved/rejected)")
+    timestamp: datetime = Field(..., description="When the action was taken")
+
+
+class DeleteConversationResponse(BaseModel):
+    """Response after deleting a conversation"""
+    conversation_id: int = Field(..., description="ID of the deleted conversation")
+    title: str = Field(..., description="Title of the deleted conversation")
+    examples_deleted: int = Field(..., description="Number of examples deleted")
+    message: str = Field(..., description="Confirmation message")
+
+
+class ApprovalWorkflowStats(BaseModel):
+    """Statistics for approval workflow"""
+    total_conversations: int = Field(..., description="Total number of conversations")
+    pending_approval: int = Field(..., description="Conversations awaiting initial processing")
+    awaiting_review: int = Field(..., description="Conversations processed and awaiting review")
+    approved: int = Field(..., description="Approved conversations")
+    rejected: int = Field(..., description="Rejected conversations")
+    published: int = Field(..., description="Published conversations")
+    currently_processing: int = Field(..., description="Conversations currently being processed")
+    processing_failed: int = Field(..., description="Conversations with processing failures")
+    avg_quality_score: Optional[float] = Field(None, description="Average quality score")
+    avg_processing_time_ms: Optional[float] = Field(None, description="Average processing time")
+
+
+class BulkApprovalRequest(BaseModel):
+    """Request for bulk approval operations"""
+    conversation_ids: List[int] = Field(..., description="List of conversation IDs to process")
+    action: str = Field(..., description="Action to take (approve/reject)")
+    approved_by: str = Field(..., description="User performing the bulk operation")
+    reviewer_notes: Optional[str] = Field(None, description="Notes for the bulk operation")
+    
+    @validator('conversation_ids')
+    def validate_conversation_ids(cls, v):
+        if not v or len(v) == 0:
+            raise ValueError("At least one conversation ID is required")
+        if len(v) > 50:  # Reasonable limit for bulk operations
+            raise ValueError("Maximum 50 conversations can be processed at once")
+        return v
+    
+    @validator('action')
+    def validate_action(cls, v):
+        if v not in ['approve', 'reject']:
+            raise ValueError("Action must be 'approve' or 'reject'")
+        return v
+
+
+class BulkApprovalResponse(BaseModel):
+    """Response for bulk approval operations"""
+    successful: List[int] = Field(..., description="Successfully processed conversation IDs")
+    failed: List[Dict[str, Any]] = Field(..., description="Failed operations with error details")
+    total_requested: int = Field(..., description="Total number of conversations requested")
+    total_successful: int = Field(..., description="Total number successfully processed")
+    action_taken: str = Field(..., description="Action that was taken")
+
+
+class ExampleReviewRequest(BaseModel):
+    """Request to review an individual example"""
+    reviewed_by: str = Field(..., description="User reviewing the example")
+    review_status: ReviewStatus = Field(..., description="Review decision")
+    reviewer_notes: Optional[str] = Field(None, description="Optional notes about the review")
+    
+    # Optional edits to the example
+    question_text: Optional[str] = Field(None, description="Updated question text")
+    answer_text: Optional[str] = Field(None, description="Updated answer text")
+    tags: Optional[List[str]] = Field(None, description="Updated tags")
+    
+    @validator('reviewed_by')
+    def validate_reviewed_by(cls, v):
+        if not v or len(v.strip()) == 0:
+            raise ValueError("reviewed_by is required")
+        return v
+
+
+class ExampleReviewResponse(BaseModel):
+    """Response after reviewing an example"""
+    example: FeedMeExample = Field(..., description="Updated example")
+    action: str = Field(..., description="Action taken")
+    timestamp: datetime = Field(..., description="When the review was completed")

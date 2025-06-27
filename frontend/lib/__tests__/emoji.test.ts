@@ -62,7 +62,7 @@ describe('emoji utility', () => {
 
     it('handles special characters in label', () => {
       const result = accessibleEmoji('🚩', 'warning & alert')
-      expect(result).toBe('<span role="img" aria-label="warning & alert">🚩</span>')
+      expect(result).toBe('<span role="img" aria-label="warning &amp; alert">🚩</span>')
     })
   })
 

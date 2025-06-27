@@ -14,6 +14,7 @@ import logging
 import difflib
 from typing import List, Dict, Any, Optional, Tuple
 from datetime import datetime
+import psycopg2.extras
 
 from app.db.connection_manager import get_connection_manager, with_db_connection
 from app.feedme.schemas import (
@@ -96,10 +97,23 @@ class VersioningService:
                 new_data.pop('id')
                 
                 # Insert new version
-                columns = ', '.join(new_data.keys())
-                placeholders = ', '.join(['%s'] * len(new_data))
-                values = list(new_data.values())
-                
+                # Define allowed columns
+                ALLOWED_COLUMNS = {
+                    'uuid', 'title', 'raw_transcript', 'metadata', 'version',
+                    'is_active', 'updated_by', 'updated_at', 'created_at',
+                    # ... add other allowed columns
+                }
+
+                # Validate columns
+                columns_to_insert = [col for col in new_data.keys() if col in ALLOWED_COLUMNS]
+                if len(columns_to_insert) != len(new_data):
+                    invalid_cols = set(new_data.keys()) - ALLOWED_COLUMNS
+                    raise ValueError(f"Invalid columns: {invalid_cols}")
+
+                columns = ', '.join(columns_to_insert)
+                placeholders = ', '.join(['%s'] * len(columns_to_insert))
+                values = [new_data[col] for col in columns_to_insert]
+
                 cur.execute(f"""
                     INSERT INTO feedme_conversations ({columns})
                     VALUES ({placeholders})
@@ -117,73 +131,73 @@ class VersioningService:
             logger.error(f"Failed to create new version for conversation {conversation_id}: {e}")
             raise
     
-    @with_db_connection()
-    def get_conversation_versions(self, conn, conversation_id: int) -> VersionListResponse:
+    def get_conversation_versions(self, conversation_id: int) -> VersionListResponse:
         """Get all versions of a conversation"""
         try:
-            with conn.cursor() as cur:
-                # Get the UUID for this conversation
-                cur.execute("""
-                    SELECT uuid FROM feedme_conversations 
-                    WHERE id = %s LIMIT 1
-                """, (conversation_id,))
-                
-                result = cur.fetchone()
-                if not result:
-                    raise ValueError(f"Conversation {conversation_id} not found")
-                
-                conversation_uuid = result['uuid']
-                
-                # Get all versions for this conversation UUID
-                cur.execute("""
-                    SELECT * FROM feedme_conversations 
-                    WHERE uuid = %s 
-                    ORDER BY version DESC
-                """, (conversation_uuid,))
-                
-                version_rows = cur.fetchall()
-                versions = [ConversationVersion(**dict(row)) for row in version_rows]
-                
-                # Get active version number
-                active_version = next((v.version for v in versions if v.is_active), None)
-                
-                return VersionListResponse(
-                    versions=versions,
-                    total_count=len(versions),
-                    active_version=active_version or versions[0].version if versions else 1
-                )
+            with self.connection_manager.get_connection() as conn:
+                with conn.cursor(cursor_factory=psycopg2_extras.RealDictCursor) as cur:
+                    # Get the UUID for this conversation
+                    cur.execute("""
+                        SELECT uuid FROM feedme_conversations 
+                        WHERE id = %s LIMIT 1
+                    """, (conversation_id,))
+                    
+                    result = cur.fetchone()
+                    if not result:
+                        raise ValueError(f"Conversation {conversation_id} not found")
+                    
+                    conversation_uuid = result['uuid']
+                    
+                    # Get all versions for this conversation UUID
+                    cur.execute("""
+                        SELECT * FROM feedme_conversations 
+                        WHERE uuid = %s 
+                        ORDER BY version DESC
+                    """, (conversation_uuid,))
+                    
+                    version_rows = cur.fetchall()
+                    versions = [ConversationVersion(**dict(row)) for row in version_rows]
+                    
+                    # Get active version number
+                    active_version = next((v.version for v in versions if v.is_active), None)
+                    
+                    return VersionListResponse(
+                        versions=versions,
+                        total_count=len(versions),
+                        active_version=active_version or versions[0].version if versions else 1
+                    )
                 
         except Exception as e:
             logger.error(f"Failed to get versions for conversation {conversation_id}: {e}")
             raise
     
-    @with_db_connection()
-    def get_version_by_number(self, conn, conversation_id: int, version_number: int) -> Optional[ConversationVersion]:
+    def get_version_by_number(self, conversation_id: int, version_number: int) -> Optional[ConversationVersion]:
         """Get a specific version of a conversation"""
         try:
-            with conn.cursor() as cur:
-                # Get the UUID for this conversation
-                cur.execute("""
-                    SELECT uuid FROM feedme_conversations 
-                    WHERE id = %s LIMIT 1
-                """, (conversation_id,))
-                
-                result = cur.fetchone()
-                if not result:
+            with self.connection_manager.get_connection() as conn:
+                with conn.cursor(cursor_factory=psycopg2_extras.RealDictCursor) as cur:
+                    # Get the UUID for this conversation
+                    cur.execute("""
+                        SELECT uuid FROM feedme_conversations 
+                        WHERE id = %s LIMIT 1
+                    """, (conversation_id,))
+                    
+                    result = cur.fetchone()
+                    if not result:
+                        return None
+                    
+                    conversation_uuid = result['uuid']
+                    
+                    # Get specific version
+                    cur.execute("""
+                        SELECT * FROM feedme_conversations 
+                        WHERE uuid = %s AND version = %s
+                    """, (conversation_uuid, version_number))
+                    
+                    version_row = cur.fetchone()
+                    if version_row:
+                        return ConversationVersion(**dict(version_row))
                     return None
-                
-                conversation_uuid = result['uuid']
-                
-                # Get specific version
-                cur.execute("""
-                    SELECT * FROM feedme_conversations 
-                    WHERE uuid = %s AND version = %s
-                """, (conversation_uuid, version_number))
-                
-                version_row = cur.fetchone()
-                if version_row:
-                    return ConversationVersion(**dict(version_row))
-                return None
                 
         except Exception as e:
             logger.error(f"Failed to get version {version_number} for conversation {conversation_id}: {e}")
@@ -283,7 +297,7 @@ class VersioningService:
             # Convert to FeedMeConversation
             conversation = FeedMeConversation(
                 id=new_version.id,
-                uuid=new_version.id,  # Will be corrected in actual implementation
+                uuid=new_version.uuid,
                 title=new_version.title,
                 raw_transcript=new_version.raw_transcript,
                 metadata=new_version.metadata,
@@ -346,10 +360,14 @@ class VersioningService:
                 updated_by=revert_request.reverted_by
             )
             
+            # The UUID is consistent across all versions, so we can get it from the target version
+            # This avoids an extra database query.
+            conversation_uuid = target_version.uuid
+            
             # Convert to FeedMeConversation
             conversation = FeedMeConversation(
                 id=new_version.id,
-                uuid=new_version.id,  # Will be corrected in actual implementation
+                uuid=conversation_uuid,  # Use the actual UUID from the database
                 title=new_version.title,
                 raw_transcript=new_version.raw_transcript,
                 metadata=new_version.metadata,
@@ -357,7 +375,14 @@ class VersioningService:
                 version=new_version.version,
                 updated_by=new_version.updated_by,
                 created_at=new_version.created_at,
-                updated_at=new_version.updated_at
+                updated_at=new_version.updated_at,
+                # Required fields from FeedMeConversationBase
+                original_filename=new_version.metadata.get('original_filename'),
+                uploaded_by=new_version.updated_by,
+                # Required fields from FeedMeConversation
+                uploaded_at=new_version.created_at,  # Use created_at as fallback
+                processing_status='completed',  # Default status
+                total_examples=0  # Will be updated during processing
             )
             
             task_id = None
