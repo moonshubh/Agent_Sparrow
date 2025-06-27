@@ -95,11 +95,11 @@ export function EnhancedLogAnalysisContainer({ data, className }: EnhancedLogAna
     const hasCriticalIssues = criticalIssues.length > 0 || (immediate_actions && immediate_actions.length > 0)
     const hasAdvancedFeatures = predictive_insights?.length > 0 || 
                               ml_pattern_discovery?.patterns_discovered?.length > 0 ||
-                              correlation_analysis ||
-                              dependency_analysis
+                              !!correlation_analysis ||
+                              !!dependency_analysis
 
     return (
-      <article className={cn("mx-auto max-w-[65ch] w-full space-y-6", className)} data-log-container>
+      <article className={cn("w-full max-w-none space-y-3 log-analysis-container", className)} data-log-container>
         {/* Critical Issues Banner */}
         {hasCriticalIssues && (
           <Alert className="ring-1 ring-red-500/40 bg-red-900/20 dark:bg-red-900/20 border-red-500/30">
@@ -140,7 +140,7 @@ export function EnhancedLogAnalysisContainer({ data, className }: EnhancedLogAna
         {/* Tab Content based on ActiveTab */}
         <div className="w-full">
           {activeTab === 'system' && (
-            <div className="space-y-6 animate-in fade-in-0 slide-in-from-bottom-2 duration-200 scroll-mt-24" id="panel-system" role="tabpanel">
+            <div className="space-y-3 animate-in fade-in-0 slide-in-from-bottom-2 duration-200 scroll-mt-24" id="panel-system" role="tabpanel">
               {/* System Overview Card */}
               <SystemAndAnalysisOverviewCard 
                 metadata={system_metadata} 
@@ -155,9 +155,9 @@ export function EnhancedLogAnalysisContainer({ data, className }: EnhancedLogAna
           )}
 
           {activeTab === 'issues' && (
-            <div className="space-y-4 animate-in fade-in-0 slide-in-from-bottom-2 duration-200 scroll-mt-24" id="panel-issues" role="tabpanel">
+            <div className="space-y-3 animate-in fade-in-0 slide-in-from-bottom-2 duration-200 scroll-mt-24" id="panel-issues" role="tabpanel">
             {activeIssues && activeIssues.length > 0 ? (
-              <div className="space-y-4">
+              <div className="space-y-3">
                 {/* Issue Summary Header */}
                 {topIssueTypes.length > 0 && (
                   <div className="mb-4 p-3 bg-muted/30 border border-border/50 rounded-lg">
@@ -218,9 +218,9 @@ export function EnhancedLogAnalysisContainer({ data, className }: EnhancedLogAna
           )}
 
           {activeTab === 'insights' && (
-            <div className="space-y-4 animate-in fade-in-0 slide-in-from-bottom-2 duration-200 scroll-mt-24" id="panel-insights" role="tabpanel">
+            <div className="space-y-3 animate-in fade-in-0 slide-in-from-bottom-2 duration-200 scroll-mt-24" id="panel-insights" role="tabpanel">
             {hasAdvancedFeatures ? (
-              <div className="space-y-4">
+              <div className="space-y-3">
                 <PredictiveInsightsCard insights={predictive_insights || []} />
                 <MLPatternDiscoveryCard discovery={ml_pattern_discovery} />
                 
@@ -244,7 +244,7 @@ export function EnhancedLogAnalysisContainer({ data, className }: EnhancedLogAna
           )}
 
           {activeTab === 'actions' && (
-            <div className="space-y-4 animate-in fade-in-0 slide-in-from-bottom-2 duration-200 scroll-mt-24" id="panel-actions" role="tabpanel">
+            <div className="space-y-3 animate-in fade-in-0 slide-in-from-bottom-2 duration-200 scroll-mt-24" id="panel-actions" role="tabpanel">
             <EnhancedRecommendationsCard
               immediateActions={immediate_actions || []}
               preventiveMeasures={preventive_measures || []}
@@ -316,7 +316,7 @@ export function EnhancedLogAnalysisContainer({ data, className }: EnhancedLogAna
     const hasCriticalIssues = criticalIssues.length > 0 || immediateActions.length > 0
 
     return (
-      <article className={cn("mx-auto max-w-[65ch] w-full space-y-6", className)} data-log-container>
+      <article className={cn("w-full max-w-none space-y-3 log-analysis-container", className)} data-log-container>
         {/* Legacy System Overview */}
         <SystemOverviewCard stats={systemStats} />
         
@@ -355,16 +355,16 @@ export function EnhancedLogAnalysisContainer({ data, className }: EnhancedLogAna
         {/* Tab Content */}
         <div className="w-full">
           {activeTab === 'system' && executiveSummary && (
-            <div className="space-y-4 animate-in fade-in-0 slide-in-from-bottom-2 duration-200 scroll-mt-24" id="panel-system" role="tabpanel">
+            <div className="space-y-3 animate-in fade-in-0 slide-in-from-bottom-2 duration-200 scroll-mt-24" id="panel-system" role="tabpanel">
               <ExecutiveSummaryRenderer content={executiveSummary} />
             </div>
           )}
 
           {activeTab === 'issues' && (
-            <div className="space-y-4 animate-in fade-in-0 slide-in-from-bottom-2 duration-200 scroll-mt-24" id="panel-issues" role="tabpanel">
+            <div className="space-y-3 animate-in fade-in-0 slide-in-from-bottom-2 duration-200 scroll-mt-24" id="panel-issues" role="tabpanel">
         {/* Issues Section */}
         {activeIssues.length > 0 ? (
-          <div className="space-y-4">
+          <div className="space-y-3">
             {/* Issue Summary Header */}
             {topIssueTypes.length > 0 && (
               <div className="mb-4 p-3 bg-muted/30 border border-border/50 rounded-lg">
@@ -409,10 +409,10 @@ export function EnhancedLogAnalysisContainer({ data, className }: EnhancedLogAna
           )}
 
           {activeTab === 'actions' && (
-            <div className="space-y-4 animate-in fade-in-0 slide-in-from-bottom-2 duration-200 scroll-mt-24" id="panel-actions" role="tabpanel">
+            <div className="space-y-3 animate-in fade-in-0 slide-in-from-bottom-2 duration-200 scroll-mt-24" id="panel-actions" role="tabpanel">
               {/* Standalone Solutions */}
               {groupedSolutions['general']?.length > 0 && (
-                <div className="space-y-4">
+                <div className="space-y-3">
                   <div>
                     <h3 className="text-sm font-semibold text-foreground mb-3 flex items-center gap-2">
                       <AlertTriangle className="h-4 w-4 text-blue-500" />
@@ -438,7 +438,7 @@ export function EnhancedLogAnalysisContainer({ data, className }: EnhancedLogAna
                 </div>
               )}
               {immediateActions.length > 0 && (
-                <div className="space-y-4">
+                <div className="space-y-3">
                   <div>
                     <h3 className="text-sm font-semibold text-foreground mb-3 flex items-center gap-2">
                       <Shield className="h-4 w-4 text-amber-500" />

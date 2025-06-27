@@ -79,6 +79,20 @@ class DatabaseConnectionManager:
             retry_delay=getattr(settings, 'feedme_db_retry_delay', 1.0)
         )
     
+    def get_raw_connection(self):
+        """
+        Get a raw connection from the connection pool
+        
+        Returns:
+            A database connection from the pool
+            
+        Raises:
+            RuntimeError: If the connection pool is not initialized
+        """
+        if not self._pool:
+            raise RuntimeError("Database connection pool is not initialized")
+        return self._pool.getconn()
+        
     def _initialize_pool(self):
         """Initialize the connection pool with retry logic"""
         for attempt in range(self.config.retry_attempts):
@@ -94,7 +108,7 @@ class DatabaseConnectionManager:
                 )
                 
                 # Test connection and register vector extension (avoid recursion)
-                conn = self._pool.getconn()
+                conn = self.get_raw_connection()
                 try:
                     if self.config.enable_vector_extension:
                         register_vector(conn)
@@ -274,13 +288,20 @@ class DatabaseConnectionManager:
         """Get connection pool statistics"""
         pool_stats = {}
         if self._pool:
-            pool_stats = {
-                "pool_size": len(self._pool._pool),
-                "available_connections": len([c for c in self._pool._pool if c]),
-                "is_healthy": self._is_healthy,
-                "last_health_check": self._last_health_check
-            }
-        
+            try:
+                # Safe way to get pool statistics without accessing private attributes
+                pool_stats = {
+                    "pool_minconn": getattr(self._pool, 'minconn', 0),
+                    "pool_maxconn": getattr(self._pool, 'maxconn', 0),
+                    "is_healthy": self._is_healthy,
+                    "last_health_check": self._last_health_check
+                }
+            except Exception as e:
+                logger.warning(f"Could not retrieve pool stats: {e}")
+                pool_stats = {
+                    "is_healthy": self._is_healthy,
+                    "last_health_check": self._last_health_check
+                }
         return {**self._connection_stats, **pool_stats}
     
     def close(self):
@@ -342,8 +363,9 @@ def health_check() -> Dict[str, Any]:
         stats = manager.get_stats()
         
         # Test basic operations (avoid recursion in health check)
-        conn = manager._pool.getconn()
+        conn = None
         try:
+            conn = manager.get_raw_connection()
             with conn.cursor() as cur:
                 # Test basic query
                 cur.execute("SELECT 1 as test")
@@ -354,8 +376,8 @@ def health_check() -> Dict[str, Any]:
                 try:
                     cur.execute("SELECT '[1,2,3]'::vector(3)")
                     vector_test = True
-                except:
-                    pass
+                except Exception as e:
+                    logger.warning(f"Vector extension test failed: {e}")
                 
                 # Test FeedMe tables existence
                 cur.execute("""
@@ -372,7 +394,8 @@ def health_check() -> Dict[str, Any]:
                 """)
                 table_check = cur.fetchone()
         finally:
-            manager._pool.putconn(conn)
+            if conn:
+                manager.close_connection(conn)
         
         return {
             "status": "healthy" if all([basic_test, stats["is_healthy"]]) else "unhealthy",

@@ -25,9 +25,20 @@ export FEEDME_RESULT_BACKEND=${FEEDME_RESULT_BACKEND:-redis://localhost:6379/2}
 # Navigate to project root
 cd "$(dirname "$0")/.."
 
+# Check if required modules are available
+echo "🔍 Checking Python dependencies..."
+python -c "import celery, redis, bs4; print('✅ All dependencies available')" || {
+    echo "❌ Missing dependencies. Please install:"
+    echo "   pip install celery[redis] beautifulsoup4"
+    exit 1
+}
+
+# Set Python path to ensure modules are found
+export PYTHONPATH="$(pwd):$PYTHONPATH"
+
 # Start Celery worker
 echo "🔄 Starting Celery worker..."
-python -m app.feedme.celery_app worker \
+celery -A app.feedme.celery_app worker \
     --loglevel=info \
     --concurrency=2 \
     --queues=feedme_default,feedme_processing,feedme_embeddings,feedme_parsing,feedme_health \

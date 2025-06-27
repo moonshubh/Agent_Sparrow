@@ -9,11 +9,12 @@ import logging
 import os
 from typing import List, Optional, Dict, Any
 from datetime import datetime
-from fastapi import APIRouter, HTTPException, Depends, UploadFile, File, Form, Query, BackgroundTasks
+from fastapi import APIRouter, HTTPException, Depends, UploadFile, File, Form, Query, BackgroundTasks, Body
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 import asyncio
 import io
+import psycopg2.extras as psycopg2_extras
 
 from app.core.settings import settings
 from app.feedme.schemas import (
@@ -25,6 +26,8 @@ from app.feedme.schemas import (
     ExampleUpdate,
     TranscriptUploadRequest,
     ProcessingStatus,
+    ApprovalStatus,
+    ReviewStatus,
     FeedMeSearchResult,
     ConversationListResponse,
     ExampleListResponse,
@@ -40,8 +43,51 @@ from app.feedme.schemas import (
     ConversationEditRequest,
     ConversationRevertRequest,
     EditResponse,
-    RevertResponse
+    RevertResponse,
+    # Approval workflow schemas
+    ApprovalRequest,
+    RejectionRequest,
+    ApprovalResponse,
+    DeleteConversationResponse,
+    ApprovalWorkflowStats,
+    BulkApprovalRequest,
+    BulkApprovalResponse,
+    ExampleReviewRequest,
+    ExampleReviewResponse
 )
+
+# Folder management schemas
+class FeedMeFolder(BaseModel):
+    id: int
+    name: str
+    color: str
+    description: Optional[str] = None
+    created_by: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime
+    conversation_count: Optional[int] = 0
+
+    class Config:
+        from_attributes = True
+
+class FolderCreate(BaseModel):
+    name: str
+    color: str = "#0095ff"
+    description: Optional[str] = None
+    created_by: Optional[str] = None
+
+class FolderUpdate(BaseModel):
+    name: Optional[str] = None
+    color: Optional[str] = None
+    description: Optional[str] = None
+
+class AssignFolderRequest(BaseModel):
+    folder_id: Optional[int] = None  # None to remove from folder
+    conversation_ids: List[int]
+
+class FolderListResponse(BaseModel):
+    folders: List[FeedMeFolder]
+    total_count: int
 
 # Import database utilities
 from app.db.connection_manager import get_connection_manager
@@ -301,26 +347,39 @@ async def upload_transcript(
         if auto_process and settings.feedme_async_processing:
             try:
                 # Import Celery task and trigger async processing
+                logger.info(f"Attempting to import Celery task for conversation {conversation.id}")
                 from app.feedme.tasks import process_transcript
+                logger.info(f"Successfully imported process_transcript task")
                 
                 # Start async processing task
+                logger.info(f"Starting async processing task for conversation {conversation.id}")
                 task = process_transcript.delay(conversation.id, uploaded_by)
+                logger.info(f"Task created successfully with ID: {task.id}")
                 
                 # Update conversation with task ID and processing status
+                logger.info(f"Updating conversation {conversation.id} with task ID")
+                current_metadata = conversation.metadata or {}
+                updated_metadata = {**current_metadata, "task_id": task.id}
+                
                 await update_conversation_in_db(
                     conversation.id,
                     ConversationUpdate(
                         processing_status=ProcessingStatus.PROCESSING,
-                        metadata={**conversation.metadata, "task_id": task.id}
+                        metadata=updated_metadata
                     )
                 )
-                logger.info(f"Started async processing for conversation {conversation.id}, task_id={task.id}")
+                logger.info(f"Successfully started async processing for conversation {conversation.id}, task_id={task.id}")
                 
             except ImportError as e:
-                logger.warning(f"Celery not available for async processing: {e}. Falling back to manual processing.")
+                logger.error(f"ImportError during Celery task import: {e}")
+                logger.error(f"Import error details: {str(e)}")
                 async_processing_failed = True
             except Exception as e:
-                logger.error(f"Failed to start async processing: {e}. Falling back to manual processing.")
+                logger.error(f"Exception during async processing setup: {e}")
+                logger.error(f"Exception type: {type(e).__name__}")
+                logger.error(f"Exception details: {str(e)}")
+                import traceback
+                logger.error(f"Traceback: {traceback.format_exc()}")
                 async_processing_failed = True
             
         if auto_process and (not settings.feedme_async_processing or async_processing_failed):
@@ -506,7 +565,7 @@ async def update_conversation(conversation_id: int, update_data: ConversationUpd
     return updated_conversation
 
 
-@router.delete("/conversations/{conversation_id}", tags=["FeedMe"])
+@router.delete("/conversations/{conversation_id}", response_model=DeleteConversationResponse, tags=["FeedMe"])
 async def delete_conversation(conversation_id: int):
     """
     Deletes a conversation and all associated examples from the database.
@@ -515,7 +574,7 @@ async def delete_conversation(conversation_id: int):
         HTTPException: If the FeedMe service is disabled (503), the conversation does not exist (404), or deletion fails (500).
     
     Returns:
-        dict: A message confirming successful deletion.
+        DeleteConversationResponse: Details of the deleted conversation and examples.
     """
     
     if not settings.feedme_enabled:
@@ -523,18 +582,40 @@ async def delete_conversation(conversation_id: int):
     
     try:
         with get_db_connection() as conn:
-            with conn.cursor() as cur:
-                # Check if conversation exists
-                cur.execute("SELECT id FROM feedme_conversations WHERE id = %s", (conversation_id,))
-                if not cur.fetchone():
+            with conn.cursor(cursor_factory=psycopg2_extras.RealDictCursor) as cur:
+                # Check if conversation exists and get details
+                cur.execute("""
+                    SELECT id, title, total_examples 
+                    FROM feedme_conversations 
+                    WHERE id = %s
+                """, (conversation_id,))
+                
+                conversation = cur.fetchone()
+                if not conversation:
                     raise HTTPException(status_code=404, detail="Conversation not found")
+                
+                # Count examples before deletion
+                cur.execute("""
+                    SELECT COUNT(*) as example_count 
+                    FROM feedme_examples 
+                    WHERE conversation_id = %s
+                """, (conversation_id,))
+                
+                example_count_result = cur.fetchone()
+                examples_deleted = example_count_result['example_count'] if example_count_result else 0
                 
                 # Delete conversation (cascade will delete examples)
                 cur.execute("DELETE FROM feedme_conversations WHERE id = %s", (conversation_id,))
                 conn.commit()
                 
-                logger.info(f"Deleted conversation {conversation_id}")
-                return {"message": "Conversation deleted successfully"}
+                logger.info(f"Deleted conversation {conversation_id} with {examples_deleted} examples")
+                
+                return DeleteConversationResponse(
+                    conversation_id=conversation['id'],
+                    title=conversation['title'],
+                    examples_deleted=examples_deleted,
+                    message="Conversation and all associated examples deleted successfully"
+                )
             
     except HTTPException:
         raise
@@ -620,6 +701,122 @@ async def list_conversation_examples(
     except Exception as e:
         logger.error(f"Error listing examples for conversation {conversation_id}: {e}")
         raise HTTPException(status_code=500, detail="Failed to list examples")
+
+
+@router.get("/conversations/{conversation_id}/formatted-content", tags=["FeedMe"])
+async def get_formatted_qa_content(conversation_id: int):
+    """
+    Get formatted Q&A content for editing in the conversation modal.
+    
+    Returns the extracted Q&A pairs formatted as readable text that can be
+    displayed and edited in the conversation edit modal.
+    
+    Returns:
+        dict: Contains 'formatted_content' with Q&A pairs as formatted text,
+              'total_examples' count, and 'raw_transcript' as fallback.
+    """
+    
+    if not settings.feedme_enabled:
+        raise HTTPException(status_code=503, detail="FeedMe service is currently disabled")
+    
+    # Check if conversation exists
+    conversation = await get_conversation_by_id(conversation_id)
+    if not conversation:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor(cursor_factory=psycopg2_extras.RealDictCursor) as cur:
+                # Get all active examples for this conversation
+                cur.execute("""
+                    SELECT question_text, answer_text, context_before, context_after,
+                           confidence_score, tags, issue_type, resolution_type
+                    FROM feedme_examples 
+                    WHERE conversation_id = %s AND is_active = true
+                    ORDER BY created_at ASC
+                """, (conversation_id,))
+                
+                examples = cur.fetchall()
+                
+                if not examples:
+                    # No examples extracted yet, return raw transcript
+                    return {
+                        "formatted_content": conversation.raw_transcript or "",
+                        "total_examples": 0,
+                        "content_type": "raw_transcript",
+                        "message": "No Q&A examples extracted yet. Showing raw transcript."
+                    }
+                
+                # Format Q&A examples into readable text
+                formatted_lines = []
+                formatted_lines.append("# Extracted Q&A Examples")
+                formatted_lines.append("")
+                formatted_lines.append(f"**Total Examples:** {len(examples)}")
+                formatted_lines.append("")
+                
+                for i, example in enumerate(examples, 1):
+                    formatted_lines.append(f"## Example {i}")
+                    
+                    # Add metadata if available
+                    metadata_parts = []
+                    if example['issue_type']:
+                        metadata_parts.append(f"Issue: {example['issue_type']}")
+                    if example['resolution_type']:
+                        metadata_parts.append(f"Resolution: {example['resolution_type']}")
+                    if example['confidence_score']:
+                        metadata_parts.append(f"Confidence: {example['confidence_score']:.2f}")
+                    if example['tags']:
+                        metadata_parts.append(f"Tags: {', '.join(example['tags'])}")
+                    
+                    if metadata_parts:
+                        formatted_lines.append(f"*{' | '.join(metadata_parts)}*")
+                        formatted_lines.append("")
+                    
+                    # Add context before if available
+                    if example['context_before']:
+                        formatted_lines.append("**Context Before:**")
+                        formatted_lines.append(example['context_before'])
+                        formatted_lines.append("")
+                    
+                    # Add Q&A pair
+                    formatted_lines.append("**Question:**")
+                    formatted_lines.append(example['question_text'])
+                    formatted_lines.append("")
+                    
+                    formatted_lines.append("**Answer:**")
+                    formatted_lines.append(example['answer_text'])
+                    formatted_lines.append("")
+                    
+                    # Add context after if available
+                    if example['context_after']:
+                        formatted_lines.append("**Context After:**")
+                        formatted_lines.append(example['context_after'])
+                        formatted_lines.append("")
+                    
+                    # Add separator between examples
+                    if i < len(examples):
+                        formatted_lines.append("---")
+                        formatted_lines.append("")
+                
+                formatted_content = "\n".join(formatted_lines)
+                
+                return {
+                    "formatted_content": formatted_content,
+                    "total_examples": len(examples),
+                    "content_type": "qa_examples", 
+                    "raw_transcript": conversation.raw_transcript or "",
+                    "message": f"Showing {len(examples)} extracted Q&A examples"
+                }
+                
+    except Exception as e:
+        logger.error(f"Error getting formatted content for conversation {conversation_id}: {e}")
+        # Fallback to raw transcript on error
+        return {
+            "formatted_content": conversation.raw_transcript or "",
+            "total_examples": 0,
+            "content_type": "raw_transcript",
+            "message": f"Error loading Q&A examples: {str(e)}. Showing raw transcript."
+        }
 
 
 @router.get("/conversations/{conversation_id}/status", response_model=ProcessingStatusResponse, tags=["FeedMe"])
@@ -1309,3 +1506,1180 @@ async def get_specific_version(conversation_id: int, version_number: int):
     except Exception as e:
         logger.error(f"Error getting version {version_number} for conversation {conversation_id}: {e}")
         raise HTTPException(status_code=500, detail="Failed to get conversation version")
+
+
+# Approval Workflow API Endpoints
+
+@router.post("/conversations/{conversation_id}/approve", response_model=ApprovalResponse, tags=["FeedMe"])
+async def approve_conversation(conversation_id: int, approval_request: ApprovalRequest):
+    """
+    Approve a conversation for publication
+    
+    Transitions the conversation from 'processed' to 'approved' status and marks
+    all associated examples as approved for retrieval.
+    
+    Args:
+        conversation_id: ID of the conversation to approve
+        approval_request: Approval details including reviewer information
+        
+    Returns:
+        ApprovalResponse: Updated conversation and approval details
+        
+    Raises:
+        HTTPException: If conversation not found, not in processed state, or approval fails
+    """
+    
+    if not settings.feedme_enabled:
+        raise HTTPException(status_code=503, detail="FeedMe service is currently disabled")
+    
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor(cursor_factory=psycopg2_extras.RealDictCursor) as cur:
+                # Check conversation exists and is in processed state
+                cur.execute("""
+                    SELECT * FROM feedme_conversations 
+                    WHERE id = %s
+                """, (conversation_id,))
+                
+                conversation = cur.fetchone()
+                if not conversation:
+                    raise HTTPException(status_code=404, detail="Conversation not found")
+                
+                if conversation['approval_status'] not in ['processed', 'pending']:
+                    raise HTTPException(
+                        status_code=400, 
+                        detail=f"Conversation is in '{conversation['approval_status']}' status and cannot be approved"
+                    )
+                
+                # Update conversation to approved status
+                approval_time = datetime.utcnow()
+                cur.execute("""
+                    UPDATE feedme_conversations 
+                    SET approval_status = %s, 
+                        approved_by = %s, 
+                        approved_at = %s,
+                        reviewer_notes = %s,
+                        updated_at = %s
+                    WHERE id = %s
+                    RETURNING *
+                """, (
+                    ApprovalStatus.APPROVED.value,
+                    approval_request.approved_by,
+                    approval_time,
+                    approval_request.reviewer_notes,
+                    approval_time,
+                    conversation_id
+                ))
+                
+                updated_conversation = cur.fetchone()
+                
+                # Mark all examples as approved for retrieval
+                cur.execute("""
+                    UPDATE feedme_examples 
+                    SET review_status = %s, 
+                        reviewed_by = %s,
+                        reviewed_at = %s,
+                        is_active = true
+                    WHERE conversation_id = %s
+                """, (
+                    ReviewStatus.APPROVED.value,
+                    approval_request.approved_by,
+                    approval_time,
+                    conversation_id
+                ))
+                
+                conn.commit()
+                
+                logger.info(f"Conversation {conversation_id} approved by {approval_request.approved_by}")
+                
+                return ApprovalResponse(
+                    conversation=FeedMeConversation(**dict(updated_conversation)),
+                    action="approved",
+                    timestamp=approval_time
+                )
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error approving conversation {conversation_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to approve conversation")
+
+
+@router.post("/conversations/{conversation_id}/reject", response_model=ApprovalResponse, tags=["FeedMe"])
+async def reject_conversation(conversation_id: int, rejection_request: RejectionRequest):
+    """
+    Reject a conversation
+    
+    Transitions the conversation from 'processed' to 'rejected' status and marks
+    all associated examples as rejected (inactive for retrieval).
+    
+    Args:
+        conversation_id: ID of the conversation to reject
+        rejection_request: Rejection details including reviewer information and notes
+        
+    Returns:
+        ApprovalResponse: Updated conversation and rejection details
+        
+    Raises:
+        HTTPException: If conversation not found, not in processed state, or rejection fails
+    """
+    
+    if not settings.feedme_enabled:
+        raise HTTPException(status_code=503, detail="FeedMe service is currently disabled")
+    
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor(cursor_factory=psycopg2_extras.RealDictCursor) as cur:
+                # Check conversation exists and is in processed state
+                cur.execute("""
+                    SELECT * FROM feedme_conversations 
+                    WHERE id = %s
+                """, (conversation_id,))
+                
+                conversation = cur.fetchone()
+                if not conversation:
+                    raise HTTPException(status_code=404, detail="Conversation not found")
+                
+                if conversation['approval_status'] not in ['processed', 'pending']:
+                    raise HTTPException(
+                        status_code=400, 
+                        detail=f"Conversation is in '{conversation['approval_status']}' status and cannot be rejected"
+                    )
+                
+                # Update conversation to rejected status
+                rejection_time = datetime.utcnow()
+                cur.execute("""
+                    UPDATE feedme_conversations 
+                    SET approval_status = %s, 
+                        approved_by = %s,
+                        rejected_at = %s,
+                        reviewer_notes = %s,
+                        updated_at = %s
+                    WHERE id = %s
+                    RETURNING *
+                """, (
+                    ApprovalStatus.REJECTED.value,
+                    rejection_request.rejected_by,
+                    rejection_time,
+                    rejection_request.reviewer_notes,
+                    rejection_time,
+                    conversation_id
+                ))
+                
+                updated_conversation = cur.fetchone()
+                
+                # Mark all examples as rejected (inactive for retrieval)
+                cur.execute("""
+                    UPDATE feedme_examples 
+                    SET review_status = %s, 
+                        reviewed_by = %s,
+                        reviewed_at = %s,
+                        is_active = false
+                    WHERE conversation_id = %s
+                """, (
+                    ReviewStatus.REJECTED.value,
+                    rejection_request.rejected_by,
+                    rejection_time,
+                    conversation_id
+                ))
+                
+                conn.commit()
+                
+                logger.info(f"Conversation {conversation_id} rejected by {rejection_request.rejected_by}")
+                
+                return ApprovalResponse(
+                    conversation=FeedMeConversation(**dict(updated_conversation)),
+                    action="rejected",
+                    timestamp=rejection_time
+                )
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error rejecting conversation {conversation_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to reject conversation")
+
+
+@router.get("/approval/stats", response_model=ApprovalWorkflowStats, tags=["FeedMe"])
+async def get_approval_workflow_stats():
+    """
+    Get approval workflow statistics
+    
+    Returns comprehensive statistics about the approval workflow including
+    conversation counts by status, quality metrics, and processing times.
+    
+    Returns:
+        ApprovalWorkflowStats: Complete workflow statistics
+        
+    Raises:
+        HTTPException: If FeedMe service is disabled or stats retrieval fails
+    """
+    
+    if not settings.feedme_enabled:
+        raise HTTPException(status_code=503, detail="FeedMe service is currently disabled")
+    
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor(cursor_factory=psycopg2_extras.RealDictCursor) as cur:
+                # Get approval workflow statistics
+                cur.execute("SELECT * FROM feedme_approval_stats")
+                stats = cur.fetchone()
+                
+                if not stats:
+                    # Return empty stats if no data
+                    return ApprovalWorkflowStats(
+                        total_conversations=0,
+                        pending_approval=0,
+                        awaiting_review=0,
+                        approved=0,
+                        rejected=0,
+                        published=0,
+                        currently_processing=0,
+                        processing_failed=0,
+                        avg_quality_score=None,
+                        avg_processing_time_ms=None
+                    )
+                
+                return ApprovalWorkflowStats(
+                    total_conversations=stats['total_conversations'],
+                    pending_approval=stats['pending_approval'],
+                    awaiting_review=stats['awaiting_review'],
+                    approved=stats['approved'],
+                    rejected=stats['rejected'],
+                    published=stats['published'],
+                    currently_processing=stats['currently_processing'],
+                    processing_failed=stats['processing_failed'],
+                    avg_quality_score=float(stats['avg_quality_score']) if stats['avg_quality_score'] else None,
+                    avg_processing_time_ms=float(stats['avg_processing_time_ms']) if stats['avg_processing_time_ms'] else None
+                )
+            
+    except Exception as e:
+        logger.error(f"Error getting approval workflow stats: {e}")
+        raise HTTPException(status_code=500, detail="Failed to get approval workflow statistics")
+
+
+@router.post("/conversations/bulk-approve", response_model=BulkApprovalResponse, tags=["FeedMe"])
+async def bulk_approve_conversations(bulk_request: BulkApprovalRequest):
+    """
+    Bulk approve or reject multiple conversations
+    
+    Processes multiple conversations in a single operation, useful for
+    batch approval workflows.
+    
+    Args:
+        bulk_request: Bulk operation details including conversation IDs and action
+        
+    Returns:
+        BulkApprovalResponse: Results of the bulk operation
+        
+    Raises:
+        HTTPException: If FeedMe service is disabled or bulk operation fails
+    """
+    
+    if not settings.feedme_enabled:
+        raise HTTPException(status_code=503, detail="FeedMe service is currently disabled")
+    
+    successful = []
+    failed = []
+    
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor(cursor_factory=psycopg2_extras.RealDictCursor) as cur:
+                for conversation_id in bulk_request.conversation_ids:
+                    try:
+                        # Check conversation exists and is in processed state
+                        cur.execute("""
+                            SELECT id, approval_status FROM feedme_conversations 
+                            WHERE id = %s
+                        """, (conversation_id,))
+                        
+                        conversation = cur.fetchone()
+                        if not conversation:
+                            failed.append({
+                                "conversation_id": conversation_id,
+                                "error": "Conversation not found"
+                            })
+                            continue
+                        
+                        if conversation['approval_status'] not in ['processed', 'pending']:
+                            failed.append({
+                                "conversation_id": conversation_id,
+                                "error": f"Conversation is in '{conversation['approval_status']}' status"
+                            })
+                            continue
+                        
+                        # Update conversation based on action
+                        action_time = datetime.utcnow()
+                        
+                        if bulk_request.action == 'approve':
+                            cur.execute("""
+                                UPDATE feedme_conversations 
+                                SET approval_status = %s, 
+                                    approved_by = %s, 
+                                    approved_at = %s,
+                                    reviewer_notes = %s,
+                                    updated_at = %s
+                                WHERE id = %s
+                            """, (
+                                ApprovalStatus.APPROVED.value,
+                                bulk_request.approved_by,
+                                action_time,
+                                bulk_request.reviewer_notes,
+                                action_time,
+                                conversation_id
+                            ))
+                            
+                            # Mark examples as approved
+                            cur.execute("""
+                                UPDATE feedme_examples 
+                                SET review_status = %s, 
+                                    reviewed_by = %s,
+                                    reviewed_at = %s,
+                                    is_active = true
+                                WHERE conversation_id = %s
+                            """, (
+                                ReviewStatus.APPROVED.value,
+                                bulk_request.approved_by,
+                                action_time,
+                                conversation_id
+                            ))
+                            
+                        else:  # reject
+                            cur.execute("""
+                                UPDATE feedme_conversations 
+                                SET approval_status = %s, 
+                                    approved_by = %s,
+                                    rejected_at = %s,
+                                    reviewer_notes = %s,
+                                    updated_at = %s
+                                WHERE id = %s
+                            """, (
+                                ApprovalStatus.REJECTED.value,
+                                bulk_request.approved_by,
+                                action_time,
+                                bulk_request.reviewer_notes,
+                                action_time,
+                                conversation_id
+                            ))
+                            
+                            # Mark examples as rejected
+                            cur.execute("""
+                                UPDATE feedme_examples 
+                                SET review_status = %s, 
+                                    reviewed_by = %s,
+                                    reviewed_at = %s,
+                                    is_active = false
+                                WHERE conversation_id = %s
+                            """, (
+                                ReviewStatus.REJECTED.value,
+                                bulk_request.approved_by,
+                                action_time,
+                                conversation_id
+                            ))
+                        
+                        successful.append(conversation_id)
+                        
+                    except Exception as e:
+                        failed.append({
+                            "conversation_id": conversation_id,
+                            "error": str(e)
+                        })
+                        continue
+                
+                # Commit all successful operations
+                conn.commit()
+                
+                logger.info(f"Bulk {bulk_request.action} completed: {len(successful)} successful, {len(failed)} failed")
+                
+                return BulkApprovalResponse(
+                    successful=successful,
+                    failed=failed,
+                    total_requested=len(bulk_request.conversation_ids),
+                    total_successful=len(successful),
+                    action_taken=bulk_request.action
+                )
+            
+    except Exception as e:
+        logger.error(f"Error in bulk approval operation: {e}")
+        raise HTTPException(status_code=500, detail="Failed to complete bulk approval operation")
+
+
+@router.post("/examples/{example_id}/review", response_model=ExampleReviewResponse, tags=["FeedMe"])
+async def review_example(example_id: int, review_request: ExampleReviewRequest):
+    """
+    Review an individual example
+    
+    Allows reviewers to approve, reject, or edit individual examples
+    within an approved conversation.
+    
+    Args:
+        example_id: ID of the example to review
+        review_request: Review details including status and optional edits
+        
+    Returns:
+        ExampleReviewResponse: Updated example and review details
+        
+    Raises:
+        HTTPException: If example not found or review fails
+    """
+    
+    if not settings.feedme_enabled:
+        raise HTTPException(status_code=503, detail="FeedMe service is currently disabled")
+    
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor(cursor_factory=psycopg2_extras.RealDictCursor) as cur:
+                # Check example exists
+                cur.execute("""
+                    SELECT * FROM feedme_examples 
+                    WHERE id = %s
+                """, (example_id,))
+                
+                example = cur.fetchone()
+                if not example:
+                    raise HTTPException(status_code=404, detail="Example not found")
+                
+                # Prepare update fields
+                update_fields = [
+                    "review_status = %s",
+                    "reviewed_by = %s", 
+                    "reviewed_at = %s",
+                    "updated_at = %s"
+                ]
+                params = [
+                    review_request.review_status.value,
+                    review_request.reviewed_by,
+                    datetime.utcnow(),
+                    datetime.utcnow()
+                ]
+                
+                # Add optional edits
+                if review_request.question_text is not None:
+                    update_fields.append("question_text = %s")
+                    params.append(review_request.question_text)
+                
+                if review_request.answer_text is not None:
+                    update_fields.append("answer_text = %s")
+                    params.append(review_request.answer_text)
+                
+                if review_request.tags is not None:
+                    update_fields.append("tags = %s")
+                    params.append(review_request.tags)
+                
+                # Set active status based on review decision
+                if review_request.review_status == ReviewStatus.APPROVED:
+                    update_fields.append("is_active = true")
+                elif review_request.review_status == ReviewStatus.REJECTED:
+                    update_fields.append("is_active = false")
+                
+                # Add example ID for WHERE clause
+                params.append(example_id)
+                
+                # Update example
+                query = f"""
+                    UPDATE feedme_examples 
+                    SET {', '.join(update_fields)}
+                    WHERE id = %s
+                    RETURNING *
+                """
+                
+                cur.execute(query, params)
+                updated_example = cur.fetchone()
+                conn.commit()
+                
+                logger.info(f"Example {example_id} reviewed by {review_request.reviewed_by}: {review_request.review_status.value}")
+                
+                return ExampleReviewResponse(
+                    example=FeedMeExample(**dict(updated_example)),
+                    action=review_request.review_status.value,
+                    timestamp=datetime.utcnow()
+                )
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error reviewing example {example_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to review example")
+
+
+@router.get("/conversations/{conversation_id}/preview-examples", response_model=List[Dict[str, Any]], tags=["FeedMe"])
+async def preview_extracted_examples(conversation_id: int):
+    """
+    Preview extracted Q&A examples before approval.
+    
+    This endpoint returns examples from the temporary table that haven't been approved yet.
+    Human agents can review these examples before deciding which ones to approve.
+    
+    Args:
+        conversation_id: ID of the conversation
+        
+    Returns:
+        List of temporary examples with confidence scores and metadata
+        
+    Raises:
+        HTTPException: If the FeedMe service is disabled (503), conversation not found (404),
+                      or a database error occurs (500).
+    """
+    if not settings.feedme_enabled:
+        raise HTTPException(status_code=503, detail="FeedMe service is currently disabled")
+    
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor(cursor_factory=psycopg2_extras.RealDictCursor) as cur:
+                # Check if conversation exists
+                cur.execute("SELECT id, processing_status FROM feedme_conversations WHERE id = %s", (conversation_id,))
+                conversation = cur.fetchone()
+                
+                if not conversation:
+                    raise HTTPException(status_code=404, detail="Conversation not found")
+                
+                # Get temporary examples
+                cur.execute("""
+                    SELECT 
+                        id,
+                        question_text,
+                        answer_text,
+                        context_before,
+                        context_after,
+                        confidence_score,
+                        quality_score,
+                        tags,
+                        issue_type,
+                        resolution_type,
+                        extraction_method,
+                        metadata,
+                        created_at
+                    FROM feedme_examples_temp
+                    WHERE conversation_id = %s
+                    ORDER BY confidence_score DESC
+                """, (conversation_id,))
+                
+                examples = []
+                for row in cur.fetchall():
+                    examples.append({
+                        'id': row['id'],
+                        'question_text': row['question_text'],
+                        'answer_text': row['answer_text'],
+                        'context_before': row['context_before'],
+                        'context_after': row['context_after'],
+                        'confidence_score': row['confidence_score'],
+                        'quality_score': row['quality_score'],
+                        'tags': row['tags'] or [],
+                        'issue_type': row['issue_type'],
+                        'resolution_type': row['resolution_type'],
+                        'extraction_method': row['extraction_method'],
+                        'metadata': row['metadata'] or {},
+                        'created_at': row['created_at'].isoformat() if row['created_at'] else None
+                    })
+                
+                return examples
+                
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error previewing examples for conversation {conversation_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/conversations/{conversation_id}/approve-examples", tags=["FeedMe"])
+async def approve_conversation_examples(
+    conversation_id: int,
+    approval_data: Dict[str, Any] = Body(..., description="Approval data with selected example IDs")
+):
+    """
+    Approve selected Q&A examples and move them to the main examples table.
+    
+    This endpoint allows human agents to approve specific examples or all examples
+    from the temporary table. Approved examples are moved to the main table and
+    become available for retrieval in agent responses.
+    
+    Args:
+        conversation_id: ID of the conversation
+        approval_data: Dict containing:
+            - approved_by: ID/name of the approver
+            - selected_example_ids: Optional list of specific example IDs to approve
+                                  (if not provided, all examples will be approved)
+            
+    Returns:
+        Dict with approval results
+        
+    Raises:
+        HTTPException: If the FeedMe service is disabled (503), conversation not found (404),
+                      or approval fails (500).
+    """
+    if not settings.feedme_enabled:
+        raise HTTPException(status_code=503, detail="FeedMe service is currently disabled")
+    
+    approved_by = approval_data.get('approved_by')
+    if not approved_by:
+        raise HTTPException(status_code=400, detail="approved_by is required")
+    
+    selected_example_ids = approval_data.get('selected_example_ids')
+    
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cur:
+                # Check if conversation exists and has temp examples
+                cur.execute(
+                    "SELECT COUNT(*) as count FROM feedme_examples_temp WHERE conversation_id = %s",
+                    (conversation_id,)
+                )
+                temp_count = cur.fetchone()[0]
+                
+                if temp_count == 0:
+                    raise HTTPException(status_code=404, detail="No examples found for approval")
+                
+                # Call the approval function
+                if selected_example_ids:
+                    cur.execute(
+                        "SELECT approve_conversation_examples(%s, %s, %s)",
+                        (conversation_id, approved_by, selected_example_ids)
+                    )
+                else:
+                    cur.execute(
+                        "SELECT approve_conversation_examples(%s, %s)",
+                        (conversation_id, approved_by)
+                    )
+                
+                approved_count = cur.fetchone()[0]
+                conn.commit()
+                
+                return {
+                    "success": True,
+                    "conversation_id": conversation_id,
+                    "approved_examples": approved_count,
+                    "approved_by": approved_by,
+                    "approved_at": datetime.utcnow().isoformat(),
+                    "approval_type": "selective" if selected_example_ids else "all"
+                }
+                
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error approving examples for conversation {conversation_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/conversations/{conversation_id}/reject-examples", tags=["FeedMe"])
+async def reject_conversation_examples(
+    conversation_id: int,
+    rejection_data: Dict[str, Any] = Body(..., description="Rejection data")
+):
+    """
+    Reject extracted Q&A examples and remove them from the temporary table.
+    
+    This endpoint allows human agents to reject examples that are not suitable
+    for the knowledge base. Rejected examples are deleted from the temporary table.
+    
+    Args:
+        conversation_id: ID of the conversation
+        rejection_data: Dict containing:
+            - rejected_by: ID/name of the reviewer
+            - rejection_reason: Optional reason for rejection
+            
+    Returns:
+        Dict with rejection results
+        
+    Raises:
+        HTTPException: If the FeedMe service is disabled (503), conversation not found (404),
+                      or rejection fails (500).
+    """
+    if not settings.feedme_enabled:
+        raise HTTPException(status_code=503, detail="FeedMe service is currently disabled")
+    
+    rejected_by = rejection_data.get('rejected_by')
+    if not rejected_by:
+        raise HTTPException(status_code=400, detail="rejected_by is required")
+    
+    rejection_reason = rejection_data.get('rejection_reason')
+    
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cur:
+                # Check if conversation exists and has temp examples
+                cur.execute(
+                    "SELECT COUNT(*) as count FROM feedme_examples_temp WHERE conversation_id = %s",
+                    (conversation_id,)
+                )
+                temp_count = cur.fetchone()[0]
+                
+                if temp_count == 0:
+                    raise HTTPException(status_code=404, detail="No examples found for rejection")
+                
+                # Call the rejection function
+                cur.execute(
+                    "SELECT reject_conversation_examples(%s, %s, %s)",
+                    (conversation_id, rejected_by, rejection_reason)
+                )
+                
+                rejected_count = cur.fetchone()[0]
+                conn.commit()
+                
+                return {
+                    "success": True,
+                    "conversation_id": conversation_id,
+                    "rejected_examples": rejected_count,
+                    "rejected_by": rejected_by,
+                    "rejection_reason": rejection_reason,
+                    "rejected_at": datetime.utcnow().isoformat()
+                }
+                
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error rejecting examples for conversation {conversation_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/conversations/{conversation_id}/summary", tags=["FeedMe"])
+async def get_conversation_summary(conversation_id: int):
+    """
+    Get comprehensive summary of conversation processing status.
+    
+    This endpoint provides a complete overview of the conversation including
+    processing status, approval status, and counts of temporary vs approved examples.
+    
+    Args:
+        conversation_id: ID of the conversation
+        
+    Returns:
+        Dict with comprehensive conversation summary
+        
+    Raises:
+        HTTPException: If the FeedMe service is disabled (503), conversation not found (404),
+                      or a database error occurs (500).
+    """
+    if not settings.feedme_enabled:
+        raise HTTPException(status_code=503, detail="FeedMe service is currently disabled")
+    
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor(cursor_factory=psycopg2_extras.RealDictCursor) as cur:
+                # Get comprehensive summary
+                cur.execute("SELECT * FROM get_conversation_summary(%s)", (conversation_id,))
+                result = cur.fetchone()
+                
+                if not result:
+                    raise HTTPException(status_code=404, detail="Conversation not found")
+                
+                summary = dict(result)
+                
+                # Convert datetime objects to ISO strings
+                for key in ['uploaded_at', 'processed_at', 'approved_at']:
+                    if summary.get(key):
+                        summary[key] = summary[key].isoformat()
+                
+                return summary
+                
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting summary for conversation {conversation_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# Folder Management API Endpoints
+
+@router.get("/folders", response_model=FolderListResponse, tags=["FeedMe"])
+async def list_folders():
+    """
+    Get all folders with conversation counts
+    
+    Returns:
+        FolderListResponse: List of all folders with metadata and conversation counts
+    """
+    
+    if not settings.feedme_enabled:
+        raise HTTPException(status_code=503, detail="FeedMe service is currently disabled")
+    
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor(cursor_factory=psycopg2_extras.RealDictCursor) as cur:
+                # Get folders with conversation counts
+                cur.execute("""
+                    SELECT f.*, COUNT(c.id) as conversation_count
+                    FROM feedme_folders f
+                    LEFT JOIN feedme_conversations c ON f.id = c.folder_id AND c.is_active = true
+                    GROUP BY f.id, f.name, f.color, f.description, f.created_by, f.created_at, f.updated_at
+                    ORDER BY f.name
+                """)
+                
+                folder_rows = cur.fetchall()
+                folders = []
+                
+                for row in folder_rows:
+                    folder_dict = dict(row)
+                    folders.append(FeedMeFolder(**folder_dict))
+                
+                return FolderListResponse(
+                    folders=folders,
+                    total_count=len(folders)
+                )
+            
+    except Exception as e:
+        logger.error(f"Error listing folders: {e}")
+        raise HTTPException(status_code=500, detail="Failed to list folders")
+
+
+@router.post("/folders", response_model=FeedMeFolder, tags=["FeedMe"])
+async def create_folder(folder_data: FolderCreate):
+    """
+    Create a new folder for organizing conversations
+    
+    Args:
+        folder_data: Folder creation data including name, color, description
+        
+    Returns:
+        FeedMeFolder: The created folder with metadata
+    """
+    
+    if not settings.feedme_enabled:
+        raise HTTPException(status_code=503, detail="FeedMe service is currently disabled")
+    
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor(cursor_factory=psycopg2_extras.RealDictCursor) as cur:
+                # Check if folder name already exists
+                cur.execute("SELECT id FROM feedme_folders WHERE name = %s", (folder_data.name,))
+                if cur.fetchone():
+                    raise HTTPException(status_code=409, detail="Folder name already exists")
+                
+                # Create folder
+                cur.execute("""
+                    INSERT INTO feedme_folders (name, color, description, created_by)
+                    VALUES (%s, %s, %s, %s)
+                    RETURNING *
+                """, (folder_data.name, folder_data.color, folder_data.description, folder_data.created_by))
+                
+                folder_row = cur.fetchone()
+                conn.commit()
+                
+                folder_dict = dict(folder_row)
+                folder_dict['conversation_count'] = 0  # New folder has no conversations
+                
+                logger.info(f"Created folder: {folder_data.name}")
+                return FeedMeFolder(**folder_dict)
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error creating folder: {e}")
+        raise HTTPException(status_code=500, detail="Failed to create folder")
+
+
+@router.put("/folders/{folder_id}", response_model=FeedMeFolder, tags=["FeedMe"])
+async def update_folder(folder_id: int, folder_data: FolderUpdate):
+    """
+    Update an existing folder's name, color, or description
+    
+    Args:
+        folder_id: ID of the folder to update
+        folder_data: Updated folder data
+        
+    Returns:
+        FeedMeFolder: The updated folder with metadata
+    """
+    
+    if not settings.feedme_enabled:
+        raise HTTPException(status_code=503, detail="FeedMe service is currently disabled")
+    
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor(cursor_factory=psycopg2_extras.RealDictCursor) as cur:
+                # Check folder exists
+                cur.execute("SELECT * FROM feedme_folders WHERE id = %s", (folder_id,))
+                existing_folder = cur.fetchone()
+                if not existing_folder:
+                    raise HTTPException(status_code=404, detail="Folder not found")
+                
+                # Check for name conflicts if name is being updated
+                if folder_data.name and folder_data.name != existing_folder['name']:
+                    cur.execute("SELECT id FROM feedme_folders WHERE name = %s AND id != %s", 
+                              (folder_data.name, folder_id))
+                    if cur.fetchone():
+                        raise HTTPException(status_code=409, detail="Folder name already exists")
+                
+                # Build update query dynamically
+                update_fields = []
+                update_values = []
+                
+                if folder_data.name is not None:
+                    update_fields.append("name = %s")
+                    update_values.append(folder_data.name)
+                
+                if folder_data.color is not None:
+                    update_fields.append("color = %s")
+                    update_values.append(folder_data.color)
+                
+                if folder_data.description is not None:
+                    update_fields.append("description = %s")
+                    update_values.append(folder_data.description)
+                
+                if not update_fields:
+                    # No fields to update, return existing folder
+                    folder_dict = dict(existing_folder)
+                    folder_dict['conversation_count'] = 0  # Will be calculated separately
+                    return FeedMeFolder(**folder_dict)
+                
+                update_values.append(folder_id)
+                update_query = f"""
+                    UPDATE feedme_folders 
+                    SET {', '.join(update_fields)}, updated_at = NOW()
+                    WHERE id = %s
+                    RETURNING *
+                """
+                
+                cur.execute(update_query, update_values)
+                updated_folder = cur.fetchone()
+                conn.commit()
+                
+                # Get conversation count
+                cur.execute("""
+                    SELECT COUNT(*) as count 
+                    FROM feedme_conversations 
+                    WHERE folder_id = %s AND is_active = true
+                """, (folder_id,))
+                count_result = cur.fetchone()
+                conversation_count = count_result['count'] if count_result else 0
+                
+                folder_dict = dict(updated_folder)
+                folder_dict['conversation_count'] = conversation_count
+                
+                logger.info(f"Updated folder {folder_id}")
+                return FeedMeFolder(**folder_dict)
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error updating folder {folder_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to update folder")
+
+
+@router.delete("/folders/{folder_id}", tags=["FeedMe"])
+async def delete_folder(folder_id: int, move_conversations_to: Optional[int] = Query(None, description="Folder ID to move conversations to, or null to remove from folders")):
+    """
+    Delete a folder and optionally move its conversations to another folder
+    
+    Args:
+        folder_id: ID of the folder to delete
+        move_conversations_to: Optional folder ID to move conversations to
+        
+    Returns:
+        dict: Deletion summary with conversation move details
+    """
+    
+    if not settings.feedme_enabled:
+        raise HTTPException(status_code=503, detail="FeedMe service is currently disabled")
+    
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor(cursor_factory=psycopg2_extras.RealDictCursor) as cur:
+                # Check folder exists
+                cur.execute("SELECT * FROM feedme_folders WHERE id = %s", (folder_id,))
+                folder = cur.fetchone()
+                if not folder:
+                    raise HTTPException(status_code=404, detail="Folder not found")
+                
+                # Count conversations in this folder
+                cur.execute("""
+                    SELECT COUNT(*) as count 
+                    FROM feedme_conversations 
+                    WHERE folder_id = %s AND is_active = true
+                """, (folder_id,))
+                count_result = cur.fetchone()
+                conversation_count = count_result['count'] if count_result else 0
+                
+                # Validate target folder if specified
+                if move_conversations_to is not None:
+                    cur.execute("SELECT id FROM feedme_folders WHERE id = %s", (move_conversations_to,))
+                    if not cur.fetchone():
+                        raise HTTPException(status_code=404, detail="Target folder not found")
+                
+                # Move conversations if needed
+                if conversation_count > 0:
+                    cur.execute("""
+                        UPDATE feedme_conversations 
+                        SET folder_id = %s, updated_at = NOW()
+                        WHERE folder_id = %s
+                    """, (move_conversations_to, folder_id))
+                
+                # Delete the folder
+                cur.execute("DELETE FROM feedme_folders WHERE id = %s", (folder_id,))
+                conn.commit()
+                
+                logger.info(f"Deleted folder {folder_id}, moved {conversation_count} conversations")
+                
+                return {
+                    "folder_id": folder_id,
+                    "folder_name": folder['name'],
+                    "conversations_moved": conversation_count,
+                    "moved_to_folder_id": move_conversations_to,
+                    "message": f"Folder '{folder['name']}' deleted successfully"
+                }
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error deleting folder {folder_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to delete folder")
+
+
+@router.post("/folders/assign", tags=["FeedMe"])
+async def assign_conversations_to_folder(assign_request: AssignFolderRequest):
+    """
+    Assign multiple conversations to a folder or remove them from folders
+    
+    Args:
+        assign_request: Assignment details including folder_id and conversation_ids
+        
+    Returns:
+        dict: Assignment summary with success/failure details
+    """
+    
+    if not settings.feedme_enabled:
+        raise HTTPException(status_code=503, detail="FeedMe service is currently disabled")
+    
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor(cursor_factory=psycopg2_extras.RealDictCursor) as cur:
+                # Validate folder exists if folder_id is provided
+                if assign_request.folder_id is not None:
+                    cur.execute("SELECT name FROM feedme_folders WHERE id = %s", (assign_request.folder_id,))
+                    folder = cur.fetchone()
+                    if not folder:
+                        raise HTTPException(status_code=404, detail="Folder not found")
+                    folder_name = folder['name']
+                else:
+                    folder_name = None
+                
+                # Validate conversations exist
+                if assign_request.conversation_ids:
+                    placeholders = ','.join(['%s'] * len(assign_request.conversation_ids))
+                    cur.execute(f"""
+                        SELECT id FROM feedme_conversations 
+                        WHERE id IN ({placeholders}) AND is_active = true
+                    """, assign_request.conversation_ids)
+                    
+                    existing_ids = [row['id'] for row in cur.fetchall()]
+                    missing_ids = set(assign_request.conversation_ids) - set(existing_ids)
+                    
+                    if missing_ids:
+                        raise HTTPException(status_code=404, detail=f"Conversations not found: {list(missing_ids)}")
+                    
+                    # Update folder assignments
+                    cur.execute(f"""
+                        UPDATE feedme_conversations 
+                        SET folder_id = %s, updated_at = NOW()
+                        WHERE id IN ({placeholders})
+                    """, [assign_request.folder_id] + assign_request.conversation_ids)
+                    
+                    updated_count = cur.rowcount
+                    conn.commit()
+                    
+                    action = f"assigned to folder '{folder_name}'" if folder_name else "removed from folders"
+                    logger.info(f"Successfully {action} {updated_count} conversations")
+                    
+                    return {
+                        "folder_id": assign_request.folder_id,
+                        "folder_name": folder_name,
+                        "conversation_ids": assign_request.conversation_ids,
+                        "updated_count": updated_count,
+                        "action": action,
+                        "message": f"Successfully {action} {updated_count} conversations"
+                    }
+                else:
+                    return {
+                        "folder_id": assign_request.folder_id,
+                        "folder_name": folder_name,
+                        "conversation_ids": [],
+                        "updated_count": 0,
+                        "action": "no conversations provided",
+                        "message": "No conversations were provided for assignment"
+                    }
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error assigning conversations to folder: {e}")
+        raise HTTPException(status_code=500, detail="Failed to assign conversations to folder")
+
+
+@router.get("/folders/{folder_id}/conversations", response_model=ConversationListResponse, tags=["FeedMe"])
+async def list_folder_conversations(
+    folder_id: int,
+    page: int = Query(1, ge=1, description="Page number"),
+    page_size: int = Query(20, ge=1, le=100, description="Number of items per page")
+):
+    """
+    Get all conversations in a specific folder
+    
+    Args:
+        folder_id: ID of the folder
+        page: Page number for pagination
+        page_size: Number of conversations per page
+        
+    Returns:
+        ConversationListResponse: Paginated list of conversations in the folder
+    """
+    
+    if not settings.feedme_enabled:
+        raise HTTPException(status_code=503, detail="FeedMe service is currently disabled")
+    
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor(cursor_factory=psycopg2_extras.RealDictCursor) as cur:
+                # Validate folder exists
+                cur.execute("SELECT name FROM feedme_folders WHERE id = %s", (folder_id,))
+                folder = cur.fetchone()
+                if not folder:
+                    raise HTTPException(status_code=404, detail="Folder not found")
+                
+                # Count total conversations in folder
+                cur.execute("""
+                    SELECT COUNT(*) as count 
+                    FROM feedme_conversations 
+                    WHERE folder_id = %s AND is_active = true
+                """, (folder_id,))
+                count_result = cur.fetchone()
+                total_count = count_result['count'] if count_result else 0
+                
+                # Get paginated conversations
+                offset = (page - 1) * page_size
+                cur.execute("""
+                    SELECT * FROM feedme_conversations 
+                    WHERE folder_id = %s AND is_active = true
+                    ORDER BY updated_at DESC
+                    LIMIT %s OFFSET %s
+                """, (folder_id, page_size, offset))
+                
+                conversation_rows = cur.fetchall()
+                conversations = []
+                
+                for row in conversation_rows:
+                    # Convert to the expected response format
+                    conversation_dict = dict(row)
+                    # Map database fields to response model fields
+                    response_conversation = {
+                        'id': conversation_dict['id'],
+                        'title': conversation_dict['title'],
+                        'processing_status': conversation_dict.get('processing_status', 'pending'),
+                        'total_examples': conversation_dict.get('total_examples', 0),
+                        'created_at': conversation_dict['created_at'].isoformat(),
+                        'metadata': conversation_dict.get('metadata', {})
+                    }
+                    conversations.append(response_conversation)
+                
+                return ConversationListResponse(
+                    conversations=conversations,
+                    total_count=total_count,
+                    page=page,
+                    page_size=page_size,
+                    has_next=offset + len(conversations) < total_count
+                )
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error listing conversations for folder {folder_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to list folder conversations")
+

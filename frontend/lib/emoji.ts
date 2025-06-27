@@ -19,13 +19,30 @@ export const sectionPatterns = [
 ] as const;
 
 /**
- * Wraps emoji in proper accessibility markup for screen readers
+ * A simple utility to escape HTML characters in a string.
+ * This prevents XSS when inserting dynamic data into HTML.
+ * @param unsafe The string to escape.
+ * @returns The escaped string.
+ */
+function escapeHtml(unsafe: string): string {
+    return unsafe
+         .replace(/&/g, "&amp;")
+         .replace(/</g, "&lt;")
+         .replace(/>/g, "&gt;")
+         .replace(/"/g, "&quot;")
+         .replace(/'/g, "&#039;");
+}
+
+/**
+ * Wraps emoji in proper accessibility markup for screen readers.
+ * This function returns an HTML string, which must be rendered using `dangerouslySetInnerHTML`.
  * @param emoji - The emoji character to wrap
- * @param label - Accessible label for screen readers
- * @returns JSX span element with proper ARIA attributes
+ * @param label - Accessible label for screen readers. This will be safely escaped.
+ * @returns An HTML string with proper ARIA attributes for the emoji.
  */
 export function accessibleEmoji(emoji: string, label: string): string {
-  return `<span role="img" aria-label="${label}">${emoji}</span>`;
+  const safeLabel = escapeHtml(label);
+  return `<span role="img" aria-label="${safeLabel}">${emoji}</span>`;
 }
 
 /**

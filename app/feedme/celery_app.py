@@ -14,16 +14,24 @@ from celery import Celery
 from celery.signals import worker_init, worker_shutdown
 from kombu import Queue
 import logging
+from typing import Dict, Any, Type
+from celery import Task
+import psycopg2
+import requests
 
 from app.core.settings import settings
 
 logger = logging.getLogger(__name__)
 
 # Create Celery application
+# Set default broker/backend if not configured
+default_broker = "redis://localhost:6379/1"
+default_backend = "redis://localhost:6379/2"
+
 celery_app = Celery(
     "feedme",
-    broker=settings.feedme_celery_broker,
-    backend=settings.feedme_result_backend,
+    broker=getattr(settings, 'feedme_celery_broker', default_broker),
+    backend=getattr(settings, 'feedme_result_backend', default_backend),
     include=["app.feedme.tasks"]
 )
 
@@ -77,28 +85,55 @@ celery_app.conf.update(
     worker_send_task_events=True,
     
     # Error handling
-    task_annotations={
-        '*': {'rate_limit': '10/s'},
-        'app.feedme.tasks.process_transcript': {
-            'rate_limit': '5/m',  # 5 per minute for heavy processing
-            'max_retries': 3,
-            'default_retry_delay': 60,  # 1 minute
-        },
-        'app.feedme.tasks.generate_embeddings': {
-            'rate_limit': '10/m',
-            'max_retries': 2,
-            'default_retry_delay': 30,
-        },
-        'app.feedme.tasks.parse_conversation': {
-            'rate_limit': '20/m',
-            'max_retries': 2,
-            'default_retry_delay': 15,
-        }
+    # Default task retry policy for unexpected errors
+    task_publish_retry_policy = {
+        'max_retries': 3,
+        'interval_start': 10,  # seconds
+        'interval_step': 10,
+        'interval_max': 60,
     }
 )
 
 # Task discovery
 celery_app.autodiscover_tasks(['app.feedme'])
+
+
+# --- Type-Safe Base Task with Retry --- #
+
+RETRYABLE_EXCEPTIONS: tuple[Type[Exception], ...] = (
+    psycopg2.OperationalError,
+    requests.exceptions.ConnectionError,
+    requests.exceptions.Timeout,
+)
+
+class BaseTaskWithRetry(Task):
+    """
+    A base Celery task with built-in, type-safe retry logic for recoverable errors.
+
+    Handles common transient issues like DB connection errors or network timeouts
+    with exponential backoff.
+    """
+    autoretry_for = RETRYABLE_EXCEPTIONS
+    retry_kwargs = {'max_retries': 3}
+    retry_backoff = True
+    retry_backoff_max = 60  # Max delay 60 seconds
+    task_acks_late = True
+
+    def on_retry(self, exc, task_id, args, kwargs, einfo):
+        """Log when a task is being retried."""
+        logging.warning(
+            f"Task {task_id} retrying (attempt {self.request.retries + 1}/{self.max_retries}) "
+            f"due to {type(exc).__name__}: {exc}"
+        )
+        super().on_retry(exc, task_id, args, kwargs, einfo)
+
+    def on_failure(self, exc, task_id, args, kwargs, einfo):
+        """Log on final task failure after all retries are exhausted."""
+        logging.error(
+            f"Task {task_id} failed permanently after {self.request.retries} retries "
+            f"due to {type(exc).__name__}: {exc}"
+        )
+        super().on_failure(exc, task_id, args, kwargs, einfo)
 
 
 @worker_init.connect
@@ -139,7 +174,7 @@ def worker_shutdown_handler(sender=None, **kwargs):
 
 
 # Health check for Celery application
-def check_celery_health():
+def check_celery_health() -> Dict[str, Any]:
     """Check Celery application health"""
     try:
         # Check if Celery is responsive
@@ -163,12 +198,18 @@ def check_celery_health():
             "active_tasks": total_active,
             "reserved_tasks": total_reserved,
             "queues": list(celery_app.conf.task_queues),
-            "broker": settings.feedme_celery_broker,
-            "backend": settings.feedme_result_backend
+            "broker": getattr(settings, 'feedme_celery_broker', default_broker),
+            "backend": getattr(settings, 'feedme_result_backend', default_backend)
         }
         
     except Exception as e:
-        return {"status": "unhealthy", "error": str(e)}
+        return {
+            "status": "unhealthy", 
+            "error": {
+                "type": type(e).__name__,
+                "message": str(e)
+            }
+        }
 
 
 if __name__ == "__main__":

@@ -77,6 +77,15 @@ class Settings(BaseSettings):
     log_analysis_enable_comprehensive_testing: bool = Field(default=False, alias="ENABLE_COMPREHENSIVE_TESTING")
     log_analysis_test_framework_enabled: bool = Field(default=False, alias="TEST_FRAMEWORK_ENABLED")
     log_analysis_validation_strict_mode: bool = Field(default=False, alias="VALIDATION_STRICT_MODE")
+    
+    # Chat Session Configuration
+    max_sessions_per_agent: int = Field(default=5, alias="MAX_SESSIONS_PER_AGENT")
+    chat_message_max_length: int = Field(default=10000, alias="CHAT_MESSAGE_MAX_LENGTH")
+    chat_title_max_length: int = Field(default=255, alias="CHAT_TITLE_MAX_LENGTH")
+    chat_session_cleanup_days: int = Field(default=30, alias="CHAT_SESSION_CLEANUP_DAYS")
+    chat_enable_message_history: bool = Field(default=True, alias="CHAT_ENABLE_MESSAGE_HISTORY")
+    chat_default_page_size: int = Field(default=10, alias="CHAT_DEFAULT_PAGE_SIZE")
+    chat_max_page_size: int = Field(default=100, alias="CHAT_MAX_PAGE_SIZE")
 
     class Config:
         case_sensitive = False

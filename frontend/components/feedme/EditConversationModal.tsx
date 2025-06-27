@@ -13,7 +13,7 @@
 'use client'
 
 import React, { useState, useEffect, useRef } from 'react'
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../ui/dialog'
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '../ui/dialog'
 import { Button } from '../ui/button'
 import { Input } from '../ui/input'
 import { Label } from '../ui/label'
@@ -27,9 +27,11 @@ import {
   editConversation,
   getConversationVersions,
   revertConversation,
+  getFormattedQAContent,
   type ConversationVersion,
   type VersionListResponse,
   type ConversationEditRequest,
+  type ConversationRevertRequest,
   type EditResponse,
   type UploadTranscriptResponse
 } from '../../lib/feedme-api'
@@ -49,6 +51,14 @@ interface FormData {
   transcript: string
 }
 
+interface ContentData {
+  formatted_content: string
+  total_examples: number
+  content_type: 'qa_examples' | 'raw_transcript'
+  raw_transcript?: string
+  message: string
+}
+
 interface FormErrors {
   title?: string
   transcript?: string
@@ -65,7 +75,10 @@ export function EditConversationModal({
     title: conversation.title,
     transcript: conversation.metadata?.raw_transcript || ''
   })
+  const [contentData, setContentData] = useState<ContentData | null>(null)
+  const [isLoadingContent, setIsLoadingContent] = useState(false)
   const [errors, setErrors] = useState<FormErrors>({})
+  const [apiError, setApiError] = useState<string | null>(null)
   const [isLoading, setIsLoading] = useState(false)
   const [isSaving, setIsSaving] = useState(false)
   
@@ -84,36 +97,71 @@ export function EditConversationModal({
   // Current user (mock for now - would come from auth context)
   const currentUser = 'editor@example.com'
 
-  // Load version history on mount
+  // Load version history and formatted content on mount
   useEffect(() => {
     if (isOpen) {
       loadVersionHistory()
+      loadFormattedContent()
     }
   }, [isOpen, conversation.id])
 
   // Track unsaved changes
   useEffect(() => {
+    const originalTranscript = contentData?.formatted_content || conversation.metadata?.raw_transcript || ''
     const hasChanges = 
       formData.title !== conversation.title ||
-      formData.transcript !== (conversation.metadata?.raw_transcript || '')
+      formData.transcript !== originalTranscript
     
     setHasUnsavedChanges(hasChanges)
-  }, [formData, conversation])
+  }, [formData, conversation, contentData])
 
   const loadVersionHistory = async () => {
+    setApiError(null)
     try {
       setIsLoadingVersions(true)
       const response = await getConversationVersions(conversation.id)
       setVersions(response.versions)
     } catch (error) {
       console.error('Failed to load version history:', error)
-      toast({
-        title: 'Error',
-        description: 'Failed to load version history',
-        variant: 'destructive'
-      })
+      // Don't show error for pending conversations (versions may not exist yet)
+      if (conversation.processing_status !== 'pending') {
+        const message = error instanceof Error ? error.message : 'Could not load version history.'
+        setApiError(message)
+      }
+      // Set empty versions array for pending conversations
+      setVersions([])
     } finally {
       setIsLoadingVersions(false)
+    }
+  }
+
+  const loadFormattedContent = async () => {
+    setApiError(null)
+    try {
+      setIsLoadingContent(true)
+      const content = await getFormattedQAContent(conversation.id)
+      setContentData(content)
+      
+      // Update the form with the formatted content
+      setFormData(prev => ({
+        ...prev,
+        transcript: content.formatted_content
+      }))
+      
+      console.log(`[EditModal] Loaded ${content.content_type}: ${content.message}`)
+    } catch (error) {
+      console.error('Failed to load formatted content:', error)
+      // Keep the existing raw transcript on error
+      const fallbackContent = conversation.metadata?.raw_transcript || ''
+      setFormData(prev => ({
+        ...prev,
+        transcript: fallbackContent
+      }))
+      
+      // Don't show error for this - just log it
+      console.log('[EditModal] Using raw transcript as fallback')
+    } finally {
+      setIsLoadingContent(false)
     }
   }
 
@@ -133,56 +181,35 @@ export function EditConversationModal({
   }
 
   const handleSave = async () => {
+    setApiError(null)
     if (!validateForm()) {
       return
     }
 
+    setIsSaving(true)
     try {
-      setIsSaving(true)
-
-      const editRequest: ConversationEditRequest = {
-        title: formData.title.trim(),
-        raw_transcript: formData.transcript.trim(),
-        updated_by: currentUser,
-        reprocess: reprocessAfterSave
+      const payload: ConversationEditRequest = {
+        title: formData.title,
+        raw_transcript: formData.transcript,
+        reprocess: reprocessAfterSave,
+        updated_by: currentUser
       }
 
-      const response: EditResponse = await editConversation(conversation.id, editRequest)
+      const response = await editConversation(conversation.id, payload)
 
-      // Update conversation data
+      toast({
+        title: 'Success',
+        description: `Saved as v${response.new_version}.${response.reprocessing ? ' Reprocessing...' : ''}`
+      })
+
       if (onConversationUpdated) {
         onConversationUpdated(response.conversation)
       }
-
-      // Reload version history
-      await loadVersionHistory()
-
-      // Show success message
-      toast({
-        title: 'Success',
-        description: `Conversation updated to version ${response.new_version}${
-          response.reprocessing ? ' and scheduled for reprocessing' : ''
-        }`
-      })
-
-      // Show reprocess status if applicable
-      if (response.reprocessing && response.task_id) {
-        setShowReprocessOption(true)
-      }
-
-      // Reset unsaved changes flag
-      setHasUnsavedChanges(false)
-
-      // Close modal
-      onClose()
-
+      handleClose()
     } catch (error) {
-      console.error('Failed to save conversation:', error)
-      toast({
-        title: 'Error',
-        description: error instanceof Error ? error.message : 'Failed to save conversation',
-        variant: 'destructive'
-      })
+      console.error('Save failed:', error)
+      const message = error instanceof Error ? error.message : 'An unknown error occurred.'
+      setApiError(`Failed to save changes: ${message}`)
     } finally {
       setIsSaving(false)
     }
@@ -195,42 +222,42 @@ export function EditConversationModal({
   }
 
   const handleRevert = async (versionNumber: number) => {
+    setApiError(null)
+    setIsLoading(true)
     try {
-      setIsLoading(true)
-
-      const response = await revertConversation(conversation.id, versionNumber, {
+      const revertPayload: ConversationRevertRequest = {
         target_version: versionNumber,
         reverted_by: currentUser,
-        reason: 'Manual revert via UI',
+        reason: 'Manual revert from UI',
         reprocess: true
-      })
-
-      // Update form data with reverted content
-      const revertedVersion = versions.find(v => v.version === versionNumber)
-      if (revertedVersion) {
-        setFormData({
-          title: revertedVersion.title,
-          transcript: revertedVersion.raw_transcript
-        })
       }
-
-      // Reload version history
-      await loadVersionHistory()
+      const response = await revertConversation(conversation.id, versionNumber, revertPayload)
 
       toast({
         title: 'Success',
-        description: `Reverted to version ${versionNumber}, created version ${response.new_version}`
+        description: `Reverted to v${response.reverted_to_version}. New active version is v${response.new_version}.`
       })
 
+      // Update form data with reverted content
+      setFormData({
+        title: response.conversation.title,
+        transcript: response.conversation.metadata?.raw_transcript || ''
+      })
+
+      // Refresh version history to show new active version
+      await loadVersionHistory()
+
+      // Notify parent component
+      if (onConversationUpdated) {
+        onConversationUpdated(response.conversation)
+      }
+
+      // Switch back to edit tab
       setActiveTab('edit')
-
     } catch (error) {
-      console.error('Failed to revert conversation:', error)
-      toast({
-        title: 'Error',
-        description: error instanceof Error ? error.message : 'Failed to revert conversation',
-        variant: 'destructive'
-      })
+      console.error(`Failed to revert to version ${versionNumber}:`, error)
+      const message = error instanceof Error ? error.message : 'An unknown error occurred.'
+      setApiError(`Failed to revert to version ${versionNumber}: ${message}`)
     } finally {
       setIsLoading(false)
     }
@@ -255,7 +282,16 @@ export function EditConversationModal({
             Edit Conversation
             {hasUnsavedChanges && <Badge variant="outline">Unsaved Changes</Badge>}
           </DialogTitle>
+          <DialogDescription>
+            Edit the conversation title and transcript. You can view version history, see diffs, and revert to previous versions.
+          </DialogDescription>
         </DialogHeader>
+
+        {apiError && (
+          <Alert variant="destructive" className="my-4">
+            <AlertDescription>{apiError}</AlertDescription>
+          </Alert>
+        )}
 
         <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as any)} className="flex-1 flex flex-col overflow-hidden">
           <TabsList className="grid w-full grid-cols-3">
@@ -298,12 +334,36 @@ export function EditConversationModal({
 
               {/* Rich Text Editor */}
               <div className="space-y-2 flex-1 flex flex-col overflow-hidden">
-                <Label htmlFor="transcript">Transcript Content</Label>
+                <div className="flex items-center justify-between">
+                  <Label htmlFor="transcript">
+                    {contentData?.content_type === 'qa_examples' ? 'Q&A Examples' : 'Transcript Content'}
+                  </Label>
+                  {isLoadingContent && (
+                    <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                      <Loader2 className="h-3 w-3 animate-spin" />
+                      Loading content...
+                    </div>
+                  )}
+                  {contentData && (
+                    <Badge variant={contentData.content_type === 'qa_examples' ? 'default' : 'secondary'}>
+                      {contentData.content_type === 'qa_examples' 
+                        ? `${contentData.total_examples} Examples` 
+                        : 'Raw Transcript'}
+                    </Badge>
+                  )}
+                </div>
+                {contentData?.message && (
+                  <p className="text-xs text-muted-foreground">{contentData.message}</p>
+                )}
                 <div className="flex-1 overflow-hidden">
                   <RichTextEditor
                     value={formData.transcript}
                     onChange={(value) => setFormData(prev => ({ ...prev, transcript: value }))}
-                    placeholder="Enter transcript content..."
+                    placeholder={
+                      contentData?.content_type === 'qa_examples' 
+                        ? "Edit Q&A examples (markdown format)..."
+                        : "Enter transcript content..."
+                    }
                     className={cn(
                       'h-full',
                       errors.transcript && 'border-red-500'

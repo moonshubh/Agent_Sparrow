@@ -3,7 +3,7 @@
  * Ensures no hydration mismatches occur due to theme or browser extensions
  */
 
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render } from '@testing-library/react'
 import RootLayout from '../layout'
 
@@ -43,27 +43,34 @@ vi.mock('@/components/ui/sonner', () => ({
 }))
 
 describe('Layout Hydration', () => {
-  it('should render without hydration warnings', () => {
-    const consoleWarn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+  let consoleWarn: ReturnType<typeof vi.spyOn>;
+  let consoleError: ReturnType<typeof vi.spyOn>;
 
+  beforeEach(() => {
+    consoleWarn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    consoleWarn.mockRestore();
+    consoleError.mockRestore();
+  });
+
+  it('should render without hydration warnings', () => {
     render(
       <RootLayout>
         <div>Test content</div>
       </RootLayout>
-    )
+    );
 
     // Check that no hydration warnings were logged
     expect(consoleWarn).not.toHaveBeenCalledWith(
       expect.stringMatching(/hydration|mismatch/i)
-    )
+    );
     expect(consoleError).not.toHaveBeenCalledWith(
-      expect.stringMatching(/hydration|mismatch/i) 
-    )
-
-    consoleWarn.mockRestore()
-    consoleError.mockRestore()
-  })
+      expect.stringMatching(/hydration|mismatch/i)
+    );
+  });
 
   it('should read theme from cookies deterministically', () => {
     // Test that layout properly reads theme from cookies
@@ -72,11 +79,11 @@ describe('Layout Hydration', () => {
       <RootLayout>
         <div>Test content</div>
       </RootLayout>
-    )
+    );
 
-    const themeProvider = getByTestId('theme-provider')
-    expect(themeProvider).toHaveAttribute('data-default-theme', 'dark')
-  })
+    const themeProvider = getByTestId('theme-provider');
+    expect(themeProvider).toHaveAttribute('data-default-theme', 'dark');
+  });
 
   it('should include hydration safety measures', () => {
     // Test that components that could cause hydration issues are handled
@@ -84,23 +91,12 @@ describe('Layout Hydration', () => {
       <RootLayout>
         <div>Test content</div>
       </RootLayout>
-    )
+    );
 
     // Check that the layout rendered without errors
-    expect(container.firstChild).toBeDefined()
-    expect(container.querySelector('[data-testid="theme-provider"]')).toBeInTheDocument()
-  })
-
-  it('should pass theme to ThemeProvider consistently', () => {
-    const { getByTestId } = render(
-      <RootLayout>
-        <div>Test content</div>
-      </RootLayout>
-    )
-
-    const themeProvider = getByTestId('theme-provider')
-    expect(themeProvider).toHaveAttribute('data-default-theme', 'dark')
-  })
+    expect(container.firstChild).toBeDefined();
+    expect(container.querySelector('[data-testid="theme-provider"]')).toBeInTheDocument();
+  });
 
   it('should include Grammarly disable script', () => {
     const { container } = render(

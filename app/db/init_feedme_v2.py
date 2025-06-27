@@ -16,6 +16,7 @@ import sys
 import logging
 import traceback
 from pathlib import Path
+import sqlparse
 from typing import Dict, Any, List, Tuple
 
 # Add the project root to the Python path
@@ -42,41 +43,42 @@ class FeedMeInitializer:
         self.errors = []
     
     def run_sql_file(self, file_path: Path) -> bool:
-        """Execute SQL from file with error handling"""
+        """Execute SQL from a file using a proper parser to handle complex statements."""
         try:
             logger.info(f"Executing SQL file: {file_path}")
             
             with open(file_path, 'r') as f:
                 sql_content = f.read()
             
-            # Remove comments and empty lines
-            lines = []
-            for line in sql_content.split('\n'):
-                line = line.strip()
-                if line and not line.startswith('--'):
-                    lines.append(line)
+            # Use sqlparse to split the content into individual, valid statements.
+            # This correctly handles multi-line statements, comments, and strings.
+            statements = sqlparse.split(sql_content)
             
-            sql_content = ' '.join(lines)
-            
-            # Execute the entire content as one transaction
+            # Execute the statements within a single transaction
             with self.manager.get_connection() as conn:
                 with conn.cursor() as cur:
                     try:
-                        cur.execute(sql_content)
+                        for statement in statements:
+                            # sqlparse can return empty strings for comments or whitespace
+                            if statement.strip():
+                                cur.execute(statement)
+                        
                         conn.commit()
                         logger.info(f"Successfully executed SQL file: {file_path}")
                         return True
                     except Exception as e:
                         conn.rollback()
+                        # The "already exists" check is kept for compatibility.
                         if "already exists" in str(e).lower():
-                            logger.info(f"Objects already exist (OK): {e}")
+                            logger.warning(f"Objects in {file_path} may already exist, which is acceptable. Error: {e}")
                             return True
                         else:
-                            logger.error(f"SQL execution failed: {e}")
+                            logger.error(f"SQL execution failed in {file_path}: {e}")
+                            logger.debug(traceback.format_exc())
                             return False
-            
+        
         except Exception as e:
-            logger.error(f"Failed to execute SQL file {file_path}: {e}")
+            logger.error(f"Failed to read or process SQL file {file_path}: {e}")
             logger.debug(traceback.format_exc())
             return False
     
@@ -139,7 +141,8 @@ class FeedMeInitializer:
         
         tables = {
             'feedme_conversations': False,
-            'feedme_examples': False
+            'feedme_examples': False,
+            'feedme_folders': False
         }
         
         try:
@@ -175,7 +178,8 @@ class FeedMeInitializer:
         migration_files = [
             "004_feedme_basic_tables.sql",
             "005_feedme_indexes.sql", 
-            "006_feedme_functions.sql"
+            "006_feedme_functions.sql",
+            "007_add_versioning_support.sql"
         ]
         
         for migration_file_name in migration_files:
@@ -216,7 +220,7 @@ class FeedMeInitializer:
                     
                     required_conv_columns = [
                         'id', 'uuid', 'title', 'raw_transcript', 'processing_status',
-                        'version', 'is_active', 'quality_score', 'created_at', 'updated_at'
+                        'version', 'is_active', 'folder_id', 'folder_color', 'created_at', 'updated_at'
                     ]
                     
                     missing_conv_columns = [col for col in required_conv_columns if col not in conv_columns]
@@ -234,9 +238,8 @@ class FeedMeInitializer:
                     ex_columns = [row['column_name'] for row in cur.fetchall()]
                     
                     required_ex_columns = [
-                        'id', 'uuid', 'conversation_id', 'question_text', 'answer_text',
-                        'version', 'is_active', 'retrieval_weight', 'usage_count',
-                        'confidence_score', 'usefulness_score', 'created_at', 'updated_at'
+                        'id', 'conversation_id', 'question_text', 'answer_text',
+                        'confidence_score', 'usefulness_score', 'is_active', 'created_at', 'updated_at'
                     ]
                     
                     missing_ex_columns = [col for col in required_ex_columns if col not in ex_columns]
