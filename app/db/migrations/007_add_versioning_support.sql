@@ -1,16 +1,20 @@
 -- Migration: Add versioning support to FeedMe conversations
 -- This migration adds the necessary fields for conversation versioning and editing
 
+-- Enable required extensions
+CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
 -- 1. Add versioning fields to feedme_conversations table
 ALTER TABLE feedme_conversations
-ADD COLUMN IF NOT EXISTS uuid UUID DEFAULT gen_random_uuid(),
+ADD COLUMN IF NOT EXISTS uuid UUID DEFAULT uuid_generate_v4(),
 ADD COLUMN IF NOT EXISTS version INTEGER DEFAULT 1,
 ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT true;
 
 -- 2. Update existing conversations to have proper UUIDs and version numbers
 -- Each existing conversation becomes version 1 of itself
 UPDATE feedme_conversations 
-SET uuid = gen_random_uuid(), version = 1, is_active = true 
+SET uuid = uuid_generate_v4(), version = 1, is_active = true 
 WHERE uuid IS NULL;
 
 -- 3. Add constraints

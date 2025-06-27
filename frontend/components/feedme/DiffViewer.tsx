@@ -271,7 +271,7 @@ export function DiffViewer({
         </div>
       ) : (
         <div className="flex-1 overflow-hidden">
-          <Tabs value={viewMode} onValueChange={(value) => setViewMode(value as any)} className="h-full flex flex-col">
+          <Tabs value={viewMode} onValueChange={(value) => setViewMode(value as 'unified' | 'split')} className="h-full flex flex-col">
             <TabsList className="grid w-full grid-cols-2 mb-4">
               <TabsTrigger value="unified">Unified View</TabsTrigger>
               <TabsTrigger value="split">Split View</TabsTrigger>

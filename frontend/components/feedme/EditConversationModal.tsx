@@ -293,7 +293,7 @@ export function EditConversationModal({
           </Alert>
         )}
 
-        <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as any)} className="flex-1 flex flex-col overflow-hidden">
+        <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as 'edit' | 'history' | 'diff')} className="flex-1 flex flex-col overflow-hidden">
           <TabsList className="grid w-full grid-cols-3">
             <TabsTrigger value="edit" className="flex items-center gap-2">
               <Edit3 className="h-4 w-4" />

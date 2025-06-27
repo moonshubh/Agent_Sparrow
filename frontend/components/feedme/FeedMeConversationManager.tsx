@@ -183,7 +183,8 @@ function ConversationCard({ conversation, onEdit, onDelete, onRefresh }: Convers
 }
 
 export function FeedMeConversationManager({ isOpen, onClose }: FeedMeConversationManagerProps) {
-  const [activeTab, setActiveTab] = useState('view')
+  type TabValue = 'view' | 'upload' | 'folders'
+  const [activeTab, setActiveTab] = useState<TabValue>('view')
   const [conversations, setConversations] = useState<UploadTranscriptResponse[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -346,7 +347,7 @@ export function FeedMeConversationManager({ isOpen, onClose }: FeedMeConversatio
             )}
           </DialogHeader>
 
-          <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as any)} className="flex-1 flex flex-col overflow-hidden">
+          <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as TabValue)} className="flex-1 flex flex-col overflow-hidden">
             <TabsList className="grid w-full grid-cols-3">
               <TabsTrigger value="view" className="flex items-center gap-2">
                 <FileText className="h-4 w-4" />
@@ -599,9 +600,7 @@ export function FeedMeConversationManager({ isOpen, onClose }: FeedMeConversatio
       <FolderManager
         isOpen={isFolderManagerOpen}
         onClose={() => setIsFolderManagerOpen(false)}
-        onFolderCreated={loadFolders}
-        onFolderUpdated={loadFolders}
-        onFolderDeleted={loadFolders}
+        onConversationsUpdated={loadFolders}
       />
 
       {/* Delete Confirmation Dialog */}

@@ -1,10 +1,9 @@
 -- FeedMe v2.0 Phase 2: Temporary Examples Table for Preview & Approval Workflow
 -- This migration adds support for preview and approval workflow before Q&A pairs are finalized
 
--- Add fields to conversations table for content type and extraction method
+-- Add fields to conversations table for content type (extraction_method already exists in migration 003)
 ALTER TABLE feedme_conversations
 ADD COLUMN IF NOT EXISTS content_type VARCHAR(20) DEFAULT 'text',
-ADD COLUMN IF NOT EXISTS extraction_method VARCHAR(20),
 ADD COLUMN IF NOT EXISTS approval_status VARCHAR(20) DEFAULT 'pending',
 ADD COLUMN IF NOT EXISTS approved_by VARCHAR(255),
 ADD COLUMN IF NOT EXISTS approved_at TIMESTAMP;
