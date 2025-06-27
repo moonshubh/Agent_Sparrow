@@ -670,3 +670,6 @@ dev-debug.log
 !frontend/lib/api.ts
 !frontend/lib/types/logAnalysis.ts
 frontend/tsconfig.tsbuildinfo
+
+# MCP configuration file
+.mcp.json
