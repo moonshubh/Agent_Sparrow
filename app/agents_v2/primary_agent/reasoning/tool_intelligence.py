@@ -63,10 +63,10 @@ class ToolIntelligence:
             'office365', 'exchange', 'server status', 'downtime', 'maintenance'
         ]
         
-        # Knowledge confidence thresholds
-        self.high_confidence_threshold = 0.8
-        self.medium_confidence_threshold = 0.6
-        self.low_confidence_threshold = 0.4
+        # Knowledge confidence thresholds - more aggressive web search
+        self.high_confidence_threshold = 0.85
+        self.medium_confidence_threshold = 0.7
+        self.low_confidence_threshold = 0.5
     
     async def decide_tool_usage(
         self,
@@ -401,50 +401,54 @@ class ToolIntelligence:
         has_confidence_gaps = any(cf < self.medium_confidence_threshold for cf in confidence_factors)
         is_urgent = query_analysis.urgency_level >= 4
         
-        # Decision logic
-        if needs_external_info and has_confidence_gaps:
+        # Enhanced decision logic - more aggressive about using web search for complex queries
+        avg_confidence = sum(confidence_factors) / len(confidence_factors) if confidence_factors else 0.5
+        is_complex = query_analysis.complexity_score > 0.6
+        
+        # Use both sources for complex or temporal queries
+        if (needs_external_info and has_confidence_gaps) or (is_complex and len(required_information) > 1):
             decision = ToolDecisionType.BOTH_SOURCES_NEEDED
             reasoning = (
-                f"Both internal knowledge base and web search required. "
-                f"Identified {len(temporal_factors)} temporal factors and {len(knowledge_gaps)} knowledge gaps. "
-                f"Will combine internal expertise with current external information."
+                f"Complex query requiring comprehensive research. "
+                f"Combining internal knowledge with web search for: {', '.join(required_information[:3])}. "
+                f"Confidence: {avg_confidence:.2f}, Complexity: {query_analysis.complexity_score:.2f}"
             )
         
-        elif needs_external_info:
-            if is_urgent:
-                decision = ToolDecisionType.BOTH_SOURCES_NEEDED
-                reasoning = (
-                    f"Urgent query requiring external information. "
-                    f"Will prioritize speed by combining internal knowledge with targeted web search."
-                )
-            else:
-                decision = ToolDecisionType.WEB_SEARCH_REQUIRED
-                reasoning = (
-                    f"External information required for optimal response. "
-                    f"Web search needed for: {', '.join(required_information[:3])}."
-                )
+        # Use web search for external info needs or complex technical issues
+        elif needs_external_info or (is_complex and query_analysis.problem_category in [
+            ProblemCategory.TECHNICAL_ISSUE, 
+            ProblemCategory.FEATURE_REQUEST,
+            ProblemCategory.BILLING_INQUIRY
+        ]):
+            decision = ToolDecisionType.WEB_SEARCH_REQUIRED
+            reasoning = (
+                f"Web search required for current information and comprehensive solutions. "
+                f"Complexity: {query_analysis.complexity_score:.2f}, "
+                f"Category: {query_analysis.problem_category.value}"
+            )
         
-        elif has_confidence_gaps:
-            avg_confidence = sum(confidence_factors) / len(confidence_factors)
-            if avg_confidence < self.low_confidence_threshold:
-                decision = ToolDecisionType.WEB_SEARCH_REQUIRED
-                reasoning = (
-                    f"Low confidence in internal knowledge (avg: {avg_confidence:.2f}). "
-                    f"Web search recommended to provide accurate information."
-                )
-            else:
-                decision = ToolDecisionType.INTERNAL_KB_ONLY
-                reasoning = (
-                    f"Sufficient internal knowledge available (confidence: {avg_confidence:.2f}). "
-                    f"Internal knowledge base can provide comprehensive response."
-                )
+        # Use both sources if confidence is low on complex queries
+        elif has_confidence_gaps and is_complex:
+            decision = ToolDecisionType.BOTH_SOURCES_NEEDED
+            reasoning = (
+                f"Low confidence ({avg_confidence:.2f}) on complex query. "
+                f"Combining internal knowledge with web research for accuracy."
+            )
+        
+        # Use web search if confidence is very low
+        elif avg_confidence < self.low_confidence_threshold:
+            decision = ToolDecisionType.WEB_SEARCH_REQUIRED
+            reasoning = (
+                f"Low confidence in internal knowledge ({avg_confidence:.2f}). "
+                f"Web search needed to provide accurate information."
+            )
         
         else:
-            # High confidence, no external needs
+            # Use internal KB for simple, high-confidence queries
             decision = ToolDecisionType.INTERNAL_KB_ONLY
             reasoning = (
-                f"Internal knowledge base sufficient for comprehensive response. "
-                f"High confidence in available information and solution approaches."
+                f"Internal knowledge sufficient (confidence: {avg_confidence:.2f}). "
+                f"Simple query category: {query_analysis.problem_category.value}"
             )
         
         # Special case: escalation needed

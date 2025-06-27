@@ -280,7 +280,7 @@ export function FeedMeModal({ isOpen, onClose }: FeedMeModalProps) {
       // Poll for processing completion with exponential backoff
       setUploadState(prev => ({ ...prev, progress: 80 }))
       let delay = 1000
-      let statusResponse
+      let statusResponse: any = null
       while (true) {
         try {
           statusResponse = await getProcessingStatus(uploadResponse.id)

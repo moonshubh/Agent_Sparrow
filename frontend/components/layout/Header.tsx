@@ -12,11 +12,7 @@ export function Header() {
       role="banner"
     >
       <div className="flex items-center gap-2 text-base font-semibold text-accent">
-        <Avatar className="size-6">
-          <AvatarImage src="/agent-sparrow.png" alt="Agent Sparrow" />
-          <AvatarFallback>AS</AvatarFallback>
-        </Avatar>
-        Agent Sparrow
+        <span>MB-Sparrow</span>
       </div>
       <div className="flex items-center gap-3">
         <FeedMeButton />

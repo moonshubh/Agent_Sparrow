@@ -54,7 +54,7 @@ interface MessageBubbleProps {
   id: string
   type: "user" | "agent" | "system"
   content: string
-  timestamp: Date
+  timestamp: Date | string // Support both Date objects and string timestamps (from JSON)
   agentType?: "primary" | "log_analyst" | "researcher"
   metadata?: MessageMetadata
   streaming?: boolean
@@ -505,6 +505,15 @@ export default function MessageBubble({
     }
   }
   
+  // Ensure timestamp is a Date object (handle both Date objects and string timestamps)
+  const getTimestamp = (): Date => {
+    if (timestamp instanceof Date) {
+      return timestamp
+    }
+    // Handle string timestamps (from JSON deserialization)
+    return new Date(timestamp)
+  }
+  
   const { icon: AgentIcon, label: agentLabel, color: agentColor } = getAgentInfo()
   
   return (
@@ -517,10 +526,14 @@ export default function MessageBubble({
       onMouseEnter={() => setIsHovered(true)}
       onMouseLeave={() => setIsHovered(false)}
       role={isSystem ? "status" : "article"}
-      aria-label={`${isUser ? 'Your message' : `${agentLabel} response`} sent at ${timestamp.toLocaleTimeString()}`}
+      aria-label={`${isUser ? 'Your message' : `${agentLabel} response`} sent at ${getTimestamp().toLocaleTimeString()}`}
     >
       <div className={cn(
-        "flex items-start gap-3 max-w-4xl w-full",
+        "flex items-start gap-3 w-full",
+        // Use content-aware responsive containers
+        agentType === 'log_analyst' && metadata?.analysisResults 
+          ? "message-container-log-analysis px-2 lg:px-4" 
+          : "message-container-primary px-2 sm:px-4 md:px-6",
         isUser ? "flex-row-reverse justify-start" : "flex-row"
       )}>
         {/* Avatar */}
@@ -538,7 +551,7 @@ export default function MessageBubble({
         <div className={cn(
           "rounded-xl px-4 py-3 shadow-sm border text-sm leading-relaxed",
           isUser
-            ? "bg-accent/10 border-accent/30 text-foreground max-w-[75%] w-fit ml-auto"
+            ? "bg-accent/10 border-accent/30 text-foreground max-w-[85%] sm:max-w-[80%] md:max-w-[75%] lg:max-w-[70%] w-fit ml-auto"
             : isSystem
             ? "bg-muted/50 text-muted-foreground border-border/50 flex-1"
             : "bg-muted/70 dark:bg-zinc-800 border-border/40 text-foreground flex-1"
@@ -565,7 +578,7 @@ export default function MessageBubble({
           {agentType === 'log_analyst' && metadata?.analysisResults && !streaming && (
             <EnhancedLogAnalysisContainer 
               data={metadata.analysisResults as (EnhancedLogAnalysisData | LogAnalysisData)}
-              className="mt-4"
+              className="mt-4 w-full"
             />
           )}
           
@@ -593,7 +606,7 @@ export default function MessageBubble({
           <div className="flex items-center justify-between mt-3 pt-2">
             <div className="flex items-center gap-2 text-xs text-chat-metadata">
               {!isUser && (
-                <span>{timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                <span>{getTimestamp().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
               )}
               {metadata?.routingReason && (
                 <span className="opacity-70">• {metadata.routingReason}</span>

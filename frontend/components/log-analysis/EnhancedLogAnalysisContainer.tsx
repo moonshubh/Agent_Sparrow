@@ -3,7 +3,6 @@
 import React, { useState } from 'react'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { 
   AlertTriangle, 
   BarChart3, 
@@ -21,9 +20,11 @@ import {
   type LogIssue,
   type LogSolution
 } from '@/lib/log-analysis-utils'
+import { getActiveIssues, getActiveIssueCount, countBySeverity } from '@/lib/utils/issueHelpers'
 
 // Enhanced Components
 import { SystemAndAnalysisOverviewCard } from './SystemAndAnalysisOverviewCard'
+import { ActionBar } from './ActionBar'
 import { PredictiveInsightsCard } from './PredictiveInsightsCard'
 import { MLPatternDiscoveryCard } from './MLPatternDiscoveryCard'
 import { EnhancedRecommendationsCard } from './EnhancedRecommendationsCard'
@@ -42,6 +43,7 @@ interface EnhancedLogAnalysisContainerProps {
 
 export function EnhancedLogAnalysisContainer({ data, className }: EnhancedLogAnalysisContainerProps) {
   const [showAdvancedSections, setShowAdvancedSections] = useState(false)
+  const [activeTab, setActiveTab] = useState('system')
   
   // Type guard to check if data is enhanced format
   const isEnhancedData = (data: any): data is EnhancedLogAnalysisData => {
@@ -73,22 +75,31 @@ export function EnhancedLogAnalysisContainer({ data, className }: EnhancedLogAna
       automated_remediation_available
     } = data as EnhancedLogAnalysisData
 
+    // Filter issues and get counts for active issues only
+    const activeIssues = getActiveIssues(identified_issues || [])
+    const activeIssueCount = getActiveIssueCount(identified_issues || [])
+    const severityCounts = countBySeverity(identified_issues || [])
+    
     // Check for critical issues that need immediate attention
-    const criticalIssues = identified_issues?.filter(issue => 
+    const criticalIssues = activeIssues.filter(issue => 
       issue.severity?.toLowerCase() === 'critical'
-    ) || []
+    )
+    
+    // Get top issue types for display
+    const topIssueTypes = [...new Set(
+      activeIssues
+        .map(issue => issue.category || 'Unknown')
+        .filter(category => category !== 'Unknown')
+    )].slice(0, 3)
     
     const hasCriticalIssues = criticalIssues.length > 0 || (immediate_actions && immediate_actions.length > 0)
     const hasAdvancedFeatures = predictive_insights?.length > 0 || 
                               ml_pattern_discovery?.patterns_discovered?.length > 0 ||
-                              correlation_analysis ||
-                              dependency_analysis
+                              !!correlation_analysis ||
+                              !!dependency_analysis
 
     return (
-      <div className={cn("w-full space-y-6", className)}>
-        {/* Enhanced System Overview */}
-        <SystemAndAnalysisOverviewCard metadata={system_metadata} metrics={analysis_metrics} />
-        
+      <article className={cn("w-full max-w-none space-y-3 log-analysis-container", className)} data-log-container>
         {/* Critical Issues Banner */}
         {hasCriticalIssues && (
           <Alert className="ring-1 ring-red-500/40 bg-red-900/20 dark:bg-red-900/20 border-red-500/30">
@@ -116,80 +127,85 @@ export function EnhancedLogAnalysisContainer({ data, className }: EnhancedLogAna
           </Alert>
         )}
 
-        {/* Executive Summary */}
-        {overall_summary && (
-          <ExecutiveSummaryRenderer content={overall_summary} />
-        )}
+        {/* ActionBar */}
+        <ActionBar
+          activeTab={activeTab}
+          onTabChange={setActiveTab}
+          issueCount={activeIssueCount}
+          criticalIssuesCount={criticalIssues.length}
+          hasInsights={hasAdvancedFeatures}
+          onSystemOverviewClick={() => setActiveTab('system')}
+        />
 
-        {/* Main Analysis Content */}
-        <Tabs defaultValue="overview" className="w-full">
-          <TabsList className="grid w-full grid-cols-4">
-            <TabsTrigger value="overview" className="flex items-center gap-2">
-              <BarChart3 className="h-4 w-4" />
-              Overview
-            </TabsTrigger>
-            <TabsTrigger value="issues" className="flex items-center gap-2">
-              <AlertTriangle className="h-4 w-4" />
-              Issues ({identified_issues?.length || 0})
-            </TabsTrigger>
-            <TabsTrigger value="insights" className="flex items-center gap-2" disabled={!hasAdvancedFeatures}>
-              <TrendingUp className="h-4 w-4" />
-              Insights
-            </TabsTrigger>
-            <TabsTrigger value="recommendations" className="flex items-center gap-2">
-              <Shield className="h-4 w-4" />
-              Actions
-            </TabsTrigger>
-          </TabsList>
-
-          {/* Overview Tab */}
-          <TabsContent value="overview" className="space-y-4">
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-              <SystemAndAnalysisOverviewCard
-                metadata={system_metadata}
+        {/* Tab Content based on ActiveTab */}
+        <div className="w-full">
+          {activeTab === 'system' && (
+            <div className="space-y-3 animate-in fade-in-0 slide-in-from-bottom-2 duration-200 scroll-mt-24" id="panel-system" role="tabpanel">
+              {/* System Overview Card */}
+              <SystemAndAnalysisOverviewCard 
+                metadata={system_metadata} 
                 metrics={analysis_metrics}
               />
+              
+              {/* Executive Summary */}
+              {overall_summary && (
+                <ExecutiveSummaryRenderer content={overall_summary} />
+              )}
             </div>
-          </TabsContent>
+          )}
 
-          {/* Issues Tab */}
-          <TabsContent value="issues" className="space-y-4">
-            {identified_issues && identified_issues.length > 0 ? (
-              <div className="space-y-4">
-                {/* Issue Summary */}
-                {issue_summary_by_severity && (
-                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                    {Object.entries(issue_summary_by_severity).map(([severity, count]) => (
-                      <div key={severity} className="p-3 rounded-lg bg-muted/30 border border-border/50 text-center">
-                        <div className="text-xs text-muted-foreground">{severity}</div>
-                        <div className="text-lg font-semibold text-foreground">{count}</div>
-                      </div>
-                    ))}
+          {activeTab === 'issues' && (
+            <div className="space-y-3 animate-in fade-in-0 slide-in-from-bottom-2 duration-200 scroll-mt-24" id="panel-issues" role="tabpanel">
+            {activeIssues && activeIssues.length > 0 ? (
+              <div className="space-y-3">
+                {/* Issue Summary Header */}
+                {topIssueTypes.length > 0 && (
+                  <div className="mb-4 p-3 bg-muted/30 border border-border/50 rounded-lg">
+                    <div className="text-sm text-muted-foreground">
+                      <span className="font-medium">Detected Issue Types:</span>{' '}
+                      {topIssueTypes.join(', ')}
+                      {activeIssues.length > topIssueTypes.length && ' and more...'}
+                    </div>
                   </div>
                 )}
 
-                {/* Issues List */}
-                const filteredIssues = identified_issues.filter(i => i.schemaVersion === 'enhanced_v3')
-                <div className="space-y-3">
-                  {filteredIssues.map((issue, idx) => {
-                    // Find related solutions
-                    const relatedSolutions = proposed_solutions?.filter(solution => 
-                      solution.issue_id === issue.id || 
-                      solution.affected_accounts?.some(account => 
-                        issue.affected_accounts?.includes(account)
-                      )
-                    ) || []
-                    
-                    return (
-                      <IssueCard
-                        key={issue.id || idx}
-                        issue={issue}
-                        solutions={relatedSolutions}
-                        isExpanded={issue.severity?.toLowerCase() === 'critical'}
-                      />
-                    )
-                  })}
+                {/* Issue Summary - Use active issue counts */}
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                  {Object.entries(severityCounts).filter(([_, count]) => count > 0).map(([severity, count]) => (
+                    <div key={severity} className="p-3 rounded-lg bg-muted/30 border border-border/50 text-center">
+                      <div className="text-xs text-muted-foreground capitalize">{severity}</div>
+                      <div className="text-lg font-semibold text-foreground">{count}</div>
+                    </div>
+                  ))}
                 </div>
+
+                {/* Issues List */}
+                {(() => {
+                  // Show all active issues - backend schema versioning handled separately
+                  const filteredIssues = activeIssues;
+                  return (
+                    <div className="space-y-3">
+                      {filteredIssues.map((issue, idx) => {
+                        // Find related solutions
+                        const relatedSolutions = proposed_solutions?.filter(solution => 
+                          solution.issue_id === issue.id || 
+                          solution.affected_accounts?.some(account => 
+                            issue.affected_accounts?.includes(account)
+                          )
+                        ) || []
+                        
+                        return (
+                          <IssueCard
+                            key={issue.id || idx}
+                            issue={issue}
+                            solutions={relatedSolutions}
+                            isExpanded={issue.severity?.toLowerCase() === 'critical'}
+                          />
+                        )
+                      })}
+                    </div>
+                  );
+                })()}
               </div>
             ) : (
               <div className="text-center py-8 text-muted-foreground">
@@ -198,12 +214,13 @@ export function EnhancedLogAnalysisContainer({ data, className }: EnhancedLogAna
                 <p className="text-xs mt-1">System appears to be functioning normally</p>
               </div>
             )}
-          </TabsContent>
+            </div>
+          )}
 
-          {/* Insights Tab */}
-          <TabsContent value="insights" className="space-y-4">
+          {activeTab === 'insights' && (
+            <div className="space-y-3 animate-in fade-in-0 slide-in-from-bottom-2 duration-200 scroll-mt-24" id="panel-insights" role="tabpanel">
             {hasAdvancedFeatures ? (
-              <div className="space-y-4">
+              <div className="space-y-3">
                 <PredictiveInsightsCard insights={predictive_insights || []} />
                 <MLPatternDiscoveryCard discovery={ml_pattern_discovery} />
                 
@@ -223,19 +240,21 @@ export function EnhancedLogAnalysisContainer({ data, className }: EnhancedLogAna
                 <p className="text-xs mt-1">Insights appear with enhanced analysis</p>
               </div>
             )}
-          </TabsContent>
+            </div>
+          )}
 
-          {/* Recommendations Tab */}
-          <TabsContent value="recommendations" className="space-y-4">
+          {activeTab === 'actions' && (
+            <div className="space-y-3 animate-in fade-in-0 slide-in-from-bottom-2 duration-200 scroll-mt-24" id="panel-actions" role="tabpanel">
             <EnhancedRecommendationsCard
               immediateActions={immediate_actions || []}
               preventiveMeasures={preventive_measures || []}
               monitoringRecommendations={monitoring_recommendations || []}
               automatedRemediationAvailable={automated_remediation_available || false}
             />
-          </TabsContent>
-        </Tabs>
-      </div>
+            </div>
+          )}
+        </div>
+      </article>
     )
   } else {
     // Legacy format - fallback to existing LogAnalysisContainer logic
@@ -286,11 +305,18 @@ export function EnhancedLogAnalysisContainer({ data, className }: EnhancedLogAna
     }
 
     const groupedSolutions = groupSolutionsByIssue(issues, solutions)
-    const criticalIssues = issues.filter(issue => issue.severity?.toLowerCase() === 'critical')
+    const activeIssues = getActiveIssues(issues)
+    const activeIssueCount = getActiveIssueCount(issues)
+    const criticalIssues = activeIssues.filter(issue => issue.severity?.toLowerCase() === 'critical')
+    const topIssueTypes = [...new Set(
+      activeIssues
+        .map(issue => issue.category || 'Unknown')
+        .filter(category => category !== 'Unknown')
+    )].slice(0, 3)
     const hasCriticalIssues = criticalIssues.length > 0 || immediateActions.length > 0
 
     return (
-      <div className={cn("w-full space-y-6", className)}>
+      <article className={cn("w-full max-w-none space-y-3 log-analysis-container", className)} data-log-container>
         {/* Legacy System Overview */}
         <SystemOverviewCard stats={systemStats} />
         
@@ -315,17 +341,48 @@ export function EnhancedLogAnalysisContainer({ data, className }: EnhancedLogAna
             </AlertDescription>
           </Alert>
         )}
-        
+
+        {/* ActionBar for Legacy */}
+        <ActionBar
+          activeTab={activeTab}
+          onTabChange={setActiveTab}
+          issueCount={activeIssueCount}
+          criticalIssuesCount={criticalIssues.length}
+          hasInsights={false}
+          onSystemOverviewClick={() => setActiveTab('system')}
+        />
+
+        {/* Tab Content */}
+        <div className="w-full">
+          {activeTab === 'system' && executiveSummary && (
+            <div className="space-y-3 animate-in fade-in-0 slide-in-from-bottom-2 duration-200 scroll-mt-24" id="panel-system" role="tabpanel">
+              <ExecutiveSummaryRenderer content={executiveSummary} />
+            </div>
+          )}
+
+          {activeTab === 'issues' && (
+            <div className="space-y-3 animate-in fade-in-0 slide-in-from-bottom-2 duration-200 scroll-mt-24" id="panel-issues" role="tabpanel">
         {/* Issues Section */}
-        {issues.length > 0 && (
-          <div className="space-y-4">
+        {activeIssues.length > 0 ? (
+          <div className="space-y-3">
+            {/* Issue Summary Header */}
+            {topIssueTypes.length > 0 && (
+              <div className="mb-4 p-3 bg-muted/30 border border-border/50 rounded-lg">
+                <div className="text-sm text-muted-foreground">
+                  <span className="font-medium">Detected Issue Types:</span>{' '}
+                  {topIssueTypes.join(', ')}
+                  {activeIssues.length > topIssueTypes.length && ' and more...'}
+                </div>
+              </div>
+            )}
+
             <div>
               <h3 className="text-sm font-semibold text-foreground mb-3 flex items-center gap-2">
                 <AlertTriangle className="h-4 w-4 text-orange-500" />
-                Identified Issues ({issues.length})
+                Identified Issues ({activeIssueCount})
               </h3>
               <div className="space-y-3">
-                {issues.map((issue, idx) => {
+                {activeIssues.map((issue, idx) => {
                   const issueKey = issue.id || issue.category || `issue-${idx}`
                   const relatedSolutions = groupedSolutions[issueKey] || []
                   
@@ -341,49 +398,66 @@ export function EnhancedLogAnalysisContainer({ data, className }: EnhancedLogAna
               </div>
             </div>
           </div>
-        )}
-        
-        {/* Standalone Solutions */}
-        {groupedSolutions['general']?.length > 0 && (
-          <div className="space-y-4">
-            <div>
-              <h3 className="text-sm font-semibold text-foreground mb-3 flex items-center gap-2">
-                <AlertTriangle className="h-4 w-4 text-blue-500" />
-                Additional Recommendations ({groupedSolutions['general'].length})
-              </h3>
-              <div className="space-y-3">
-                {groupedSolutions['general'].map((solution, idx) => (
-                  <IssueCard
-                    key={`general-${idx}`}
-                    issue={{
-                      severity: solution.priority,
-                      category: 'recommendation',
-                      title: solution.title || solution.solution_summary,
-                      description: solution.summary,
-                      affected_accounts: solution.affected_accounts
-                    }}
-                    solutions={[solution]}
-                    isExpanded={false}
-                  />
-                ))}
+            ) : (
+              <div className="text-center py-8 text-muted-foreground">
+                <AlertTriangle className="h-8 w-8 mx-auto mb-2 opacity-50" />
+                <p className="text-sm">No issues detected</p>
+                <p className="text-xs mt-1">System appears to be functioning normally</p>
               </div>
+            )}
             </div>
-          </div>
-        )}
-        
-        {/* Executive Summary */}
-        {executiveSummary && (
-          <ExecutiveSummaryRenderer content={executiveSummary} />
-        )}
-        
-        {/* Empty State */}
-        {issues.length === 0 && solutions.length === 0 && !executiveSummary && (
-          <div className="text-center py-8 text-muted-foreground">
-            <AlertTriangle className="h-8 w-8 mx-auto mb-2 opacity-50" />
-            <p className="text-sm">No analysis results available</p>
-          </div>
-        )}
-      </div>
+          )}
+
+          {activeTab === 'actions' && (
+            <div className="space-y-3 animate-in fade-in-0 slide-in-from-bottom-2 duration-200 scroll-mt-24" id="panel-actions" role="tabpanel">
+              {/* Standalone Solutions */}
+              {groupedSolutions['general']?.length > 0 && (
+                <div className="space-y-3">
+                  <div>
+                    <h3 className="text-sm font-semibold text-foreground mb-3 flex items-center gap-2">
+                      <AlertTriangle className="h-4 w-4 text-blue-500" />
+                      Additional Recommendations ({groupedSolutions['general'].length})
+                    </h3>
+                    <div className="space-y-3">
+                      {groupedSolutions['general'].map((solution, idx) => (
+                        <IssueCard
+                          key={`general-${idx}`}
+                          issue={{
+                            severity: solution.priority,
+                            category: 'recommendation',
+                            title: solution.title || solution.solution_summary,
+                            description: solution.summary,
+                            affected_accounts: solution.affected_accounts
+                          }}
+                          solutions={[solution]}
+                          isExpanded={false}
+                        />
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              )}
+              {immediateActions.length > 0 && (
+                <div className="space-y-3">
+                  <div>
+                    <h3 className="text-sm font-semibold text-foreground mb-3 flex items-center gap-2">
+                      <Shield className="h-4 w-4 text-amber-500" />
+                      Immediate Actions Required
+                    </h3>
+                    <div className="space-y-2">
+                      {immediateActions.map((action, idx) => (
+                        <div key={idx} className="p-3 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-lg">
+                          <p className="text-sm text-amber-900 dark:text-amber-100">{action}</p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      </article>
     )
   }
 }
