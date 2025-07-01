@@ -86,6 +86,20 @@ class Settings(BaseSettings):
     chat_enable_message_history: bool = Field(default=True, alias="CHAT_ENABLE_MESSAGE_HISTORY")
     chat_default_page_size: int = Field(default=10, alias="CHAT_DEFAULT_PAGE_SIZE")
     chat_max_page_size: int = Field(default=100, alias="CHAT_MAX_PAGE_SIZE")
+    
+    # Rate Limiting Configuration
+    gemini_flash_rpm_limit: int = Field(default=8, alias="GEMINI_FLASH_RPM_LIMIT")
+    gemini_flash_rpd_limit: int = Field(default=200, alias="GEMINI_FLASH_RPD_LIMIT")
+    gemini_pro_rpm_limit: int = Field(default=4, alias="GEMINI_PRO_RPM_LIMIT")
+    gemini_pro_rpd_limit: int = Field(default=80, alias="GEMINI_PRO_RPD_LIMIT")
+    rate_limit_redis_url: str = Field(default="redis://localhost:6379", alias="RATE_LIMIT_REDIS_URL")
+    rate_limit_redis_prefix: str = Field(default="mb_sparrow_rl", alias="RATE_LIMIT_REDIS_PREFIX")
+    rate_limit_redis_db: int = Field(default=3, alias="RATE_LIMIT_REDIS_DB")
+    circuit_breaker_enabled: bool = Field(default=True, alias="CIRCUIT_BREAKER_ENABLED")
+    circuit_breaker_failure_threshold: int = Field(default=5, alias="CIRCUIT_BREAKER_FAILURE_THRESHOLD")
+    circuit_breaker_timeout: int = Field(default=60, alias="CIRCUIT_BREAKER_TIMEOUT")
+    rate_limit_safety_margin: float = Field(default=0.2, alias="RATE_LIMIT_SAFETY_MARGIN")
+    rate_limit_monitoring_enabled: bool = Field(default=True, alias="RATE_LIMIT_MONITORING_ENABLED")
 
     class Config:
         case_sensitive = False

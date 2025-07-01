@@ -11,6 +11,7 @@ from dotenv import load_dotenv
 from langchain_google_genai import ChatGoogleGenerativeAI
 
 from app.core.settings import settings
+from app.core.rate_limiting.agent_wrapper import wrap_gemini_agent
 from uuid import uuid4
 from datetime import datetime
 
@@ -51,17 +52,20 @@ class EnhancedLogAnalysisAgent:
     """Production-grade log analysis agent with comprehensive profiling and solution generation v3.0."""
     
     def __init__(self):
-        self.primary_llm = ChatGoogleGenerativeAI(
+        # Create rate-limited LLM instances
+        primary_llm_base = ChatGoogleGenerativeAI(
             model="gemini-2.5-pro",  # Use most advanced model
             temperature=0.1,
             google_api_key=settings.gemini_api_key,
         )
+        self.primary_llm = wrap_gemini_agent(primary_llm_base, "gemini-2.5-pro")
         
-        self.fallback_llm = ChatGoogleGenerativeAI(
-            model="gemini-1.5-pro-latest",
+        fallback_llm_base = ChatGoogleGenerativeAI(
+            model="gemini-2.5-flash",  # Use supported model for rate limiting
             temperature=0.2,
             google_api_key=settings.gemini_api_key,
         )
+        self.fallback_llm = wrap_gemini_agent(fallback_llm_base, "gemini-2.5-flash")
         
         # Initialize enhanced components
         self.edge_case_handler = EdgeCaseHandler()

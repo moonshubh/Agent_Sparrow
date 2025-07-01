@@ -24,6 +24,7 @@ import SystemStatusMessage from './SystemStatusMessage'
 import { Header } from '@/components/layout/Header'
 import { Welcome } from '@/components/home/Welcome'
 import { ChatSidebar } from './ChatSidebar'
+import { RateLimitWarning } from '@/components/rate-limiting'
 
 interface AgentStatusProps {
   currentAgent: "primary" | "log_analyst" | "researcher" | null
@@ -188,18 +189,9 @@ export default function UnifiedChatInterface() {
       
       await sendMessage(content, messageFiles)
       
-      // Track the message in history and update title if it's the first message
+      // Session message syncing is handled by the useEffect below (lines 267-277)
+      // Update session title if this is the first user message
       if (sessionId) {
-        const userMessage: UnifiedMessage = {
-          id: `user-${Date.now()}-${Math.random().toString(36).slice(2, 11)}`,
-          type: 'user',
-          content,
-          timestamp: new Date(),
-          agentType: undefined
-        }
-        addMessageToSession(sessionId, userMessage)
-        
-        // Update session title if this is the first user message
         const userMessages = state.messages.filter(m => m.type === 'user')
         if (userMessages.length === 0) { // No user messages yet, this will be the first
           updateSessionTitle(sessionId, content)
@@ -357,6 +349,19 @@ export default function UnifiedChatInterface() {
                   </div>
                 </div>
               )}
+
+              {/* Rate Limit Warning */}
+              <div className="flex-shrink-0">
+                <div className="w-full max-w-none mx-auto px-4 md:px-6 lg:px-8 py-2">
+                  <RateLimitWarning 
+                    warningThreshold={0.7}
+                    criticalThreshold={0.85}
+                    autoCheck={true}
+                    checkInterval={10000}
+                    dismissible={true}
+                  />
+                </div>
+              </div>
 
               {/* Use virtualized list for large conversations */}
               {isClient && state.messages.length > 50 ? (

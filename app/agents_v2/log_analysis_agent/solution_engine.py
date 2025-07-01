@@ -11,6 +11,7 @@ import os
 from langchain_google_genai import ChatGoogleGenerativeAI
 
 from app.core.settings import settings
+from app.core.rate_limiting.agent_wrapper import wrap_gemini_agent
 from langchain_core.prompts import PromptTemplate
 from pydantic import BaseModel, Field
 
@@ -51,17 +52,20 @@ class AdvancedSolutionEngine:
     """Advanced solution generation with Gemini 2.5 Pro reasoning and web search fallback."""
     
     def __init__(self):
-        self.primary_llm = ChatGoogleGenerativeAI(
+        # Initialize rate-limited LLMs
+        primary_llm_base = ChatGoogleGenerativeAI(
             model="gemini-2.5-pro",  # Use the most powerful model
             temperature=0.1,  # Low temperature for consistent reasoning
             google_api_key=settings.gemini_api_key,
         )
+        self.primary_llm = wrap_gemini_agent(primary_llm_base, "gemini-2.5-pro")
         
-        self.fallback_llm = ChatGoogleGenerativeAI(
-            model="gemini-1.5-pro-latest",
+        fallback_llm_base = ChatGoogleGenerativeAI(
+            model="gemini-2.5-flash",  # Use supported model for rate limiting
             temperature=0.2,
             google_api_key=settings.gemini_api_key,
         )
+        self.fallback_llm = wrap_gemini_agent(fallback_llm_base, "gemini-2.5-flash")
         
         # Solution generation prompt template
         self.solution_prompt = PromptTemplate(

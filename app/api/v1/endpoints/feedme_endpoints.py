@@ -2296,12 +2296,16 @@ async def list_folders():
         with get_db_connection() as conn:
             with conn.cursor(cursor_factory=psycopg2_extras.RealDictCursor) as cur:
                 # Get folders with conversation counts
+                # More efficient query to get folders with conversation counts
                 cur.execute("""
-                    SELECT f.*, COUNT(c.id) as conversation_count
+                    SELECT 
+                        f.id, f.name, f.color, f.description, 
+                        f.created_by, f.created_at, f.updated_at, 
+                        COUNT(c.id) as conversation_count
                     FROM feedme_folders f
                     LEFT JOIN feedme_conversations c ON f.id = c.folder_id AND c.is_active = true
-                    GROUP BY f.id, f.name, f.color, f.description, f.created_by, f.created_at, f.updated_at
-                    ORDER BY f.name
+                    GROUP BY f.id
+                    ORDER BY f.name;
                 """)
                 
                 folder_rows = cur.fetchall()
