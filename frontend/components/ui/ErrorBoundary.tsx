@@ -22,7 +22,12 @@ export class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoun
 
   render() {
     if (this.state.hasError) {
-      return null
+      return (
+        <div className="p-4 border border-red-300 rounded bg-red-50 text-red-800">
+          <p className="font-semibold">Something went wrong</p>
+          <p className="text-sm">Please try refreshing the page</p>
+        </div>
+      )
     }
     return this.props.children
   }

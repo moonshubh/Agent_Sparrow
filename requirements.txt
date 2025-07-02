@@ -51,6 +51,8 @@ opentelemetry-exporter-otlp-proto-http
 protobuf==3.20.3
 structlog
 loguru
+sqlparse
+sentence-transformers
 psutil
 python-dateutil
 pgvector==0.4.1

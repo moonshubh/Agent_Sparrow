@@ -3,7 +3,7 @@
  */
 
 // Use environment variable or default for API base URL
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || '/api/v1';
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE || '/api/v1';
 
 // Type definitions matching backend schemas
 export interface RateLimitMetadata {

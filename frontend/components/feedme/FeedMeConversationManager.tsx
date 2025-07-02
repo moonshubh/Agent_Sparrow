@@ -232,6 +232,18 @@ export function FeedMeConversationManager({ isOpen, onClose }: FeedMeConversatio
       setFolders(response.folders)
     } catch (err) {
       console.error('Failed to load folders:', err)
+      // If folders fail to load, set an empty array to prevent UI issues
+      setFolders([])
+      // Show error to user
+      if (err instanceof Error) {
+        const errorMessage = err.message.includes('unavailable') 
+          ? 'FeedMe service is temporarily unavailable. Please try again later.'
+          : 'Failed to load folders. Please check your connection and try again.'
+        
+        setError(errorMessage)
+        // Clear error after 5 seconds
+        setTimeout(() => setError(null), 5000)
+      }
     }
   }, [])
 

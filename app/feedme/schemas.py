@@ -106,7 +106,6 @@ class TranscriptUploadRequest(BaseModel):
     transcript_content: str = Field(..., min_length=1, description="Transcript content")
     uploaded_by: Optional[str] = Field(None, description="User uploading the transcript")
     metadata: Dict[str, Any] = Field(default_factory=dict, description="Additional metadata")
-    auto_process: bool = Field(default=True, description="Whether to automatically process the transcript")
 
     @validator('transcript_content')
     def validate_transcript_content(cls, v):
@@ -120,12 +119,9 @@ class TranscriptUploadRequest(BaseModel):
             str: The stripped transcript content.
         """
         if len(v.strip()) < 10:
-            raise ValueError('Transcript content must be at least 10 characters long')
-        # Max size configured via settings.FEEDME_MAX_FILE_SIZE_MB
-        max_chars = settings.feedme_max_file_size_mb * 1024 * 1024
-        if len(v) > max_chars:
-            raise ValueError(f'Transcript content exceeds maximum size of {max_chars} characters')
-        return v.strip()
+            raise ValueError("Transcript content must be at least 10 characters long")
+        return v
+
 
 # Update Models (for API requests)
 
@@ -138,7 +134,7 @@ class ConversationUpdate(BaseModel):
     total_examples: Optional[int] = Field(None, ge=0)
 
 
-class ExampleUpdate(BaseModel):
+class ExampleUpdate(FeedMeExampleBase):
     """Model for updating examples"""
     question_text: Optional[str] = Field(None, min_length=1)
     answer_text: Optional[str] = Field(None, min_length=1)
@@ -152,326 +148,355 @@ class ExampleUpdate(BaseModel):
     is_active: Optional[bool] = None
 
 
+# Analytics Models
+
+class ConversationStats(BaseModel):
+    """Aggregated statistics for conversations."""
+    total_conversations: int
+    total_examples: int
+    pending_processing: int
+    processing_failed: int
+    pending_approval: int
+    approved: int
+    rejected: int
+
+class AnalyticsResponse(BaseModel):
+    """Response model for analytics data."""
+    conversation_stats: ConversationStats
+    top_tags: Dict[str, int]
+    issue_type_distribution: Dict[str, int]
+    quality_metrics: Dict[str, float]
+    last_updated: datetime
+
+
+# Approval Workflow Models
+
+class ApprovalRequest(BaseModel):
+    """Request model for approving a conversation."""
+    approved_by: str = Field(..., description="The ID or name of the user who approved the conversation.")
+    approval_notes: Optional[str] = Field(None, description="Optional notes for the approval.")
+    tags: Optional[List[str]] = Field(None, description="Optional tags to add or update.")
+
+class RejectionRequest(BaseModel):
+    """Request model for rejecting a conversation."""
+    rejected_by: str = Field(..., description="The ID or name of the user who rejected the conversation.")
+    rejection_reason: str = Field(..., description="The reason for the rejection.")
+    rejection_notes: Optional[str] = Field(None, description="Optional additional notes for the rejection.")
+
+class ApprovalResponse(BaseModel):
+    """Response model for an approval or rejection action."""
+    conversation: "FeedMeConversation"
+    approval_status: str
+    message: str
+
+class DeleteConversationResponse(BaseModel):
+    """Response model for deleting a conversation."""
+    message: str
+    deleted_conversation_id: int
+    deleted_examples_count: int
+
+class ApprovalWorkflowStats(BaseModel):
+    """Statistics for the approval workflow."""
+    pending_approval: int
+    approved_total: int
+    rejected_total: int
+    approval_rate: float
+    avg_approval_time_seconds: Optional[float] = None
+
+class BulkApprovalRequest(BaseModel):
+    """Request model for bulk approving conversations."""
+    conversation_ids: List[int] = Field(..., min_items=1, description="A list of conversation IDs to approve.")
+    approved_by: str = Field(..., description="The ID or name of the user performing the bulk approval.")
+    approval_notes: Optional[str] = Field(None, description="Optional notes for the bulk approval.")
+
+class BulkApprovalResponse(BaseModel):
+    """Response model for a bulk approval operation."""
+    approved_ids: List[int]
+    failed_ids: Dict[int, str]
+    message: str
+
+
+# Versioning Models
+
+class ConversationVersion(BaseModel):
+    """Represents a single version of a conversation's transcript."""
+    id: int
+    conversation_id: int
+    version_number: int
+    transcript_content: str
+    created_at: datetime
+    created_by: Optional[str] = None
+    change_description: Optional[str] = None
+    is_active: bool
+
+    class Config:
+        from_attributes = True
+
+class VersionListResponse(BaseModel):
+    """Response model for a list of conversation versions."""
+    versions: List[ConversationVersion]
+    total_count: int
+    active_version: int
+
+class VersionDiff(BaseModel):
+    """Response model for the difference between two versions."""
+    diff_html: str
+    additions: int
+    deletions: int
+    version_1_id: int
+    version_2_id: int
+
+class ConversationEditRequest(BaseModel):
+    """Request model for editing a conversation transcript."""
+    transcript_content: str = Field(..., min_length=1, description="The new transcript content.")
+    edit_reason: str = Field(..., min_length=1, description="The reason for the edit.")
+    user_id: str = Field(..., description="The ID of the user performing the edit.")
+
+class EditResponse(BaseModel):
+    """Response model after successfully editing a conversation."""
+    conversation_id: int
+    new_version: int
+    new_version_uuid: UUID
+    message: str
+
+class ConversationRevertRequest(BaseModel):
+    """Request model for reverting a conversation to a previous version."""
+    target_version: int = Field(..., gt=0, description="The version number to revert to.")
+    revert_reason: str = Field(..., min_length=1, description="The reason for the revert.")
+    user_id: str = Field(..., description="The ID of the user performing the revert.")
+
+class RevertResponse(BaseModel):
+    """Response model after successfully reverting a conversation."""
+    conversation_id: int
+    reverted_to_version: int
+    new_version: int
+    new_version_uuid: UUID
+    message: str
+
+
+# Search Models
+
+class FeedMeSearchResultItem(BaseModel):
+    """A single item in a search result list."""
+    id: int
+    uuid: UUID
+    title: str
+    question_text: str
+    answer_text: str
+    similarity_score: float
+
+    class Config:
+        from_attributes = True
+
+class SearchQuery(BaseModel):
+    """Request model for performing a search."""
+    query: str = Field(..., min_length=1, description="The text to search for.")
+    top_k: int = Field(10, ge=1, le=50, description="The number of results to return.")
+
+class SearchResponse(BaseModel):
+    """Response model for search results."""
+    query: str
+    results: List[FeedMeSearchResultItem]
+    total_found: int
+    search_time_ms: float
+
+
 # Database Models (full representations)
 
 class FeedMeConversation(FeedMeConversationBase):
     """Complete FeedMe conversation model"""
     id: int = Field(..., description="Unique conversation ID")
     uuid: UUID = Field(..., description="Globally unique identifier for the conversation")
-    raw_transcript: str = Field(..., description="Full transcript content")
-    parsed_content: Optional[str] = Field(None, description="Cleaned/parsed transcript")
-    uploaded_at: datetime = Field(..., description="Upload timestamp")
-    processed_at: Optional[datetime] = Field(None, description="Processing completion timestamp")
+    
+    # Transcript content
+    raw_transcript: str = Field(..., description="Raw transcript content")
+    
+    # Processing status
     processing_status: ProcessingStatus = Field(default=ProcessingStatus.PENDING, description="Processing status")
-    error_message: Optional[str] = Field(None, description="Error details if processing failed")
-    total_examples: int = Field(default=0, ge=0, description="Number of examples extracted")
+    processing_started_at: Optional[datetime] = Field(None, description="Timestamp when processing started")
+    processing_completed_at: Optional[datetime] = Field(None, description="Timestamp when processing completed")
+    processing_time_ms: Optional[int] = Field(None, description="Processing duration in milliseconds")
+    error_message: Optional[str] = Field(None, description="Error message if processing failed")
     
-    # Approval workflow fields
-    approval_status: ApprovalStatus = Field(default=ApprovalStatus.PENDING, description="Approval workflow status")
-    approved_by: Optional[str] = Field(None, description="User who approved/rejected the conversation")
-    approved_at: Optional[datetime] = Field(None, description="Approval timestamp")
-    rejected_at: Optional[datetime] = Field(None, description="Rejection timestamp")
-    reviewer_notes: Optional[str] = Field(None, description="Notes from the reviewer")
+    # Approval workflow
+    approval_status: ApprovalStatus = Field(default=ApprovalStatus.PENDING, description="Approval status")
+    approved_by: Optional[str] = Field(None, description="User who approved the conversation")
+    approved_at: Optional[datetime] = Field(None, description="Timestamp of approval")
     
-    # Processing timeline fields
-    processing_started_at: Optional[datetime] = Field(None, description="When processing started")
-    processing_completed_at: Optional[datetime] = Field(None, description="When processing completed")
-    processing_error: Optional[str] = Field(None, description="Detailed processing error information")
-    processing_time_ms: Optional[int] = Field(None, description="Processing time in milliseconds")
+    # Extracted data
+    summary: Optional[str] = Field(None, description="AI-generated summary")
+    total_examples: int = Field(default=0, ge=0, description="Number of extracted examples")
     
     # Quality metrics
-    quality_score: float = Field(default=0.0, ge=0.0, le=1.0, description="Average quality score of examples")
+    quality_score: Optional[float] = Field(None, ge=0.0, le=1.0, description="Overall quality score")
+    
+    # Versioning
+    version: int = Field(default=1, ge=1, description="Version number")
+    is_latest_version: bool = Field(default=True, description="Whether this is the latest version")
+    
+    # Soft delete
+    is_deleted: bool = Field(default=False, description="Whether the conversation is soft-deleted")
+    deleted_at: Optional[datetime] = Field(None, description="Timestamp of soft deletion")
+    
+    # Example counts
     high_quality_examples: int = Field(default=0, ge=0, description="Number of high-quality examples")
     medium_quality_examples: int = Field(default=0, ge=0, description="Number of medium-quality examples")
     low_quality_examples: int = Field(default=0, ge=0, description="Number of low-quality examples")
     
     created_at: datetime = Field(..., description="Creation timestamp")
     updated_at: datetime = Field(..., description="Last update timestamp")
-
-    class Config:
-        from_attributes = True  # Updated for Pydantic v2
-
-
-class FeedMeExample(FeedMeExampleBase):
-    """Complete FeedMe example model"""
-    id: int = Field(..., description="Unique example ID")
-    conversation_id: int = Field(..., description="Parent conversation ID")
-    
-    # Extraction fields
-    extraction_method: str = Field(default="ai", description="Method used for extraction")
-    extraction_confidence: float = Field(default=0.0, ge=0.0, le=1.0, description="Extraction confidence")
-    source_position: int = Field(default=0, description="Position in source transcript")
-    
-    # Review fields
-    reviewed_by: Optional[str] = Field(None, description="User who reviewed this example")
-    reviewed_at: Optional[datetime] = Field(None, description="Review timestamp")
-    review_status: ReviewStatus = Field(default=ReviewStatus.PENDING, description="Review status")
-    
-    created_at: datetime = Field(..., description="Creation timestamp")
-    updated_at: datetime = Field(..., description="Last update timestamp")
-
-    class Config:
-        from_attributes = True  # Updated for Pydantic v2
-
-
-# Search and Retrieval Models
-
-class FeedMeSearchResult(BaseModel):
-    """Model for FeedMe similarity search results"""
-    id: int = Field(..., description="Example ID")
-    conversation_id: int = Field(..., description="Parent conversation ID")
-    conversation_title: str = Field(..., description="Parent conversation title")
-    question_text: str = Field(..., description="Customer question")
-    answer_text: str = Field(..., description="Support agent response")
-    context_before: Optional[str] = Field(None, description="Context before the Q&A")
-    context_after: Optional[str] = Field(None, description="Context after the Q&A")
-    tags: List[str] = Field(default_factory=list, description="Example tags")
-    issue_type: Optional[IssueType] = Field(None, description="Issue type")
-    resolution_type: Optional[ResolutionType] = Field(None, description="Resolution type")
-    similarity_score: float = Field(..., ge=0.0, le=1.0, description="Similarity score for the search")
-    confidence_score: float = Field(..., ge=0.0, le=1.0, description="Quality confidence score")
-    usefulness_score: float = Field(..., ge=0.0, le=1.0, description="Usefulness rating")
-    source_type: str = Field(default="feedme", description="Source type identifier")
-
-    class Config:
-        from_attributes = True  # Updated for Pydantic v2
-
-
-# API Response Models
-
-class ConversationListResponse(BaseModel):
-    """Response model for conversation listing"""
-    conversations: List[FeedMeConversation] = Field(..., description="List of conversations")
-    total_count: int = Field(..., ge=0, description="Total number of conversations")
-    page: int = Field(..., ge=1, description="Current page number")
-    page_size: int = Field(..., ge=1, description="Number of items per page")
-    has_next: bool = Field(..., description="Whether there are more pages")
-
-
-class ExampleListResponse(BaseModel):
-    """Response model for example listing"""
-    examples: List[FeedMeExample] = Field(..., description="List of examples")
-    total_count: int = Field(..., ge=0, description="Total number of examples")
-    page: int = Field(..., ge=1, description="Current page number")
-    page_size: int = Field(..., ge=1, description="Number of items per page")
-    has_next: bool = Field(..., description="Whether there are more pages")
-
-
-class ProcessingStatusResponse(BaseModel):
-    """Response model for processing status"""
-    conversation_id: int = Field(..., description="Conversation ID")
-    status: ProcessingStatus = Field(..., description="Current processing status")
-    progress_percentage: float = Field(..., ge=0.0, le=100.0, description="Processing progress")
-    error_message: Optional[str] = Field(None, description="Error message if failed")
-    examples_extracted: int = Field(default=0, ge=0, description="Number of examples extracted so far")
-    estimated_completion: Optional[datetime] = Field(None, description="Estimated completion time")
-
-
-class SearchQuery(BaseModel):
-    """Model for FeedMe search requests"""
-    query: str = Field(..., min_length=1, description="Search query text")
-    max_results: int = Field(
-        default=5,
-        ge=1,
-        le=settings.feedme_max_retrieval_results,
-        description=f"Maximum number of results (up to {settings.feedme_max_retrieval_results})"
-    )
-    min_similarity: float = Field(default=0.7, ge=0.0, le=1.0, description="Minimum similarity threshold")
-    issue_types: Optional[List[IssueType]] = Field(None, description="Filter by issue types")
-    tags: Optional[List[str]] = Field(None, description="Filter by tags")
-    include_inactive: bool = Field(default=False, description="Include inactive examples")
-
-
-class SearchResponse(BaseModel):
-    """Response model for FeedMe search"""
-    query: str = Field(..., description="Original search query")
-    results: List[FeedMeSearchResult] = Field(..., description="Search results")
-    total_found: int = Field(..., ge=0, description="Total number of results found")
-    search_time_ms: float = Field(..., ge=0, description="Search execution time in milliseconds")
-
-
-# Analytics Models
-
-class ConversationStats(BaseModel):
-    """Statistics for conversations"""
-    total_conversations: int = Field(..., ge=0)
-    processed_conversations: int = Field(..., ge=0)
-    failed_conversations: int = Field(..., ge=0)
-    pending_conversations: int = Field(..., ge=0)
-    average_examples_per_conversation: float = Field(..., ge=0)
-    total_examples: int = Field(..., ge=0)
-    active_examples: int = Field(..., ge=0)
-
-
-class TagStats(BaseModel):
-    """Statistics for tags"""
-    tag: str = Field(..., description="Tag name")
-    count: int = Field(..., ge=0, description="Number of examples with this tag")
-    percentage: float = Field(..., ge=0, le=100, description="Percentage of total examples")
-
-
-class IssueTypeStats(BaseModel):
-    """Statistics for issue types"""
-    issue_type: IssueType = Field(..., description="Issue type")
-    count: int = Field(..., ge=0, description="Number of examples of this type")
-    percentage: float = Field(..., ge=0, le=100, description="Percentage of total examples")
-    average_confidence: float = Field(..., ge=0, le=1, description="Average confidence score")
-
-
-class AnalyticsResponse(BaseModel):
-    """Comprehensive analytics response"""
-    conversation_stats: ConversationStats = Field(..., description="Conversation statistics")
-    top_tags: List[TagStats] = Field(..., description="Most common tags")
-    issue_type_distribution: List[IssueTypeStats] = Field(..., description="Issue type distribution")
-    quality_metrics: Dict[str, float] = Field(..., description="Quality and usefulness metrics")
-    last_updated: datetime = Field(..., description="When analytics were last calculated")
-
-
-# Phase 3: Versioning and Edit UI Schemas
-
-class ConversationVersion(BaseModel):
-    """Individual version of a conversation"""
-    id: int = Field(..., description="Database ID")
-    conversation_id: int = Field(..., description="Parent conversation ID")
-    version: int = Field(..., description="Version number")
-    title: str = Field(..., description="Conversation title at this version")
-    raw_transcript: str = Field(..., description="Transcript content at this version")
-    metadata: Dict[str, Any] = Field(default_factory=dict, description="Version metadata")
-    is_active: bool = Field(..., description="Whether this is the active version")
-    updated_by: Optional[str] = Field(None, description="User who created this version")
-    created_at: datetime = Field(..., description="When this version was created")
-    updated_at: datetime = Field(..., description="When this version was last modified")
     
     class Config:
         from_attributes = True
 
 
-class VersionListResponse(BaseModel):
-    """Response for listing conversation versions"""
-    versions: List[ConversationVersion] = Field(..., description="List of versions")
-    total_count: int = Field(..., description="Total number of versions")
-    active_version: int = Field(..., description="Currently active version number")
-
-
-class DiffLine(BaseModel):
-    """Individual line in a diff"""
-    line_number: Optional[int] = Field(None, description="Line number in source")
-    content: str = Field(..., description="Line content")
-    change_type: str = Field(..., description="Type of change: 'added', 'removed', 'modified', 'unchanged'")
-
-
-class ModifiedLine(BaseModel):
-    """Modified line showing before and after"""
-    line_number: int = Field(..., description="Line number")
-    original: str = Field(..., description="Original content")
-    modified: str = Field(..., description="Modified content")
-
-
-class VersionDiff(BaseModel):
-    """Diff between two conversation versions"""
-    from_version: int = Field(..., description="Source version number")
-    to_version: int = Field(..., description="Target version number")
-    added_lines: List[str] = Field(default_factory=list, description="Lines added in target version")
-    removed_lines: List[str] = Field(default_factory=list, description="Lines removed from source version")
-    modified_lines: List[ModifiedLine] = Field(default_factory=list, description="Lines modified between versions")
-    unchanged_lines: List[str] = Field(default_factory=list, description="Lines that remained the same")
-    stats: Dict[str, int] = Field(default_factory=dict, description="Diff statistics")
-
-
-class ConversationEditRequest(BaseModel):
-    """Request to edit a conversation"""
-    title: Optional[str] = Field(None, description="Updated title")
-    raw_transcript: Optional[str] = Field(None, description="Updated transcript content")
-    metadata: Optional[Dict[str, Any]] = Field(None, description="Updated metadata")
-    updated_by: str = Field(..., description="User making the edit")
-    reprocess: bool = Field(default=False, description="Whether to reprocess after edit")
-
-    @validator('raw_transcript')
-    def validate_transcript(cls, v):
-        if v is not None and len(v.strip()) == 0:
-            raise ValueError("Transcript content cannot be empty")
-        return v
-
-    @validator('updated_by')
-    def validate_updated_by(cls, v):
-        if not v or len(v.strip()) == 0:
-            raise ValueError("updated_by is required")
-        return v
-
-
-class ConversationRevertRequest(BaseModel):
-    """Request to revert a conversation to a previous version"""
-    target_version: int = Field(..., description="Version to revert to")
-    reverted_by: str = Field(..., description="User performing the revert")
-    reason: Optional[str] = Field(None, description="Reason for reverting")
-    reprocess: bool = Field(default=True, description="Whether to reprocess after revert")
-
-    @validator('target_version')
-    def validate_target_version(cls, v):
-        if v < 1:
-            raise ValueError("Target version must be 1 or greater")
-        return v
-
-    @validator('reverted_by')
-    def validate_reverted_by(cls, v):
-        if not v or len(v.strip()) == 0:
-            raise ValueError("reverted_by is required")
-        return v
-
-
-class EditResponse(BaseModel):
-    """Response after editing a conversation"""
-    conversation: FeedMeConversation = Field(..., description="Updated conversation")
-    new_version: int = Field(..., description="New version number created")
-    task_id: Optional[str] = Field(None, description="Celery task ID if reprocessing")
-    reprocessing: bool = Field(..., description="Whether reprocessing was triggered")
-
-
-class RevertResponse(BaseModel):
-    """Response after reverting a conversation"""
-    conversation: FeedMeConversation = Field(..., description="Reverted conversation")
-    new_version: int = Field(..., description="New version number created")
-    reverted_to_version: int = Field(..., description="Version that was reverted to")
-    task_id: Optional[str] = Field(None, description="Celery task ID if reprocessing")
-    reprocessing: bool = Field(..., description="Whether reprocessing was triggered")
-
-
-# Approval Workflow Models
-
-class ApprovalRequest(BaseModel):
-    """Request to approve a conversation"""
-    approved_by: str = Field(..., description="User approving the conversation")
-    reviewer_notes: Optional[str] = Field(None, description="Optional notes about the approval")
+class FeedMeExample(FeedMeExampleBase):
+    """Complete FeedMe example model"""
+    id: int = Field(..., description="Unique example ID")
+    uuid: UUID = Field(..., description="Globally unique identifier for the example")
+    conversation_id: int = Field(..., description="ID of the parent conversation")
     
-    @validator('approved_by')
-    def validate_approved_by(cls, v):
-        if not v or len(v.strip()) == 0:
-            raise ValueError("approved_by is required")
-        return v
-
-
-class RejectionRequest(BaseModel):
-    """Request to reject a conversation"""
-    rejected_by: str = Field(..., description="User rejecting the conversation")
-    reviewer_notes: str = Field(..., description="Required notes about the rejection")
+    # Review and approval
+    review_status: ReviewStatus = Field(default=ReviewStatus.PENDING, description="Review status")
+    reviewed_by: Optional[str] = Field(None, description="User who reviewed the example")
+    reviewed_at: Optional[datetime] = Field(None, description="Timestamp of review")
+    reviewer_notes: Optional[str] = Field(None, description="Notes from the reviewer")
     
-    @validator('rejected_by')
-    def validate_rejected_by(cls, v):
-        if not v or len(v.strip()) == 0:
-            raise ValueError("rejected_by is required")
-        return v
+    # Versioning
+    version: int = Field(default=1, ge=1, description="Version number")
     
-    @validator('reviewer_notes')
-    def validate_reviewer_notes(cls, v):
-        if not v or len(v.strip()) == 0:
-            raise ValueError("reviewer_notes is required for rejections")
+    # AI-generated fields
+    generated_by_model: Optional[str] = Field(None, description="Model that generated the example")
+    
+    created_at: datetime = Field(..., description="Creation timestamp")
+    updated_at: datetime = Field(..., description="Last update timestamp")
+    
+    class Config:
+        from_attributes = True
+
+
+# API Response Models
+
+class ConversationListResponse(BaseModel):
+    """Response for listing conversations"""
+    conversations: List[FeedMeConversation] = Field(..., description="List of conversations")
+    total_conversations: int = Field(..., description="Total number of conversations")
+    page: int = Field(..., description="Current page number")
+    page_size: int = Field(..., description="Number of conversations per page")
+    total_pages: int = Field(..., description="Total number of pages")
+
+
+class ExampleListResponse(BaseModel):
+    """Response for listing examples"""
+    examples: List[FeedMeExample] = Field(..., description="List of examples")
+    total_examples: int = Field(..., description="Total number of examples")
+    page: int = Field(..., description="Current page number")
+    page_size: int = Field(..., description="Number of examples per page")
+    total_pages: int = Field(..., description="Total number of pages")
+
+
+class ConversationDetailResponse(FeedMeConversation):
+    """Detailed view of a single conversation with its examples"""
+    examples: List[FeedMeExample] = Field(default_factory=list, description="Examples extracted from the conversation")
+
+
+class ConversationVersion(BaseModel):
+    """Represents a single version of a conversation"""
+    version: int = Field(..., description="Version number")
+    created_at: datetime = Field(..., description="Timestamp of version creation")
+    created_by: Optional[str] = Field(None, description="User who created this version")
+    change_description: Optional[str] = Field(None, description="Description of changes in this version")
+
+
+class ConversationVersionHistoryResponse(BaseModel):
+    """Response containing the version history of a conversation"""
+    conversation_id: int = Field(..., description="ID of the conversation")
+    versions: List[ConversationVersion] = Field(..., description="List of all versions")
+
+
+class ConversationStats(BaseModel):
+    """Statistics for FeedMe conversations"""
+    total_conversations: int = Field(..., description="Total number of conversations")
+    total_examples: int = Field(..., description="Total number of examples")
+    conversations_by_status: Dict[ProcessingStatus, int] = Field(..., description="Count of conversations by status")
+    examples_by_review_status: Dict[ReviewStatus, int] = Field(..., description="Count of examples by review status")
+    latest_upload: Optional[datetime] = Field(None, description="Timestamp of the latest upload")
+
+
+class FolderBase(BaseModel):
+    """Base model for a folder"""
+    name: str = Field(..., min_length=1, max_length=100, description="Folder name")
+    description: Optional[str] = Field(None, max_length=255, description="Folder description")
+
+
+class FolderCreate(FolderBase):
+    """Model for creating a new folder"""
+    pass
+
+
+class FolderUpdate(FolderBase):
+    """Model for updating a folder"""
+    name: Optional[str] = Field(None, min_length=1, max_length=100)
+
+
+class Folder(FolderBase):
+    """Complete folder model"""
+    id: int = Field(..., description="Unique folder ID")
+    uuid: UUID = Field(..., description="Globally unique identifier for the folder")
+    created_by: Optional[str] = Field(None, description="User who created the folder")
+    created_at: datetime = Field(..., description="Creation timestamp")
+    updated_at: datetime = Field(..., description="Last update timestamp")
+    conversation_count: int = Field(0, description="Number of conversations in this folder")
+    
+    class Config:
+        from_attributes = True
+
+
+class FolderListResponse(BaseModel):
+    """Response for listing folders"""
+    folders: List[Folder] = Field(..., description="List of folders")
+
+
+class AddConversationToFolderRequest(BaseModel):
+    """Request to add a conversation to a folder"""
+    conversation_ids: List[int] = Field(..., description="List of conversation IDs to add")
+    
+    @validator('conversation_ids')
+    def validate_conversation_ids(cls, v):
+        if not v:
+            raise ValueError("At least one conversation ID must be provided")
         return v
 
 
-class ApprovalResponse(BaseModel):
-    """Response after approving/rejecting a conversation"""
-    conversation: FeedMeConversation = Field(..., description="Updated conversation")
-    action: str = Field(..., description="Action taken (approved/rejected)")
+class FolderDetailResponse(Folder):
+    """Detailed view of a folder with its conversations"""
+    conversations: List[FeedMeConversation] = Field(..., description="List of conversations in the folder")
+
+
+class SearchResult(BaseModel):
+    """A single search result"""
+    document_id: str = Field(..., description="ID of the source document (conversation or example)")
+    document_type: str = Field(..., description="Type of document (conversation or example)")
+    score: float = Field(..., description="Search relevance score")
+    content: str = Field(..., description="Matching content snippet")
+    metadata: Dict[str, Any] = Field(..., description="Document metadata")
+
+
+class SearchResponse(BaseModel):
+    """Response for a search query"""
+    query: str = Field(..., description="The original search query")
+    results: List[SearchResult] = Field(..., description="List of search results")
+    total_results: int = Field(..., description="Total number of results found")
+    processing_time_ms: int = Field(..., description="Time taken to process the search in milliseconds")
+
+
+class ConversationActionLog(BaseModel):
+    """Log entry for an action taken on a conversation"""
+    id: int = Field(..., description="Unique log ID")
+    conversation_id: int = Field(..., description="ID of the conversation")
+    action: str = Field(..., description="Action taken (e.g., 'created', 'approved', 'processed')")
+    actor: Optional[str] = Field(None, description="User or system component performing the action")
+    details: Optional[Dict[str, Any]] = Field(None, description="Details about the action")
     timestamp: datetime = Field(..., description="When the action was taken")
 
 
@@ -481,6 +506,19 @@ class DeleteConversationResponse(BaseModel):
     title: str = Field(..., description="Title of the deleted conversation")
     examples_deleted: int = Field(..., description="Number of examples deleted")
     message: str = Field(..., description="Confirmation message")
+
+
+class ConversationUploadResponse(BaseModel):
+    """Response model for conversation uploads."""
+    message: str
+    conversation_id: int
+    processing_status: ProcessingStatus
+
+
+class ConversationStatusUpdate(BaseModel):
+    """Request model to update a conversation's status."""
+    processing_status: ProcessingStatus
+    error_message: Optional[str] = None
 
 
 class ApprovalWorkflowStats(BaseModel):
