@@ -81,12 +81,16 @@ class FeedMeKnowledgeSource:
         Args:
             query: Search query text
             context: Context information from Primary Agent
-            limit: Maximum number of results to return
+            limit: Maximum number of results to return (1-100)
             min_confidence: Minimum confidence threshold for results
             
         Returns:
             List of relevant Q&A examples with metadata
         """
+        # Validate limit parameter
+        if not isinstance(limit, int) or limit < 1 or limit > 100:
+            raise ValueError(f"Limit must be an integer between 1 and 100, got: {limit}")
+        
         start_time = time.time()
         
         try:
@@ -279,13 +283,13 @@ class FeedMeKnowledgeSource:
             for result in results:
                 example_id = result.get('id')
                 if example_id:
-                    task = self.repository.increment_usage_count(example_id)
-                    tasks.append(task)
+                    # Repository method is sync, execute directly
+                    try:
+                        self.repository.increment_usage_count(example_id)
+                    except Exception as e:
+                        logger.error(f"Failed to increment usage count for example {example_id}: {e}")
             
-            # Execute usage tracking concurrently
-            if tasks:
-                await asyncio.gather(*tasks, return_exceptions=True)
-                logger.debug(f"Tracked usage for {len(tasks)} examples")
+            logger.debug(f"Tracked usage for {len(results)} examples")
                 
         except Exception as e:
             logger.error(f"Error tracking example usage: {e}")
@@ -324,8 +328,8 @@ class FeedMeKnowledgeSource:
             List of related conversation examples
         """
         try:
-            # Get the reference example
-            reference_example = await self.repository.get_example(example_id)
+            # Get the reference example (repository method is sync, not async)
+            reference_example = self.repository.get_example(example_id)
             if not reference_example:
                 logger.warning(f"Reference example not found: {example_id}")
                 return []
@@ -336,8 +340,8 @@ class FeedMeKnowledgeSource:
                 logger.warning(f"Reference example has no embedding: {example_id}")
                 return []
             
-            # Find similar examples
-            similar_examples = await self.repository.find_similar_examples(
+            # Find similar examples (repository method is sync, not async)
+            similar_examples = self.repository.find_similar_examples(
                 reference_embedding=np.array(reference_embedding),
                 exclude_id=example_id,
                 limit=limit,
@@ -388,8 +392,8 @@ class FeedMeKnowledgeSource:
         
         try:
             # Check repository connection
-            # Simple check by attempting to get repository stats
-            repo_stats = await self.repository.get_repository_statistics()
+            # Simple check by attempting to get repository stats (repository method is sync)
+            repo_stats = self.repository.get_repository_statistics()
             status['components']['repository'] = {
                 'status': 'healthy',
                 'total_examples': repo_stats.get('total_examples', 0)

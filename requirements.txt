@@ -1,5 +1,6 @@
 # Core Application & Agent Dependencies
-fastapi==0.115.12
+fastapi-limiter==0.1.6
+redis==5.0.415.12
 uvicorn
 python-multipart
 pydantic==2.11.5

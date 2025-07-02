@@ -25,6 +25,8 @@ from app.feedme.html_parser import HTMLTranscriptParser
 from app.db.embedding_utils import get_embedding_model, generate_feedme_embeddings
 from app.feedme.schemas import ProcessingStatus
 from app.core.settings import settings
+from app.feedme.ai_extraction_engine import GemmaExtractionEngine
+from app.feedme.parsers.enhanced_html_parser import EnhancedHTMLParser
 
 logger = logging.getLogger(__name__)
 
@@ -85,7 +87,6 @@ def process_transcript(self, conversation_id: int, user_id: Optional[str] = None
                 logger.info("Detected HTML content, using AI extraction engine with enhanced HTML parser")
                 
                 # Use new AI extraction engine for HTML content
-                from app.feedme.ai_extraction_engine import GemmaExtractionEngine
                 
                 if settings.gemini_api_key:
                     # Use Gemma-3-27b-it for intelligent extraction
@@ -97,7 +98,6 @@ def process_transcript(self, conversation_id: int, user_id: Optional[str] = None
                     logger.info(f"AI extraction engine extracted {len(examples)} Q&A pairs with gemma-3-27b-it")
                 else:
                     # Fallback to enhanced HTML parser
-                    from app.feedme.parsers.enhanced_html_parser import EnhancedHTMLParser
                     
                     html_parser = EnhancedHTMLParser()
                     parse_result = html_parser.parse(raw_transcript)
@@ -126,7 +126,6 @@ def process_transcript(self, conversation_id: int, user_id: Optional[str] = None
             else:
                 logger.info("Using AI-powered text extraction")
                 # Use AI extraction for text content as well
-                from app.feedme.ai_extraction_engine import GemmaExtractionEngine
                 
                 if settings.gemini_api_key:
                     engine = GemmaExtractionEngine(api_key=settings.gemini_api_key)
@@ -139,7 +138,6 @@ def process_transcript(self, conversation_id: int, user_id: Optional[str] = None
                     logger.info(f"AI extraction engine processed text content: {len(examples)} Q&A pairs")
                 else:
                     # Fallback to existing text parser
-                    from app.feedme.transcript_parser import TranscriptParser
                     
                     parser = TranscriptParser()
                     examples = parser.extract_qa_examples(

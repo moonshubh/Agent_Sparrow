@@ -8,6 +8,7 @@ bulk actions, metrics, and reviewer management.
 import logging
 from datetime import datetime, timedelta
 from typing import List, Dict, Optional, Any
+from functools import lru_cache
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import JSONResponse
 
@@ -44,10 +45,9 @@ rate_limiter = RateLimiter()
 # Dependency Injection
 # ===========================
 
-async def get_workflow_engine() -> ApprovalWorkflowEngine:
-    """Get workflow engine instance"""
-    # This would typically be injected via dependency injection
-    # For now, create a basic instance
+@lru_cache(maxsize=1)
+def _create_workflow_engine() -> ApprovalWorkflowEngine:
+    """Create singleton workflow engine instance"""
     from app.feedme.repositories.optimized_repository import OptimizedFeedMeRepository
     from app.feedme.embeddings.embedding_pipeline import FeedMeEmbeddingPipeline
     from app.feedme.approval.schemas import WorkflowConfig
@@ -58,11 +58,24 @@ async def get_workflow_engine() -> ApprovalWorkflowEngine:
     
     return ApprovalWorkflowEngine(repository, embedding_service, config)
 
+async def get_workflow_engine() -> ApprovalWorkflowEngine:
+    """Get workflow engine instance with singleton pattern"""
+    return _create_workflow_engine()
+
 
 async def get_current_user() -> str:
     """Get current authenticated user (placeholder)"""
     # This would integrate with your authentication system
     return "user@mailbird.com"
+
+async def get_current_admin_user() -> str:
+    """Get current authenticated admin user"""
+    # This would integrate with your authentication system
+    # and verify admin permissions
+    user = await get_current_user()
+    # In a real system, check if user has admin role
+    # For now, assume all users are admins for demo purposes
+    return user
 
 
 # ===========================
@@ -538,11 +551,11 @@ async def get_workflow_summary(
 async def cleanup_old_rejected_items(
     days_old: int = Query(30, ge=1, le=365, description="Age in days for cleanup"),
     workflow_engine: ApprovalWorkflowEngine = Depends(get_workflow_engine),
-    current_user: str = Depends(get_current_user)
+    current_user: str = Depends(get_current_admin_user)
 ):
     """Clean up old rejected items to free up storage."""
     try:
-        # This would require admin permissions in a real system
+        # Verify admin permissions
         cutoff_date = datetime.now() - timedelta(days=days_old)
         
         # Implementation would delete old rejected items

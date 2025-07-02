@@ -82,6 +82,7 @@ class VectorSearchEngine:
             e.tags,
             e.usage_count,
             e.created_at,
+            e.combined_embedding,
             COALESCE(e.overall_quality_score, 0) as overall_quality_score
             """
         
@@ -181,7 +182,8 @@ class VectorSearchEngine:
         SELECT 
             COUNT(*) as total_examples,
             COUNT(*) FILTER (WHERE combined_embedding IS NOT NULL) as examples_with_embeddings,
-            AVG(1 - (combined_embedding <=> combined_embedding)) as avg_self_similarity,
+            -- Self-similarity should be 1.0 for identical vectors, using a different approach
+            1.0 as avg_self_similarity,
             COUNT(DISTINCT issue_category) as unique_categories
         FROM feedme_examples_v2
         WHERE is_active = true

@@ -55,8 +55,7 @@ class SearchEvent(BaseModel):
     search_type: SearchType
     context_data: Dict[str, Any] = Field(default_factory=dict)
     
-    class Config:
-        from_attributes = True
+    model_config = {"from_attributes": True}
 
 
 class SearchSession(BaseModel):
@@ -76,8 +75,7 @@ class SearchSession(BaseModel):
             raise ValueError('end_time must be after start_time')
         return v
     
-    class Config:
-        from_attributes = True
+    model_config = {"from_attributes": True}
 
 
 class UsageMetrics(BaseModel):
@@ -89,8 +87,7 @@ class UsageMetrics(BaseModel):
     success_rate: float = Field(ge=0.0, le=1.0)
     timestamp: datetime
     
-    class Config:
-        from_attributes = True
+    model_config = {"from_attributes": True}
 
 
 class SearchBehaviorMetrics(BaseModel):
@@ -102,8 +99,7 @@ class SearchBehaviorMetrics(BaseModel):
     query_refinement_rate: float = Field(ge=0.0, le=1.0)
     timestamp: datetime
     
-    class Config:
-        from_attributes = True
+    model_config = {"from_attributes": True}
 
 
 class SearchAnalytics(BaseModel):
@@ -113,8 +109,7 @@ class SearchAnalytics(BaseModel):
     avg_results_per_search: float = Field(ge=0.0)
     no_results_rate: float = Field(ge=0.0, le=1.0)
     
-    class Config:
-        from_attributes = True
+    model_config = {"from_attributes": True}
 
 
 class SystemPerformanceMetrics(BaseModel):
@@ -141,8 +136,7 @@ class SystemPerformanceMetrics(BaseModel):
             raise ValueError('p99 must be >= p95 response time')
         return v
     
-    class Config:
-        from_attributes = True
+    model_config = {"from_attributes": True}
 
 
 class UserBehaviorAnalytics(BaseModel):
@@ -152,8 +146,7 @@ class UserBehaviorAnalytics(BaseModel):
     temporal_patterns: Dict[str, Any]
     retention_metrics: Dict[str, Any]
     
-    class Config:
-        from_attributes = True
+    model_config = {"from_attributes": True}
 
 
 class QueryPattern(BaseModel):
@@ -166,8 +159,7 @@ class QueryPattern(BaseModel):
     intent_category: Optional[str] = None
     complexity_level: int = Field(ge=1, le=5)
     
-    class Config:
-        from_attributes = True
+    model_config = {"from_attributes": True}
 
 
 class SearchPerformanceData(BaseModel):
@@ -187,8 +179,7 @@ class SearchPerformanceData(BaseModel):
     error_occurred: bool
     error_type: Optional[str] = None
     
-    class Config:
-        from_attributes = True
+    model_config = {"from_attributes": True}
 
 
 # Health Monitoring Models
@@ -202,8 +193,7 @@ class SystemHealthMetrics(BaseModel):
     network_io_mbps: float = Field(ge=0.0)
     active_connections: int = Field(ge=0)
     
-    class Config:
-        from_attributes = True
+    model_config = {"from_attributes": True}
 
 
 class ComponentHealth(BaseModel):
@@ -214,8 +204,7 @@ class ComponentHealth(BaseModel):
     last_error: Optional[str] = None
     metrics: Dict[str, Any] = Field(default_factory=dict)
     
-    class Config:
-        from_attributes = True
+    model_config = {"from_attributes": True}
 
 
 class HealthStatus(BaseModel):
@@ -226,8 +215,7 @@ class HealthStatus(BaseModel):
     system_metrics: Dict[str, float]
     alerts_count: int = Field(ge=0, default=0)
     
-    class Config:
-        from_attributes = True
+    model_config = {"from_attributes": True}
 
 
 class HealthAlert(BaseModel):
@@ -241,8 +229,7 @@ class HealthAlert(BaseModel):
     resolved: bool = False
     resolution_time: Optional[datetime] = None
     
-    class Config:
-        from_attributes = True
+    model_config = {"from_attributes": True}
 
 
 class MonitoringConfig(BaseModel):
@@ -252,8 +239,7 @@ class MonitoringConfig(BaseModel):
     critical_services: List[str]
     notification_channels: List[str] = Field(default_factory=list)
     
-    class Config:
-        from_attributes = True
+    model_config = {"from_attributes": True}
 
 
 # Analytics Response Models
@@ -269,8 +255,7 @@ class AnalyticsInsights(BaseModel):
     performance_trends: Dict[str, Any] = Field(default_factory=dict)
     optimization_opportunities: List[Dict[str, Any]] = Field(default_factory=list)
     
-    class Config:
-        from_attributes = True
+    model_config = {"from_attributes": True}
 
 
 class OptimizationRecommendation(BaseModel):
@@ -283,8 +268,7 @@ class OptimizationRecommendation(BaseModel):
     estimated_improvement: str
     technical_details: Dict[str, Any] = Field(default_factory=dict)
     
-    class Config:
-        from_attributes = True
+    model_config = {"from_attributes": True}
 
 
 class OptimizationInsight(BaseModel):
@@ -295,8 +279,7 @@ class OptimizationInsight(BaseModel):
     improvement_potential: float = Field(ge=0.0, le=1.0)
     recommendations: List[OptimizationRecommendation]
     
-    class Config:
-        from_attributes = True
+    model_config = {"from_attributes": True}
 
 
 # API Request/Response Models
@@ -326,8 +309,7 @@ class AnalyticsRequest(BaseModel):
             raise ValueError('Date cannot be more than 1 year ago')
         return v
     
-    class Config:
-        from_attributes = True
+    model_config = {"from_attributes": True}
 
 
 class AnalyticsResponse(BaseModel):
@@ -337,8 +319,7 @@ class AnalyticsResponse(BaseModel):
     metadata: Dict[str, Any] = Field(default_factory=dict)
     execution_time_ms: Optional[float] = None
     
-    class Config:
-        from_attributes = True
+    model_config = {"from_attributes": True}
 
 
 class DashboardData(BaseModel):
@@ -348,8 +329,7 @@ class DashboardData(BaseModel):
     alerts: List[HealthAlert]
     last_updated: datetime = Field(default_factory=datetime.utcnow)
     
-    class Config:
-        from_attributes = True
+    model_config = {"from_attributes": True}
 
 
 class ReportConfig(BaseModel):
@@ -368,8 +348,7 @@ class ReportConfig(BaseModel):
                 raise ValueError('End date must be after start date')
         return self
     
-    class Config:
-        from_attributes = True
+    model_config = {"from_attributes": True}
 
 
 # Advanced Analytics Models
@@ -382,8 +361,7 @@ class TrendAnalysis(BaseModel):
     data_points: List[Dict[str, Any]]
     prediction: Optional[Dict[str, Any]] = None
     
-    class Config:
-        from_attributes = True
+    model_config = {"from_attributes": True}
 
 
 class AnomalyDetection(BaseModel):
@@ -396,8 +374,7 @@ class AnomalyDetection(BaseModel):
     anomaly_type: Literal["spike", "drop", "pattern_change"]
     context: Dict[str, Any] = Field(default_factory=dict)
     
-    class Config:
-        from_attributes = True
+    model_config = {"from_attributes": True}
 
 
 class PerformanceBenchmark(BaseModel):
@@ -427,8 +404,7 @@ class PerformanceBenchmark(BaseModel):
             return info.data['performance_ratio'] >= 1.0
         return v or False
     
-    class Config:
-        from_attributes = True
+    model_config = {"from_attributes": True}
 
 
 class SystemComponents:

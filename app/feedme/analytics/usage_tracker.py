@@ -220,8 +220,9 @@ class UsageAnalytics:
                     'context_data': json.dumps(event.context_data)
                 })
             
-            await self.db.execute_many(insert_query, event_data)
-            await self.db.commit()
+            # Use proper async SQLAlchemy bulk insert
+            async with self.db.begin() as transaction:
+                await transaction.execute(insert_query, event_data)
             
             logger.info(f"Flushed {len(event_data)} search events to database")
             
@@ -328,12 +329,21 @@ class UsageAnalytics:
             LIMIT :limit
         """)
         
-        results = await self.db.fetch_all(
-            query, 
-            {'start_date': start_date, 'end_date': end_date, 'limit': limit}
-        )
+        # Use proper async SQLAlchemy execution
+        async with self.db.begin() as transaction:
+            result = await transaction.execute(
+                query, 
+                {'start_date': start_date, 'end_date': end_date, 'limit': limit}
+            )
+            rows = result.fetchall()
         
-        return [dict(result) for result in results]
+        return [{
+            'query': row[0],
+            'frequency': row[1], 
+            'avg_response_time': row[2],
+            'success_rate': row[3],
+            'click_through_rate': row[4]
+        } for row in rows]
     
     async def _get_performance_trends(
         self, 

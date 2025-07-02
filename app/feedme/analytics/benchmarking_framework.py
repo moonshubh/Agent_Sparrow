@@ -94,12 +94,14 @@ class PerformanceBenchmarkFramework:
         """
         Execute a comprehensive performance benchmark with the specified scenario
         """
+        # Initialize benchmark_id before try block to ensure it's available in except
+        benchmark_id = f"benchmark_{int(time.time())}"
+        start_time = datetime.utcnow()
+        
         try:
             logger.info(f"Starting benchmark: {scenario.name}")
-            start_time = datetime.utcnow()
             
             # Initialize benchmark
-            benchmark_id = f"benchmark_{int(time.time())}"
             await self._initialize_benchmark(benchmark_id, scenario)
             
             # System warmup
@@ -156,6 +158,7 @@ class PerformanceBenchmarkFramework:
             
         except Exception as e:
             logger.error(f"Benchmark failed: {scenario.name} - {e}")
+            # benchmark_id and start_time are now guaranteed to be initialized
             return BenchmarkResult(
                 benchmark_id=benchmark_id,
                 scenario_name=scenario.name,
@@ -894,11 +897,35 @@ class PerformanceBenchmarkFramework:
         response_times = [r.load_test_results.avg_response_time_ms for r in sorted_results]
         error_rates = [r.load_test_results.error_rate for r in sorted_results]
         
-        # Calculate trends
+        # Calculate trends with error handling for insufficient data
         grade_values = {'A': 5, 'B': 4, 'C': 3, 'D': 2, 'F': 1}
-        grade_trend = np.polyfit(range(len(grades)), [grade_values.get(g, 1) for g in grades], 1)[0]
-        response_time_trend = np.polyfit(range(len(response_times)), response_times, 1)[0]
-        error_rate_trend = np.polyfit(range(len(error_rates)), error_rates, 1)[0]
+        
+        try:
+            if len(grades) >= 2:
+                grade_trend = np.polyfit(range(len(grades)), [grade_values.get(g, 1) for g in grades], 1)[0]
+            else:
+                grade_trend = 0
+        except (np.linalg.LinAlgError, ValueError) as e:
+            logger.warning(f"Error calculating grade trend: {e}")
+            grade_trend = 0
+            
+        try:
+            if len(response_times) >= 2:
+                response_time_trend = np.polyfit(range(len(response_times)), response_times, 1)[0]
+            else:
+                response_time_trend = 0
+        except (np.linalg.LinAlgError, ValueError) as e:
+            logger.warning(f"Error calculating response time trend: {e}")
+            response_time_trend = 0
+            
+        try:
+            if len(error_rates) >= 2:
+                error_rate_trend = np.polyfit(range(len(error_rates)), error_rates, 1)[0]
+            else:
+                error_rate_trend = 0
+        except (np.linalg.LinAlgError, ValueError) as e:
+            logger.warning(f"Error calculating error rate trend: {e}")
+            error_rate_trend = 0
         
         return {
             'performance_grade_trend': 'improving' if grade_trend > 0.1 else 'declining' if grade_trend < -0.1 else 'stable',

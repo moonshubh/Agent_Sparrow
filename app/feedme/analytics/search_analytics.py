@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 import numpy as np
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.cluster import DBSCAN
+import redis.asyncio as redis
 
 from .schemas import (
     SearchBehaviorMetrics, QueryPattern, SearchAnalytics,
@@ -33,7 +34,7 @@ class SearchAnalyzer:
     def __init__(
         self,
         db: AsyncSession,
-        redis_client,
+        redis_client: redis.Redis,
         config: Optional[Dict[str, Any]] = None
     ):
         self.db = db
@@ -170,7 +171,7 @@ class SearchAnalyzer:
                     FROM sequential_queries
                     WHERE prev_query IS NOT NULL 
                         AND query != prev_query
-                        AND EXTRACT(EPOCH FROM (timestamp - LAG(timestamp) OVER (PARTITION BY user_id ORDER BY timestamp))) < 300
+                        AND EXTRACT(EPOCH FROM (timestamp - prev_timestamp)) < 300
                 )
                 SELECT 
                     original_query,
@@ -411,7 +412,8 @@ class QueryPatternAnalyzer:
         self,
         similarity_threshold: float = 0.8,
         min_cluster_size: int = 3,
-        max_clusters: int = 20
+        max_clusters: int = 20,
+        intent_keywords: Optional[Dict[str, List[str]]] = None
     ):
         self.similarity_threshold = similarity_threshold
         self.min_cluster_size = min_cluster_size
@@ -424,8 +426,8 @@ class QueryPatternAnalyzer:
             ngram_range=(1, 2)
         )
         
-        # Intent classification keywords
-        self.intent_keywords = {
+        # Intent classification keywords - configurable with sensible defaults
+        self.intent_keywords = intent_keywords or {
             'setup': ['setup', 'configure', 'install', 'create', 'add'],
             'troubleshooting': ['error', 'problem', 'issue', 'fix', 'not working', 'failed'],
             'information': ['how to', 'what is', 'where', 'when', 'list', 'show'],
@@ -492,9 +494,17 @@ class QueryPatternAnalyzer:
     async def calculate_semantic_similarity(self, query1: str, query2: str) -> float:
         """Calculate semantic similarity between two queries"""
         try:
-            # Simple approach using TF-IDF vectors
-            vectors = self.vectorizer.fit_transform([query1, query2])
-            similarity = (vectors[0] * vectors[1].T).toarray()[0, 0]
+            # Initialize TF-IDF vectorizer if not already trained or reuse existing fit
+            if not hasattr(self.vectorizer, 'vocabulary_') or self.vectorizer.vocabulary_ is None:
+                # Train on both queries
+                vectors = self.vectorizer.fit_transform([query1, query2])
+            else:
+                # Use already trained vectorizer
+                vectors = self.vectorizer.transform([query1, query2])
+            
+            # Calculate cosine similarity
+            from sklearn.metrics.pairwise import cosine_similarity
+            similarity = cosine_similarity(vectors[0:1], vectors[1:2])[0, 0]
             return float(similarity)
             
         except Exception as e:
@@ -612,7 +622,7 @@ class SearchOptimizer:
     ) -> List[Dict[str, Any]]:
         """Analyze search result ranking optimization opportunities"""
         try:
-            # Mock ranking analysis - in real implementation would analyze click data
+            # TODO: Replace with actual ranking analysis - in real implementation would analyze click data
             opportunities = [
                 {
                     'result_id': 'result_1',
@@ -674,7 +684,7 @@ class SearchOptimizer:
         """Optimize caching strategy based on usage patterns"""
         recommendations = []
         
-        # Mock cache analysis - would use real Redis data
+        # TODO: Implement real cache analysis - would use real Redis data
         current_hit_rate = 0.65
         target_hit_rate = 0.80
         

@@ -14,6 +14,7 @@ from collections import defaultdict
 import weakref
 
 from fastapi import WebSocket, WebSocketDisconnect
+import redis.asyncio as redis
 
 from .schemas import (
     ConnectionInfo,
@@ -101,9 +102,10 @@ class FeedMeRealtimeManager:
     Main WebSocket manager for FeedMe real-time communications.
     
     Handles connection management, room-based broadcasting, and message queuing.
+    Features Redis-backed persistence with graceful fallback to in-memory storage.
     """
     
-    def __init__(self):
+    def __init__(self, redis_url: Optional[str] = None):
         # Room management
         self.rooms: Dict[str, WebSocketRoom] = {}
         self.connection_to_room: Dict[WebSocket, str] = {}
@@ -115,8 +117,22 @@ class FeedMeRealtimeManager:
         self.connection_events: List[ConnectionEvent] = []
         self.metrics_window = timedelta(minutes=5)
         
-        # Heartbeat management
+        # Redis connection (optional)
+        self.redis_client: Optional[redis.Redis] = None
+        self.redis_enabled = False
+        if redis_url:
+            try:
+                self.redis_client = redis.from_url(redis_url)
+                self.redis_enabled = True
+                logger.info("Redis enabled for WebSocket persistence")
+            except Exception as e:
+                logger.warning(f"Failed to connect to Redis: {e}. Using in-memory storage only.")
+        
+        # Background task management
         self.heartbeat_interval = 30  # seconds
+        self.cleanup_interval = 300  # 5 minutes
+        self.heartbeat_task: Optional[asyncio.Task] = None
+        self.cleanup_task: Optional[asyncio.Task] = None
         self.heartbeat_task: Optional[asyncio.Task] = None
         
         # Configuration
@@ -185,9 +201,9 @@ class FeedMeRealtimeManager:
             # Log connection event
             self._log_connection_event("connect", user_id, room_id)
             
-            # Start heartbeat if this is the first connection
+            # Start background tasks if this is the first connection
             if not self.heartbeat_task:
-                self.heartbeat_task = asyncio.create_task(self._heartbeat_loop())
+                await self.start_background_tasks()
             
             logger.info(f"WebSocket connected: user={user_id}, room={room_id}")
             return connection_info
@@ -366,7 +382,7 @@ class FeedMeRealtimeManager:
 
     async def queue_message_for_user(self, user_id: str, message: Dict[str, Any], ttl_seconds: int = 3600):
         """
-        Queue message for offline user.
+        Queue message for offline user with Redis persistence fallback.
         
         Args:
             user_id: User to queue message for
@@ -382,8 +398,26 @@ class FeedMeRealtimeManager:
             ttl_seconds=ttl_seconds
         )
         
-        self.message_queues[user_id].add_message(queued_message)
-        logger.debug(f"Queued message for user {user_id}")
+        # Try to persist to Redis first
+        if self.redis_enabled and self.redis_client:
+            try:
+                redis_key = f"feedme:websocket:queue:{user_id}"
+                message_data = {
+                    'message': message,
+                    'created_at': queued_message.created_at.isoformat(),
+                    'ttl_seconds': ttl_seconds
+                }
+                await self.redis_client.lpush(redis_key, json.dumps(message_data))
+                await self.redis_client.expire(redis_key, ttl_seconds)
+                logger.debug(f"Queued message for user {user_id} in Redis")
+            except Exception as e:
+                logger.error(f"Failed to queue message in Redis: {e}. Using in-memory queue.")
+                # Fall back to in-memory queue
+                self.message_queues[user_id].add_message(queued_message)
+        else:
+            # Use in-memory queue
+            self.message_queues[user_id].add_message(queued_message)
+            logger.debug(f"Queued message for user {user_id} in memory")
 
     def get_room_users(self, room_id: str) -> List[ConnectionInfo]:
         """
@@ -478,22 +512,53 @@ class FeedMeRealtimeManager:
         await self._send_message_safe(websocket, status_message)
 
     async def _deliver_queued_messages(self, user_id: str, websocket: WebSocket):
-        """Deliver queued messages to reconnected user"""
-        if user_id not in self.message_queues:
-            return
+        """Deliver queued messages to reconnected user with selective removal"""
+        delivered_messages = []
         
-        message_queue = self.message_queues[user_id]
-        pending_messages = message_queue.get_pending_messages()
-        
-        for queued_message in pending_messages:
+        # Try to get messages from Redis first
+        if self.redis_enabled and self.redis_client:
             try:
-                await self._send_message_safe(websocket, queued_message.message)
-                queued_message.attempts += 1
+                redis_key = f"feedme:websocket:queue:{user_id}"
+                redis_messages = await self.redis_client.lrange(redis_key, 0, -1)
+                
+                for redis_msg in redis_messages:
+                    try:
+                        message_data = json.loads(redis_msg)
+                        await self._send_message_safe(websocket, message_data['message'])
+                        delivered_messages.append(redis_msg)
+                    except Exception as e:
+                        logger.error(f"Failed to deliver Redis queued message: {e}")
+                
+                # Remove successfully delivered messages from Redis
+                if delivered_messages:
+                    for msg in delivered_messages:
+                        await self.redis_client.lrem(redis_key, 1, msg)
+                    logger.debug(f"Delivered and removed {len(delivered_messages)} messages from Redis for user {user_id}")
+                        
             except Exception as e:
-                logger.error(f"Failed to deliver queued message: {e}")
+                logger.error(f"Failed to access Redis message queue: {e}")
         
-        # Clear delivered messages
-        message_queue.messages = []
+        # Handle in-memory queue
+        if user_id in self.message_queues:
+            message_queue = self.message_queues[user_id]
+            pending_messages = message_queue.get_pending_messages()
+            successfully_delivered = []
+            
+            for queued_message in pending_messages:
+                try:
+                    await self._send_message_safe(websocket, queued_message.message)
+                    successfully_delivered.append(queued_message)
+                    queued_message.attempts += 1
+                except Exception as e:
+                    logger.error(f"Failed to deliver queued message: {e}")
+            
+            # Remove only successfully delivered messages
+            for delivered_msg in successfully_delivered:
+                if delivered_msg in message_queue.messages:
+                    message_queue.messages.remove(delivered_msg)
+            
+            if successfully_delivered:
+                logger.debug(f"Delivered and removed {len(successfully_delivered)} messages from memory for user {user_id}")
 
     async def _send_message_safe(self, websocket: WebSocket, message: Dict[str, Any]):
         """Send message with error handling"""
@@ -545,6 +610,71 @@ class FeedMeRealtimeManager:
         
         finally:
             self.heartbeat_task = None
+    
+    async def _cleanup_loop(self):
+        """Background cleanup loop for stale connections"""
+        try:
+            while True:
+                await asyncio.sleep(self.cleanup_interval)
+                try:
+                    await self.cleanup_stale_connections()
+                    logger.debug("Completed cleanup of stale connections")
+                except Exception as e:
+                    logger.error(f"Error in cleanup loop: {e}")
+        
+        except asyncio.CancelledError:
+            logger.info("Cleanup loop cancelled")
+        
+        finally:
+            self.cleanup_task = None
+    
+    async def start_background_tasks(self):
+        """Start all background tasks"""
+        await self.start_heartbeat()
+        await self.start_cleanup_task()
+    
+    async def start_heartbeat(self):
+        """Start periodic heartbeat to all connections"""
+        if self.heartbeat_task is not None:
+            return
+        
+        self.heartbeat_task = asyncio.create_task(self._heartbeat_loop())
+        logger.info("Started WebSocket heartbeat")
+    
+    async def start_cleanup_task(self):
+        """Start periodic cleanup of stale connections"""
+        if self.cleanup_task is not None:
+            return
+        
+        self.cleanup_task = asyncio.create_task(self._cleanup_loop())
+        logger.info("Started WebSocket cleanup task")
+    
+    async def stop_background_tasks(self):
+        """Stop all background tasks"""
+        await self.stop_heartbeat()
+        await self.stop_cleanup_task()
+    
+    async def stop_heartbeat(self):
+        """Stop heartbeat task"""
+        if self.heartbeat_task:
+            self.heartbeat_task.cancel()
+            try:
+                await self.heartbeat_task
+            except asyncio.CancelledError:
+                pass
+            self.heartbeat_task = None
+            logger.info("Stopped WebSocket heartbeat")
+    
+    async def stop_cleanup_task(self):
+        """Stop cleanup task"""
+        if self.cleanup_task:
+            self.cleanup_task.cancel()
+            try:
+                await self.cleanup_task
+            except asyncio.CancelledError:
+                pass
+            self.cleanup_task = None
+            logger.info("Stopped WebSocket cleanup task")
 
     async def cleanup_stale_connections(self):
         """Clean up stale connections and empty rooms"""

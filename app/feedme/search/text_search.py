@@ -16,6 +16,35 @@ logger = logging.getLogger(__name__)
 class TextSearchEngine:
     """Full-text search engine using PostgreSQL text search"""
     
+    # SQL query template for full-text search
+    SEARCH_QUERY_TEMPLATE = """
+    SELECT 
+        e.id,
+        e.question_text,
+        e.answer_text,
+        e.confidence_score,
+        e.issue_category,
+        e.tags,
+        e.usage_count,
+        e.created_at,
+        COALESCE(e.overall_quality_score, 0) as overall_quality_score,
+        {rank_expr} as text_score,
+        ts_headline('english', e.question_text, {search_func}('english', %(query)s)) as question_headline,
+        ts_headline('english', e.answer_text, {search_func}('english', %(query)s)) as answer_headline
+    FROM feedme_examples_v2 e
+    WHERE e.search_text @@ {search_func}('english', %(query)s)
+      AND {where_clause}
+    ORDER BY {rank_expr} DESC
+    LIMIT %(limit)s
+    """
+    
+    # Stop words for query optimization and performance analysis
+    STOP_WORDS = {
+        'the', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'of', 'with', 'by', 
+        'is', 'are', 'was', 'were', 'this', 'that', 'they', 'have', 'will', 'your', 
+        'what', 'when', 'from'
+    }
+    
     def __init__(self):
         self.connection_manager = get_connection_manager()
     
@@ -85,26 +114,11 @@ class TextSearchEngine:
             END
             """
         
-        sql = f"""
-        SELECT 
-            e.id,
-            e.question_text,
-            e.answer_text,
-            e.confidence_score,
-            e.issue_category,
-            e.tags,
-            e.usage_count,
-            e.created_at,
-            COALESCE(e.overall_quality_score, 0) as overall_quality_score,
-            {rank_expr} as text_score,
-            ts_headline('english', e.question_text, {search_func}('english', %(query)s)) as question_headline,
-            ts_headline('english', e.answer_text, {search_func}('english', %(query)s)) as answer_headline
-        FROM feedme_examples_v2 e
-        WHERE e.search_text @@ {search_func}('english', %(query)s)
-          AND {where_clause}
-        ORDER BY {rank_expr} DESC
-        LIMIT %(limit)s
-        """
+        sql = self.SEARCH_QUERY_TEMPLATE.format(
+            rank_expr=rank_expr,
+            search_func=search_func,
+            where_clause=where_clause
+        )
         
         try:
             start_time = time.time()
@@ -192,12 +206,15 @@ class TextSearchEngine:
     def _generate_suggestions(self, query: str, limit: int) -> List[str]:
         """Generate query suggestions based on existing content"""
         
+        # Format stop words for SQL query
+        stop_words_formatted = "'" + "', '".join(self.STOP_WORDS) + "'"
+        
         # Get common terms from the database
-        sql = """
+        sql = f"""
         SELECT word, nentry as frequency
         FROM ts_stat('SELECT search_text FROM feedme_examples_v2 WHERE is_active = true')
         WHERE char_length(word) > 3
-          AND word NOT IN ('this', 'that', 'with', 'from', 'they', 'have', 'will', 'your', 'what', 'when')
+          AND word NOT IN ({stop_words_formatted})
         ORDER BY nentry DESC
         LIMIT 50
         """
@@ -262,12 +279,9 @@ class TextSearchEngine:
         """Analyze query performance and suggest optimizations"""
         
         # Check if query has stop words that might reduce performance
-        stop_words = {
-            'the', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'of', 'with', 'by', 'is', 'are', 'was', 'were'
-        }
         
         query_words = set(query.lower().split())
-        stop_word_count = len(query_words.intersection(stop_words))
+        stop_word_count = len(query_words.intersection(self.STOP_WORDS))
         
         analysis = {
             'query': query,
@@ -294,16 +308,24 @@ class TextSearchEngine:
         """Get available search categories"""
         
         sql = """
+        WITH tag_unnested AS (
+            SELECT 
+                issue_category,
+                confidence_score,
+                unnest(tags) as individual_tag
+            FROM feedme_examples_v2
+            WHERE is_active = true
+              AND issue_category IS NOT NULL
+              AND tags IS NOT NULL
+        )
         SELECT 
             issue_category,
-            COUNT(*) as example_count,
+            COUNT(DISTINCT individual_tag) as example_count,
             AVG(confidence_score) as avg_confidence,
-            array_agg(DISTINCT tags[1:2]) as sample_tags
-        FROM feedme_examples_v2
-        WHERE is_active = true
-          AND issue_category IS NOT NULL
+            array_agg(DISTINCT individual_tag ORDER BY individual_tag)[1:5] as sample_tags
+        FROM tag_unnested
         GROUP BY issue_category
-        HAVING COUNT(*) >= 3  -- Only categories with meaningful content
+        HAVING COUNT(DISTINCT individual_tag) >= 3  -- Only categories with meaningful content
         ORDER BY example_count DESC
         LIMIT %(limit)s
         """

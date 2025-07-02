@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from enum import Enum
 
 import google.generativeai as genai
+from bs4 import BeautifulSoup
 from google.api_core.exceptions import ResourceExhausted, InvalidArgument
 
 from app.core.settings import settings
@@ -304,14 +305,14 @@ HTML Content:
         
         return True
 
-    async def chunk_and_extract(self, html_content: str, chunk_size: int = 50000) -> List[Dict[str, Any]]:
+    async def chunk_and_extract(self, html_content: str, chunk_size: int = 50000, concurrency_limit: int = 3) -> List[Dict[str, Any]]:
         """Handle large HTML files by intelligent chunking"""
         
         chunks = self._create_semantic_chunks(html_content, chunk_size)
         logger.info(f"Split large content into {len(chunks)} chunks")
         
         # Process chunks with controlled concurrency
-        semaphore = asyncio.Semaphore(3)  # Limit concurrent requests
+        semaphore = asyncio.Semaphore(concurrency_limit)
         
         async def process_chunk(chunk: str) -> List[Dict[str, Any]]:
             async with semaphore:
@@ -499,7 +500,6 @@ class FallbackExtractor:
         
         # This is a simplified implementation
         # In production, would include more sophisticated pattern matching
-        from bs4 import BeautifulSoup
         
         soup = BeautifulSoup(html_content, 'html.parser')
         

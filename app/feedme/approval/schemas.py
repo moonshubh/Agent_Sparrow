@@ -8,7 +8,7 @@ from datetime import datetime
 from typing import List, Dict, Optional, Any, Union
 from enum import Enum
 
-from pydantic import BaseModel, Field, validator, ConfigDict
+from pydantic import BaseModel, Field, validator, ConfigDict, ValidationError
 import numpy as np
 
 
@@ -200,10 +200,10 @@ class ApprovalDecision(BaseModel):
     def model_post_init(self, __context):
         """Validate rejection reason and revision instructions after model creation"""
         if self.action == ApprovalAction.REJECT and not self.rejection_reason:
-            raise ValueError("Rejection reason is required for reject action")
+            raise ValidationError("Rejection reason is required for reject action")
         
         if self.action == ApprovalAction.REQUEST_REVISION and not self.revision_instructions:
-            raise ValueError("Revision instructions are required for revision request")
+            raise ValidationError("Revision instructions are required for revision request")
 
 
 class BulkApprovalRequest(BaseModel):

@@ -152,9 +152,15 @@ class HealthMonitor:
             
             response_time_ms = (time.perf_counter() - start_time) * 1000
             
-            # Check connection pool if available
-            pool_size = getattr(self.db.bind.pool, 'size', 0)
-            pool_checked_out = getattr(self.db.bind.pool, 'checked_out', 0)
+            # Check connection pool if available with safe attribute access
+            pool_size = 0
+            pool_checked_out = 0
+            try:
+                if hasattr(self.db, 'bind') and hasattr(self.db.bind, 'pool'):
+                    pool_size = getattr(self.db.bind.pool, 'size', 0)
+                    pool_checked_out = getattr(self.db.bind.pool, 'checkedout', 0)
+            except Exception as e:
+                logger.debug(f"Could not access connection pool info: {e}")
             
             # Determine status
             if response_time_ms > self.config.alert_thresholds.get('database_response_time_ms', 1000):
@@ -336,9 +342,21 @@ class HealthMonitor:
             # Disk usage
             disk = psutil.disk_usage('/')
             
-            # Network I/O
+            # Network I/O rate calculation
             network = psutil.net_io_counters()
-            network_io_mbps = (network.bytes_sent + network.bytes_recv) / (1024 * 1024)
+            current_time = time.time()
+            
+            # Calculate rate if we have previous measurements
+            if hasattr(self, '_last_network_bytes') and hasattr(self, '_last_network_time'):
+                time_delta = current_time - self._last_network_time
+                bytes_delta = (network.bytes_sent + network.bytes_recv) - self._last_network_bytes
+                network_io_mbps = (bytes_delta / time_delta) / (1024 * 1024) if time_delta > 0 else 0
+            else:
+                network_io_mbps = 0  # First measurement
+            
+            # Store current values for next calculation
+            self._last_network_bytes = network.bytes_sent + network.bytes_recv
+            self._last_network_time = current_time
             
             # Active connections
             connections = len(psutil.net_connections())
@@ -768,14 +786,14 @@ class AlertManager:
         self.escalation_rules = escalation_rules or {}
         
         # Alert tracking
-        self._sent_alerts = {}
-        self._alert_counts = {}
+        # Use Redis for persistent alert tracking instead of in-memory
+        self._redis_alert_prefix = "feedme:health_alerts:tracking"
     
     async def process_alert(self, alert: HealthAlert) -> Dict[str, Any]:
         """Process and route alerts according to rules"""
         try:
             # Check rate limiting
-            if self._is_rate_limited(alert):
+            if await self._is_rate_limited(alert):
                 return {
                     'sent': False,
                     'reason': 'rate_limited',
@@ -792,7 +810,7 @@ class AlertManager:
             delivery_results = await self.deliver_notifications(alert, channels)
             
             # Track sent alert
-            self._track_sent_alert(alert)
+            await self._track_sent_alert(alert)
             
             return {
                 'sent': True,
@@ -810,10 +828,18 @@ class AlertManager:
                 'error': str(e)
             }
     
-    def _is_rate_limited(self, alert: HealthAlert) -> bool:
-        """Check if alert is rate limited"""
+    async def _is_rate_limited(self, alert: HealthAlert) -> bool:
+        """Check if alert is rate limited using Redis"""
         alert_key = f"{alert.component}_{alert.severity.value}"
-        last_sent = self._sent_alerts.get(alert_key)
+        try:
+            last_sent_str = await self.redis.get(f"{self._redis_alert_prefix}:last_sent:{alert_key}")
+            if not last_sent_str:
+                return False
+            
+            last_sent = datetime.fromisoformat(last_sent_str.decode())
+        except Exception as e:
+            logger.error(f"Error checking rate limit in Redis: {e}")
+            return False
         
         if last_sent:
             time_since_last = datetime.utcnow() - last_sent
@@ -821,13 +847,22 @@ class AlertManager:
         
         return False
     
-    def _track_sent_alert(self, alert: HealthAlert) -> None:
-        """Track sent alerts for rate limiting"""
+    async def _track_sent_alert(self, alert: HealthAlert) -> None:
+        """Track sent alerts for rate limiting using Redis"""
         alert_key = f"{alert.component}_{alert.severity.value}"
-        self._sent_alerts[alert_key] = datetime.utcnow()
-        
-        # Increment count
-        self._alert_counts[alert_key] = self._alert_counts.get(alert_key, 0) + 1
+        try:
+            # Store last sent time
+            await self.redis.set(
+                f"{self._redis_alert_prefix}:last_sent:{alert_key}",
+                datetime.utcnow().isoformat(),
+                ex=3600  # Expire after 1 hour
+            )
+            
+            # Increment count
+            await self.redis.incr(f"{self._redis_alert_prefix}:count:{alert_key}")
+            await self.redis.expire(f"{self._redis_alert_prefix}:count:{alert_key}", 3600)
+        except Exception as e:
+            logger.error(f"Error tracking alert in Redis: {e}")
     
     def _get_next_allowed_time(self, alert: HealthAlert) -> datetime:
         """Get next allowed time for this alert type"""

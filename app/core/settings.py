@@ -9,7 +9,18 @@ from pydantic_settings import BaseSettings
 from pydantic import Field
 
 # Load environment variables from project root .env if present
-ENV_PATH = Path(__file__).resolve().parents[2] / ".env"
+# Calculate the path safely with depth validation
+current_file_path = Path(__file__).resolve()
+project_root_depth = 2  # Two levels up from app/core/settings.py to project root
+
+# Validate directory depth to prevent IndexError
+if len(current_file_path.parents) <= project_root_depth:
+    # Fallback to current directory if path calculation fails
+    project_root = Path.cwd()
+else:
+    project_root = current_file_path.parents[project_root_depth]
+
+ENV_PATH = project_root / ".env"
 load_dotenv(ENV_PATH)
 
 class Settings(BaseSettings):

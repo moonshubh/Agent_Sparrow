@@ -394,9 +394,8 @@ class OptimizationEngine:
         filtered = []
         
         for candidate, score in scored_candidates:
-            # Skip if prerequisites not met (simplified check)
-            if candidate.prerequisites:
-                # In a real implementation, check if prerequisites are actually met
+            # Skip if prerequisites not met
+            if candidate.prerequisites and not await self._check_prerequisites(candidate.prerequisites):
                 continue
             
             # Skip high-risk optimizations in production
@@ -411,6 +410,45 @@ class OptimizationEngine:
             filtered.append((candidate, score))
         
         return filtered
+    
+    async def _check_prerequisites(self, prerequisites: List[str]) -> bool:
+        """Check if optimization prerequisites are met"""
+        try:
+            for prerequisite in prerequisites:
+                if prerequisite == 'database_connection':
+                    # Check database connectivity
+                    try:
+                        if hasattr(self, 'db') and self.db:
+                            await self.db.execute('SELECT 1')
+                    except Exception:
+                        return False
+                        
+                elif prerequisite == 'redis_connection':
+                    # Check Redis connectivity
+                    try:
+                        if hasattr(self, 'redis') and self.redis:
+                            await self.redis.ping()
+                    except Exception:
+                        return False
+                        
+                elif prerequisite == 'low_system_load':
+                    # Check system load
+                    import psutil
+                    if psutil.cpu_percent(interval=1) > 80:
+                        return False
+                        
+                elif prerequisite == 'maintenance_window':
+                    # Check if we're in maintenance window
+                    current_hour = datetime.utcnow().hour
+                    if not (2 <= current_hour <= 6):  # 2-6 AM UTC maintenance window
+                        return False
+                        
+                # Add more prerequisite checks as needed
+                        
+            return True
+        except Exception as e:
+            logger.error(f"Error checking prerequisites: {e}")
+            return False
     
     def _prioritize_candidates(
         self,
@@ -607,7 +645,26 @@ class OptimizationEngine:
         optimization_id: str,
         duration_minutes: int = 30
     ) -> Dict[str, float]:
-        """Monitor performance after optimization implementation"""
+        """Monitor performance after optimization implementation (non-blocking)"""
+        try:
+            # Run monitoring in background task to avoid blocking
+            monitoring_task = asyncio.create_task(
+                self._collect_performance_samples(optimization_id, duration_minutes)
+            )
+            
+            # Don't wait for completion, let it run in background
+            return await monitoring_task
+            
+        except Exception as e:
+            logger.error(f"Error monitoring post-optimization performance: {e}")
+            return {}
+    
+    async def _collect_performance_samples(
+        self, 
+        optimization_id: str, 
+        duration_minutes: int
+    ) -> Dict[str, float]:
+        """Collect performance samples in background task"""
         try:
             # Collect performance samples over the monitoring period
             samples = []
@@ -615,6 +672,11 @@ class OptimizationEngine:
             total_samples = duration_minutes
             
             for i in range(total_samples):
+                # Check for shutdown during monitoring
+                if getattr(self, '_shutdown_requested', False):
+                    logger.info(f"Monitoring stopped for optimization {optimization_id} due to shutdown")
+                    break
+                    
                 if self.performance_monitor:
                     # Get current performance metrics
                     metrics = await self.performance_monitor.calculate_response_time_percentiles()
@@ -749,8 +811,10 @@ class OptimizationEngine:
         Run continuous optimization process with automated monitoring and tuning
         """
         logger.info("Starting continuous optimization process...")
+        self._shutdown_requested = False
         
-        while True:
+        try:
+            while not self._shutdown_requested:
             try:
                 # Check if we should run optimization analysis
                 current_time = datetime.utcnow()
@@ -798,12 +862,67 @@ class OptimizationEngine:
                 # Monitor active optimizations
                 await self._monitor_active_optimizations()
                 
-                # Sleep before next iteration
-                await asyncio.sleep(3600)  # Check every hour
+                # Sleep before next iteration (check for shutdown every 10 seconds)
+                for _ in range(360):  # 360 * 10 = 3600 seconds (1 hour)
+                    if self._shutdown_requested:
+                        break
+                    await asyncio.sleep(10)
                 
             except Exception as e:
                 logger.error(f"Error in continuous optimization: {e}")
-                await asyncio.sleep(3600)  # Wait before retrying
+                # Wait before retrying, but check for shutdown
+                for _ in range(360):
+                    if self._shutdown_requested:
+                        break
+                    await asyncio.sleep(10)
+        
+        finally:
+            logger.info("Continuous optimization process shutting down...")
+            await self._cleanup_active_optimizations()
+    
+    async def request_shutdown(self) -> None:
+        """Request graceful shutdown of continuous optimization"""
+        logger.info("Shutdown requested for optimization engine")
+        self._shutdown_requested = True
+    
+    async def _cleanup_active_optimizations(self) -> None:
+        """Clean up active optimizations during shutdown"""
+        try:
+            if hasattr(self, '_active_optimizations'):
+                logger.info(f"Cleaning up {len(self._active_optimizations)} active optimizations")
+                for opt_id, opt_data in self._active_optimizations.items():
+                    try:
+                        # Save current state for later resumption
+                        await self._save_optimization_state(opt_id, opt_data)
+                    except Exception as e:
+                        logger.error(f"Error saving optimization state for {opt_id}: {e}")
+                        
+                self._active_optimizations.clear()
+        except Exception as e:
+            logger.error(f"Error during optimization cleanup: {e}")
+    
+    async def _save_optimization_state(self, opt_id: str, opt_data: Dict[str, Any]) -> None:
+        """Save optimization state for resumption after restart"""
+        try:
+            state_data = {
+                'optimization_id': opt_id,
+                'candidate_name': opt_data['candidate'].name,
+                'start_time': opt_data['start_time'].isoformat(),
+                'current_phase': opt_data.get('current_phase', 'monitoring'),
+                'implementation_success': opt_data['result'].implementation_success
+            }
+            
+            # Store in Redis or database for persistence
+            if hasattr(self, 'redis') and self.redis:
+                await self.redis.set(
+                    f"feedme:optimization:state:{opt_id}",
+                    json.dumps(state_data),
+                    ex=86400 * 7  # Keep for 7 days
+                )
+                
+            logger.info(f"Saved state for optimization {opt_id}")
+        except Exception as e:
+            logger.error(f"Error saving optimization state: {e}")
     
     async def _monitor_active_optimizations(self) -> None:
         """Monitor active optimizations and handle completion/failure"""

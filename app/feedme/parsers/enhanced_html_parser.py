@@ -552,7 +552,8 @@ class EnhancedHTMLParser:
                 except Exception:
                     continue
         
-        logger.debug(f"Could not parse timestamp: {timestamp_str}")
+        # Add debug logging for timestamp parsing failure
+        logger.debug(f"Could not parse timestamp: '{timestamp_str}' - tried {len(formats)} formats")
         return None
 
     def _extract_attachments(self, element: Tag, attachment_selector: str) -> List[str]:
@@ -596,8 +597,8 @@ class EnhancedHTMLParser:
                 # Remove excessive whitespace
                 content = re.sub(r'\s+', ' ', content)
                 
-                # Skip messages that are too short
-                if len(content) < 5:
+                # Skip messages that are too short - increased threshold to filter trivial messages
+                if len(content) < 15:
                     continue
                 
                 # Skip system messages or automated responses

@@ -18,13 +18,21 @@ logger = logging.getLogger(__name__)
 class FeedMeEmbeddingPipeline:
     """Optimized embedding generation for Q&A pairs"""
     
-    def __init__(self, model_name: str = 'all-MiniLM-L12-v2'):
+    # Configuration constants
+    DEFAULT_CONTENT_LENGTH_NORMALIZATION_FACTOR = 100.0
+    
+    def __init__(self, model_name: str = 'all-MiniLM-L12-v2', 
+                 content_length_normalization_factor: float = None):
         """Initialize embedding pipeline with specified model"""
         self.model_name = model_name
         self.dimension = 384  # Smaller, faster embeddings for production
         self.enable_semantic_optimization = False
         self.enable_quality_scoring = False
         self.domain = 'general'
+        self.content_length_normalization_factor = (
+            content_length_normalization_factor or 
+            self.DEFAULT_CONTENT_LENGTH_NORMALIZATION_FACTOR
+        )
         
         try:
             # Initialize embedding model
@@ -74,6 +82,17 @@ class FeedMeEmbeddingPipeline:
                 # Add quality scoring if enabled
                 if self.enable_quality_scoring:
                     pair['embedding_quality_score'] = self._assess_embedding_quality(pair)
+                
+                # Dynamic embedding dimension validation
+                if 'combined_embedding' in pair:
+                    embedding_dim = len(pair['combined_embedding'])
+                    if embedding_dim != self.dimension:
+                        logger.warning(f"Embedding dimension mismatch: expected {self.dimension}, got {embedding_dim}")
+                        # Pad or truncate to expected dimension
+                        if embedding_dim < self.dimension:
+                            pair['combined_embedding'].extend([0.0] * (self.dimension - embedding_dim))
+                        else:
+                            pair['combined_embedding'] = pair['combined_embedding'][:self.dimension]
                 
                 # Add domain processing metadata
                 if self.domain == 'customer_support':
@@ -149,7 +168,7 @@ class FeedMeEmbeddingPipeline:
             
             # Content length factor
             content_length = len(pair.get('question_text', '')) + len(pair.get('answer_text', ''))
-            length_score = min(1.0, content_length / 100.0)  # Normalize to reasonable range
+            length_score = min(1.0, content_length / self.content_length_normalization_factor)
             
             return (norm_score + length_score) / 2.0
             

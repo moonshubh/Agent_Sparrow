@@ -8,6 +8,7 @@ with validation and business rule enforcement.
 from typing import Dict, Set, Optional, List
 from enum import Enum
 import logging
+from collections import deque
 
 from .schemas import ApprovalState, ApprovalAction
 
@@ -135,11 +136,18 @@ class ApprovalStateMachine:
         Returns:
             True if transition is valid, False otherwise
         """
-        try:
-            self.transition(current_state, action)
-            return True
-        except StateTransitionError:
+        # Validate states and actions without calling transition method to avoid side effects
+        if not self.is_valid_state(current_state):
             return False
+        
+        if not self.is_valid_action(action):
+            return False
+        
+        # Check if transition exists in transitions mapping
+        if current_state not in self._transitions:
+            return False
+        
+        return action in self._transitions[current_state]
 
     def get_allowed_actions(self, current_state: ApprovalState) -> List[ApprovalAction]:
         """
@@ -247,7 +255,6 @@ class ApprovalStateMachine:
             return []
         
         # Simple BFS to find shortest path
-        from collections import deque
         
         queue = deque([(start_state, [])])
         visited = {start_state}
