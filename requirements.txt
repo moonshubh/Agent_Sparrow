@@ -1,6 +1,6 @@
 # Core Application & Agent Dependencies
 fastapi-limiter==0.1.6
-redis==5.0.415.12
+redis==6.2.0
 uvicorn
 python-multipart
 pydantic==2.11.5

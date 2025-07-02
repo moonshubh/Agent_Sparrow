@@ -200,10 +200,28 @@ class ApprovalDecision(BaseModel):
     def model_post_init(self, __context):
         """Validate rejection reason and revision instructions after model creation"""
         if self.action == ApprovalAction.REJECT and not self.rejection_reason:
-            raise ValidationError("Rejection reason is required for reject action")
+            raise ValidationError.from_exception_data(
+                self.__class__,
+                [
+                    {
+                        "type": "missing",
+                        "loc": ("rejection_reason",),
+                        "msg": "Rejection reason is required for reject action",
+                    }
+                ],
+            )
         
         if self.action == ApprovalAction.REQUEST_REVISION and not self.revision_instructions:
-            raise ValidationError("Revision instructions are required for revision request")
+            raise ValidationError.from_exception_data(
+                self.__class__,
+                [
+                    {
+                        "type": "missing",
+                        "loc": ("revision_instructions",),
+                        "msg": "Revision instructions are required for revision request",
+                    }
+                ],
+            )
 
 
 class BulkApprovalRequest(BaseModel):
