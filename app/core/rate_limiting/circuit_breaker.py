@@ -7,7 +7,7 @@ requests when failure rates exceed thresholds.
 
 import asyncio
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from enum import Enum
 from typing import Any, Callable, Optional, Dict
 
@@ -92,7 +92,7 @@ class CircuitBreaker:
     
     async def _update_state(self) -> None:
         """Update circuit breaker state based on current conditions."""
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         
         if self.state == CircuitState.OPEN:
             if self.next_attempt_time and now >= self.next_attempt_time:
@@ -117,7 +117,7 @@ class CircuitBreaker:
         """Handle failed function execution."""
         async with self._lock:
             self.failure_count += 1
-            self.last_failure_time = datetime.utcnow()
+            self.last_failure_time = datetime.now(timezone.utc)
             
             self.logger.warning(f"Circuit breaker {self.name} failure count: {self.failure_count}")
             
@@ -131,7 +131,7 @@ class CircuitBreaker:
     def _open_circuit(self) -> None:
         """Open the circuit breaker."""
         self.state = CircuitState.OPEN
-        self.next_attempt_time = datetime.utcnow() + timedelta(seconds=self.timeout_seconds)
+        self.next_attempt_time = datetime.now(timezone.utc) + timedelta(seconds=self.timeout_seconds)
         self.logger.error(
             f"Circuit breaker {self.name} OPENED after {self.failure_count} failures. "
             f"Next attempt at {self.next_attempt_time}"

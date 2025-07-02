@@ -31,6 +31,9 @@ class RateLimitMetadata(BaseModel):
     
     model: str = Field(description="Gemini model name")
     safety_margin: float = Field(default=0.2, description="Safety margin applied")
+    
+    class Config:
+        orm_mode = True
 
 
 class RateLimitResult(BaseModel):
@@ -40,6 +43,9 @@ class RateLimitResult(BaseModel):
     metadata: RateLimitMetadata = Field(description="Rate limit metadata")
     retry_after: Optional[int] = Field(default=None, description="Seconds to wait before retry")
     blocked_by: Optional[str] = Field(default=None, description="Which limit blocked the request")
+    
+    class Config:
+        orm_mode = True
 
 
 class CircuitBreakerStatus(BaseModel):
@@ -50,6 +56,9 @@ class CircuitBreakerStatus(BaseModel):
     success_count: int = Field(description="Number of consecutive successes in HALF_OPEN")
     last_failure_time: Optional[datetime] = Field(default=None, description="Time of last failure")
     next_attempt_time: Optional[datetime] = Field(default=None, description="When next attempt is allowed")
+    
+    class Config:
+        orm_mode = True
     
     
 class UsageStats(BaseModel):
@@ -65,4 +74,4 @@ class UsageStats(BaseModel):
     total_requests_this_minute: int = Field(description="Total requests across all models this minute")
     
     uptime_percentage: float = Field(description="Service uptime percentage")
-    last_updated: datetime = Field(default_factory=datetime.utcnow, description="When stats were last updated")
+    last_updated: datetime = Field(default_factory=datetime.utcnow, description="When stats were last updated")\n    \n    class Config:\n        orm_mode = True

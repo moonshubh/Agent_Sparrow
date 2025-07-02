@@ -13,6 +13,7 @@ import {
   Plus,
   MessageCircle,
   FileSearch,
+  Search,
   Trash2,
   Edit3,
   ChevronDown,
@@ -24,7 +25,7 @@ import Image from 'next/image'
 export interface ChatSession {
   id: string
   title: string
-  agentType: 'primary' | 'log_analysis'
+  agentType: 'primary' | 'log_analysis' | 'research'
   createdAt: Date
   lastMessageAt: Date
   preview?: string
@@ -34,8 +35,9 @@ interface ChatSidebarProps {
   sessions: ChatSession[]
   currentSessionId?: string
   isCollapsed: boolean
+  isLoading?: boolean
   onToggleCollapse: () => void
-  onNewChat: (agentType: 'primary' | 'log_analysis') => void
+  onNewChat: (agentType: 'primary' | 'log_analysis' | 'research') => Promise<void>
   onSelectSession: (sessionId: string) => void
   onDeleteSession: (sessionId: string) => void
   onRenameSession: (sessionId: string, newTitle: string) => void
@@ -45,6 +47,7 @@ export function ChatSidebar({
   sessions,
   currentSessionId,
   isCollapsed,
+  isLoading = false,
   onToggleCollapse,
   onNewChat,
   onSelectSession,
@@ -53,6 +56,7 @@ export function ChatSidebar({
 }: ChatSidebarProps) {
   const [primaryExpanded, setPrimaryExpanded] = useState(true)
   const [logAnalysisExpanded, setLogAnalysisExpanded] = useState(true)
+  const [researchExpanded, setResearchExpanded] = useState(true)
   const [editingSessionId, setEditingSessionId] = useState<string | null>(null)
   const [editingTitle, setEditingTitle] = useState('')
 
@@ -64,6 +68,11 @@ export function ChatSidebar({
   
   const logAnalysisSessions = sessions
     .filter(s => s.agentType === 'log_analysis')
+    .sort((a, b) => b.lastMessageAt.getTime() - a.lastMessageAt.getTime())
+    .slice(0, 5)
+    
+  const researchSessions = sessions
+    .filter(s => s.agentType === 'research')
     .sort((a, b) => b.lastMessageAt.getTime() - a.lastMessageAt.getTime())
     .slice(0, 5)
 
@@ -139,10 +148,19 @@ export function ChatSidebar({
                 isCollapsed && "justify-center px-2"
               )}
               onClick={() => onNewChat('primary')}
+              disabled={isLoading}
             >
               <Plus className="h-4 w-4" />
               {!isCollapsed && <span>New Chat</span>}
             </Button>
+
+            {/* Loading indicator */}
+            {isLoading && !isCollapsed && (
+              <div className="flex items-center justify-center gap-2 text-sm text-muted-foreground py-4">
+                <div className="w-4 h-4 border-2 border-accent border-t-transparent rounded-full animate-spin"></div>
+                <span>Loading sessions...</span>
+              </div>
+            )}
 
             {/* Primary Agent Section */}
             <div className="space-y-2">
@@ -207,6 +225,47 @@ export function ChatSidebar({
                 </CollapsibleTrigger>
                 <CollapsibleContent className="space-y-1 mt-1">
                   {logAnalysisSessions.map((session) => (
+                    <SessionItem
+                      key={session.id}
+                      session={session}
+                      isActive={session.id === currentSessionId}
+                      isEditing={session.id === editingSessionId}
+                      editingTitle={editingTitle}
+                      isCollapsed={isCollapsed}
+                      onSelect={() => onSelectSession(session.id)}
+                      onDelete={() => onDeleteSession(session.id)}
+                      onRename={() => handleRename(session.id, session.title)}
+                      onRenameSubmit={() => handleRenameSubmit(session.id)}
+                      onEditingTitleChange={setEditingTitle}
+                      formatDate={formatDate}
+                    />
+                  ))}
+                </CollapsibleContent>
+              </Collapsible>
+            </div>
+
+            {/* Research Section */}
+            <div className="space-y-2">
+              <Collapsible open={researchExpanded} onOpenChange={setResearchExpanded}>
+                <CollapsibleTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    className={cn(
+                      "w-full justify-between h-9 px-2 text-sm text-muted-foreground hover:text-foreground",
+                      isCollapsed && "justify-center"
+                    )}
+                  >
+                    <div className="flex items-center gap-2">
+                      <Search className="h-4 w-4 text-accent" />
+                      {!isCollapsed && <span>Research</span>}
+                    </div>
+                    {!isCollapsed && (
+                      researchExpanded ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />
+                    )}
+                  </Button>
+                </CollapsibleTrigger>
+                <CollapsibleContent className="space-y-1 mt-1">
+                  {researchSessions.map((session) => (
                     <SessionItem
                       key={session.id}
                       session={session}

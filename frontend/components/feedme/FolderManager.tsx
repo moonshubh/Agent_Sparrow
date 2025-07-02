@@ -140,35 +140,42 @@ export function FolderManager({
   }
 
   const handleCreateFolder = async () => {
-    if (!formData.name) {
-      setApiError('Folder name is required')
-      return
+    if (!formData.name.trim()) {
+      setApiError('Folder name is required.');
+      return;
     }
-    
-    setApiError(null)
-    setIsCreating(true)
-    
+
+    setIsCreating(true);
+    setApiError(null);
+
     try {
-      await createFolder(formData)
+      const folderName = formData.name;
+      await createFolder(formData);
+      
       toast({
         title: 'Folder Created',
-        description: `Folder "${formData.name}" was successfully created.`,
-      })
-      await loadFolders()
-      // Reset form and switch to browse tab
-      setFormData({
-        name: '',
-        color: PRESET_COLORS[0].value,
-        description: ''
-      })
-      setActiveTab('browse')
+        description: `"${folderName}" has been successfully created.`,
+      });
+      
+      // Reset form and switch tab before reloading data
+      setFormData({ name: '', color: PRESET_COLORS[0].value, description: '' });
+      setActiveTab('browse');
+      
+      // Refresh the folder list from the server to ensure consistency
+      await loadFolders();
+
     } catch (error) {
-      console.error('Failed to create folder:', error)
-      setApiError('Failed to create folder. Please try again.')
+      const errorMessage = error instanceof Error ? error.message : 'An unknown error occurred.';
+      setApiError(errorMessage);
+      toast({
+        title: 'Error Creating Folder',
+        description: errorMessage,
+        variant: 'destructive',
+      });
     } finally {
-      setIsCreating(false)
+      setIsCreating(false);
     }
-  }
+  };
 
   const handleEditFolder = async () => {
     if (!editingFolder) return
@@ -419,7 +426,7 @@ export function FolderManager({
                       </div>
                     </div>
                     <div className="flex gap-2">
-                      <Button type="submit" disabled={isCreating}>
+                      <Button type="submit" disabled={isCreating || !formData.name.trim()}>
                         {isCreating ? (
                           <Loader2 className="h-4 w-4 animate-spin mr-2" />
                         ) : editingFolder ? (

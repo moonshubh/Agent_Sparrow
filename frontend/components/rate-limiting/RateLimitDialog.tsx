@@ -84,13 +84,17 @@ export const RateLimitDialog: React.FC<RateLimitDialogProps> = ({
 
   return (
     <Dialog open={isOpen} onOpenChange={onClose}>
-      <DialogContent className="max-w-md">
+      <DialogContent 
+        className="max-w-md" 
+        aria-labelledby="rate-limit-dialog-title"
+        aria-describedby="rate-limit-dialog-description"
+      >
         <DialogHeader>
           <div className="flex items-center space-x-2">
             <AlertTriangle className="h-5 w-5 text-red-500" />
-            <DialogTitle>Rate Limit Reached</DialogTitle>
+            <DialogTitle id="rate-limit-dialog-title">Rate Limit Reached</DialogTitle>
           </div>
-          <DialogDescription>
+          <DialogDescription id="rate-limit-dialog-description">
             You've reached the rate limit for Gemini {modelName} model
           </DialogDescription>
         </DialogHeader>
@@ -113,7 +117,15 @@ export const RateLimitDialog: React.FC<RateLimitDialogProps> = ({
                 <span>Requests {limitType}</span>
                 <span className="font-mono">{currentUsed}/{currentLimit}</span>
               </div>
-              <Progress value={utilization * 100} className="h-2" />
+              <Progress 
+                value={utilization * 100} 
+                className="h-2"
+                aria-valuenow={Math.round(utilization * 100)}
+                aria-valuemin={0}
+                aria-valuemax={100}
+                aria-label={`Rate limit utilization: ${Math.round(utilization * 100)}% used`}
+                role="progressbar"
+              />
               <div className="text-xs text-gray-500">
                 {Math.round(utilization * 100)}% of free tier limit used
               </div>

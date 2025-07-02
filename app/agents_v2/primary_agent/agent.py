@@ -111,10 +111,10 @@ model_with_tools_base = model_base.bind_tools([mailbird_kb_search, tavily_web_se
 logger.info("Tools bound to model.")
 
 # 3. NOW wrap the model with tools to apply rate limiting
-print(f"🔥 WRAPPING MODEL WITH TOOLS: {type(model_with_tools_base)}")
+logger.info(f"Wrapping model with tools: {type(model_with_tools_base)}")
 model_with_tools = wrap_gemini_agent(model_with_tools_base, "gemini-2.5-flash")
-print(f"🔥 FINAL WRAPPED MODEL WITH TOOLS TYPE: {type(model_with_tools)}")
-print(f"🔥 FINAL MODEL HAS STREAM: {hasattr(model_with_tools, 'stream')}")
+logger.info(f"Final wrapped model with tools type: {type(model_with_tools)}")
+logger.info(f"Final model has stream: {hasattr(model_with_tools, 'stream')}")
 logger.info("Rate-limited model with tools created")
 
 # 3. Initialize Agent Sparrow Troubleshooting System

@@ -4,6 +4,7 @@ and circuit breaker protection for Google Gemini API calls.
 """
 
 import asyncio
+from datetime import datetime, timedelta
 from typing import Dict, Any, Optional, Callable
 
 import redis.asyncio as redis
@@ -13,7 +14,7 @@ from app.core.settings import settings
 from .redis_limiter import RedisRateLimiter
 from .circuit_breaker import CircuitBreaker
 from .config import RateLimitConfig
-from .schemas import RateLimitResult, UsageStats, CircuitState
+from .schemas import RateLimitResult, UsageStats, CircuitState, RateLimitMetadata
 from .exceptions import (
     RateLimitExceededException,
     CircuitBreakerOpenException,
@@ -191,11 +192,9 @@ class GeminiRateLimiter:
             flash_stats = redis_stats.get("flash", {})
             pro_stats = redis_stats.get("pro", {})
             
-            from datetime import datetime, timedelta
             now = datetime.utcnow()
             
             # Create comprehensive usage stats
-            from .schemas import RateLimitMetadata
             
             flash_metadata = RateLimitMetadata(
                 rpm_limit=flash_rpm_limit,

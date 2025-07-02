@@ -4,7 +4,7 @@ Configuration for rate limiting system.
 
 from dataclasses import dataclass
 from typing import Optional
-from app.core.settings import settings
+import os\nfrom app.core.settings import settings\n\n\ndef parse_boolean_env(value: str) -> bool:\n    \"\"\"\n    Parse environment variable as boolean with support for multiple truthy values.\n    \n    Recognizes: 'true', '1', 'yes', 'on' (case insensitive) as True\n    Everything else as False\n    \"\"\"\n    return value.lower() in ('true', '1', 'yes', 'on')"
 
 
 @dataclass
@@ -73,11 +73,11 @@ class RateLimitConfig:
             redis_url=os.getenv("RATE_LIMIT_REDIS_URL", settings.redis_url),
             redis_key_prefix=os.getenv("RATE_LIMIT_REDIS_PREFIX", "mb_sparrow_rl"),
             redis_db=int(os.getenv("RATE_LIMIT_REDIS_DB", "3")),
-            circuit_breaker_enabled=os.getenv("CIRCUIT_BREAKER_ENABLED", "true").lower() == "true",
+            circuit_breaker_enabled=parse_boolean_env(os.getenv("CIRCUIT_BREAKER_ENABLED", "true")),
             circuit_breaker_failure_threshold=int(os.getenv("CIRCUIT_BREAKER_FAILURE_THRESHOLD", "5")),
             circuit_breaker_timeout_seconds=int(os.getenv("CIRCUIT_BREAKER_TIMEOUT", "60")),
             safety_margin=float(os.getenv("RATE_LIMIT_SAFETY_MARGIN", "0.2")),
-            monitoring_enabled=os.getenv("RATE_LIMIT_MONITORING_ENABLED", "true").lower() == "true",
+            monitoring_enabled=parse_boolean_env(os.getenv("RATE_LIMIT_MONITORING_ENABLED", "true")),
         )
     
     def get_effective_limits(self, model: str) -> tuple[int, int]:

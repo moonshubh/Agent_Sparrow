@@ -48,8 +48,7 @@ class RedisRateLimiter:
         model: str = "gemini",
         safety_margin: float = 0.0
     ) -> RateLimitResult:
-        print(f"🔥 REDIS RATE LIMIT CHECK CALLED for {model} (identifier: {identifier})")
-        self.logger.info(f"🔥 REDIS RATE LIMIT CHECK CALLED for {model}")
+        self.logger.info(f"Redis rate limit check for {model} (identifier: {identifier})")
         """
         Check if request is within rate limits.
         
@@ -140,43 +139,56 @@ class RedisRateLimiter:
         """
         key = f"{self.key_prefix}:{identifier}:{window_type}"
         
+        # Lua script for atomic rate limit check and increment
+        lua_script = """
+        local key = KEYS[1]
+        local now = tonumber(ARGV[1])
+        local cutoff = tonumber(ARGV[2])
+        local limit = tonumber(ARGV[3])
+        local window_seconds = tonumber(ARGV[4])
+        
+        -- Remove expired entries
+        redis.call('ZREMRANGEBYSCORE', key, 0, cutoff)
+        
+        -- Count current requests
+        local current_count = redis.call('ZCARD', key)
+        
+        if current_count < limit then
+            -- Add current request
+            redis.call('ZADD', key, now, tostring(now))
+            -- Set expiration
+            redis.call('EXPIRE', key, window_seconds + 60)
+            return {1, current_count + 1}  -- allowed=true, used=count+1
+        else
+            return {0, current_count}  -- allowed=false, used=count
+        end
+        """
+        
         try:
-            # Use Redis pipeline for atomic operations
-            pipe = self.redis.pipeline()
-            
-            # Remove expired entries
             cutoff = now - window_seconds
-            pipe.zremrangebyscore(key, 0, cutoff)
+            result = await self.redis.eval(
+                lua_script, 
+                1, 
+                key, 
+                str(now), 
+                str(cutoff), 
+                str(limit), 
+                str(window_seconds)
+            )
             
-            # Count current requests in window
-            pipe.zcard(key)
+            allowed = bool(result[0])
+            used = int(result[1])
             
-            # Execute pipeline
-            results = await pipe.execute()
-            current_count = results[1]
-            
-            # Check if we can allow this request
-            if current_count < limit:
-                # Add current request to the window
-                await self.redis.zadd(key, {str(now): now})
-                # Set expiration to window size + buffer
-                await self.redis.expire(key, window_seconds + 60)
-                
-                return {
-                    "allowed": True,
-                    "used": current_count + 1
-                }
-            else:
-                return {
-                    "allowed": False,
-                    "used": current_count
-                }
+            return {
+                "allowed": allowed,
+                "used": used
+            }
                 
         except Exception as e:
             self.logger.error(f"Redis rate limit check failed: {e}")
-            # Fail open - allow request but log error
+            # Fail closed - deny request when Redis is unavailable to prevent free tier overages
             return {
-                "allowed": True,
+                "allowed": False,
                 "used": 0
             }
     
@@ -221,11 +233,25 @@ class RedisRateLimiter:
         pattern = f"{self.key_prefix}:{identifier}:*"
         
         try:
-            # Get all matching keys
-            keys = await self.redis.keys(pattern)
-            if keys:
-                await self.redis.delete(*keys)
-                self.logger.info(f"Reset rate limits for {identifier}")
+            # Use SCAN to safely iterate over keys in production
+            keys_to_delete = []
+            cursor = 0
+            
+            while True:
+                cursor, keys = await self.redis.scan(
+                    cursor=cursor, 
+                    match=pattern, 
+                    count=100
+                )
+                keys_to_delete.extend(keys)
+                
+                if cursor == 0:
+                    break
+            
+            # Delete collected keys if any found
+            if keys_to_delete:
+                await self.redis.delete(*keys_to_delete)
+                self.logger.info(f"Reset rate limits for {identifier} ({len(keys_to_delete)} keys)")
                 
         except Exception as e:
             self.logger.error(f"Failed to reset limits for {identifier}: {e}")
@@ -241,20 +267,31 @@ class RedisRateLimiter:
         stats = {}
         
         try:
-            keys = await self.redis.keys(pattern)
+            # Use SCAN to safely iterate over keys in production
+            cursor = 0
             
-            for key_bytes in keys:
-                key = key_bytes.decode() if isinstance(key_bytes, bytes) else key_bytes
-                parts = key.split(":")
-                if len(parts) >= 3:
-                    identifier = parts[1]
-                    window_type = parts[2]
-                    
-                    count = await self.redis.zcard(key)
-                    
-                    if identifier not in stats:
-                        stats[identifier] = {}
-                    stats[identifier][window_type] = count
+            while True:
+                cursor, keys = await self.redis.scan(
+                    cursor=cursor, 
+                    match=pattern, 
+                    count=100
+                )
+                
+                for key_bytes in keys:
+                    key = key_bytes.decode() if isinstance(key_bytes, bytes) else key_bytes
+                    parts = key.split(":")
+                    if len(parts) >= 3:
+                        identifier = parts[1]
+                        window_type = parts[2]
+                        
+                        count = await self.redis.zcard(key)
+                        
+                        if identifier not in stats:
+                            stats[identifier] = {}
+                        stats[identifier][window_type] = count
+                
+                if cursor == 0:
+                    break
                     
         except Exception as e:
             self.logger.error(f"Failed to get usage stats: {e}")

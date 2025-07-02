@@ -42,7 +42,7 @@ export const useRateLimiting = (options: UseRateLimitingOptions = {}) => {
 
   const checkRateLimits = useCallback(async () => {
     try {
-      setState(prev => ({ ...prev, error: null }));
+      setState(prev => ({ ...prev, loading: true, error: null }));
       
       const status = await rateLimitApi.getStatus();
       const { utilization } = status.details;
@@ -61,12 +61,18 @@ export const useRateLimiting = (options: UseRateLimitingOptions = {}) => {
       // Check which models are blocked
       const blockedModels: string[] = [];
       
+      // Define model constants for maintainability
+      const GEMINI_MODELS = {
+        FLASH: 'gemini-2.5-flash' as const,
+        PRO: 'gemini-2.5-pro' as const,
+      };
+      
       if (utilization.flash_rpm >= 1.0 || utilization.flash_rpd >= 1.0) {
-        blockedModels.push('gemini-2.5-flash');
+        blockedModels.push(GEMINI_MODELS.FLASH);
       }
       
       if (utilization.pro_rpm >= 1.0 || utilization.pro_rpd >= 1.0) {
-        blockedModels.push('gemini-2.5-pro');
+        blockedModels.push(GEMINI_MODELS.PRO);
       }
       
       setState(prev => ({
@@ -136,11 +142,27 @@ export const useRateLimiting = (options: UseRateLimitingOptions = {}) => {
     checkModelAvailability,
     resetLimits,
     
+    // Model name constants for maintainability
+    GEMINI_MODELS: {
+      FLASH: 'gemini-2.5-flash' as const,
+      PRO: 'gemini-2.5-pro' as const,
+    },
+    
     // Utilities
     isModelBlocked: (model: string) => state.blockedModels.includes(model),
     getUtilization: (model: 'flash' | 'pro', type: 'rpm' | 'rpd') => {
       if (!state.status) return 0;
-      return state.status.details.utilization[`${model}_${type}` as keyof typeof state.status.details.utilization];
+      
+      // Type-safe mapping object for utilization access
+      const utilizationKeys = {
+        flash_rpm: state.status.details.utilization.flash_rpm,
+        flash_rpd: state.status.details.utilization.flash_rpd,
+        pro_rpm: state.status.details.utilization.pro_rpm,
+        pro_rpd: state.status.details.utilization.pro_rpd,
+      } as const;
+      
+      const key = `${model}_${type}` as keyof typeof utilizationKeys;
+      return utilizationKeys[key] || 0;
     },
     getWarningLevel: () => {
       if (state.isCritical) return 'critical';

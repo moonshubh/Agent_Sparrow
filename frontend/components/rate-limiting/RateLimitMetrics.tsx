@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -55,7 +55,7 @@ export const RateLimitMetrics: React.FC<RateLimitMetricsProps> = ({
   const [error, setError] = useState<string | null>(null);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
 
-  const fetchData = async () => {
+  const fetchData = useCallback(async () => {
     try {
       setError(null);
       const [metricsData, statusData] = await Promise.all([
@@ -70,7 +70,7 @@ export const RateLimitMetrics: React.FC<RateLimitMetricsProps> = ({
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
 
   useEffect(() => {
     fetchData();
@@ -79,7 +79,7 @@ export const RateLimitMetrics: React.FC<RateLimitMetricsProps> = ({
       const interval = setInterval(fetchData, refreshInterval);
       return () => clearInterval(interval);
     }
-  }, [autoRefresh, refreshInterval]);
+  }, [fetchData, autoRefresh, refreshInterval]);
 
   const getUtilizationColor = (utilization: number) => {
     const level = getUtilizationLevel(utilization);
@@ -136,31 +136,35 @@ export const RateLimitMetrics: React.FC<RateLimitMetricsProps> = ({
     return null;
   }
 
-  // Prepare chart data
+  // Prepare chart data with colors
   const utilizationData = [
     {
       name: 'Flash RPM',
       utilization: metrics.flash_rpm_utilization * 100,
       used: metrics.gemini_flash_rpm_used,
       limit: metrics.gemini_flash_rpm_limit,
+      color: getUtilizationColor(metrics.flash_rpm_utilization),
     },
     {
       name: 'Flash RPD',
       utilization: metrics.flash_rpd_utilization * 100,
       used: metrics.gemini_flash_rpd_used,
       limit: metrics.gemini_flash_rpd_limit,
+      color: getUtilizationColor(metrics.flash_rpd_utilization),
     },
     {
       name: 'Pro RPM',
       utilization: metrics.pro_rpm_utilization * 100,
       used: metrics.gemini_pro_rpm_used,
       limit: metrics.gemini_pro_rpm_limit,
+      color: getUtilizationColor(metrics.pro_rpm_utilization),
     },
     {
       name: 'Pro RPD',
       utilization: metrics.pro_rpd_utilization * 100,
       used: metrics.gemini_pro_rpd_used,
       limit: metrics.gemini_pro_rpd_limit,
+      color: getUtilizationColor(metrics.pro_rpd_utilization),
     },
   ];
 
@@ -328,9 +332,12 @@ export const RateLimitMetrics: React.FC<RateLimitMetricsProps> = ({
                     />
                     <Bar 
                       dataKey="utilization" 
-                      fill={(data) => getUtilizationColor(data.utilization / 100)}
                       radius={[4, 4, 0, 0]}
-                    />
+                    >
+                      {utilizationData.map((entry, index) => (
+                        <Cell key={`cell-${index}`} fill={entry.color} />
+                      ))}
+                    </Bar>
                   </BarChart>
                 </ResponsiveContainer>
               </CardContent>

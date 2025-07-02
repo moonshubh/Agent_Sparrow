@@ -77,14 +77,34 @@ def rate_limited(model: str, fail_gracefully: bool = False):
         
         @functools.wraps(func)
         def sync_wrapper(*args, **kwargs):
-            # For synchronous functions, create event loop if needed
+            # For synchronous functions, handle event loop safely
             try:
-                loop = asyncio.get_event_loop()
+                # Check if there is a running event loop
+                loop = asyncio.get_running_loop()
+                # If running loop exists, we can't use run_until_complete
+                import threading
+                import concurrent.futures
+                
+                # Run in thread pool to avoid blocking running event loop
+                with concurrent.futures.ThreadPoolExecutor() as executor:
+                    future = executor.submit(
+                        lambda: asyncio.run(async_wrapper(*args, **kwargs))
+                    )
+                    return future.result()
+                    
             except RuntimeError:
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-            
-            return loop.run_until_complete(async_wrapper(*args, **kwargs))
+                # No running event loop, create a new one
+                try:
+                    loop = asyncio.get_event_loop()
+                    return loop.run_until_complete(async_wrapper(*args, **kwargs))
+                except RuntimeError:
+                    # No event loop in this thread, create new one
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    try:
+                        return loop.run_until_complete(async_wrapper(*args, **kwargs))
+                    finally:
+                        loop.close()
         
         # Return appropriate wrapper based on function type
         if asyncio.iscoroutinefunction(func):
@@ -175,14 +195,23 @@ class RateLimitedAgent:
             # Check rate limits synchronously before streaming
             import asyncio
             try:
-                loop = asyncio.get_event_loop()
+                # First try to get the current running event loop
+                loop = asyncio.get_running_loop()
+                # If we have a running loop, we need to handle this differently
+                # For now, we'll skip rate limiting check in stream to avoid blocking
+                self.logger.warning("Running event loop detected, skipping sync rate limit check")
+                
             except RuntimeError:
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
+                # No running event loop, safe to get or create one
+                try:
+                    loop = asyncio.get_event_loop()
+                except RuntimeError:
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
             
             # Check rate limits before streaming
-            rate_check = loop.run_until_complete(self.rate_limiter.check_and_consume(self.model))
-            if not rate_check.allowed:
+            # Only run rate check if we have a usable loop (not running)\n            if 'loop' in locals():\n                rate_check = loop.run_until_complete(self.rate_limiter.check_and_consume(self.model))\n            else:\n                rate_check = None
+            if rate_check is not None and not rate_check.allowed:
                 self.logger.warning(f"Rate limit exceeded for {self.model}")
                 print(f"⚠️ Rate limit exceeded for {self.model}")
                 if self.fail_gracefully:
@@ -231,7 +260,7 @@ class RateLimitedAgent:
         try:
             # Check rate limits first
             rate_check = await self.rate_limiter.check_and_consume(self.model)
-            if not rate_check.allowed:
+            if rate_check is not None and not rate_check.allowed:
                 raise RateLimitExceededException(
                     message=f"Rate limit exceeded for {self.model}",
                     retry_after=rate_check.retry_after,
