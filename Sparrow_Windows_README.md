@@ -348,6 +348,27 @@ npm start
 
 ---
 
+## 🚀 Automated Startup Script for Windows
+
+For convenience, a script is included to automate the entire startup process for the Windows environment.
+
+### Using `start_system.bat`
+
+**How to Use:**
+Simply navigate to the project's root directory in File Explorer and double-click `start_system.bat`.
+
+**What it Does:**
+1.  **Sets Up Logging**: Creates a `system_logs` directory with `backend` and `frontend` subfolders.
+2.  **Installs Dependencies**: Runs `pip install` for the backend and `npm install --legacy-peer-deps` for the frontend.
+3.  **Manages Ports**: Checks for and terminates any processes currently using ports `8000` (backend) and `3000` (frontend).
+4.  **Starts Servers**: Launches both the backend and frontend servers in the background.
+5.  **Redirects Logs**: All server output is saved into `system_logs/backend/backend.log` and `system_logs/frontend/frontend.log` for easy debugging.
+
+**Stopping the System:**
+On Windows, you must stop the servers manually using the **Task Manager** (`Ctrl+Shift+Esc`). In the "Processes" or "Details" tab, look for and end the `uvicorn.exe` (or a Python process) and `node.exe` processes.
+
+---
+
 ## ✅ Testing & Verification
 
 ### 1. System Health Check

@@ -74,4 +74,7 @@ class UsageStats(BaseModel):
     total_requests_this_minute: int = Field(description="Total requests across all models this minute")
     
     uptime_percentage: float = Field(description="Service uptime percentage")
-    last_updated: datetime = Field(default_factory=datetime.utcnow, description="When stats were last updated")\n    \n    class Config:\n        orm_mode = True
+    last_updated: datetime = Field(default_factory=datetime.utcnow, description="When stats were last updated")
+
+    class Config:
+        orm_mode = True

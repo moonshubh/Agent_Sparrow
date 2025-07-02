@@ -9,7 +9,18 @@ from pydantic_settings import BaseSettings
 from pydantic import Field
 
 # Load environment variables from project root .env if present
-ENV_PATH = Path(__file__).resolve().parents[2] / ".env"
+# Calculate the path safely with depth validation
+current_file_path = Path(__file__).resolve()
+project_root_depth = 2  # Two levels up from app/core/settings.py to project root
+
+# Validate directory depth to prevent IndexError
+if len(current_file_path.parents) <= project_root_depth:
+    # Fallback to current directory if path calculation fails
+    project_root = Path.cwd()
+else:
+    project_root = current_file_path.parents[project_root_depth]
+
+ENV_PATH = project_root / ".env"
 load_dotenv(ENV_PATH)
 
 class Settings(BaseSettings):
@@ -99,7 +110,8 @@ class Settings(BaseSettings):
     circuit_breaker_failure_threshold: int = Field(default=5, alias="CIRCUIT_BREAKER_FAILURE_THRESHOLD")
     circuit_breaker_timeout: int = Field(default=60, alias="CIRCUIT_BREAKER_TIMEOUT")
     rate_limit_safety_margin: float = Field(default=0.2, alias="RATE_LIMIT_SAFETY_MARGIN")
-    rate_limit_monitoring_enabled: bool = Field(default=True, alias="RATE_LIMIT_MONITORING_ENABLED")\n    circuit_breaker_success_threshold: int = Field(default=3, alias="CIRCUIT_BREAKER_SUCCESS_THRESHOLD")
+    rate_limit_monitoring_enabled: bool = Field(default=True, alias="RATE_LIMIT_MONITORING_ENABLED")
+    circuit_breaker_success_threshold: int = Field(default=3, alias="CIRCUIT_BREAKER_SUCCESS_THRESHOLD")
 
     class Config:
         case_sensitive = False
