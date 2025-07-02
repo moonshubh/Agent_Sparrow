@@ -41,7 +41,7 @@ kill_process_on_port() {
         return
     fi
     
-    PIDS=$(lsof -t -i:$PORT 2>/dev/null)
+    PIDS=$(lsof -t -i:$PORT 2>/dev/null || true)
     if [ -z "$PIDS" ]; then
         echo "No process found on port $PORT."
     else
