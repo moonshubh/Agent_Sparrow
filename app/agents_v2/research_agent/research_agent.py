@@ -26,6 +26,7 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 from langgraph.graph import END, StateGraph
 
 from app.tools.research_tools import get_research_tools
+from app.core.rate_limiting.agent_wrapper import wrap_gemini_agent
 
 
 # ---------------------------------------------------------------------------
@@ -137,10 +138,11 @@ Return JSON in this format (no markdown block):
 }}
 """
 
-    model = ChatGoogleGenerativeAI(
+    model_base = ChatGoogleGenerativeAI(
         model="gemini-2.5-flash",
         google_api_key=settings.gemini_api_key,
     )
+    model = wrap_gemini_agent(model_base, "gemini-2.5-flash")
 
     try:
         response = model.invoke(prompt)

@@ -11,6 +11,7 @@ import os
 from dotenv import load_dotenv
 from langchain_core.messages import BaseMessage, SystemMessage, AIMessage, AIMessageChunk, HumanMessage, ToolMessage
 from langchain_google_genai import ChatGoogleGenerativeAI, HarmCategory, HarmBlockThreshold
+from app.core.rate_limiting.agent_wrapper import wrap_gemini_agent
 from app.agents_v2.primary_agent.schemas import PrimaryAgentState
 from typing import Iterator, List, AsyncIterator # Added for streaming return type and List
 from app.agents_v2.primary_agent.tools import mailbird_kb_search, tavily_web_search
@@ -92,7 +93,7 @@ try:
         HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
         HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
     }
-    model = ChatGoogleGenerativeAI(
+    model_base = ChatGoogleGenerativeAI(
         model="gemini-2.5-flash", # Updated to latest 2.5 Flash model as per user
         temperature=0,
         google_api_key=os.environ.get("GEMINI_API_KEY"),
@@ -104,10 +105,17 @@ except Exception as e:
     logger.exception("Error during ChatGoogleGenerativeAI initialization: %s", e)
     raise
 
-# 2. Bind the tool to the model
+# 2. Bind the tool to the model FIRST, then wrap
 logger.debug("Binding tools to model")
-model_with_tools = model.bind_tools([mailbird_kb_search, tavily_web_search])
+model_with_tools_base = model_base.bind_tools([mailbird_kb_search, tavily_web_search])
 logger.info("Tools bound to model.")
+
+# 3. NOW wrap the model with tools to apply rate limiting
+logger.info(f"Wrapping model with tools: {type(model_with_tools_base)}")
+model_with_tools = wrap_gemini_agent(model_with_tools_base, "gemini-2.5-flash")
+logger.info(f"Final wrapped model with tools type: {type(model_with_tools)}")
+logger.info(f"Final model has stream: {hasattr(model_with_tools, 'stream')}")
+logger.info("Rate-limited model with tools created")
 
 # 3. Initialize Agent Sparrow Troubleshooting System
 logger.info("Initializing Agent Sparrow structured troubleshooting system")
@@ -563,6 +571,8 @@ async def run_primary_agent(state: PrimaryAgentState) -> AsyncIterator[AIMessage
             parent_span.add_event("primary_agent.llm_stream_start", {"prompt": str(prompt_messages)})
 
             try:
+                # Rate limiting is handled by the model_with_tools wrapper automatically
+                # No need for manual rate limiting check here as it would be redundant
                 logger.info("Initializing LLM stream iterator...")
                 stream_iter = model_with_tools.stream(prompt_messages)
                 logger.info("LLM stream iterator initialized. Starting iteration...")

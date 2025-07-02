@@ -16,6 +16,7 @@ export interface UnifiedMessage {
     sources?: any[]
     analysisResults?: any
     routingReason?: string
+    researchSteps?: any[]
   }
 }
 
@@ -37,7 +38,7 @@ export interface UseUnifiedChatReturn {
   sendMessage: (content: string, files?: File[]) => Promise<void>
   clearConversation: () => void
   retryLastMessage: () => Promise<void>
-  loadSessionMessages: (messages: UnifiedMessage[], agentType?: 'primary' | 'log_analysis') => void
+  loadSessionMessages: (messages: UnifiedMessage[], agentType?: 'primary' | 'log_analysis' | 'research') => void
 }
 
 // Unique ID generator to prevent duplicate keys
@@ -159,26 +160,23 @@ export function useUnifiedChat(): UseUnifiedChatReturn {
 
   const sendMessage = useCallback(async (content: string, files?: File[]) => {
     if (!content.trim() && (!files || files.length === 0)) return
-    
-    // Cancel any ongoing request
+
     if (abortControllerRef.current) {
       abortControllerRef.current.abort()
     }
-    
+
     const abortController = new AbortController()
     abortControllerRef.current = abortController
-    
-    // Detect the appropriate agent
+
     const suggestedAgent = detectQueryType(content, files)
-    
-    // Add user message
+
     const userMessage: UnifiedMessage = {
       id: generateUniqueId('user'),
-      type: "user",
+      type: 'user',
       content: content,
-      timestamp: new Date()
+      timestamp: new Date(),
     }
-    
+
     setState(prev => ({
       ...prev,
       messages: [...prev.messages, userMessage],
@@ -188,16 +186,16 @@ export function useUnifiedChat(): UseUnifiedChatReturn {
       context: {
         ...prev.context,
         hasFiles: Boolean(files && files.length > 0),
-        isAnalyzing: suggestedAgent === "log_analyst"
-      }
+        isAnalyzing: suggestedAgent === 'log_analyst',
+      },
     }))
-    
+
     try {
-      if (suggestedAgent === "log_analyst" && files && files.length > 0) {
-        // Handle log analysis with file upload
+      if (suggestedAgent === 'log_analyst' && files && files.length > 0) {
         await handleLogAnalysis(content, files[0], abortController)
+      } else if (suggestedAgent === 'researcher') {
+        await handleResearchQuery(content, abortController)
       } else {
-        // Handle all other queries through unified endpoint
         await handleUnifiedChat(content, suggestedAgent, abortController)
       }
     } catch (error: any) {
@@ -208,12 +206,12 @@ export function useUnifiedChat(): UseUnifiedChatReturn {
           name: error.name,
           suggestedAgent,
           apiBaseUrl,
-          contentLength: content.length
+          contentLength: content.length,
         })
         setState(prev => ({
           ...prev,
           isProcessing: false,
-          error: error.message || 'Something went wrong. Please try again.'
+          error: error.message || 'Something went wrong. Please try again.',
         }))
         toast.error('Message failed to send')
       }
@@ -306,9 +304,12 @@ export function useUnifiedChat(): UseUnifiedChatReturn {
               }))
             } else if (event.role === 'assistant' && event.content) {
               accumulatedContent += event.content
-              
+
+              // Always de-duplicate by messageId before pushing the updated chunk. This
+              // guarantees that even if React StrictMode or rapid successive chunks
+              // invoke this updater before the previous state has been applied, the
+              // final state will only contain ONE message with this `messageId`.
               setState(prev => {
-                const existingMessageIndex = prev.messages.findIndex(m => m.id === messageId)
                 const newMessage: UnifiedMessage = {
                   id: messageId,
                   type: "agent",
@@ -318,14 +319,14 @@ export function useUnifiedChat(): UseUnifiedChatReturn {
                   streaming: true,
                   metadata: event.sources ? { sources: event.sources } : undefined
                 }
-                
-                if (existingMessageIndex >= 0) {
-                  const newMessages = [...prev.messages]
-                  newMessages[existingMessageIndex] = newMessage
-                  return { ...prev, messages: newMessages }
-                } else {
-                  return { ...prev, messages: [...prev.messages, newMessage] }
-                }
+
+                const newMessages = [
+                  // filter out any stale duplicates for this id
+                  ...prev.messages.filter(m => m.id !== messageId),
+                  newMessage,
+                ]
+
+                return { ...prev, messages: newMessages }
               })
             }
           } catch (e) {
@@ -454,77 +455,117 @@ export function useUnifiedChat(): UseUnifiedChatReturn {
       }
     }
   }
-  
-  const handleResearchQuery = async (content: string, abortController: AbortController) => {
+
+const handleResearchQuery = async (content: string, abortController: AbortController) => {
+    // Generate a single, stable ID for the entire research stream
+    const messageId = generateUniqueId('agent');
+    let accumulatedContent = '';
+    const steps: any[] = [];
+
     try {
       const response = await fetch(`${apiBaseUrl}/api/v1/agent/research/stream`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ query: content }),
         signal: abortController.signal
-      })
-      
+      });
+
       if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`)
+        throw new Error(`HTTP ${response.status}`);
       }
-      
-      const reader = response.body?.getReader()
-      if (!reader) throw new Error('No response body')
-      
-      const decoder = new TextDecoder()
-      const steps: any[] = []
-      
+
+      const reader = response.body?.getReader();
+      if (!reader) throw new Error('No response body');
+
+      const decoder = new TextDecoder();
+
       while (true) {
-        const { done, value } = await reader.read()
-        if (done) break
-        
-        const chunk = decoder.decode(value, { stream: true })
-        const lines = chunk.split('\n').filter(line => line.startsWith('data:'))
-        
-        for (const line of lines) {
-          const jsonStr = line.replace('data:', '').trim()
-          
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        const chunk = decoder.decode(value, { stream: true });
+        const jsonStrs = chunk.split('\n\n').filter(s => s.startsWith('data: ')).map(s => s.slice(6));
+
+        for (const jsonStr of jsonStrs) {
+          if (jsonStr === '[DONE]') {
+            setState(prev => ({
+              ...prev,
+              isProcessing: false,
+              messages: prev.messages.map(msg =>
+                msg.id === messageId ? { ...msg, streaming: false } : msg
+              )
+            }));
+            return;
+          }
+
           try {
-            const event = JSON.parse(jsonStr)
-            
+            const event = JSON.parse(jsonStr);
+
             if (event.type === 'step') {
-              steps.push(event.data)
-              setState(prev => ({
-                ...prev,
-                context: {
-                  ...prev.context,
-                  researchSteps: [...steps]
-                }
-              }))
-            } else if (event.type === 'message') {
-              const researchMessage: UnifiedMessage = {
-                id: generateUniqueId('research'),
+              steps.push(event.data);
+              // Update the streaming message with the latest step
+              accumulatedContent = `*Researching: ${event.data.description}*`;
+
+              setState(prev => {
+                const newMessage: UnifiedMessage = {
+                  id: messageId,
+                  type: "agent",
+                  content: accumulatedContent,
+                  timestamp: new Date(),
+                  agentType: "researcher",
+                  streaming: true,
+                   metadata: {
+                    researchSteps: steps
+                  }
+                };
+                // Replace or add the message
+                const newMessages = [
+                  ...prev.messages.filter(m => m.id !== messageId),
+                  newMessage
+                ];
+                return { ...prev, messages: newMessages };
+              });
+            } else if (event.type === 'final_answer') {
+              const finalMessage: UnifiedMessage = {
+                id: messageId,
                 type: "agent",
-                content: event.data.content,
+                content: event.data.final_answer,
                 timestamp: new Date(),
                 agentType: "researcher",
+                streaming: false, // Stream is complete
                 metadata: {
-                  sources: event.data.citations || []
+                  sources: event.data.citations || [],
+                  researchSteps: steps
                 }
-              }
-              
+              };
+
+              // Replace the streaming message with the final version
               setState(prev => ({
                 ...prev,
-                messages: [...prev.messages, researchMessage],
+                messages: [
+                  ...prev.messages.filter(m => m.id !== messageId),
+                  finalMessage
+                ],
                 isProcessing: false
-              }))
-              return
+              }));
+              return;
             }
           } catch (e) {
-            console.warn('⚠️ Failed to parse JSON chunk:', jsonStr, e)
+            console.warn('⚠️ Failed to parse JSON chunk:', jsonStr, e);
           }
         }
       }
     } finally {
-      setState(prev => ({ ...prev, isProcessing: false }))
+      setState(prev => ({
+        ...prev,
+        isProcessing: false,
+        messages: prev.messages.map(msg =>
+          msg.streaming ? { ...msg, streaming: false } : msg
+        )
+      }));
     }
-  }
-  
+  };
+
   const clearConversation = useCallback(() => {
     setState({
       messages: [
@@ -563,7 +604,7 @@ export function useUnifiedChat(): UseUnifiedChatReturn {
     }
   }, [state.messages, sendMessage])
   
-  const loadSessionMessages = useCallback((messages: UnifiedMessage[], agentType?: 'primary' | 'log_analysis') => {
+  const loadSessionMessages = useCallback((messages: UnifiedMessage[], agentType?: 'primary' | 'log_analysis' | 'research') => {
     const welcomeMessage: UnifiedMessage = {
       id: "welcome",
       type: "system",
@@ -571,15 +612,37 @@ export function useUnifiedChat(): UseUnifiedChatReturn {
       timestamp: new Date(),
       agentType: "primary"
     }
+
+    // De-duplicate messages from the session to prevent React key errors.
+    // We keep the LAST occurrence of any duplicate ID, as it's the most likely to be up-to-date.
+    const seenIds = new Set<string>();
+    const uniqueMessages = messages.slice().reverse().filter(msg => {
+      if (seenIds.has(msg.id)) {
+        console.warn(`Duplicate message ID found and removed from session load: ${msg.id}`);
+        return false;
+      }
+      seenIds.add(msg.id);
+      return true;
+    }).reverse();
+    
+    // Map session agentType to currentAgent state
+    let currentAgent: "primary" | "log_analyst" | "researcher" | null = null
+    if (agentType === 'log_analysis') {
+      currentAgent = 'log_analyst'
+    } else if (agentType === 'research') {
+      currentAgent = 'researcher'
+    } else if (agentType === 'primary') {
+      currentAgent = 'primary'
+    }
     
     setState({
-      messages: [welcomeMessage, ...messages],
+      messages: [welcomeMessage, ...uniqueMessages],
       isProcessing: false,
-      currentAgent: agentType === 'log_analysis' ? 'log_analyst' : 'primary',
+      currentAgent,
       routingConfidence: 0,
       error: null,
       context: {
-        hasFiles: messages.some(msg => msg.metadata?.analysisResults || msg.type === 'user'),
+        hasFiles: uniqueMessages.some(msg => msg.metadata?.analysisResults || msg.type === 'user'),
         isAnalyzing: false,
         researchSteps: []
       }

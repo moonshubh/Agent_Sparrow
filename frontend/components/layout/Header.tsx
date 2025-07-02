@@ -4,6 +4,7 @@ import React from 'react'
 import { Avatar, AvatarImage, AvatarFallback } from '@/components/ui/avatar'
 import { LightDarkToggle } from '@/components/ui/LightDarkToggle'
 import { FeedMeButton } from '@/components/ui/FeedMeButton'
+import { RateLimitDropdown } from '@/components/rate-limiting'
 
 export function Header() {
   return (
@@ -15,6 +16,10 @@ export function Header() {
         <span>MB-Sparrow</span>
       </div>
       <div className="flex items-center gap-3">
+        <RateLimitDropdown 
+          autoUpdate={true}
+          updateInterval={15000}
+        />
         <FeedMeButton />
         <LightDarkToggle />
       </div>

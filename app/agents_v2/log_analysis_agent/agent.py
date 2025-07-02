@@ -4,6 +4,7 @@ from typing import Dict, Any
 
 from app.core.settings import settings
 from langchain_google_genai import ChatGoogleGenerativeAI
+from app.core.rate_limiting.agent_wrapper import wrap_gemini_agent
 from uuid import uuid4
 from app.core.logging_config import get_logger
 
@@ -94,12 +95,13 @@ async def run_legacy_log_analysis_agent(state: LogAnalysisAgentState) -> Dict[st
         state['parsed_log_data'] = parsed_data
         logger.info("parsing_complete", entries=parsed_data["metadata"]["total_entries_parsed"])
 
-        # 2. Initialize the Language Model for structured output
-        llm = ChatGoogleGenerativeAI(
-            model="gemini-1.5-pro-latest",
+        # 2. Initialize the Language Model for structured output with rate limiting
+        llm_base = ChatGoogleGenerativeAI(
+            model="gemini-2.5-flash",  # Use supported model for rate limiting
             temperature=0.1,
             google_api_key=settings.gemini_api_key,
         )
+        llm = wrap_gemini_agent(llm_base, "gemini-2.5-flash")
         llm_so = llm.with_structured_output(StructuredLogAnalysisOutput)
 
         # 3. Create and invoke the analysis chain

@@ -24,6 +24,7 @@ import SystemStatusMessage from './SystemStatusMessage'
 import { Header } from '@/components/layout/Header'
 import { Welcome } from '@/components/home/Welcome'
 import { ChatSidebar } from './ChatSidebar'
+import { RateLimitWarning } from '@/components/rate-limiting'
 
 interface AgentStatusProps {
   currentAgent: "primary" | "log_analyst" | "researcher" | null
@@ -96,8 +97,11 @@ export default function UnifiedChatInterface() {
     sessions,
     currentSessionId,
     currentSession,
+    isPersistenceAvailable,
+    isLoading: isSessionsLoading,
     createSession,
     selectSession,
+    updateSession,
     deleteSession,
     renameSession,
     addMessageToSession
@@ -173,6 +177,13 @@ export default function UnifiedChatInterface() {
     }
   }, [state.currentAgent, state.isProcessing, state.context.isAnalyzing, state.messages, logAnalysisState.isActive])
   
+  // Helper to map currentAgent to session agentType
+  const mapAgentToSessionType = (agent: string | null): 'primary' | 'log_analysis' | 'research' => {
+    if (agent === 'log_analyst') return 'log_analysis'
+    if (agent === 'researcher') return 'research'
+    return 'primary'
+  }
+
   const handleSendMessage = async (content: string, messageFiles?: File[]) => {
     if (!content.trim() && (!messageFiles || messageFiles.length === 0)) return
     if (state.isProcessing) return
@@ -181,25 +192,24 @@ export default function UnifiedChatInterface() {
       // Create a new session if needed
       let sessionId = currentSessionId
       if (!sessionId) {
-        // Determine agent type based on file upload
-        const agentType = messageFiles && messageFiles.length > 0 ? 'log_analysis' : 'primary'
-        sessionId = createSession(agentType, content)
+        // Determine agent type based on file upload or content
+        let agentType: 'primary' | 'log_analysis' | 'research' = 'primary'
+        if (messageFiles && messageFiles.length > 0) {
+          agentType = 'log_analysis'
+        } else {
+          const contentLower = content.toLowerCase()
+          if (contentLower.includes('research') || contentLower.includes('find information')) {
+            agentType = 'research'
+          }
+        }
+        sessionId = await createSession(agentType, content)
       }
       
       await sendMessage(content, messageFiles)
       
-      // Track the message in history and update title if it's the first message
+      // Session message syncing is handled by the useEffect below
+      // Update session title if this is the first user message
       if (sessionId) {
-        const userMessage: UnifiedMessage = {
-          id: `user-${Date.now()}-${Math.random().toString(36).slice(2, 11)}`,
-          type: 'user',
-          content,
-          timestamp: new Date(),
-          agentType: undefined
-        }
-        addMessageToSession(sessionId, userMessage)
-        
-        // Update session title if this is the first user message
         const userMessages = state.messages.filter(m => m.type === 'user')
         if (userMessages.length === 0) { // No user messages yet, this will be the first
           updateSessionTitle(sessionId, content)
@@ -217,17 +227,16 @@ export default function UnifiedChatInterface() {
   }
   
   // Chat history handlers
-  const handleNewChat = (agentType: 'primary' | 'log_analysis') => {
+  const handleNewChat = async (agentType: 'primary' | 'log_analysis' | 'research') => {
     clearConversation()
-    const sessionId = createSession(agentType)
+    const sessionId = await createSession(agentType)
     selectSession(sessionId)
   }
   
   const handleSelectSession = (sessionId: string) => {
     const session = sessions.find(s => s.id === sessionId)
     if (session) {
-      // Clear current conversation and load session messages
-      clearConversation()
+      // Don't clear conversation, just load the session messages directly
       selectSession(sessionId)
       
       // Load session messages into the chat state
@@ -243,13 +252,6 @@ export default function UnifiedChatInterface() {
     }
   }
   
-  // Memoized function to handle session sync
-  const syncMessageToSession = useCallback((message: UnifiedMessage, sessionId: string) => {
-    // Only sync user and agent messages
-    if (message.type === 'agent' || message.type === 'user') {
-      addMessageToSession(sessionId, message)
-    }
-  }, [addMessageToSession]) // Stable function dependencies
 
   // Handle title updates when user sends first message
   const updateSessionTitle = useCallback((sessionId: string, messageContent: string) => {
@@ -264,16 +266,33 @@ export default function UnifiedChatInterface() {
 
   // Sync new messages to history (controlled to prevent infinite loops)
   useEffect(() => {
-    if (currentSessionId && state.messages.length > 1) {
-      const lastMessage = state.messages[state.messages.length - 1]
-      
-      // Only process if this is a new message we haven't seen before
-      if (lastMessage.id !== lastProcessedMessageId.current) {
-        lastProcessedMessageId.current = lastMessage.id
-        syncMessageToSession(lastMessage, currentSessionId)
+    const syncMessage = async () => {
+      if (currentSessionId && state.messages.length > 1) {
+        const lastMessage = state.messages[state.messages.length - 1]
+        
+        // Only process if this is a new message we haven't seen before
+        if (lastMessage.id !== lastProcessedMessageId.current && lastMessage.id !== 'welcome') {
+          lastProcessedMessageId.current = lastMessage.id
+          
+          // Update session's agent type based on actual agent response if needed
+          const currentSession = sessions.find(s => s.id === currentSessionId)
+          if (currentSession && lastMessage.agentType && lastMessage.type === 'agent') {
+            const mappedType = mapAgentToSessionType(lastMessage.agentType)
+            if (currentSession.agentType !== mappedType) {
+              // Update session to correct agent type
+              updateSession(currentSessionId, { agentType: mappedType })
+            }
+          }
+          
+          await addMessageToSession(currentSessionId, lastMessage)
+        }
       }
     }
-  }, [state.messages.length, currentSessionId, syncMessageToSession]) // Stable dependencies
+
+    syncMessage().catch(error => {
+      console.error('Failed to sync message to session:', error)
+    })
+  }, [state.messages.length, currentSessionId, addMessageToSession, sessions, updateSession]) // Added dependencies
   
   // Helper function to generate a title from the first message
   const generateSessionTitle = (message: string): string => {
@@ -300,6 +319,7 @@ export default function UnifiedChatInterface() {
           sessions={sessions}
           currentSessionId={currentSessionId || undefined}
           isCollapsed={isSidebarCollapsed}
+          isLoading={isSessionsLoading}
           onToggleCollapse={() => setIsSidebarCollapsed(!isSidebarCollapsed)}
           onNewChat={handleNewChat}
           onSelectSession={handleSelectSession}
@@ -357,6 +377,19 @@ export default function UnifiedChatInterface() {
                   </div>
                 </div>
               )}
+
+              {/* Rate Limit Warning */}
+              <div className="flex-shrink-0">
+                <div className="w-full max-w-none mx-auto px-4 md:px-6 lg:px-8 py-2">
+                  <RateLimitWarning 
+                    warningThreshold={0.7}
+                    criticalThreshold={0.85}
+                    autoCheck={true}
+                    checkInterval={10000}
+                    dismissible={true}
+                  />
+                </div>
+              </div>
 
               {/* Use virtualized list for large conversations */}
               {isClient && state.messages.length > 50 ? (

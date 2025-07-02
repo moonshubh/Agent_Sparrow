@@ -1,11 +1,12 @@
 import { useState, useEffect, useCallback } from 'react'
 import { v4 as uuidv4 } from 'uuid'
 import { UnifiedMessage } from './useUnifiedChat'
+import { chatAPI, ChatAPI, isChatPersistenceAvailable } from '@/lib/api/chat'
 
 export interface ChatSession {
   id: string
   title: string
-  agentType: 'primary' | 'log_analysis'
+  agentType: 'primary' | 'log_analysis' | 'research'  // Added research type
   createdAt: Date
   lastMessageAt: Date
   messages: UnifiedMessage[]
@@ -15,6 +16,8 @@ export interface ChatSession {
 interface ChatHistoryState {
   sessions: ChatSession[]
   currentSessionId: string | null
+  isPersistenceAvailable: boolean
+  isLoading: boolean
 }
 
 const STORAGE_KEY = 'mb-sparrow-chat-history'
@@ -23,40 +26,147 @@ const MAX_SESSIONS_PER_AGENT = 5
 export function useChatHistory() {
   const [state, setState] = useState<ChatHistoryState>({
     sessions: [],
-    currentSessionId: null
+    currentSessionId: null,
+    isPersistenceAvailable: false,
+    isLoading: true
   })
 
-  // Load from localStorage on mount
+  // Load sessions on mount - try API first, fallback to localStorage
   useEffect(() => {
-    const stored = localStorage.getItem(STORAGE_KEY)
-    if (stored) {
+    const loadSessions = async () => {
       try {
-        const parsed = JSON.parse(stored)
-        // Convert date strings back to Date objects
-        const sessions = parsed.sessions.map((session: any) => ({
-          ...session,
-          createdAt: new Date(session.createdAt),
-          lastMessageAt: new Date(session.lastMessageAt)
-        }))
-        setState({
-          sessions,
-          currentSessionId: parsed.currentSessionId
-        })
+        // Check if API persistence is available
+        const persistenceAvailable = await isChatPersistenceAvailable()
+        
+        if (persistenceAvailable) {
+          // Load from API
+          const response = await chatAPI.listSessions(undefined, undefined, 1, 100)
+          const sessions = response.sessions.map(ChatAPI.sessionToFrontend)
+          
+          // Load messages for each session
+          const sessionsWithMessages = await Promise.all(
+            sessions.map(async (session) => {
+              try {
+                const sessionWithMessages = await chatAPI.getSession(parseInt(session.id))
+                return {
+                  ...session,
+                  messages: sessionWithMessages.messages.map(ChatAPI.messageToFrontend)
+                }
+              } catch (error) {
+                console.warn('Failed to load messages for session', session.id, error)
+                return session
+              }
+            })
+          )
+          
+          setState(prev => ({
+            ...prev,
+            sessions: sessionsWithMessages,
+            isPersistenceAvailable: true,
+            isLoading: false
+          }))
+        } else {
+          // Fallback to localStorage
+          const stored = localStorage.getItem(STORAGE_KEY)
+          if (stored) {
+            try {
+              const parsed = JSON.parse(stored)
+              const sessions = parsed.sessions.map((session: any) => ({
+                ...session,
+                createdAt: new Date(session.createdAt),
+                lastMessageAt: new Date(session.lastMessageAt)
+              }))
+              setState(prev => ({
+                ...prev,
+                sessions,
+                currentSessionId: parsed.currentSessionId,
+                isPersistenceAvailable: false,
+                isLoading: false
+              }))
+            } catch (error) {
+              console.error('Failed to parse chat history:', error)
+              setState(prev => ({ ...prev, isLoading: false }))
+            }
+          } else {
+            setState(prev => ({ ...prev, isLoading: false }))
+          }
+        }
       } catch (error) {
-        console.error('Failed to parse chat history:', error)
+        console.error('Failed to load chat sessions:', error)
+        // Fallback to localStorage
+        const stored = localStorage.getItem(STORAGE_KEY)
+        if (stored) {
+          try {
+            const parsed = JSON.parse(stored)
+            const sessions = parsed.sessions.map((session: any) => ({
+              ...session,
+              createdAt: new Date(session.createdAt),
+              lastMessageAt: new Date(session.lastMessageAt)
+            }))
+            setState(prev => ({
+              ...prev,
+              sessions,
+              currentSessionId: parsed.currentSessionId,
+              isPersistenceAvailable: false,
+              isLoading: false
+            }))
+          } catch (parseError) {
+            console.error('Failed to parse chat history:', parseError)
+            setState(prev => ({ ...prev, isLoading: false }))
+          }
+        } else {
+          setState(prev => ({ ...prev, isLoading: false }))
+        }
       }
     }
+
+    loadSessions()
   }, [])
 
-  // Save to localStorage whenever state changes
+  // Save to localStorage whenever state changes (only if API persistence is not available)
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(state))
-  }, [state])
+    if (!state.isPersistenceAvailable && !state.isLoading) {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify({
+        sessions: state.sessions,
+        currentSessionId: state.currentSessionId
+      }))
+    }
+  }, [state.sessions, state.currentSessionId, state.isPersistenceAvailable, state.isLoading])
 
-  const createSession = useCallback((agentType: 'primary' | 'log_analysis', initialMessage?: string) => {
+  const createSession = useCallback(async (agentType: 'primary' | 'log_analysis' | 'research', initialMessage?: string) => {
+    const title = initialMessage ? generateTitle(initialMessage) : `New ${agentType === 'primary' ? 'Chat' : agentType === 'research' ? 'Research' : 'Analysis'}`
+    
+    if (state.isPersistenceAvailable) {
+      try {
+        // Create session via API
+        const backendSession = await chatAPI.createSession({
+          title,
+          agent_type: agentType,
+          metadata: { preview: initialMessage },
+          is_active: true
+        })
+        
+        const newSession = ChatAPI.sessionToFrontend(backendSession)
+        newSession.messages = []
+        newSession.preview = initialMessage
+
+        setState(prev => ({
+          ...prev,
+          sessions: [newSession, ...prev.sessions],
+          currentSessionId: newSession.id
+        }))
+
+        return newSession.id
+      } catch (error) {
+        console.error('Failed to create session via API, falling back to local:', error)
+        // Fall through to local creation
+      }
+    }
+
+    // Local session creation (fallback or when API unavailable)
     const newSession: ChatSession = {
       id: uuidv4(),
-      title: initialMessage ? generateTitle(initialMessage) : `New ${agentType === 'primary' ? 'Chat' : 'Analysis'}`,
+      title,
       agentType,
       createdAt: new Date(),
       lastMessageAt: new Date(),
@@ -84,13 +194,14 @@ export function useChatHistory() {
       allSessions.sort((a, b) => b.lastMessageAt.getTime() - a.lastMessageAt.getTime())
 
       return {
+        ...prev,
         sessions: allSessions,
         currentSessionId: newSession.id
       }
     })
 
     return newSession.id
-  }, [])
+  }, [state.isPersistenceAvailable])
 
   const selectSession = useCallback((sessionId: string) => {
     setState(prev => ({
@@ -135,7 +246,8 @@ export function useChatHistory() {
     }))
   }, [])
 
-  const addMessageToSession = useCallback((sessionId: string, message: UnifiedMessage) => {
+  const addMessageToSession = useCallback(async (sessionId: string, message: UnifiedMessage) => {
+    // Update local state immediately for responsive UI
     setState(prev => ({
       ...prev,
       sessions: prev.sessions.map(session =>
@@ -149,7 +261,21 @@ export function useChatHistory() {
           : session
       )
     }))
-  }, [])
+
+    // Sync with API if available
+    if (state.isPersistenceAvailable) {
+      try {
+        const sessionIdNumber = parseInt(sessionId)
+        if (!isNaN(sessionIdNumber)) {
+          const backendMessage = ChatAPI.messageToBackend(message, sessionIdNumber)
+          await chatAPI.addMessage(sessionIdNumber, backendMessage)
+        }
+      } catch (error) {
+        console.warn('Failed to sync message to API:', error)
+        // Message is already added to local state, so we can continue
+      }
+    }
+  }, [state.isPersistenceAvailable])
 
   const getCurrentSession = useCallback(() => {
     return state.sessions.find(s => s.id === state.currentSessionId)
@@ -159,6 +285,8 @@ export function useChatHistory() {
     sessions: state.sessions,
     currentSessionId: state.currentSessionId,
     currentSession: getCurrentSession(),
+    isPersistenceAvailable: state.isPersistenceAvailable,
+    isLoading: state.isLoading,
     createSession,
     selectSession,
     updateSession,

@@ -725,7 +725,6 @@ export interface FolderCreate {
   name: string
   color?: string
   description?: string
-  created_by?: string
 }
 
 export interface FolderUpdate {
