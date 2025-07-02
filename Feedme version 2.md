@@ -10,7 +10,7 @@ This guide provides a detailed roadmap for transforming FeedMe into a world-clas
 
 ## 1. AI Systems Architecture Enhancement
 
-### 1.1 Intelligent Extraction Engine with Gemma 3
+### 1.1 Intelligent Extraction Engine with Gemma-3-27b-it
 
 **Current State**: Basic text parsing with placeholder AI integration  
 **Target State**: Advanced multi-model extraction pipeline with Gemma 3 as the primary engine
@@ -26,8 +26,8 @@ from dataclasses import dataclass
 
 @dataclass
 class ExtractionConfig:
-    model_name: str = "gemini-2.0-flash-exp"  # Use latest available
-    temperature: float = 0.3
+    model_name: str = "gemma-3-27b-it"  # Use latest available
+    temperature: float = 0.3                
     max_output_tokens: int = 8192
     confidence_threshold: float = 0.7
     
@@ -37,7 +37,7 @@ class GemmaExtractionEngine:
     def __init__(self, api_key: str):
         genai.configure(api_key=api_key)
         self.model = genai.GenerativeModel(
-            model_name="gemini-2.0-flash-exp",
+            model_name="gemma-3-27b-it",
             generation_config={
                 "temperature": 0.3,
                 "top_p": 0.95,
@@ -119,16 +119,7 @@ class GemmaExtractionEngine:
 
 #### Key Enhancements:
 
-1. **Multi-Model Fallback Strategy**:
-```python
-models = [
-    "gemini-2.0-flash-exp",  # Primary: Fast and accurate
-    "gemini-1.5-pro",        # Fallback: More context window
-    "gemini-1.5-flash"       # Emergency: Lower cost
-]
-```
-
-2. **Chunking for Large Documents**:
+1. **Chunking for Large Documents**:
 ```python
 async def chunk_and_extract(self, html_content: str, chunk_size: int = 50000):
     """Handle large HTML files by intelligent chunking"""
@@ -144,7 +135,7 @@ async def chunk_and_extract(self, html_content: str, chunk_size: int = 50000):
     return self._merge_chunk_results(results)
 ```
 
-3. **Conversation Thread Detection**:
+2. **Conversation Thread Detection**:
 ```python
 def detect_conversation_threads(self, messages: List[Message]) -> List[Thread]:
     """Group messages into logical conversation threads"""

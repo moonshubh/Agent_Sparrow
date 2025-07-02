@@ -4,7 +4,17 @@ Configuration for rate limiting system.
 
 from dataclasses import dataclass
 from typing import Optional
-import os\nfrom app.core.settings import settings\n\n\ndef parse_boolean_env(value: str) -> bool:\n    \"\"\"\n    Parse environment variable as boolean with support for multiple truthy values.\n    \n    Recognizes: 'true', '1', 'yes', 'on' (case insensitive) as True\n    Everything else as False\n    \"\"\"\n    return value.lower() in ('true', '1', 'yes', 'on')"
+import os
+from app.core.settings import settings
+
+def parse_boolean_env(value: str) -> bool:
+    """
+    Parse environment variable as boolean with support for multiple truthy values.
+    
+    Recognizes: 'true', '1', 'yes', 'on' (case insensitive) as True
+    Everything else as False
+    """
+    return str(value).lower() in ('true', '1', 'yes', 'on')
 
 
 @dataclass
