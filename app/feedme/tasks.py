@@ -78,42 +78,104 @@ def process_transcript(self, conversation_id: int, user_id: Optional[str] = None
         raw_transcript = conversation_data['raw_transcript']
         logger.info(f"Processing transcript of {len(raw_transcript)} characters")
         
-        # Check if content is HTML and use appropriate parser
-        if raw_transcript.strip().startswith('<') or 'html' in conversation_data.get('original_filename', '').lower():
-            logger.info("Detected HTML content, using HTML parser")
+        # Phase 1: Use new AI extraction engine with gemma-3-27b-it
+        try:
+            # Check if content is HTML and use appropriate extraction strategy
+            if raw_transcript.strip().startswith('<') or 'html' in conversation_data.get('original_filename', '').lower():
+                logger.info("Detected HTML content, using AI extraction engine with enhanced HTML parser")
+                
+                # Use new AI extraction engine for HTML content
+                from app.feedme.ai_extraction_engine import GemmaExtractionEngine
+                
+                if settings.gemini_api_key:
+                    # Use Gemma-3-27b-it for intelligent extraction
+                    engine = GemmaExtractionEngine(api_key=settings.gemini_api_key)
+                    examples = await engine.extract_conversations(
+                        html_content=raw_transcript,
+                        metadata=conversation_data.get('metadata', {})
+                    )
+                    logger.info(f"AI extraction engine extracted {len(examples)} Q&A pairs with gemma-3-27b-it")
+                else:
+                    # Fallback to enhanced HTML parser
+                    from app.feedme.parsers.enhanced_html_parser import EnhancedHTMLParser
+                    
+                    html_parser = EnhancedHTMLParser()
+                    parse_result = html_parser.parse(raw_transcript)
+                    
+                    # Convert parsed messages to Q&A pairs (simplified for Phase 1)
+                    examples = []
+                    messages = parse_result.get('messages', [])
+                    
+                    # Group customer questions with agent responses
+                    for i in range(len(messages) - 1):
+                        if messages[i].role == 'customer' and messages[i + 1].role == 'agent':
+                            examples.append({
+                                'question_text': messages[i].content,
+                                'answer_text': messages[i + 1].content,
+                                'confidence_score': 0.7,  # Default for pattern-based
+                                'context_before': messages[i - 1].content if i > 0 else '',
+                                'context_after': messages[i + 2].content if i + 2 < len(messages) else '',
+                                'tags': [],
+                                'issue_type': None,
+                                'resolution_type': None,
+                                'extraction_method': 'html_pattern',
+                                'metadata': {}
+                            })
+                    
+                    logger.info(f"Enhanced HTML parser extracted {len(examples)} Q&A pairs")
+            else:
+                logger.info("Using AI-powered text extraction")
+                # Use AI extraction for text content as well
+                from app.feedme.ai_extraction_engine import GemmaExtractionEngine
+                
+                if settings.gemini_api_key:
+                    engine = GemmaExtractionEngine(api_key=settings.gemini_api_key)
+                    # Convert text to simple HTML for consistent processing
+                    html_content = f"<div class='conversation'><pre>{raw_transcript}</pre></div>"
+                    examples = await engine.extract_conversations(
+                        html_content=html_content,
+                        metadata=conversation_data.get('metadata', {})
+                    )
+                    logger.info(f"AI extraction engine processed text content: {len(examples)} Q&A pairs")
+                else:
+                    # Fallback to existing text parser
+                    from app.feedme.transcript_parser import TranscriptParser
+                    
+                    parser = TranscriptParser()
+                    examples = parser.extract_qa_examples(
+                        transcript=raw_transcript,
+                        conversation_id=conversation_id,
+                        metadata=conversation_data.get('metadata', {})
+                    )
+                    
+                    # Convert to standard format
+                    examples = [
+                        {
+                            'question_text': ex.get('question_text', ''),
+                            'answer_text': ex.get('answer_text', ''),
+                            'confidence_score': ex.get('confidence_score', 0.5),
+                            'context_before': ex.get('context_before', ''),
+                            'context_after': ex.get('context_after', ''),
+                            'tags': ex.get('tags', []),
+                            'issue_type': ex.get('issue_type'),
+                            'resolution_type': ex.get('resolution_type'),
+                            'extraction_method': 'text_pattern',
+                            'metadata': ex.get('metadata', {})
+                        }
+                        for ex in examples
+                    ] if examples else []
+                    
+                    logger.info(f"Text parser extracted {len(examples)} Q&A pairs")
+                    
+        except Exception as e:
+            logger.error(f"Error in Phase 1 AI extraction: {e}")
+            # Fallback to original parsing logic
             from app.feedme.html_parser import HTMLTranscriptParser
             
             html_parser = HTMLTranscriptParser()
             examples = html_parser.parse_html_transcript(raw_transcript)
             
-            logger.info(f"HTML parser extracted {len(examples)} Q&A pairs")
-        else:
-            logger.info("Using standard text parser")
-            # Use text parsing directly (not as subtask - we're already in a Celery task)
-            from app.feedme.transcript_parser import TranscriptParser
-            
-            parser = TranscriptParser()
-            examples = parser.extract_qa_examples(
-                transcript=raw_transcript,
-                conversation_id=conversation_id,
-                metadata=conversation_data.get('metadata', {})
-            )
-            
-            # Convert to dict format expected by the rest of the pipeline
-            examples = [
-                {
-                    'question_text': ex.get('question_text', ''),
-                    'answer_text': ex.get('answer_text', ''),
-                    'confidence_score': ex.get('confidence_score', 0.5),
-                    'context_before': ex.get('context_before', ''),
-                    'context_after': ex.get('context_after', ''),
-                    'tags': ex.get('tags', []),
-                    'issue_type': ex.get('issue_type'),
-                    'resolution_type': ex.get('resolution_type'),
-                    'metadata': ex.get('metadata', {})
-                }
-                for ex in examples
-            ] if examples else []
+            logger.info(f"Fallback HTML parser extracted {len(examples)} Q&A pairs")
         
         # Store examples temporarily for approval
         if examples:
