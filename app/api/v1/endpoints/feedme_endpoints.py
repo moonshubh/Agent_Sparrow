@@ -574,29 +574,35 @@ async def delete_conversation(conversation_id: int):
                 
                 example_count_result = cur.fetchone()
                 examples_deleted = example_count_result['example_count'] if example_count_result else 0
+                
+                # Delete examples first (foreign key constraint)
+                cur.execute("""
+                    DELETE FROM feedme_examples 
+                    WHERE conversation_id = %s
+                """, (conversation_id,))
+                
+                # Delete the conversation
+                cur.execute("""
+                    DELETE FROM feedme_conversations 
+                    WHERE id = %s
+                """, (conversation_id,))
+                
+                conn.commit()
+                
+                logger.info(f"Successfully deleted conversation {conversation_id} and {examples_deleted} examples")
+                
+                return DeleteConversationResponse(
+                    conversation_id=conversation_id,
+                    title=conversation['title'],
+                    examples_deleted=examples_deleted,
+                    message=f"Successfully deleted conversation '{conversation['title']}' and {examples_deleted} associated examples"
+                )
+                
+    except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Failed to create conversation: {e}")
-        raise HTTPException(status_code=500, detail="Failed to create conversation")
-
-
-async def process_uploaded_transcript(conversation_id: int, processed_by: str):
-    """Background task to process a newly uploaded transcript."""
-    try:
-        from app.feedme.tasks import process_transcript
-        logger.info(f"Starting background processing for conversation {conversation_id}")
-        await update_conversation_status(conversation_id, ProcessingStatus.PROCESSING)
-        
-        # This is where the heavy lifting happens
-        # In a real system, this would be a Celery task
-        process_transcript(conversation_id, processed_by)
-        
-        await update_conversation_status(conversation_id, ProcessingStatus.COMPLETED)
-        logger.info(f"Successfully processed conversation {conversation_id}")
-        
-    except Exception as e:
-        logger.error(f"Background processing failed for conversation {conversation_id}: {e}")
-        await update_conversation_status(conversation_id, ProcessingStatus.FAILED)
+        logger.error(f"Failed to delete conversation {conversation_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to delete conversation")
 
 
 @router.get("/conversations/{conversation_id}/examples", response_model=ExampleListResponse, tags=["FeedMe"])

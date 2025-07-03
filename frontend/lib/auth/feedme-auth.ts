@@ -53,8 +53,11 @@ class FeedMeAuth {
       iat: now
     }
 
-    // For demo purposes, create a simple base64 encoded token
-    // In production, use proper JWT signing with a secret key
+    // ⚠️  **SECURITY WARNING - INSECURE DEMO IMPLEMENTATION** ⚠️
+    // This JWT creation code is INSECURE and must NEVER be used in production!
+    // Real JWT tokens require proper signing with a secret key using libraries like 'jsonwebtoken'.
+    // This demo implementation lacks cryptographic security and can be easily forged.
+    // For production: Use a proper JWT library with HMAC SHA256 or RSA signing algorithms.
     const header = { typ: 'JWT', alg: 'HS256' }
     const headerB64 = btoa(JSON.stringify(header))
     const payloadB64 = btoa(JSON.stringify(payload))
@@ -202,6 +205,12 @@ class FeedMeAuth {
     }
   }
 
+  // ⚠️  **SECURITY WARNING - localStorage XSS Vulnerability** ⚠️
+  // Storing authentication tokens in localStorage is vulnerable to Cross-Site Scripting (XSS) attacks.
+  // Malicious scripts can access localStorage and steal tokens. Consider using:
+  // - HttpOnly cookies for sensitive authentication data
+  // - sessionStorage for temporary session data
+  // - Secure, encrypted storage solutions for production applications
   private saveAuthToStorage(): void {
     try {
       if (typeof window !== 'undefined' && this.currentUser && this.authToken) {

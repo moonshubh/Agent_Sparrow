@@ -27,6 +27,22 @@ interface DateRangePickerProps {
   placeholder?: string
 }
 
+/**
+ * Deep equality check for DateRange objects
+ * Compares actual date values instead of object references
+ */
+function isDateRangeEqual(a: DateRange | undefined, b: DateRange | undefined): boolean {
+  if (a === b) return true
+  if (!a || !b) return false
+  
+  const aFromTime = a.from?.getTime()
+  const aToTime = a.to?.getTime()
+  const bFromTime = b.from?.getTime()
+  const bToTime = b.to?.getTime()
+  
+  return aFromTime === bFromTime && aToTime === bToTime
+}
+
 export function DateRangePicker({
   className,
   value,
@@ -35,11 +51,21 @@ export function DateRangePicker({
 }: DateRangePickerProps) {
   const [date, setDate] = React.useState<DateRange | undefined>(value)
 
+  // Sync internal state with external value prop when it changes
   React.useEffect(() => {
-    if (date !== value) {
-      onChange?.(date)
+    if (!isDateRangeEqual(date, value)) {
+      setDate(value)
     }
-  }, [date, onChange, value])
+  }, [date, value]) // Include date dependency but use deep equality check
+
+  // Handle internal date changes and notify parent
+  const handleDateChange = React.useCallback((newDate: DateRange | undefined) => {
+    setDate(newDate)
+    // Only call onChange if the date actually changed
+    if (!isDateRangeEqual(newDate, date)) {
+      onChange?.(newDate)
+    }
+  }, [date, onChange])
 
   return (
     <div className={cn('grid gap-2', className)}>
@@ -74,7 +100,7 @@ export function DateRangePicker({
             mode="range"
             defaultMonth={date?.from}
             selected={date}
-            onSelect={setDate}
+            onSelect={handleDateChange}
             numberOfMonths={2}
           />
         </PopoverContent>
