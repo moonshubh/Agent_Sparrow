@@ -10,7 +10,6 @@
 'use client'
 
 import React, { useState, useCallback, useMemo, useRef, useEffect } from 'react'
-import { FixedSizeTree as Tree } from 'react-window'
 import { ChevronRight, ChevronDown, Folder, FolderOpen, MoreHorizontal, Plus, Edit2, Trash2, Move } from 'lucide-react'
 import { useFeedMeStore, useActions, useFolders, useUI } from '@/lib/stores/feedme-store'
 import { cn } from '@/lib/utils'
@@ -20,6 +19,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSepara
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
+import { ScrollArea } from '@/components/ui/scroll-area'
 
 // Types
 interface TreeNode {

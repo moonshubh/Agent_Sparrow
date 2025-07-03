@@ -543,7 +543,7 @@ export const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
         </div>
 
         <div className="flex items-center gap-2">
-          <Select value={selectedTimeRange} onValueChange={setSelectedTimeRange}>
+          <Select value={selectedTimeRange} onValueChange={(value) => setSelectedTimeRange(value as 'hour' | 'day' | 'week' | 'month' | 'year')}>
             <SelectTrigger className="w-32">
               <SelectValue />
             </SelectTrigger>

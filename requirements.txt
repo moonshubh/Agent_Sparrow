@@ -14,6 +14,7 @@ langchain-community==0.3.25
 langchain-google-genai==2.1.5
 langgraph
 
+
 # Torch (CPU version will be selected by --extra-index-url)
 torch
 torchvision
@@ -48,7 +49,6 @@ pytest-benchmark==4.0.0
 opentelemetry-api
 opentelemetry-sdk
 opentelemetry-exporter-otlp-proto-http
-protobuf==3.20.3
 structlog
 loguru
 sqlparse

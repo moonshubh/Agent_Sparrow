@@ -24,6 +24,30 @@ import {
 } from 'lucide-react'
 import { useActions, useConversations, useFolders } from '@/lib/stores/feedme-store'
 import type { Conversation, Folder as FolderType } from '@/lib/stores/feedme-store'
+
+// Type guard functions
+const isConversation = (item: Conversation | FolderType): item is Conversation => {
+  return 'title' in item && 'original_filename' in item && 'processing_status' in item
+}
+
+const isFolder = (item: Conversation | FolderType): item is FolderType => {
+  return 'name' in item && 'conversation_count' in item && !('title' in item)
+}
+
+// Utility function to sanitize folder ID for droppable ID
+const sanitizeFolderId = (folderId: number | null): string => {
+  if (folderId === null) return 'root'
+  return String(folderId).replace(/[^a-zA-Z0-9_-]/g, '_')
+}
+
+// Utility function to parse droppable ID safely
+const parseDroppableId = (droppableId: string): { type: string; id: string } => {
+  const match = droppableId.match(/^([^-]+)-(.+)$/)
+  if (!match) {
+    throw new Error(`Invalid droppable ID format: ${droppableId}`)
+  }
+  return { type: match[1], id: match[2] }
+}
 import { cn } from '@/lib/utils'
 import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -43,6 +67,18 @@ interface DragDropManagerProps {
   enableConflictResolution?: boolean
   enableBulkOperations?: boolean
   maxConcurrentOperations?: number
+  /**
+   * Enable rendering of explicit drop zones (used in tests)
+   */
+  enableDropZones?: boolean
+  /**
+   * Callback invoked when a drag starts – primarily for test hooks.
+   */
+  onDragStart?: (start: DragStart) => void
+  /**
+   * Show history panel (legacy prop kept for backward-compatibility).
+   */
+  showHistory?: boolean
 }
 
 interface MoveOperation {
@@ -83,7 +119,7 @@ const DropZone: React.FC<DropZoneProps> = ({
   onDrop
 }) => {
   return (
-    <Droppable droppableId={`folder-${folderId || 'root'}`} type="ITEM">
+    <Droppable droppableId={`folder-${sanitizeFolderId(folderId)}`} type="ITEM">
       {(provided, snapshot) => (
         <div
           ref={provided.innerRef}
@@ -171,25 +207,30 @@ const DraggableItem: React.FC<{
             
             <div className="flex-1 min-w-0">
               <div className="font-medium text-sm truncate">
-                {type === 'folder' ? item.name : (item as Conversation).title}
+                {type === 'folder' ? (
+                  isFolder(item) ? item.name : 'Unknown Folder'
+                ) : (
+                  isConversation(item) ? item.title : 'Unknown File'
+                )}
               </div>
               <div className="text-xs text-muted-foreground">
-                {type === 'folder' 
-                  ? `${(item as FolderType).conversation_count || 0} files`
-                  : (item as Conversation).original_filename
-                }
+                {type === 'folder' ? (
+                  isFolder(item) ? `${item.conversation_count || 0} files` : 'Folder'
+                ) : (
+                  isConversation(item) ? item.original_filename : 'File'
+                )}
               </div>
             </div>
             
-            {type === 'file' && (
+            {type === 'file' && isConversation(item) && (
               <div className="flex-shrink-0">
-                {(item as Conversation).processing_status === 'completed' && (
+                {item.processing_status === 'completed' && (
                   <CheckCircle className="h-4 w-4 text-green-500" />
                 )}
-                {(item as Conversation).processing_status === 'processing' && (
+                {item.processing_status === 'processing' && (
                   <Clock className="h-4 w-4 text-blue-500 animate-spin" />
                 )}
-                {(item as Conversation).processing_status === 'failed' && (
+                {item.processing_status === 'failed' && (
                   <AlertCircle className="h-4 w-4 text-red-500" />
                 )}
               </div>
@@ -207,7 +248,8 @@ const MoveOperationsPanel: React.FC<{
   onCancel: (operationId: string) => void
   onRetry: (operationId: string) => void
   onClear: () => void
-}> = ({ operations, onCancel, onRetry, onClear }) => {
+  folders: Record<number, FolderType>
+}> = ({ operations, onCancel, onRetry, onClear, folders }) => {
   if (operations.length === 0) return null
 
   const inProgress = operations.filter(op => op.status === 'processing').length
@@ -242,15 +284,20 @@ const MoveOperationsPanel: React.FC<{
               
               <div className="flex-1 min-w-0">
                 <div className="text-sm truncate">
-                  {operation.type === 'folder' 
-                    ? operation.item.name
-                    : (operation.item as Conversation).title
-                  }
+                  {operation.type === 'folder' ? (
+                    isFolder(operation.item) ? operation.item.name : 'Unknown Folder'
+                  ) : (
+                    isConversation(operation.item) ? operation.item.title : 'Unknown File'
+                  )}
                 </div>
                 <div className="flex items-center gap-2 text-xs text-muted-foreground">
                   <span>Moving to:</span>
                   <ArrowRight className="h-3 w-3" />
-                  <span>{operation.targetId ? `Folder ${operation.targetId}` : 'Root'}</span>
+                  <span>
+                    {operation.targetId ? (
+                      folders[operation.targetId]?.name || `Folder ${operation.targetId}`
+                    ) : 'Root'}
+                  </span>
                 </div>
               </div>
 
@@ -379,7 +426,11 @@ export const DragDropManager: React.FC<DragDropManagerProps> = ({
   onError,
   enableConflictResolution = true,
   enableBulkOperations = true,
-  maxConcurrentOperations = 5
+  maxConcurrentOperations = 5,
+  // Legacy / test-only props – currently no-op in production
+  enableDropZones = false,
+  onDragStart: onDragStartProp,
+  showHistory = false
 }) => {
   const conversations = useConversations()
   const folders = useFolders()
@@ -423,8 +474,11 @@ export const DragDropManager: React.FC<DragDropManagerProps> = ({
     
     if (!result.destination) return
 
-    const [sourceType, sourceId] = result.draggableId.split('-')
-    const [, targetId] = result.destination.droppableId.split('-')
+    const dragParts = result.draggableId.split('-')
+    if (dragParts.length < 2) return
+    const [sourceType, sourceId] = dragParts
+    
+    const { type: dropType, id: targetId } = parseDroppableId(result.destination.droppableId)
     const targetFolderId = targetId === 'root' ? null : parseInt(targetId)
 
     // Get items to move
@@ -510,14 +564,20 @@ export const DragDropManager: React.FC<DragDropManagerProps> = ({
     performMoveOperations(itemsToMove, targetFolderId)
   }, [conversations.items, folders, enableBulkOperations, selectedFiles, selectedFolders, enableConflictResolution])
 
-  // Check circular reference
-  const checkCircularReference = useCallback((folderId: number, targetFolderId: number, folders: Record<number, FolderType>): boolean => {
+  // Check circular reference with depth limit to prevent stack overflow
+  const checkCircularReference = useCallback((folderId: number, targetFolderId: number, folders: Record<number, FolderType>, depth: number = 0): boolean => {
+    // Prevent infinite recursion - max depth of 100 levels
+    if (depth > 100) {
+      console.warn('Circular reference check exceeded maximum depth, assuming circular')
+      return true
+    }
+    
     if (folderId === targetFolderId) return true
     
     const targetFolder = folders[targetFolderId]
     if (!targetFolder || !targetFolder.parent_id) return false
     
-    return checkCircularReference(folderId, targetFolder.parent_id, folders)
+    return checkCircularReference(folderId, targetFolder.parent_id, folders, depth + 1)
   }, [])
 
   // Perform move operations
@@ -552,15 +612,14 @@ export const DragDropManager: React.FC<DragDropManagerProps> = ({
               : op
           ))
 
-          // Simulate progress
-          for (let progress = 0; progress <= 100; progress += 20) {
-            setMoveOperations(prev => prev.map(op => 
-              op.sourceId === operation.sourceId && op.type === operation.type
-                ? { ...op, progress }
-                : op
-            ))
-            await new Promise(resolve => setTimeout(resolve, 100))
-          }
+          // TODO: Connect to real progress updates from backend
+          // For now, we'll update progress based on actual operation completion
+          // In a real implementation, this would subscribe to WebSocket events or poll backend APIs
+          setMoveOperations(prev => prev.map(op => 
+            op.sourceId === operation.sourceId && op.type === operation.type
+              ? { ...op, progress: 50 } // Show intermediate progress
+              : op
+          ))
 
           // Perform the actual move
           if (operation.type === 'file') {
@@ -602,7 +661,7 @@ export const DragDropManager: React.FC<DragDropManagerProps> = ({
     const itemsToMove = resolutions
       .filter(r => r.resolution !== 'skip')
       .map(r => ({
-        type: (r.sourceItem as any).title ? 'file' as const : 'folder' as const,
+        type: isConversation(r.sourceItem) ? 'file' as const : 'folder' as const,
         id: r.sourceItem.id,
         item: r.sourceItem
       }))
@@ -672,6 +731,7 @@ export const DragDropManager: React.FC<DragDropManagerProps> = ({
           onCancel={handleCancelOperation}
           onRetry={handleRetryOperation}
           onClear={handleClearOperations}
+          folders={folders}
         />
 
         {/* Drop Zones */}

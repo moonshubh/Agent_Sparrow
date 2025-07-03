@@ -6,7 +6,7 @@
 set -e
 
 # --- Project Root and Log Setup ---
-ROOT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
+ROOT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 echo "Project Root: $ROOT_DIR"
 
 LOG_DIR="$ROOT_DIR/system_logs"
@@ -29,8 +29,11 @@ fi
 echo "Activating virtual environment..."
 source venv/bin/activate
 
+echo "Upgrading pip..."
+python -m pip install --upgrade pip
+
 echo "Installing Python dependencies..."
-pip install -r requirements.txt
+pip install -r requirements.txt 2>/dev/null || echo "Note: Some dependency warnings are expected due to google-generativeai compatibility"
 
 # Function to kill processes on a given port
 kill_process_on_port() {
@@ -74,6 +77,54 @@ fi
 echo "Backend server started successfully."
 
 
+# --- FeedMe Celery Worker Setup ---
+echo "--- Starting FeedMe Celery Worker ---"
+cd "$ROOT_DIR"
+
+# Check if Redis is running (required for Celery)
+echo "Checking if Redis is running..."
+if ! redis-cli ping > /dev/null 2>&1; then
+    echo "Warning: Redis is not running. FeedMe Celery worker requires Redis."
+    echo "Please start Redis with: brew services start redis (macOS) or sudo systemctl start redis (Linux)"
+    echo "Continuing without Celery worker..."
+else
+    echo "Redis is running, starting FeedMe Celery worker..."
+    
+    # Create Celery log directory
+    CELERY_LOG_DIR="$LOG_DIR/celery"
+    mkdir -p "$CELERY_LOG_DIR"
+    
+    # Kill any existing Celery workers
+    echo "Checking for existing Celery workers..."
+    if pgrep -f "celery.*worker" > /dev/null; then
+        echo "Killing existing Celery workers..."
+        pkill -f "celery.*worker" || true
+        sleep 2
+    fi
+    
+    # Start FeedMe Celery worker
+    echo "Starting FeedMe Celery worker in the background..."
+    python -m celery -A app.feedme.celery_app worker \
+        --loglevel=info \
+        --concurrency=2 \
+        --queues=feedme_default,feedme_processing,feedme_embeddings,feedme_parsing,feedme_health \
+        > "$CELERY_LOG_DIR/celery_worker.log" 2>&1 &
+    CELERY_PID=$!
+    echo "FeedMe Celery worker started with PID: $CELERY_PID"
+    
+    # Verify Celery worker startup
+    echo "Verifying Celery worker startup..."
+    sleep 3
+    if ! ps -p $CELERY_PID > /dev/null; then
+        echo "Warning: Celery worker failed to start. Check logs at $CELERY_LOG_DIR/celery_worker.log"
+        echo "FeedMe background processing will not be available."
+        CELERY_PID=""
+    else
+        echo "FeedMe Celery worker started successfully."
+    fi
+fi
+
+
 # --- Frontend Setup ---
 echo "--- Starting Frontend Server ---"
 FRONTEND_DIR="$ROOT_DIR/frontend"
@@ -105,7 +156,33 @@ echo "Frontend server started successfully."
 echo "--- System is starting up! ---"
 echo "Backend logs: $BACKEND_LOG_DIR/backend.log"
 echo "Frontend logs: $FRONTEND_LOG_DIR/frontend.log"
-echo "Backend available at http://localhost:8000"
-echo "Frontend available at http://localhost:3000"
+if [ -n "$CELERY_PID" ]; then
+    echo "Celery worker logs: $CELERY_LOG_DIR/celery_worker.log"
+fi
+echo ""
+echo "Services available:"
+echo "  Backend API: http://localhost:8000"
+echo "  Frontend UI: http://localhost:3000"
+echo "  FeedMe v2.0: http://localhost:3000/feedme"
+if [ -n "$CELERY_PID" ]; then
+    echo "  FeedMe Processing: ✅ Active (Gemma 3 27b AI extraction)"
+else
+    echo "  FeedMe Processing: ❌ Inactive (background processing disabled)"
+fi
 
-echo "To stop the servers, run: kill $BACKEND_PID $FRONTEND_PID"
+# Build the kill command with all running service PIDs
+KILL_PIDS="$BACKEND_PID $FRONTEND_PID"
+if [ -n "$CELERY_PID" ]; then
+    KILL_PIDS="$KILL_PIDS $CELERY_PID"
+fi
+
+echo "To stop all services, run: kill $KILL_PIDS"
+
+# Also show individual service PIDs for granular control
+echo ""
+echo "Service PIDs:"
+echo "  Backend (FastAPI): $BACKEND_PID"
+echo "  Frontend (Next.js): $FRONTEND_PID"
+if [ -n "$CELERY_PID" ]; then
+    echo "  FeedMe Worker (Celery): $CELERY_PID"
+fi

@@ -195,14 +195,6 @@ class DeleteConversationResponse(BaseModel):
     deleted_conversation_id: int
     deleted_examples_count: int
 
-class ApprovalWorkflowStats(BaseModel):
-    """Statistics for the approval workflow."""
-    pending_approval: int
-    approved_total: int
-    rejected_total: int
-    approval_rate: float
-    avg_approval_time_seconds: Optional[float] = None
-
 class BulkApprovalRequest(BaseModel):
     """Request model for bulk approving conversations."""
     conversation_ids: List[int] = Field(..., min_items=1, description="A list of conversation IDs to approve.")
@@ -293,8 +285,8 @@ class SearchQuery(BaseModel):
     query: str = Field(..., min_length=1, description="The text to search for.")
     top_k: int = Field(10, ge=1, le=50, description="The number of results to return.")
 
-class SearchResponse(BaseModel):
-    """Response model for search results."""
+class FeedMeSearchResponse(BaseModel):
+    """Response model for FeedMe search results."""
     query: str
     results: List[FeedMeSearchResultItem]
     total_found: int
@@ -380,10 +372,10 @@ class FeedMeExample(FeedMeExampleBase):
 class ConversationListResponse(BaseModel):
     """Response for listing conversations"""
     conversations: List[FeedMeConversation] = Field(..., description="List of conversations")
-    total_conversations: int = Field(..., description="Total number of conversations")
+    total_count: int = Field(..., description="Total number of conversations")
     page: int = Field(..., description="Current page number")
     page_size: int = Field(..., description="Number of conversations per page")
-    total_pages: int = Field(..., description="Total number of pages")
+    has_next: bool = Field(..., description="Whether there are more pages available")
 
 
 class ExampleListResponse(BaseModel):
@@ -400,8 +392,8 @@ class ConversationDetailResponse(FeedMeConversation):
     examples: List[FeedMeExample] = Field(default_factory=list, description="Examples extracted from the conversation")
 
 
-class ConversationVersion(BaseModel):
-    """Represents a single version of a conversation"""
+class ConversationVersionSummary(BaseModel):
+    """Summary of a single conversation version"""
     version: int = Field(..., description="Version number")
     created_at: datetime = Field(..., description="Timestamp of version creation")
     created_by: Optional[str] = Field(None, description="User who created this version")
@@ -411,11 +403,11 @@ class ConversationVersion(BaseModel):
 class ConversationVersionHistoryResponse(BaseModel):
     """Response containing the version history of a conversation"""
     conversation_id: int = Field(..., description="ID of the conversation")
-    versions: List[ConversationVersion] = Field(..., description="List of all versions")
+    versions: List[ConversationVersionSummary] = Field(..., description="List of all versions")
 
 
-class ConversationStats(BaseModel):
-    """Statistics for FeedMe conversations"""
+class ConversationStatsDetail(BaseModel):
+    """Detailed statistics for FeedMe conversations"""
     total_conversations: int = Field(..., description="Total number of conversations")
     total_examples: int = Field(..., description="Total number of examples")
     conversations_by_status: Dict[ProcessingStatus, int] = Field(..., description="Count of conversations by status")
@@ -482,8 +474,8 @@ class SearchResult(BaseModel):
     metadata: Dict[str, Any] = Field(..., description="Document metadata")
 
 
-class SearchResponse(BaseModel):
-    """Response for a search query"""
+class GeneralSearchResponse(BaseModel):
+    """Response for a general search query"""
     query: str = Field(..., description="The original search query")
     results: List[SearchResult] = Field(..., description="List of search results")
     total_results: int = Field(..., description="Total number of results found")

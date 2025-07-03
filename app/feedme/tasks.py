@@ -12,6 +12,7 @@ This module provides:
 
 import traceback
 import time
+import asyncio
 from typing import Dict, Any, List, Optional
 from datetime import datetime, timezone
 import logging
@@ -91,10 +92,10 @@ def process_transcript(self, conversation_id: int, user_id: Optional[str] = None
                 if settings.gemini_api_key:
                     # Use Gemma-3-27b-it for intelligent extraction
                     engine = GemmaExtractionEngine(api_key=settings.gemini_api_key)
-                    examples = await engine.extract_conversations(
+                    examples = asyncio.run(engine.extract_conversations(
                         html_content=raw_transcript,
                         metadata=conversation_data.get('metadata', {})
-                    )
+                    ))
                     logger.info(f"AI extraction engine extracted {len(examples)} Q&A pairs with gemma-3-27b-it")
                 else:
                     # Fallback to enhanced HTML parser
@@ -131,10 +132,10 @@ def process_transcript(self, conversation_id: int, user_id: Optional[str] = None
                     engine = GemmaExtractionEngine(api_key=settings.gemini_api_key)
                     # Convert text to simple HTML for consistent processing
                     html_content = f"<div class='conversation'><pre>{raw_transcript}</pre></div>"
-                    examples = await engine.extract_conversations(
+                    examples = asyncio.run(engine.extract_conversations(
                         html_content=html_content,
                         metadata=conversation_data.get('metadata', {})
-                    )
+                    ))
                     logger.info(f"AI extraction engine processed text content: {len(examples)} Q&A pairs")
                 else:
                     # Fallback to existing text parser

@@ -34,7 +34,7 @@ from app.feedme.schemas import (
     ExampleListResponse,
 
     SearchQuery,
-    SearchResponse,
+    FeedMeSearchResponse,
     ConversationStats,
     AnalyticsResponse,
     # Phase 3: Versioning schemas
@@ -816,7 +816,7 @@ async def get_processing_status(conversation_id: int):
     return conversation
 
 
-@router.post("/search", response_model=SearchResponse, tags=["FeedMe"])
+@router.post("/search", response_model=FeedMeSearchResponse, tags=["FeedMe"])
 async def search_examples(search_query: SearchQuery):
     """
     Performs a similarity search on FeedMe examples based on the provided query.
@@ -827,7 +827,7 @@ async def search_examples(search_query: SearchQuery):
         search_query (SearchQuery): The search query containing the text to search for.
     
     Returns:
-        SearchResponse: The search results, including the original query, an empty results list, total found count, and search time in milliseconds.
+        FeedMeSearchResponse: The search results, including the original query, an empty results list, total found count, and search time in milliseconds.
     """
     
     if not settings.feedme_enabled:
@@ -841,7 +841,7 @@ async def search_examples(search_query: SearchQuery):
         
         search_time_ms = (datetime.now() - start_time).total_seconds() * 1000
         
-        return SearchResponse(
+        return FeedMeSearchResponse(
             query=search_query.query,
             results=[],  # Will be populated when embedding search is implemented
             total_found=0,

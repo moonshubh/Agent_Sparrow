@@ -9,16 +9,24 @@ import React from 'react'
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { vi, describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { DragDropContext } from '@hello-pangea/dnd'
+import { DragDropContext, type DropResult } from '@hello-pangea/dnd'
 import { DragDropManager } from '../DragDropManager'
 import { useMoveOperations, useActions, useFolders } from '@/lib/stores/feedme-store'
+// Import the module purely for type reference
+import type * as Store from '@/lib/stores/feedme-store'
 
 // Mock the store
-vi.mock('@/lib/stores/feedme-store', () => ({
-  useMoveOperations: vi.fn(),
-  useActions: vi.fn(),
-  useFolders: vi.fn(),
+vi.mock('@/lib/stores/feedme-store', (): Partial<typeof import('@/lib/stores/feedme-store')> => ({
+  // typed stubbed hooks
+  useMoveOperations: vi.fn() as unknown as typeof Store.useMoveOperations,
+  useActions: vi.fn() as unknown as typeof Store.useActions,
+  useFolders: vi.fn() as unknown as typeof Store.useFolders,
 }))
+
+// Helper typed mocks for store hooks
+const mockedUseMoveOperations = vi.mocked(useMoveOperations)
+const mockedUseActions = vi.mocked(useActions)
+const mockedUseFolders = vi.mocked(useFolders as unknown as typeof Store.useFolders)
 
 // Mock @hello-pangea/dnd
 vi.mock('@hello-pangea/dnd', () => ({
@@ -118,9 +126,11 @@ describe('DragDropManager', () => {
     vi.clearAllMocks()
     
     // Setup store mocks
-    ;(useMoveOperations as any).mockReturnValue(mockMoveOperations)
-    ;(useFolders as any).mockReturnValue({ folders: mockFolders })
-    ;(useActions as any).mockReturnValue(mockActions)
+    mockedUseMoveOperations.mockReturnValue(mockMoveOperations)
+    // Convert folder array to record keyed by id for component expectations
+    const foldersRecord = Object.fromEntries(mockFolders.map(f => [parseInt((f as any).id), f])) as any
+    mockedUseFolders.mockReturnValue(foldersRecord)
+    mockedUseActions.mockReturnValue(mockActions as any)
   })
 
   afterEach(() => {
@@ -189,11 +199,11 @@ describe('DragDropManager', () => {
     })
 
     it('ignores invalid drop operations', () => {
-      const mockDropResult = {
+      const mockDropResult: DropResult = {
         draggableId: 'conv-1',
         type: 'conversation',
         source: { droppableId: 'folder-1', index: 0 },
-        destination: null, // Invalid drop
+        destination: null, // Invalid drop – use null per DropResult contract
         reason: 'DROP',
       }
 
