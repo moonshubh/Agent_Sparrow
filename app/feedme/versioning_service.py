@@ -148,10 +148,10 @@ class VersioningService:
                     
                     conversation_uuid = result['uuid']
                     
-                    # Get all versions for this conversation UUID
+                    # Get all versions for this conversation UUID, excluding deleted ones
                     cur.execute("""
                         SELECT * FROM feedme_conversations 
-                        WHERE uuid = %s 
+                        WHERE uuid = %s AND (is_deleted IS NULL OR is_deleted = false)
                         ORDER BY version DESC
                     """, (conversation_uuid,))
                     

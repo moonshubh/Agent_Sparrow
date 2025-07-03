@@ -747,14 +747,42 @@ export interface FolderListResponse {
  * Get all folders with conversation counts
  */
 export async function listFolders(): Promise<FolderListResponse> {
-  const response = await fetchWithRetry(`${FEEDME_API_BASE}/folders`)
+  try {
+    console.log('[FeedMe API] Fetching folders...')
+    // Increase timeout for database operations
+    const response = await fetchWithRetry(`${FEEDME_API_BASE}/folders`, {}, 3, 30000)
 
-  if (!response.ok) {
-    const errorData = await response.json().catch(() => ({}))
-    throw new Error(errorData.detail || `Failed to list folders: ${response.status} ${response.statusText}`)
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}))
+      const errorMessage = errorData.detail || `Failed to list folders: ${response.status} ${response.statusText}`
+      console.error('[FeedMe API] Folders error:', errorMessage)
+      
+      // Check for specific error types
+      if (response.status === 503) {
+        throw new ApiUnreachableError('FeedMe service is temporarily unavailable')
+      }
+      
+      throw new Error(errorMessage)
+    }
+
+    const data = await response.json()
+    console.log(`[FeedMe API] Successfully fetched ${data.folders?.length || 0} folders`)
+    return data
+  } catch (error) {
+    console.error('[FeedMe API] Error fetching folders:', error)
+    
+    // Re-throw ApiUnreachableError as-is
+    if (error instanceof ApiUnreachableError) {
+      throw error
+    }
+    
+    // Wrap other errors
+    throw new Error(
+      error instanceof Error 
+        ? `Failed to list folders: ${error.message}`
+        : 'Failed to list folders: Unknown error'
+    )
   }
-
-  return response.json()
 }
 
 /**

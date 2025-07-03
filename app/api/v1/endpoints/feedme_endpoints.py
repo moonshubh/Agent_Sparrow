@@ -22,16 +22,17 @@ from app.feedme.schemas import (
     FeedMeExample,
     ConversationCreate,
     ConversationUpdate,
+    ConversationUploadResponse,
     ExampleCreate,
     ExampleUpdate,
     TranscriptUploadRequest,
     ProcessingStatus,
     ApprovalStatus,
     ReviewStatus,
-    FeedMeSearchResult,
+
     ConversationListResponse,
     ExampleListResponse,
-    ProcessingStatusResponse,
+
     SearchQuery,
     SearchResponse,
     ConversationStats,
@@ -96,6 +97,31 @@ import psycopg2
 import psycopg2.extras as psycopg2_extras
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+
+async def update_conversation_status(conversation_id: int, status: ProcessingStatus, error_message: Optional[str] = None):
+    """Updates the processing status and error message of a conversation."""
+    sql = """
+        UPDATE feedme_conversations
+        SET processing_status = %s, error_message = %s, updated_at = NOW()
+        WHERE id = %s
+    """
+    
+    loop = asyncio.get_running_loop()
+
+    def _exec_update():
+        try:
+            manager = get_connection_manager()
+            with manager.get_connection() as conn:
+                with conn.cursor() as cursor:
+                    cursor.execute(sql, (status.value, error_message, conversation_id))
+                    conn.commit()
+        except psycopg2.Error as e:
+            logger.error(f"Failed to update status for conversation {conversation_id}: {e}")
+        except Exception as e:
+            logger.error(f"An unexpected error occurred while updating status for conversation {conversation_id}: {e}")
+    
+    await loop.run_in_executor(None, _exec_update)
 
 # Database connection helper
 def get_db_connection():
@@ -239,7 +265,7 @@ async def update_conversation_in_db(conversation_id: int, update_data: Conversat
 
 # API Endpoints
 
-@router.post("/conversations/upload", response_model=FeedMeConversation, tags=["FeedMe"])
+@router.post("/conversations/upload", response_model=ConversationUploadResponse, status_code=202, tags=["FeedMe"])
 async def upload_transcript(
     background_tasks: BackgroundTasks,
     title: str = Form(..., description="Conversation title"),
@@ -339,98 +365,43 @@ async def upload_transcript(
     )
     
     try:
-        # Create conversation in database
+        # Create conversation in database with 'pending' status
         conversation = await create_conversation_in_db(conversation_data)
         
-        # Schedule background processing if auto_process is enabled
-        async_processing_failed = False
-        if auto_process and settings.feedme_async_processing:
-            try:
-                # Import Celery task and trigger async processing
-                logger.info(f"Attempting to import Celery task for conversation {conversation.id}")
-                from app.feedme.tasks import process_transcript
-                logger.info(f"Successfully imported process_transcript task")
-                
-                # Start async processing task
-                logger.info(f"Starting async processing task for conversation {conversation.id}")
-                task = process_transcript.delay(conversation.id, uploaded_by)
-                logger.info(f"Task created successfully with ID: {task.id}")
-                
-                # Update conversation with task ID and processing status
-                logger.info(f"Updating conversation {conversation.id} with task ID")
-                current_metadata = conversation.metadata or {}
-                updated_metadata = {**current_metadata, "task_id": task.id}
-                
-                await update_conversation_in_db(
-                    conversation.id,
-                    ConversationUpdate(
-                        processing_status=ProcessingStatus.PROCESSING,
-                        metadata=updated_metadata
-                    )
-                )
-                logger.info(f"Successfully started async processing for conversation {conversation.id}, task_id={task.id}")
-                
-            except ImportError as e:
-                logger.error(f"ImportError during Celery task import: {e}")
-                logger.error(f"Import error details: {str(e)}")
-                async_processing_failed = True
-            except Exception as e:
-                logger.error(f"Exception during async processing setup: {e}")
-                logger.error(f"Exception type: {type(e).__name__}")
-                logger.error(f"Exception details: {str(e)}")
-                import traceback
-                logger.error(f"Traceback: {traceback.format_exc()}")
-                async_processing_failed = True
-            
-        if auto_process and (not settings.feedme_async_processing or async_processing_failed):
-            # Async processing disabled or failed, set to pending for manual processing
-            await update_conversation_in_db(
-                conversation.id,
-                ConversationUpdate(processing_status=ProcessingStatus.PENDING)
-            )
-            if async_processing_failed:
-                logger.info(f"Set conversation {conversation.id} to pending (async processing failed, fallback to manual)")
-            else:
-                logger.info(f"Set conversation {conversation.id} to pending (async processing disabled)")
+        # Add background task for processing
+        if auto_process:
+            background_tasks.add_task(process_uploaded_transcript, conversation.id, conversation.uploaded_by)
         
-        logger.info(f"Successfully uploaded transcript: conversation_id={conversation.id}, title='{title}'")
-        
-        # Return appropriate response based on processing mode
-        if auto_process and settings.feedme_async_processing and not async_processing_failed:
-            # Return 202 Accepted for async processing
-            return JSONResponse(
-                status_code=202,
-                content={
-                    **conversation.model_dump(mode='json'),
-                    "message": "Transcript uploaded successfully. Processing started in background.",
-                    "processing_mode": "async"
-                }
-            )
-        else:
-            # Return 200 OK for synchronous or manual processing
-            # Use model_dump with mode='json' to properly serialize datetime objects
-            response_data = conversation.model_dump(mode='json')
-            if async_processing_failed:
-                response_data["message"] = "Transcript uploaded successfully. Async processing unavailable, set to manual processing."
-                response_data["processing_mode"] = "manual_fallback"
-            elif not auto_process:
-                response_data["message"] = "Transcript uploaded successfully. Auto-processing disabled."
-                response_data["processing_mode"] = "manual"
-            else:
-                response_data["message"] = "Transcript uploaded successfully. Async processing disabled, set to manual processing."
-                response_data["processing_mode"] = "manual"
-                
-            return JSONResponse(status_code=200, content=response_data)
-        
-    except HTTPException:
-        # Re-raise HTTP exceptions as-is
+        return ConversationUploadResponse(
+            message="Conversation upload accepted for processing.",
+            conversation_id=conversation.id,
+            processing_status=conversation.processing_status
+        )
+
+    except HTTPException as e:
+        logger.error(f"HTTP error during conversation creation: {e.detail}")
         raise
-    except psycopg2.Error as e:
-        logger.error(f"Database error during upload: {e}")
-        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
     except Exception as e:
-        logger.error(f"Unexpected error uploading transcript: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Failed to upload transcript: {str(e)}")
+        logger.error(f"Failed to create conversation: {e}")
+        raise HTTPException(status_code=500, detail="Failed to create conversation")
+
+async def process_uploaded_transcript(conversation_id: int, processed_by: str):
+    """Background task to process a newly uploaded transcript."""
+    try:
+        from app.feedme.tasks import process_transcript
+        logger.info(f"Starting background processing for conversation {conversation_id}")
+        await update_conversation_status(conversation_id, ProcessingStatus.PROCESSING)
+        
+        # This is where the heavy lifting happens
+        # In a real system, this would be a Celery task
+        process_transcript(conversation_id, processed_by)
+        
+        await update_conversation_status(conversation_id, ProcessingStatus.COMPLETED)
+        logger.info(f"Successfully processed conversation {conversation_id}")
+        
+    except Exception as e:
+        logger.error(f"Background processing failed for conversation {conversation_id}: {e}")
+        await update_conversation_status(conversation_id, ProcessingStatus.FAILED)
 
 
 @router.get("/conversations", response_model=ConversationListResponse, tags=["FeedMe"])
@@ -603,25 +574,29 @@ async def delete_conversation(conversation_id: int):
                 
                 example_count_result = cur.fetchone()
                 examples_deleted = example_count_result['example_count'] if example_count_result else 0
-                
-                # Delete conversation (cascade will delete examples)
-                cur.execute("DELETE FROM feedme_conversations WHERE id = %s", (conversation_id,))
-                conn.commit()
-                
-                logger.info(f"Deleted conversation {conversation_id} with {examples_deleted} examples")
-                
-                return DeleteConversationResponse(
-                    conversation_id=conversation['id'],
-                    title=conversation['title'],
-                    examples_deleted=examples_deleted,
-                    message="Conversation and all associated examples deleted successfully"
-                )
-            
-    except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error deleting conversation {conversation_id}: {e}")
-        raise HTTPException(status_code=500, detail="Failed to delete conversation")
+        logger.error(f"Failed to create conversation: {e}")
+        raise HTTPException(status_code=500, detail="Failed to create conversation")
+
+
+async def process_uploaded_transcript(conversation_id: int, processed_by: str):
+    """Background task to process a newly uploaded transcript."""
+    try:
+        from app.feedme.tasks import process_transcript
+        logger.info(f"Starting background processing for conversation {conversation_id}")
+        await update_conversation_status(conversation_id, ProcessingStatus.PROCESSING)
+        
+        # This is where the heavy lifting happens
+        # In a real system, this would be a Celery task
+        process_transcript(conversation_id, processed_by)
+        
+        await update_conversation_status(conversation_id, ProcessingStatus.COMPLETED)
+        logger.info(f"Successfully processed conversation {conversation_id}")
+        
+    except Exception as e:
+        logger.error(f"Background processing failed for conversation {conversation_id}: {e}")
+        await update_conversation_status(conversation_id, ProcessingStatus.FAILED)
 
 
 @router.get("/conversations/{conversation_id}/examples", response_model=ExampleListResponse, tags=["FeedMe"])
@@ -819,7 +794,7 @@ async def get_formatted_qa_content(conversation_id: int):
         }
 
 
-@router.get("/conversations/{conversation_id}/status", response_model=ProcessingStatusResponse, tags=["FeedMe"])
+@router.get("/conversations/{conversation_id}/status", response_model=FeedMeConversation, tags=["FeedMe"])
 async def get_processing_status(conversation_id: int):
     """
     Retrieve the processing status and progress information for a specific conversation.
@@ -838,22 +813,7 @@ async def get_processing_status(conversation_id: int):
     if not conversation:
         raise HTTPException(status_code=404, detail="Conversation not found")
     
-    # Calculate progress percentage based on status
-    progress_map = {
-        ProcessingStatus.PENDING: 0.0,
-        ProcessingStatus.PROCESSING: 50.0,
-        ProcessingStatus.COMPLETED: 100.0,
-        ProcessingStatus.FAILED: 0.0
-    }
-    
-    return ProcessingStatusResponse(
-        conversation_id=conversation.id,
-        status=conversation.processing_status,
-        progress_percentage=progress_map.get(conversation.processing_status, 0.0),
-        error_message=conversation.error_message,
-        examples_extracted=conversation.total_examples,
-        estimated_completion=None  # Would be calculated by Celery task
-    )
+    return conversation
 
 
 @router.post("/search", response_model=SearchResponse, tags=["FeedMe"])
@@ -2290,18 +2250,20 @@ async def list_folders():
     """
     
     if not settings.feedme_enabled:
+        logger.warning("FeedMe service is disabled")
         raise HTTPException(status_code=503, detail="FeedMe service is currently disabled")
+    
+    logger.info("Fetching folders list...")
     
     try:
         with get_db_connection() as conn:
             with conn.cursor(cursor_factory=psycopg2_extras.RealDictCursor) as cur:
-                # Get folders with conversation counts
-                # More efficient query to get folders with conversation counts
+                logger.debug("Executing query to fetch folders with conversation counts.")
                 cur.execute("""
                     SELECT 
                         f.id, f.name, f.color, f.description, 
                         f.created_by, f.created_at, f.updated_at, 
-                        COUNT(c.id) as conversation_count
+                        COALESCE(COUNT(c.id), 0) as conversation_count
                     FROM feedme_folders f
                     LEFT JOIN feedme_conversations c ON f.id = c.folder_id AND c.is_active = true
                     GROUP BY f.id
@@ -2309,20 +2271,46 @@ async def list_folders():
                 """)
                 
                 folder_rows = cur.fetchall()
-                folders = []
-                
-                for row in folder_rows:
-                    folder_dict = dict(row)
-                    folders.append(FeedMeFolder(**folder_dict))
-                
-                return FolderListResponse(
-                    folders=folders,
-                    total_count=len(folders)
-                )
+                folders = [FeedMeFolder(**dict(row)) for row in folder_rows]
+                logger.info(f"Found {len(folders)} folders.")
+
+                if not folders:
+                    logger.info("No folders found. Creating a default 'General' folder.")
+                    cur.execute("""
+                        INSERT INTO feedme_folders (name, color, description, created_by)
+                        VALUES ('General', '#0095ff', 'Default folder for conversations', 'system')
+                        RETURNING id, name, color, description, created_by, created_at, updated_at;
+                    """)
+                    new_folder_row = cur.fetchone()
+                    conn.commit()
+                    if new_folder_row:
+                        new_folder_dict = dict(new_folder_row)
+                        new_folder_dict['conversation_count'] = 0
+                        folders.append(FeedMeFolder(**new_folder_dict))
+                        logger.info("Default 'General' folder created successfully.")
+
+        return FolderListResponse(
+            folders=folders,
+            total_count=len(folders)
+        )
             
+    except HTTPException:
+        # Re-raise HTTP exceptions as-is
+        raise
+    except psycopg2.OperationalError as e:
+        logger.error(f"Database connection error: {e}")
+        raise HTTPException(
+            status_code=503, 
+            detail="Database connection failed. Please check database settings."
+        )
     except Exception as e:
-        logger.error(f"Error listing folders: {e}")
-        raise HTTPException(status_code=500, detail="Failed to list folders")
+        logger.error(f"Unexpected error listing folders: {type(e).__name__}: {e}")
+        import traceback
+        logger.error(f"Traceback: {traceback.format_exc()}")
+        raise HTTPException(
+            status_code=500, 
+            detail=f"Failed to list folders: {type(e).__name__}: {str(e)}"
+        )
 
 
 @router.post("/folders", response_model=FeedMeFolder, tags=["FeedMe"])

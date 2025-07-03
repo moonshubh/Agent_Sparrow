@@ -15,6 +15,7 @@ from app.api.v1.endpoints import agent_endpoints  # Agent interaction endpoints
 from app.api.v1.endpoints import feedme_endpoints  # FeedMe transcript ingestion
 from app.api.v1.endpoints import chat_session_endpoints  # Chat session persistence
 from app.api.v1.endpoints import rate_limit_endpoints  # Rate limiting monitoring
+from app.api.v1.websocket import feedme_websocket  # FeedMe WebSocket endpoints
 
 # OpenTelemetry Setup
 from opentelemetry import trace
@@ -78,6 +79,8 @@ app.include_router(feedme_endpoints.router, prefix="/api/v1/feedme", tags=["Feed
 app.include_router(chat_session_endpoints.router, prefix="/api/v1", tags=["Chat Sessions"])
 # Register Rate Limiting routes
 app.include_router(rate_limit_endpoints.router, prefix="/api/v1", tags=["Rate Limiting"])
+# Register FeedMe WebSocket routes
+app.include_router(feedme_websocket.router, prefix="/ws", tags=["FeedMe WebSocket"])
 
 # Global exception handler for sanitizing error messages
 @app.exception_handler(Exception)

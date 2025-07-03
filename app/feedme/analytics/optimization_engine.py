@@ -395,8 +395,18 @@ class OptimizationEngine:
         
         for candidate, score in scored_candidates:
             # Skip if prerequisites not met
-            if candidate.prerequisites and not await self._check_prerequisites(candidate.prerequisites):
-                continue
+# Change the filter method to async so you can use await inside it
+async def _filter_candidates_by_feasibility(
+    self,
+    scored_candidates: List[Tuple[OptimizationCandidate, float]]
+) -> List[Tuple[OptimizationCandidate, float]]:
+    filtered = []
+    for candidate, score in scored_candidates:
+        if candidate.prerequisites and not await self._check_prerequisites(candidate.prerequisites):
+            continue
+        # … other feasibility checks …
+        filtered.append((candidate, score))
+    return filtered
             
             # Skip high-risk optimizations in production
             if candidate.risk_level == 'high' and self.config.get('environment') == 'production':

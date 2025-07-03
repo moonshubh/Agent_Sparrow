@@ -354,23 +354,22 @@ def get_db_connection():
 def health_check() -> Dict[str, Any]:
     """
     Perform a comprehensive health check of the database connection
-    
+
     Returns:
         Dict containing health status and statistics
     """
     try:
         manager = get_connection_manager()
         stats = manager.get_stats()
-        
-        # Test basic operations (avoid recursion in health check)
-        conn = None
-        try:
-            conn = manager.get_raw_connection()
+
+        # Test basic operations using the connection context manager
+        with manager.get_connection() as conn:
             with conn.cursor() as cur:
                 # Test basic query
                 cur.execute("SELECT 1 as test")
-                basic_test = cur.fetchone()["test"] == 1
-                
+                result = cur.fetchone()
+                basic_test = result['test'] == 1 if result else False
+
                 # Test vector extension
                 vector_test = False
                 try:
@@ -378,25 +377,22 @@ def health_check() -> Dict[str, Any]:
                     vector_test = True
                 except Exception as e:
                     logger.warning(f"Vector extension test failed: {e}")
-                
+
                 # Test FeedMe tables existence
                 cur.execute("""
                     SELECT EXISTS (
-                        SELECT FROM information_schema.tables 
-                        WHERE table_schema = 'public' 
+                        SELECT FROM information_schema.tables
+                        WHERE table_schema = 'public'
                         AND table_name = 'feedme_conversations'
                     ) as conversations_exist,
                     EXISTS (
-                        SELECT FROM information_schema.tables 
-                        WHERE table_schema = 'public' 
+                        SELECT FROM information_schema.tables
+                        WHERE table_schema = 'public'
                         AND table_name = 'feedme_examples'
                     ) as examples_exist
                 """)
                 table_check = cur.fetchone()
-        finally:
-            if conn:
-                manager.close_connection(conn)
-        
+
         return {
             "status": "healthy" if all([basic_test, stats["is_healthy"]]) else "unhealthy",
             "basic_query_test": basic_test,
@@ -408,7 +404,7 @@ def health_check() -> Dict[str, Any]:
             "connection_stats": stats,
             "timestamp": time.time()
         }
-        
+
     except Exception as e:
         logger.error(f"Health check failed: {e}")
         return {

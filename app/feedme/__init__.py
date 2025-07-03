@@ -15,7 +15,7 @@ from .schemas import (
     ExampleUpdate,
     TranscriptUploadRequest,
     ProcessingStatus,
-    FeedMeSearchResult
+
 )
 
 __all__ = [
@@ -27,5 +27,5 @@ __all__ = [
     'ExampleUpdate',
     'TranscriptUploadRequest',
     'ProcessingStatus',
-    'FeedMeSearchResult'
+
 ]
