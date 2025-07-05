@@ -44,9 +44,20 @@ const fetchWithRetry = async (
     }
     
     // On final failure, throw ApiUnreachableError with friendly message
-    const message = error instanceof Error && error.name === 'AbortError' 
-      ? 'Request timed out - please check your internet connection'
-      : 'Unable to reach FeedMe service - please try again later'
+    let message: string
+    if (error instanceof Error) {
+      if (error.name === 'AbortError') {
+        message = 'Request timed out - please check your internet connection'
+      } else if (error.message.includes('NetworkError') || error.message.includes('fetch')) {
+        message = 'Network error - please check your internet connection'
+      } else if (error.message.includes('ECONNREFUSED') || error.message.includes('refused')) {
+        message = 'FeedMe service is currently unavailable - please try again later'
+      } else {
+        message = `Connection failed: ${error.message}`
+      }
+    } else {
+      message = 'Unable to reach FeedMe service - please try again later'
+    }
     
     throw new ApiUnreachableError(message, error instanceof Error ? error : new Error(String(error)))
   }
@@ -91,6 +102,9 @@ export interface ConversationListResponse {
   page: number
   page_size: number
   has_next: boolean
+  // Support both backend schema variations
+  total_conversations?: number
+  total_pages?: number
 }
 
 // Approval Workflow Types
@@ -658,6 +672,20 @@ export async function getApprovalWorkflowStats(): Promise<ApprovalWorkflowStats>
   if (!response.ok) {
     const errorData = await response.json().catch(() => ({}))
     throw new Error(errorData.detail || `Failed to get approval workflow stats: ${response.status} ${response.statusText}`)
+  }
+
+  return response.json()
+}
+
+/**
+ * Get general FeedMe analytics
+ */
+export async function getAnalytics(): Promise<any> {
+  const response = await fetchWithRetry(`${FEEDME_API_BASE}/analytics`)
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}))
+    throw new Error(errorData.detail || `Failed to get analytics: ${response.status} ${response.statusText}`)
   }
 
   return response.json()

@@ -1,0 +1,128 @@
+{
+  "enterprise_components_never_integrated": [
+    {
+      "path": "components/feedme/AnalyticsDashboard.tsx",
+      "lines": 921,
+      "reason": "Enterprise analytics with charts - never integrated, Simple version used instead",
+      "superseded_by": "AnalyticsDashboardSimple.tsx"
+    },
+    {
+      "path": "components/feedme/ConversationEditor.tsx", 
+      "lines": 882,
+      "reason": "Split-pane editor with AI assistance - never integrated, Simple version used instead",
+      "superseded_by": "ConversationEditorSimple.tsx"
+    },
+    {
+      "path": "components/feedme/FileGridView.tsx",
+      "lines": 688,
+      "reason": "Advanced grid with virtualization - never integrated, Simple version used instead", 
+      "superseded_by": "FileGridViewSimple.tsx"
+    },
+    {
+      "path": "components/feedme/FolderTreeView.tsx",
+      "lines": 518,
+      "reason": "Advanced tree with drag-drop - never integrated, Simple version used instead",
+      "superseded_by": "FolderTreeViewSimple.tsx"
+    },
+    {
+      "path": "components/feedme/UnifiedSearchBar.tsx",
+      "lines": 953,
+      "reason": "Advanced search with autocomplete - never integrated, Simple version used instead",
+      "superseded_by": "UnifiedSearchBarSimple.tsx"
+    },
+    {
+      "path": "components/feedme/QAPairExtractor.tsx",
+      "lines": 1127,
+      "reason": "Q&A extraction UI - never connected to any workflow",
+      "superseded_by": "none - functionality moved to backend"
+    },
+    {
+      "path": "components/feedme/SearchResultsGrid.tsx",
+      "lines": 881,
+      "reason": "Advanced search results - never integrated",
+      "superseded_by": "none - basic search in UnifiedSearchBarSimple"
+    },
+    {
+      "path": "components/feedme/DragDropManager.tsx",
+      "lines": 821,
+      "reason": "Drag-drop functionality - never connected to any component",
+      "superseded_by": "none"
+    },
+    {
+      "path": "components/feedme/ValidationPanel.tsx",
+      "lines": 997,
+      "reason": "Content validation UI - never integrated",
+      "superseded_by": "none - validation moved to backend"
+    }
+  ],
+  "unused_duplicate_components": [
+    {
+      "path": "components/feedme/FeedMeModal.tsx",
+      "lines": 521,
+      "reason": "Superseded by EnhancedFeedMeModal",
+      "superseded_by": "EnhancedFeedMeModal.tsx"
+    },
+    {
+      "path": "components/feedme/EditConversationModal.tsx",
+      "lines": 871,
+      "reason": "Edit modal never integrated into any workflow",
+      "superseded_by": "none - editing not implemented in UI"
+    },
+    {
+      "path": "components/feedme/FolderManager.tsx",
+      "lines": 445,
+      "reason": "Advanced folder management never integrated",
+      "superseded_by": "basic folder functionality in FolderTreeViewSimple"
+    },
+    {
+      "path": "components/feedme/RichTextEditor.tsx",
+      "lines": 623,
+      "reason": "Rich text editing never integrated",
+      "superseded_by": "none"
+    },
+    {
+      "path": "components/feedme/VersionHistoryPanel.tsx",
+      "lines": 398,
+      "reason": "Version history UI never integrated",
+      "superseded_by": "none - versioning backend-only"
+    },
+    {
+      "path": "components/feedme/DiffViewer.tsx",
+      "lines": 234,
+      "reason": "Diff viewing never integrated",
+      "superseded_by": "none"
+    }
+  ],
+  "test_files_for_removed_components": [
+    {
+      "path": "components/feedme/__tests__/AnalyticsDashboard.test.tsx",
+      "reason": "Tests for removed AnalyticsDashboard.tsx"
+    },
+    {
+      "path": "components/feedme/__tests__/ConversationEditor.test.tsx",
+      "reason": "Tests for removed ConversationEditor.tsx"
+    },
+    {
+      "path": "components/feedme/__tests__/DragDropManager.test.tsx",
+      "reason": "Tests for removed DragDropManager.tsx"
+    },
+    {
+      "path": "components/feedme/__tests__/EditConversationModal.test.tsx",
+      "reason": "Tests for removed EditConversationModal.tsx"
+    },
+    {
+      "path": "components/feedme/__tests__/FileGridView.test.tsx",
+      "reason": "Tests for removed FileGridView.tsx"
+    },
+    {
+      "path": "components/feedme/__tests__/FolderTreeView.test.tsx",
+      "reason": "Tests for removed FolderTreeView.tsx"
+    },
+    {
+      "path": "components/feedme/__tests__/QAPairExtractor.test.tsx",
+      "reason": "Tests for removed QAPairExtractor.tsx"
+    }
+  ],
+  "total_lines_removed": 8500,
+  "total_components_removed": 16
+}

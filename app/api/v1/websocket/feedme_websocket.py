@@ -13,6 +13,7 @@ from datetime import datetime, timedelta, timezone
 from typing import List, Optional, Dict, Any
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Depends, Query, HTTPException
 
+from app.core.settings import settings
 from app.feedme.websocket.realtime_manager import realtime_manager
 from app.feedme.websocket.schemas import (
     ConnectionRequest,
@@ -77,9 +78,14 @@ async def get_current_user_from_token(token: Optional[str] = Query(None)) -> str
         
         # For production JWT tokens (if any)
         try:
-            # In production, get this from environment/config
-            JWT_SECRET = "your-secret-key-here"  # Should be loaded from settings
-            JWT_ALGORITHM = "HS256"
+            # Load JWT configuration from secure settings
+            JWT_SECRET = settings.jwt_secret
+            JWT_ALGORITHM = settings.jwt_algorithm
+            
+            # Security validation: ensure production secret is properly configured
+            if JWT_SECRET in ("your-secret-key-here", "change-this-in-production"):
+                logger.warning("JWT secret is using default value - this is insecure for production!")
+                # In development/demo, allow but warn. In production, consider raising an exception.
             
             # Decode and validate JWT token
             payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])

@@ -1,9 +1,10 @@
 "use client"
 
 import React, { useState } from 'react'
+import { useRouter } from 'next/navigation'
 import { Button } from '@/components/ui/button'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
-import { FileText, Upload } from 'lucide-react'
+import { FileText, Upload, ExternalLink } from 'lucide-react'
 import { FeedMeConversationManager } from '@/components/feedme/FeedMeConversationManager'
 import { EnhancedFeedMeModal } from '@/components/feedme/EnhancedFeedMeModal'
 import { ErrorBoundary } from '@/components/ui/ErrorBoundary'
@@ -11,16 +12,21 @@ import { useWebSocketConnection } from '@/hooks/useWebSocket'
 
 interface FeedMeButtonProps {
   onClick?: () => void
-  mode?: 'manager' | 'upload'
+  mode?: 'manager' | 'upload' | 'navigate'
 }
 
-export function FeedMeButton({ onClick, mode = 'manager' }: FeedMeButtonProps) {
+export function FeedMeButton({ onClick, mode = 'navigate' }: FeedMeButtonProps) {
   const [isHovered, setIsHovered] = useState(false)
   const [isModalOpen, setIsModalOpen] = useState(false)
+  const router = useRouter()
   const { isConnected } = useWebSocketConnection()
 
   const handleClick = () => {
-    setIsModalOpen(true)
+    if (mode === 'navigate') {
+      router.push('/feedme')
+    } else {
+      setIsModalOpen(true)
+    }
     onClick?.()
   }
 
@@ -29,10 +35,12 @@ export function FeedMeButton({ onClick, mode = 'manager' }: FeedMeButtonProps) {
     console.log('Upload completed:', results)
   }
 
-  const Icon = mode === 'upload' ? Upload : FileText
+  const Icon = mode === 'upload' ? Upload : mode === 'navigate' ? ExternalLink : FileText
   const tooltipText = mode === 'upload' 
     ? 'FeedMe - Upload transcripts' 
-    : 'FeedMe - Manage conversations'
+    : mode === 'navigate' 
+      ? 'FeedMe - Open full page' 
+      : 'FeedMe - Manage conversations'
 
   return (
     <>

@@ -40,6 +40,7 @@ export const useWebSocket = (options: UseWebSocketOptions = {}): WebSocketConnec
   const reconnectAttempts = useRef(0)
   const reconnectTimer = useRef<NodeJS.Timeout | null>(null)
   const isManualDisconnect = useRef(false)
+  const isMounted = useRef(false)
 
   const log = useCallback((message: string, ...args: any[]) => {
     if (debug) {
@@ -83,12 +84,20 @@ export const useWebSocket = (options: UseWebSocketOptions = {}): WebSocketConnec
     log(`Scheduling reconnect in ${delay}ms (attempt ${reconnectAttempts.current + 1}/${maxReconnectAttempts})`)
 
     reconnectTimer.current = setTimeout(() => {
+      if (!isMounted.current) {
+        log('Skipping reconnect - component unmounted')
+        return
+      }
       reconnectAttempts.current++
       connectWebSocket()
     }, delay)
   }, [reconnectInterval, maxReconnectAttempts, connectWebSocket, addNotification, log])
 
   const connect = useCallback(() => {
+    if (!isMounted.current) {
+      log('Attempted to connect after unmount, ignoring')
+      return
+    }
     log('Connecting...')
     isManualDisconnect.current = false
     clearReconnectTimer()
@@ -126,23 +135,38 @@ export const useWebSocket = (options: UseWebSocketOptions = {}): WebSocketConnec
     }
   }, [connectionStatus, scheduleReconnect, clearReconnectTimer, log])
 
-  // Auto-connect on mount
+  // Mount/unmount effect - only runs once
   useEffect(() => {
-    if (autoConnect && connectionStatus === 'disconnected' && !isConnected) {
-      log('Auto-connecting on mount')
-      connect()
-    }
-
+    isMounted.current = true
+    log('WebSocket hook mounted')
+    
     // Cleanup on unmount
     return () => {
       log('Cleaning up WebSocket connection')
+      isMounted.current = false
+      isManualDisconnect.current = true
       clearReconnectTimer()
-      if (isConnected) {
-        isManualDisconnect.current = true
-        disconnectWebSocket()
-      }
+      disconnectWebSocket()
     }
-  }, []) // Empty dependency array for mount/unmount only
+  }, [log, clearReconnectTimer, disconnectWebSocket])
+  
+  // Separate auto-connect effect that can respond to state changes
+  useEffect(() => {
+    // Only auto-connect if:
+    // 1. Component is mounted
+    // 2. autoConnect is enabled
+    // 3. Currently disconnected
+    // 4. Not connected
+    if (
+      isMounted.current && 
+      autoConnect && 
+      connectionStatus === 'disconnected' && 
+      !isConnected
+    ) {
+      log('Auto-connecting due to state change')
+      connect()
+    }
+  }, [autoConnect, connectionStatus, isConnected, connect, log])
 
   // Handle page visibility changes for connection management
   useEffect(() => {
