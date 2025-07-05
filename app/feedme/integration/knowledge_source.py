@@ -12,8 +12,7 @@ from typing import List, Dict, Any, Optional
 import numpy as np
 from sentence_transformers import SentenceTransformer
 
-from app.feedme.search.hybrid_search_engine import HybridSearchEngine
-from app.feedme.repositories.optimized_repository import OptimizedFeedMeRepository
+from app.feedme.search.hybrid_search_supabase import HybridSearchEngineSupabase
 from app.core.settings import settings
 
 logger = logging.getLogger(__name__)
@@ -30,15 +29,17 @@ class FeedMeKnowledgeSource:
     - Performance optimization
     """
     
-    def __init__(self, repository: Optional[OptimizedFeedMeRepository] = None):
+    def __init__(self, use_supabase: bool = True):
         """
-        Initialize FeedMe knowledge source
+        Initialize FeedMe knowledge source with Supabase-only backend
         
         Args:
-            repository: Optional repository instance (for testing)
+            use_supabase: Kept for backward compatibility, always True
         """
-        self.repository = repository or OptimizedFeedMeRepository()
-        self.search_engine = HybridSearchEngine()
+        # Always use Supabase
+        logger.info("Initializing FeedMe with Supabase-only backend")
+        self.search_engine = HybridSearchEngineSupabase()
+        self.use_supabase = True
         
         # Initialize embedding model for query encoding
         self.embedding_model = None
@@ -103,11 +104,12 @@ class FeedMeKnowledgeSource:
             filters = self._build_search_filters(context, min_confidence)
             
             # Perform hybrid search
-            results = self._perform_search(
+            results = await self._perform_search(
                 query=query,
                 query_embedding=query_embedding,
                 filters=filters,
-                limit=limit
+                limit=limit,
+                context=context
             )
             
             # Track usage for retrieved examples
@@ -210,12 +212,13 @@ class FeedMeKnowledgeSource:
         
         return filters
     
-    def _perform_search(
+    async def _perform_search(
         self,
         query: str,
         query_embedding: np.ndarray,
         filters: Dict[str, Any],
-        limit: int
+        limit: int,
+        context: Dict[str, Any]
     ) -> List[Dict[str, Any]]:
         """
         Perform actual search using hybrid search engine
@@ -225,19 +228,40 @@ class FeedMeKnowledgeSource:
             query_embedding: Query embedding vector
             filters: Search filters
             limit: Maximum results
+            context: Additional context for search
             
         Returns:
             Search results
         """
         try:
-            # Use repository's hybrid search method (note: it's sync, not async)
-            results = self.repository.search_examples_hybrid(
-                query=query,
-                embedding=query_embedding,
-                filters=filters,
-                limit=min(limit, self.max_retrieval_results),
-                min_confidence=filters.get('min_confidence', self.default_confidence_threshold)
-            )
+            # Use Supabase-enabled search engine if available
+            if self.use_supabase:
+                # Determine which sources to search based on context
+                search_supabase = context.get('include_approved', True)
+                search_local = context.get('include_pending', True)
+                
+                results = await self.search_engine.search(
+                    query=query,
+                    query_embedding=query_embedding,
+                    limit=min(limit, self.max_retrieval_results),
+                    filters=filters,
+                    min_confidence=filters.get('min_confidence', self.default_confidence_threshold),
+                    enable_stemming=False,
+                    track_performance=True,
+                    search_supabase=search_supabase,
+                    search_local=search_local
+                )
+            else:
+                # Use regular sync search engine
+                results = self.search_engine.search(
+                    query=query,
+                    query_embedding=query_embedding,
+                    limit=min(limit, self.max_retrieval_results),
+                    filters=filters,
+                    min_confidence=filters.get('min_confidence', self.default_confidence_threshold),
+                    enable_stemming=False,
+                    track_performance=True
+                )
             
             # Ensure results have required fields
             formatted_results = []
@@ -283,11 +307,8 @@ class FeedMeKnowledgeSource:
             for result in results:
                 example_id = result.get('id')
                 if example_id:
-                    # Repository method is sync, execute directly
-                    try:
-                        self.repository.increment_usage_count(example_id)
-                    except Exception as e:
-                        logger.error(f"Failed to increment usage count for example {example_id}: {e}")
+                    # TODO: Implement usage tracking in Supabase
+                    logger.debug(f"Usage tracking for example {example_id} - pending Supabase implementation")
             
             logger.debug(f"Tracked usage for {len(results)} examples")
                 
@@ -328,25 +349,9 @@ class FeedMeKnowledgeSource:
             List of related conversation examples
         """
         try:
-            # Get the reference example (repository method is sync, not async)
-            reference_example = self.repository.get_example(example_id)
-            if not reference_example:
-                logger.warning(f"Reference example not found: {example_id}")
-                return []
-            
-            # Get similar examples based on combined embedding
-            reference_embedding = reference_example.get('combined_embedding')
-            if not reference_embedding:
-                logger.warning(f"Reference example has no embedding: {example_id}")
-                return []
-            
-            # Find similar examples (repository method is sync, not async)
-            similar_examples = self.repository.find_similar_examples(
-                reference_embedding=np.array(reference_embedding),
-                exclude_id=example_id,
-                limit=limit,
-                min_similarity=0.75
-            )
+            # TODO: Implement get_related_conversations using Supabase
+            logger.warning(f"get_related_conversations not yet implemented for Supabase - example_id: {example_id}")
+            return []
             
             return similar_examples
             
@@ -391,15 +396,13 @@ class FeedMeKnowledgeSource:
             status['status'] = 'degraded'
         
         try:
-            # Check repository connection
-            # Simple check by attempting to get repository stats (repository method is sync)
-            repo_stats = self.repository.get_repository_statistics()
-            status['components']['repository'] = {
-                'status': 'healthy',
-                'total_examples': repo_stats.get('total_examples', 0)
-            }
+            # Check Supabase connection through search engine
+            search_health = await self.search_engine.health_check()
+            status['components']['search_engine'] = search_health
+            if search_health.get('status') != 'healthy':
+                status['status'] = 'degraded'
         except Exception as e:
-            status['components']['repository'] = {
+            status['components']['search_engine'] = {
                 'status': 'unhealthy',
                 'error': str(e)
             }

@@ -141,14 +141,13 @@ def worker_init_handler(sender=None, **kwargs):
     """Initialize worker with necessary connections and configurations"""
     logger.info(f"Celery worker starting: {sender}")
     
-    # Initialize database connections
+    # Initialize Supabase client
     try:
-        from app.db.connection_manager import get_connection_manager
-        manager = get_connection_manager()
-        stats = manager.get_stats()
-        logger.info(f"Database connection pool initialized: {stats}")
+        from app.db.supabase_client import get_supabase_client
+        client = get_supabase_client()
+        logger.info("Supabase client initialized successfully")
     except Exception as e:
-        logger.error(f"Failed to initialize database connections: {e}")
+        logger.error(f"Failed to initialize Supabase client: {e}")
     
     # Initialize embedding model
     try:
@@ -164,13 +163,8 @@ def worker_shutdown_handler(sender=None, **kwargs):
     """Clean up worker resources on shutdown"""
     logger.info(f"Celery worker shutting down: {sender}")
     
-    try:
-        from app.db.connection_manager import get_connection_manager
-        manager = get_connection_manager()
-        manager.close()
-        logger.info("Database connections closed")
-    except Exception as e:
-        logger.error(f"Error closing database connections: {e}")
+    # Supabase client cleanup handled automatically
+    logger.info("Worker shutdown complete")
 
 
 # Health check for Celery application

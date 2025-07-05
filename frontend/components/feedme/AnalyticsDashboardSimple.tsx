@@ -7,7 +7,7 @@
 
 import React, { useEffect } from 'react'
 import { BarChart3, Users, FileText, Clock, TrendingUp } from 'lucide-react'
-import { useAnalytics, useActions } from '@/lib/stores/feedme-store'
+import { useAnalytics, useAnalyticsActions } from '@/lib/stores/analytics-store'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 
@@ -48,11 +48,11 @@ const MetricCard = ({ title, value, description, icon, trend }: MetricCardProps)
 
 export function AnalyticsDashboard() {
   const { workflowStats, isLoading } = useAnalytics()
-  const actions = useActions()
+  const analyticsActions = useAnalyticsActions()
 
   useEffect(() => {
-    actions.loadAnalytics()
-  }, [actions])
+    analyticsActions.loadAllMetrics()
+  }, [analyticsActions])
 
   if (isLoading) {
     return (
@@ -110,7 +110,7 @@ export function AnalyticsDashboard() {
           title="Processing"
           value={workflowStats?.currently_processing || 0}
           description="Currently being analyzed"
-          icon={<BarChart3 className="h-4 w-4 text-purple-500" />}
+          icon={<BarChart3 className="h-4 w-4 text-accent" />}
           trend="neutral"
         />
       </div>

@@ -174,6 +174,31 @@ export interface ExampleReviewResponse {
   timestamp: string
 }
 
+export interface ExampleListResponse {
+  examples: FeedMeExample[]
+  total_examples: number
+  page: number
+  page_size: number
+  total_pages: number
+}
+
+export interface FeedMeExample {
+  id: number
+  conversation_id: number
+  question_text: string
+  answer_text: string
+  context_before?: string
+  context_after?: string
+  tags: string[]
+  issue_type?: string
+  resolution_type?: string
+  confidence_score: number
+  usefulness_score: number
+  is_active: boolean
+  created_at: string
+  updated_at: string
+}
+
 // API Client Class
 export class FeedMeApiClient {
   private baseUrl: string
@@ -360,6 +385,85 @@ export class FeedMeApiClient {
       return false
     }
   }
+
+  /**
+   * Get conversation examples
+   */
+  async getConversationExamples(
+    conversationId: number,
+    page: number = 1,
+    pageSize: number = 20,
+    isActive?: boolean
+  ): Promise<ExampleListResponse> {
+    const params = new URLSearchParams({
+      page: page.toString(),
+      page_size: pageSize.toString(),
+    })
+
+    if (isActive !== undefined) {
+      params.append('is_active', isActive.toString())
+    }
+
+    const response = await fetchWithRetry(`${this.baseUrl}/conversations/${conversationId}/examples?${params.toString()}`)
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}))
+      throw new Error(errorData.detail || `Failed to get examples: ${response.status} ${response.statusText}`)
+    }
+
+    return response.json()
+  }
+
+  /**
+   * Update an example
+   */
+  async updateExample(
+    exampleId: number,
+    updates: Partial<FeedMeExample>
+  ): Promise<FeedMeExample> {
+    const response = await fetchWithRetry(`${this.baseUrl}/examples/${exampleId}`, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(updates),
+    })
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}))
+      throw new Error(errorData.detail || `Failed to update example: ${response.status} ${response.statusText}`)
+    }
+
+    return response.json()
+  }
+
+  /**
+   * Create folder with Supabase sync
+   */
+  async createFolderSupabase(folderData: FolderCreate): Promise<any> {
+    return createFolderSupabase(folderData)
+  }
+
+  /**
+   * Update folder with Supabase sync
+   */
+  async updateFolderSupabase(folderId: number, folderData: FolderUpdate): Promise<any> {
+    return updateFolderSupabase(folderId, folderData)
+  }
+
+  /**
+   * Delete folder with Supabase sync
+   */
+  async deleteFolderSupabase(folderId: number, moveConversationsTo?: number): Promise<any> {
+    return deleteFolderSupabase(folderId, moveConversationsTo)
+  }
+
+  /**
+   * Assign conversations to folder with Supabase sync
+   */
+  async assignConversationsToFolderSupabase(folderId: number | null, conversationIds: number[]): Promise<any> {
+    return assignConversationsToFolderSupabase(folderId, conversationIds)
+  }
 }
 
 // Default client instance
@@ -472,11 +576,9 @@ export interface VersionDiff {
 }
 
 export interface ConversationEditRequest {
-  title?: string
-  raw_transcript?: string
-  metadata?: Record<string, any>
-  updated_by: string
-  reprocess?: boolean
+  transcript_content: string
+  edit_reason: string
+  user_id: string
 }
 
 export interface ConversationRevertRequest {
@@ -908,6 +1010,180 @@ export async function listFolderConversations(folderId: number, page = 1, pageSi
   if (!response.ok) {
     const errorData = await response.json().catch(() => ({}))
     throw new Error(errorData.detail || `Failed to list folder conversations: ${response.status} ${response.statusText}`)
+  }
+
+  return response.json()
+}
+
+// Supabase-enabled Folder Management Functions
+
+/**
+ * Create folder with Supabase sync
+ */
+export async function createFolderSupabase(folderData: FolderCreate): Promise<any> {
+  const response = await fetchWithRetry(`${FEEDME_API_BASE}/folders/create`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(folderData),
+  })
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}))
+    throw new Error(errorData.detail || `Failed to create folder: ${response.status} ${response.statusText}`)
+  }
+
+  return response.json()
+}
+
+/**
+ * Update folder with Supabase sync
+ */
+export async function updateFolderSupabase(folderId: number, folderData: FolderUpdate): Promise<any> {
+  const response = await fetchWithRetry(`${FEEDME_API_BASE}/folders/${folderId}/update`, {
+    method: 'PUT',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(folderData),
+  })
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}))
+    throw new Error(errorData.detail || `Failed to update folder: ${response.status} ${response.statusText}`)
+  }
+
+  return response.json()
+}
+
+/**
+ * Delete folder with Supabase sync
+ */
+export async function deleteFolderSupabase(folderId: number, moveConversationsTo?: number): Promise<any> {
+  const url = new URL(`${FEEDME_API_BASE}/folders/${folderId}/remove`)
+  if (moveConversationsTo !== undefined) {
+    url.searchParams.set('move_conversations_to', moveConversationsTo.toString())
+  }
+
+  const response = await fetchWithRetry(url.toString(), {
+    method: 'DELETE',
+  })
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}))
+    throw new Error(errorData.detail || `Failed to delete folder: ${response.status} ${response.statusText}`)
+  }
+
+  return response.json()
+}
+
+/**
+ * Assign conversations to folder with Supabase sync
+ */
+export async function assignConversationsToFolderSupabase(folderId: number | null, conversationIds: number[]): Promise<any> {
+  let url: string
+  let body: any
+  
+  if (folderId === null) {
+    // Move to root (remove from folder) - use the general assign endpoint
+    url = `${FEEDME_API_BASE}/folders/assign`
+    body = {
+      folder_id: null,
+      conversation_ids: conversationIds,
+    }
+  } else {
+    // Move to specific folder - use the folder-specific endpoint
+    url = `${FEEDME_API_BASE}/folders/${folderId}/assign`
+    body = {
+      conversation_ids: conversationIds,
+    }
+  }
+  
+  const response = await fetchWithRetry(url, {
+    method: folderId === null ? 'POST' : 'PUT',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(body),
+  })
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}))
+    throw new Error(errorData.detail || `Failed to assign conversations: ${response.status} ${response.statusText}`)
+  }
+
+  return response.json()
+}
+
+/**
+ * Get conversation examples
+ */
+export async function getConversationExamples(
+  conversationId: number,
+  page: number = 1,
+  pageSize: number = 20,
+  isActive?: boolean
+): Promise<ExampleListResponse> {
+  const params = new URLSearchParams({
+    page: page.toString(),
+    page_size: pageSize.toString(),
+  })
+
+  if (isActive !== undefined) {
+    params.append('is_active', isActive.toString())
+  }
+
+  const response = await fetchWithRetry(`${FEEDME_API_BASE}/conversations/${conversationId}/examples?${params.toString()}`)
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}))
+    throw new Error(errorData.detail || `Failed to get examples: ${response.status} ${response.statusText}`)
+  }
+
+  return response.json()
+}
+
+/**
+ * Update an example
+ */
+export async function updateExample(
+  exampleId: number,
+  updates: Partial<FeedMeExample>
+): Promise<FeedMeExample> {
+  const response = await fetchWithRetry(`${FEEDME_API_BASE}/examples/${exampleId}`, {
+    method: 'PUT',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(updates),
+  })
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}))
+    throw new Error(errorData.detail || `Failed to update example: ${response.status} ${response.statusText}`)
+  }
+
+  return response.json()
+}
+
+/**
+ * Delete an individual Q&A example
+ */
+export async function deleteExample(exampleId: number): Promise<{
+  example_id: number
+  conversation_id: number
+  conversation_title: string
+  question_preview: string
+  message: string
+}> {
+  const response = await fetchWithRetry(`${FEEDME_API_BASE}/examples/${exampleId}`, {
+    method: 'DELETE',
+  })
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}))
+    throw new Error(errorData.detail || `Failed to delete example: ${response.status} ${response.statusText}`)
   }
 
   return response.json()

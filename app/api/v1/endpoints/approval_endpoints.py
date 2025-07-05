@@ -48,15 +48,13 @@ rate_limiter = RateLimiter()
 @lru_cache(maxsize=1)
 def _create_workflow_engine() -> ApprovalWorkflowEngine:
     """Create singleton workflow engine instance"""
-    from app.feedme.repositories.optimized_repository import OptimizedFeedMeRepository
     from app.feedme.embeddings.embedding_pipeline import FeedMeEmbeddingPipeline
     from app.feedme.approval.schemas import WorkflowConfig
     
-    repository = OptimizedFeedMeRepository()
     embedding_service = FeedMeEmbeddingPipeline()
     config = WorkflowConfig()
     
-    return ApprovalWorkflowEngine(repository, embedding_service, config)
+    return ApprovalWorkflowEngine(embedding_service, config)
 
 async def get_workflow_engine() -> ApprovalWorkflowEngine:
     """Get workflow engine instance with singleton pattern"""

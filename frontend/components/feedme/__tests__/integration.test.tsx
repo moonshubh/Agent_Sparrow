@@ -6,7 +6,7 @@
 
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
-import { useFeedMeStore } from '@/lib/stores/feedme-store'
+import { useConversationsStore } from '@/lib/stores/conversations-store'
 import { feedMeApi } from '@/lib/feedme-api'
 
 // Mock API calls

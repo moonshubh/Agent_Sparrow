@@ -6,7 +6,8 @@ REM Exit on any error (best effort for batch)
 setlocal enabledelayedexpansion
 
 REM --- Project Root and Log Setup ---
-set "ROOT_DIR=%~dp0"
+REM Navigate up two directory levels from scripts/start_on_windows/ to project root
+set "ROOT_DIR=%~dp0..\..\\"
 echo Project Root: !ROOT_DIR!
 
 set "LOG_DIR=!ROOT_DIR!system_logs"
@@ -45,11 +46,24 @@ if !errorlevel! neq 0 (
 )
 
 echo Installing Python dependencies...
-REM Handle dependency conflicts from MacOS troubleshooting - suppress warnings
-pip install -r requirements.txt 2>nul || (
-    echo Note: Some dependency warnings are expected due to google-generativeai compatibility
-    echo Continuing with installation...
+REM Capture stderr to filter google-generativeai warnings while showing critical errors
+set "TEMP_ERROR_FILE=%TEMP%\pip_errors_%RANDOM%.txt"
+pip install -r requirements.txt 2>"%TEMP_ERROR_FILE%" || (
+    REM Check if error file contains only expected google-generativeai warnings
+    findstr /I "google-generativeai" "%TEMP_ERROR_FILE%" >nul
+    if !errorlevel! equ 0 (
+        echo Note: Some dependency warnings are expected due to google-generativeai compatibility
+        echo Continuing with installation...
+    ) else (
+        echo Critical pip install errors detected:
+        type "%TEMP_ERROR_FILE%"
+        echo Please resolve these errors before continuing.
+        del "%TEMP_ERROR_FILE%" 2>nul
+        pause
+        exit /b 1
+    )
 )
+del "%TEMP_ERROR_FILE%" 2>nul
 
 REM Verify critical dependencies are installed
 echo Verifying critical dependencies...
@@ -71,7 +85,7 @@ REM Function to kill processes on port (Windows approach)
 call :kill_process_on_port 8000 "Backend"
 
 echo Starting Uvicorn server in the background...
-start "MB-Sparrow-Backend" /min cmd /c "call venv\Scripts\activate && uvicorn app.main:app --reload --port 8000 > "!BACKEND_LOG_DIR!\backend.log" 2>&1"
+start "MB-Sparrow-Backend" /min cmd /c "call venv\Scripts\activate && uvicorn app.main:app --reload --port 8000 >> "!BACKEND_LOG_DIR!\backend.log" 2>&1"
 
 echo Verifying backend server startup...
 timeout /t 5 /nobreak >nul
@@ -115,7 +129,7 @@ if !errorlevel! neq 0 (
     
     REM Start FeedMe Celery worker
     echo Starting FeedMe Celery worker in the background...
-    start "MB-Sparrow-FeedMe-Worker" /min cmd /c "call venv\Scripts\activate && python -m celery -A app.feedme.celery_app worker --loglevel=info --concurrency=2 --queues=feedme_default,feedme_processing,feedme_embeddings,feedme_parsing,feedme_health > "!CELERY_LOG_DIR!\celery_worker.log" 2>&1"
+    start "MB-Sparrow-FeedMe-Worker" /min cmd /c "call venv\Scripts\activate && python -m celery -A app.feedme.celery_app worker --loglevel=info --concurrency=2 --queues=feedme_default,feedme_processing,feedme_embeddings,feedme_parsing,feedme_health >> "!CELERY_LOG_DIR!\celery_worker.log" 2>&1"
     
     REM Verify Celery worker startup
     echo Verifying Celery worker startup...
@@ -158,7 +172,7 @@ if !errorlevel! neq 0 (
 call :kill_process_on_port 3000 "Frontend"
 
 echo Starting Next.js development server in the background...
-start "MB-Sparrow-Frontend" /min cmd /c "npm run dev > "!FRONTEND_LOG_DIR!\frontend.log" 2>&1"
+start "MB-Sparrow-Frontend" /min cmd /c "npm run dev >> "!FRONTEND_LOG_DIR!\frontend.log" 2>&1"
 
 echo Verifying frontend server startup...
 timeout /t 10 /nobreak >nul
@@ -194,7 +208,7 @@ if "!CELERY_STARTED!" == "true" (
 )
 echo.
 echo To stop all services, run: stop_system.bat
-echo To view logs in real-time, use: tail -f ^<log_file^> or PowerShell Get-Content -Wait ^<log_file^>
+echo To view logs in real-time, use: Get-Content -Wait ^<log_file^> in PowerShell
 echo.
 echo System ready for use!
 pause

@@ -25,7 +25,7 @@ from typing import List, Optional, Dict, Any # Removed Tuple
 from pydantic import BaseModel # Added Pydantic BaseModel
 
 from app.core.settings import settings
-from app.db.connection_manager import get_connection_manager, with_db_connection
+from app.db.supabase_client import get_supabase_client
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -42,14 +42,13 @@ load_dotenv(PROJECT_ROOT / '.env')
 GEMINI_API_KEY = settings.gemini_api_key
 EMBEDDING_MODEL_NAME = "models/embedding-001" # Google's embedding-001 has 768 dimensions
 
-# --- Database Connection (Updated for FeedMe v2.0) ---
+# --- Database Connection (Updated for FeedMe v3.0 - Supabase Only) ---
 def get_db_connection():
     """
-    Legacy function for backward compatibility.
-    Uses the new unified connection manager.
+    Legacy function - no longer supported.
+    Use Supabase client for all database operations.
     """
-    manager = get_connection_manager()
-    return manager.get_connection(cursor_factory=psycopg2_extras.NamedTupleCursor)
+    raise NotImplementedError("Local DB connections no longer supported. Use Supabase client instead.")
 
 # --- Embedding Generation ---
 def get_embedding_model():
