@@ -16,7 +16,7 @@ import psycopg2
 
 from app.core.settings import settings
 from app.core.security import get_current_user, TokenPayload
-from app.db.connection_manager import with_db_connection
+# Local DB connection manager removed - use Supabase instead
 from app.schemas.chat_schemas import (
     ChatSession,
     ChatMessage,
@@ -43,8 +43,7 @@ router = APIRouter()
 
 # Database helper functions
 
-@with_db_connection(cursor_factory=RealDictCursor)
-def get_chat_session_by_id(conn, session_id: int, user_id: str) -> Optional[Dict[str, Any]]:
+async def get_chat_session_by_id(session_id: int, user_id: str) -> Optional[Dict[str, Any]]:
     """Get a chat session by ID for a specific user"""
     with conn.cursor() as cur:
         cur.execute("""
@@ -55,7 +54,7 @@ def get_chat_session_by_id(conn, session_id: int, user_id: str) -> Optional[Dict
         return dict(row) if row else None
 
 
-@with_db_connection(cursor_factory=RealDictCursor)
+# @with_db_connection removed - using Supabase
 def create_chat_session_in_db(conn, session_data: ChatSessionCreate, user_id: str) -> Dict[str, Any]:
     """Create a new chat session in the database"""
     with conn.cursor() as cur:
@@ -98,7 +97,7 @@ def create_chat_session_in_db(conn, session_data: ChatSessionCreate, user_id: st
         return dict(cur.fetchone())
 
 
-@with_db_connection(cursor_factory=RealDictCursor)
+# @with_db_connection removed - using Supabase
 def update_chat_session_in_db(conn, session_id: int, user_id: str, updates: ChatSessionUpdate) -> Optional[Dict[str, Any]]:
     """Update a chat session in the database"""
     with conn.cursor() as cur:
@@ -136,7 +135,7 @@ def update_chat_session_in_db(conn, session_id: int, user_id: str, updates: Chat
         return dict(row) if row else None
 
 
-@with_db_connection(cursor_factory=RealDictCursor)
+# @with_db_connection removed - using Supabase
 def create_chat_message_in_db(conn, message_data: ChatMessageCreate, user_id: str) -> Dict[str, Any]:
     """Create a new chat message in the database"""
     with conn.cursor() as cur:
@@ -166,7 +165,7 @@ def create_chat_message_in_db(conn, message_data: ChatMessageCreate, user_id: st
         return dict(cur.fetchone())
 
 
-@with_db_connection(cursor_factory=RealDictCursor)
+# @with_db_connection removed - using Supabase
 def get_chat_sessions_for_user(conn, user_id: str, request: ChatSessionListRequest) -> Dict[str, Any]:
     """Get chat sessions for a user with filtering and pagination"""
     with conn.cursor() as cur:
@@ -217,7 +216,7 @@ def get_chat_sessions_for_user(conn, user_id: str, request: ChatSessionListReque
         }
 
 
-@with_db_connection(cursor_factory=RealDictCursor)
+# @with_db_connection removed - using Supabase
 def get_chat_messages_for_session(conn, session_id: int, user_id: str, request: ChatMessageListRequest) -> Dict[str, Any]:
     """Get chat messages for a session with pagination"""
     with conn.cursor() as cur:
@@ -452,7 +451,7 @@ async def get_user_chat_stats(
 ):
     """Get chat statistics for the current user"""
     try:
-        @with_db_connection(cursor_factory=RealDictCursor)
+        # @with_db_connection removed - using Supabase
         def get_user_stats(conn, user_id: str) -> Dict[str, Any]:
             with conn.cursor() as cur:
                 # Get session stats

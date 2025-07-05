@@ -1,0 +1,43 @@
+Customer Support Transcript
+Date: 2025-01-07
+Ticket: #123456
+
+Customer: Hi, I'm having trouble connecting my Gmail account to Mailbird. It keeps showing an authentication error.
+
+Agent: Hello! I'd be happy to help you connect your Gmail account to Mailbird. The authentication error usually happens when Gmail blocks less secure apps. Let me guide you through the solution.
+
+Customer: OK, what should I do?
+
+Agent: First, make sure you're using an App Password instead of your regular Gmail password. Here's how:
+1. Go to your Google Account settings
+2. Navigate to Security
+3. Enable 2-Step Verification if not already enabled
+4. Under "Signing in to Google", select "App passwords"
+5. Generate a new app password for Mailbird
+6. Use this app password in Mailbird instead of your regular password
+
+Customer: I see. Let me try that. Where do I enter this app password in Mailbird?
+
+Agent: In Mailbird:
+1. Go to Settings (gear icon)
+2. Click on Accounts
+3. Select your Gmail account
+4. Update the password field with the app password
+5. Click Save
+
+Customer: That worked! Thank you so much. One more question - how do I set up multiple Gmail accounts?
+
+Agent: Great question! You can add multiple Gmail accounts in Mailbird:
+1. Go to Settings → Accounts
+2. Click "Add Account"
+3. Select Gmail
+4. Follow the same app password process for each account
+5. You can switch between accounts using the account selector
+
+Customer: Perfect, that's exactly what I needed. Thanks for your help!
+
+Agent: You're welcome! Is there anything else I can help you with regarding your Mailbird setup?
+
+Customer: No, that's all. Have a great day!
+
+Agent: You too! Don't hesitate to reach out if you need any further assistance.

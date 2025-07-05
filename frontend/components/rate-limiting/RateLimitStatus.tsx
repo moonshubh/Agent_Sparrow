@@ -187,7 +187,7 @@ export const RateLimitStatus: React.FC<RateLimitStatusProps> = ({
           <div className="space-y-2">
             <div className="flex items-center justify-between">
               <div className="flex items-center space-x-2">
-                <Zap className="h-3 w-3 text-purple-500" />
+                <Zap className="h-3 w-3 text-accent" />
                 <span className="text-xs font-medium">Pro (2.5)</span>
               </div>
               <Tooltip>

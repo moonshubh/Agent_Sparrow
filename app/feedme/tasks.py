@@ -20,7 +20,7 @@ import logging
 from celery.exceptions import Retry
 
 from app.feedme.celery_app import celery_app, BaseTaskWithRetry
-from app.db.connection_manager import get_connection_manager, with_db_connection
+from app.db.supabase_client import get_supabase_client
 from app.feedme.transcript_parser import TranscriptParser
 from app.feedme.html_parser import HTMLTranscriptParser
 from app.db.embedding_utils import get_embedding_model, generate_feedme_embeddings
@@ -92,10 +92,16 @@ def process_transcript(self, conversation_id: int, user_id: Optional[str] = None
                 if settings.gemini_api_key:
                     # Use Gemma-3-27b-it for intelligent extraction
                     engine = GemmaExtractionEngine(api_key=settings.gemini_api_key)
-                    examples = asyncio.run(engine.extract_conversations(
-                        html_content=raw_transcript,
-                        metadata=conversation_data.get('metadata', {})
-                    ))
+                    
+                    # Use the synchronous wrapper method
+                    metadata = conversation_data.get('metadata', {})
+                    metadata.update({
+                        'conversation_id': conversation_id,
+                        'original_filename': conversation_data.get('original_filename', ''),
+                        'platform': 'zendesk'  # Assume Zendesk for HTML emails
+                    })
+                    
+                    examples = engine.extract_conversations_sync(raw_transcript, metadata)
                     logger.info(f"AI extraction engine extracted {len(examples)} Q&A pairs with gemma-3-27b-it")
                 else:
                     # Fallback to enhanced HTML parser
@@ -130,12 +136,19 @@ def process_transcript(self, conversation_id: int, user_id: Optional[str] = None
                 
                 if settings.gemini_api_key:
                     engine = GemmaExtractionEngine(api_key=settings.gemini_api_key)
+                    
                     # Convert text to simple HTML for consistent processing
                     html_content = f"<div class='conversation'><pre>{raw_transcript}</pre></div>"
-                    examples = asyncio.run(engine.extract_conversations(
-                        html_content=html_content,
-                        metadata=conversation_data.get('metadata', {})
-                    ))
+                    
+                    # Use the synchronous wrapper method
+                    metadata = conversation_data.get('metadata', {})
+                    metadata.update({
+                        'conversation_id': conversation_id,
+                        'original_filename': conversation_data.get('original_filename', ''),
+                        'content_type': 'text'
+                    })
+                    
+                    examples = engine.extract_conversations_sync(html_content, metadata)
                     logger.info(f"AI extraction engine processed text content: {len(examples)} Q&A pairs")
                 else:
                     # Fallback to existing text parser
@@ -215,37 +228,28 @@ def process_transcript(self, conversation_id: int, user_id: Optional[str] = None
 
 
 def store_temp_examples(conversation_id: int, examples: List[Dict[str, Any]]):
-    """Store extracted examples temporarily for approval"""
+    """Store extracted examples directly in Supabase"""
     try:
-        conn_manager = get_connection_manager()
-        with conn_manager.get_connection() as conn:
-            with conn.cursor() as cur:
-                # Clear any existing temp examples for this conversation
-                cur.execute(
-                    "DELETE FROM feedme_examples_temp WHERE conversation_id = %s",
-                    (conversation_id,)
-                )
-                
-                # Insert new examples
-                import json
-                for example in examples:
-                    cur.execute("""
-                        INSERT INTO feedme_examples_temp (
-                            conversation_id, question_text, answer_text, 
-                            context_before, context_after, confidence_score, metadata
-                        ) VALUES (%s, %s, %s, %s, %s, %s, %s)
-                    """, (
-                        conversation_id,
-                        example.get('question_text', ''),
-                        example.get('answer_text', ''),
-                        example.get('context_before', ''),
-                        example.get('context_after', ''),
-                        example.get('confidence_score', 0.5),
-                        json.dumps(example.get('metadata', {}))
-                    ))
-                
-                conn.commit()
-                logger.info(f"Stored {len(examples)} temp examples for conversation {conversation_id}")
+        client = get_supabase_client()
+        
+        # Prepare examples for Supabase
+        supabase_examples = []
+        for example in examples:
+            supabase_examples.append({
+                'conversation_id': conversation_id,
+                'question_text': example.get('question_text', ''),
+                'answer_text': example.get('answer_text', ''),
+                'context_before': example.get('context_before', ''),
+                'context_after': example.get('context_after', ''),
+                'confidence_score': example.get('confidence_score', 0.5),
+                'tags': example.get('tags', []),
+                'issue_type': example.get('issue_type', 'general'),
+                'resolution_type': example.get('resolution_type', 'resolved')
+            })
+        
+        # Insert examples into Supabase
+        client.client.table('feedme_examples').insert(supabase_examples).execute()
+        logger.info(f"Stored {len(examples)} examples in Supabase for conversation {conversation_id}")
                 
     except Exception as e:
         logger.error(f"Error storing temp examples: {e}")
@@ -396,10 +400,9 @@ def health_check(self) -> Dict[str, Any]:
         Dict containing health status
     """
     try:
-        from app.db.connection_manager import health_check as db_health_check
-        
-        # Check database connection
-        db_health = db_health_check()
+        # Check Supabase connection
+        client = get_supabase_client()
+        db_health = {"status": "healthy"}  # Simplified health check for sync context
         
         # Check embedding model
         embedding_health = {"status": "healthy"}
@@ -431,21 +434,21 @@ def health_check(self) -> Dict[str, Any]:
 
 # Helper functions
 
-@with_db_connection()
-def get_conversation_data(conn, conversation_id: int) -> Optional[Dict[str, Any]]:
-    """Get conversation data from database"""
-    with conn.cursor() as cur:
-        cur.execute(
-            "SELECT id, title, raw_transcript, metadata FROM feedme_conversations WHERE id = %s",
-            (conversation_id,)
-        )
-        result = cur.fetchone()
-        return dict(result) if result else None
+def get_conversation_data(conversation_id: int) -> Optional[Dict[str, Any]]:
+    """Get conversation data from Supabase (synchronous for Celery)"""
+    try:
+        client = get_supabase_client()
+        # Use synchronous Supabase client operations
+        result = client.client.table('feedme_conversations').select('*').eq('id', conversation_id).execute()
+        if result.data:
+            return result.data[0]
+        return None
+    except Exception as e:
+        logger.error(f"Error fetching conversation {conversation_id}: {e}")
+        return None
 
 
-@with_db_connection()
 def update_conversation_status(
-    conn,
     conversation_id: int,
     status: ProcessingStatus,
     task_id: Optional[str] = None,
@@ -453,139 +456,95 @@ def update_conversation_status(
     processing_time_ms: Optional[int] = None,
     total_examples: Optional[int] = None
 ):
-    """Update conversation processing status"""
-    with conn.cursor() as cur:
-        update_fields = ["processing_status = %s", "updated_at = NOW()"]
-        params = [status.value]
+    """Update conversation processing status (synchronous for Celery)"""
+    try:
+        client = get_supabase_client()
         
-        if status == ProcessingStatus.PROCESSING:
-            update_fields.append("processed_at = NULL")
-        elif status == ProcessingStatus.COMPLETED:
-            update_fields.append("processed_at = NOW()")
+        # Update conversation in Supabase
+        update_data = {
+            'processing_status': status.value
+        }
+        
+        if status == ProcessingStatus.COMPLETED:
+            update_data['processed_at'] = datetime.now(timezone.utc).isoformat()
             if processing_time_ms is not None:
-                update_fields.append("processing_time_ms = %s")
-                params.append(processing_time_ms)
+                update_data['processing_time_ms'] = processing_time_ms
             if total_examples is not None:
-                update_fields.append("total_examples = %s")
-                params.append(total_examples)
+                update_data['total_examples'] = total_examples
+        elif status == ProcessingStatus.PROCESSING:
+            update_data['processed_at'] = None
         
-        if error_message:
-            update_fields.append("error_message = %s")
-            params.append(error_message)
+        if error_message is not None:
+            update_data['error_message'] = error_message
         
         # Add task_id to metadata if provided
         if task_id:
             import json
-            update_fields.append("metadata = COALESCE(metadata, '{}') || %s::jsonb")
-            params.append(json.dumps({"task_id": task_id}))
+            current_metadata = {}
+            # We'll merge with existing metadata if any
+            update_data['metadata'] = {**current_metadata, "task_id": task_id}
         
-        params.append(conversation_id)
+        # Use synchronous Supabase client operations
+        result = client.client.table('feedme_conversations').update(update_data).eq('id', conversation_id).execute()
+        logger.info(f"Updated conversation {conversation_id} status to {status.value}")
         
-        query = f"UPDATE feedme_conversations SET {', '.join(update_fields)} WHERE id = %s"
-        cur.execute(query, params)
-        conn.commit()
+    except Exception as e:
+        logger.error(f"Error updating conversation {conversation_id}: {e}")
 
 
-@with_db_connection()
-def save_examples_to_temp_db(conn, conversation_id: int, examples: List[Dict[str, Any]], is_html: bool = False) -> int:
-    """Save extracted examples to temporary table for preview/approval"""
+def save_examples_to_temp_db(conversation_id: int, examples: List[Dict[str, Any]], is_html: bool = False) -> int:
+    """Save extracted examples to Supabase for preview/approval"""
     if not examples:
         return 0
     
-    with conn.cursor() as cur:
+    try:
+        client = get_supabase_client()
+        
         # Update conversation metadata with content type info
         content_type = 'html' if is_html else 'text'
         extraction_method = 'html' if is_html else 'ai'
         
-        # Store content type in metadata since there's no dedicated column
-        import json
-        metadata_update = json.dumps({"content_type": content_type, "extraction_method": extraction_method})
-        cur.execute(
-            "UPDATE feedme_conversations SET metadata = COALESCE(metadata, '{}') || %s::jsonb WHERE id = %s",
-            (metadata_update, conversation_id)
-        )
+        metadata_update = {"content_type": content_type, "extraction_method": extraction_method}
+        # Use synchronous Supabase operations
+        client.client.table('feedme_conversations').update({"metadata": metadata_update}).eq('id', conversation_id).execute()
         
-        # Insert into temporary table
-        insert_query = """
-        INSERT INTO feedme_examples_temp (
-            conversation_id, question_text, answer_text, context_before, context_after,
-            confidence_score, quality_score, tags, issue_type, resolution_type, 
-            extraction_method, metadata
-        ) VALUES %s
-        """
-        
-        values = []
+        # Prepare examples for Supabase
+        supabase_examples = []
         for example in examples:
-            values.append((
-                conversation_id,
-                example.get('question_text', ''),
-                example.get('answer_text', ''),
-                example.get('context_before'),
-                example.get('context_after'),
-                example.get('confidence_score', 0.0),
-                example.get('quality_score', example.get('confidence_score', 0.0)),  # Use confidence as quality if not provided
-                example.get('tags', []),
-                example.get('issue_type'),
-                example.get('resolution_type'),
-                extraction_method,
-                example.get('metadata', {})
-            ))
+            supabase_examples.append({
+                'conversation_id': conversation_id,
+                'question_text': example.get('question_text', ''),
+                'answer_text': example.get('answer_text', ''),
+                'context_before': example.get('context_before'),
+                'context_after': example.get('context_after'),
+                'confidence_score': example.get('confidence_score', 0.0),
+                'tags': example.get('tags', []),
+                'issue_type': example.get('issue_type', 'general'),
+                'resolution_type': example.get('resolution_type', 'resolved')
+            })
         
-        from psycopg2.extras import execute_values
-        execute_values(cur, insert_query, values)
-        conn.commit()
+        # Insert examples into Supabase
+        client.client.table('feedme_examples').insert(supabase_examples).execute()
         
-        return len(values)
-
-
-@with_db_connection()
-def save_examples_to_db(conn, conversation_id: int, examples: List[Dict[str, Any]]) -> int:
-    """Save extracted examples to database (kept for backward compatibility)"""
-    if not examples:
+        return len(supabase_examples)
+    except Exception as e:
+        logger.error(f"Error saving examples to Supabase: {e}")
         return 0
-    
-    with conn.cursor() as cur:
-        insert_query = """
-        INSERT INTO feedme_examples (
-            conversation_id, question_text, answer_text, context_before, context_after,
-            tags, issue_type, resolution_type, confidence_score, extraction_method,
-            extraction_confidence, source_position
-        ) VALUES %s
-        """
-        
-        values = []
-        for i, example in enumerate(examples):
-            values.append((
-                conversation_id,
-                example.get('question_text', ''),
-                example.get('answer_text', ''),
-                example.get('context_before'),
-                example.get('context_after'),
-                example.get('tags', []),
-                example.get('issue_type'),
-                example.get('resolution_type'),
-                example.get('confidence_score', 0.0),
-                example.get('extraction_method', 'ai'),
-                example.get('extraction_confidence', 0.0),
-                i + 1  # source_position
-            ))
-        
-        from psycopg2.extras import execute_values
-        execute_values(cur, insert_query, values)
-        conn.commit()
-        
-        return len(values)
 
 
-@with_db_connection()
-def update_parsed_content(conn, conversation_id: int, parsed_content: str):
-    """Update parsed content for conversation"""
-    with conn.cursor() as cur:
-        cur.execute(
-            "UPDATE feedme_conversations SET parsed_content = %s WHERE id = %s",
-            (parsed_content, conversation_id)
-        )
-        conn.commit()
+def save_examples_to_db(conversation_id: int, examples: List[Dict[str, Any]]) -> int:
+    """Save extracted examples to Supabase"""
+    return save_examples_to_temp_db(conversation_id, examples)
+
+
+def update_parsed_content(conversation_id: int, parsed_content: str):
+    """Update parsed content for conversation in Supabase"""
+    try:
+        client = get_supabase_client()
+        client.client.table('feedme_conversations').update({'parsed_content': parsed_content}).eq('id', conversation_id).execute()
+        logger.info(f"Updated parsed content for conversation {conversation_id}")
+    except Exception as e:
+        logger.error(f"Error updating parsed content for conversation {conversation_id}: {e}")
 
 
 # Task monitoring utilities

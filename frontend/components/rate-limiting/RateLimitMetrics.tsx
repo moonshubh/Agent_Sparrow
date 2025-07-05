@@ -300,7 +300,7 @@ export const RateLimitMetrics: React.FC<RateLimitMetricsProps> = ({
                   <div className="space-y-2">
                     <div className="flex items-center justify-between text-sm">
                       <span className="flex items-center space-x-1">
-                        <Zap className="h-3 w-3 text-purple-500" />
+                        <Zap className="h-3 w-3 text-accent" />
                         <span>Pro RPM</span>
                       </span>
                       <span className="font-mono">{metrics.gemini_pro_rpm_used}/{metrics.gemini_pro_rpm_limit}</span>
@@ -370,7 +370,7 @@ export const RateLimitMetrics: React.FC<RateLimitMetricsProps> = ({
               <Card>
                 <CardHeader>
                   <CardTitle className="text-sm flex items-center space-x-2">
-                    <Zap className="h-4 w-4 text-purple-500" />
+                    <Zap className="h-4 w-4 text-accent" />
                     <span>Pro Circuit Breaker</span>
                   </CardTitle>
                 </CardHeader>
@@ -434,7 +434,7 @@ export const RateLimitMetrics: React.FC<RateLimitMetricsProps> = ({
               <Card>
                 <CardHeader>
                   <CardTitle className="text-sm flex items-center space-x-2">
-                    <Zap className="h-4 w-4 text-purple-500" />
+                    <Zap className="h-4 w-4 text-accent" />
                     <span>Gemini 2.5 Pro</span>
                   </CardTitle>
                 </CardHeader>

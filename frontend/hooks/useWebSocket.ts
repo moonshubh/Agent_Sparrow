@@ -8,7 +8,7 @@
 'use client'
 
 import { useEffect, useCallback, useRef } from 'react'
-import { useRealtime, useActions } from '@/lib/stores/feedme-store'
+import { useRealtime, useRealtimeActions } from '@/lib/stores/realtime-store'
 
 interface UseWebSocketOptions {
   autoConnect?: boolean
@@ -35,7 +35,7 @@ export const useWebSocket = (options: UseWebSocketOptions = {}): WebSocketConnec
   } = options
 
   const { isConnected, connectionStatus, lastUpdate } = useRealtime()
-  const { connectWebSocket, disconnectWebSocket, addNotification } = useActions()
+  const { connect: realtimeConnect, disconnect: realtimeDisconnect, addNotification } = useRealtimeActions()
   
   const reconnectAttempts = useRef(0)
   const reconnectTimer = useRef<NodeJS.Timeout | null>(null)
@@ -89,9 +89,9 @@ export const useWebSocket = (options: UseWebSocketOptions = {}): WebSocketConnec
         return
       }
       reconnectAttempts.current++
-      connectWebSocket()
+      realtimeConnect()
     }, delay)
-  }, [reconnectInterval, maxReconnectAttempts, connectWebSocket, addNotification, log])
+  }, [reconnectInterval, maxReconnectAttempts, realtimeConnect, addNotification, log])
 
   const connect = useCallback(() => {
     if (!isMounted.current) {
@@ -101,16 +101,16 @@ export const useWebSocket = (options: UseWebSocketOptions = {}): WebSocketConnec
     log('Connecting...')
     isManualDisconnect.current = false
     clearReconnectTimer()
-    connectWebSocket()
-  }, [connectWebSocket, clearReconnectTimer, log])
+    realtimeConnect()
+  }, [realtimeConnect, clearReconnectTimer, log])
 
   const disconnect = useCallback(() => {
     log('Disconnecting...')
     isManualDisconnect.current = true
     clearReconnectTimer()
     reconnectAttempts.current = 0
-    disconnectWebSocket()
-  }, [disconnectWebSocket, clearReconnectTimer, log])
+    realtimeDisconnect()
+  }, [realtimeDisconnect, clearReconnectTimer, log])
 
   const reconnect = useCallback(() => {
     log('Manual reconnect triggered')
@@ -146,9 +146,9 @@ export const useWebSocket = (options: UseWebSocketOptions = {}): WebSocketConnec
       isMounted.current = false
       isManualDisconnect.current = true
       clearReconnectTimer()
-      disconnectWebSocket()
+      realtimeDisconnect()
     }
-  }, [log, clearReconnectTimer, disconnectWebSocket])
+  }, [log, clearReconnectTimer, realtimeDisconnect])
   
   // Separate auto-connect effect that can respond to state changes
   useEffect(() => {
@@ -170,6 +170,9 @@ export const useWebSocket = (options: UseWebSocketOptions = {}): WebSocketConnec
 
   // Handle page visibility changes for connection management
   useEffect(() => {
+    // Skip if running on server-side
+    if (typeof document === 'undefined') return
+
     const handleVisibilityChange = () => {
       if (document.hidden) {
         log('Page hidden - pausing reconnection attempts')
@@ -188,6 +191,9 @@ export const useWebSocket = (options: UseWebSocketOptions = {}): WebSocketConnec
 
   // Handle online/offline events
   useEffect(() => {
+    // Skip if running on server-side
+    if (typeof window === 'undefined') return
+
     const handleOnline = () => {
       log('Network online - attempting to reconnect')
       if (!isConnected && !isManualDisconnect.current) {
@@ -232,7 +238,7 @@ export const useWebSocketConnection = (options?: UseWebSocketOptions) => {
 // Hook for monitoring real-time processing updates
 export const useProcessingUpdates = () => {
   const { processingUpdates } = useRealtime()
-  const { handleProcessingUpdate } = useActions()
+  const { handleProcessingUpdate } = useRealtimeActions()
 
   const getProcessingStatus = useCallback((conversationId: number) => {
     return processingUpdates[conversationId] || null
@@ -260,7 +266,7 @@ export const useProcessingUpdates = () => {
 // Hook for notifications management
 export const useNotifications = () => {
   const { notifications } = useRealtime()
-  const { addNotification, markNotificationRead, clearNotifications } = useActions()
+  const { addNotification, markNotificationRead, clearNotifications } = useRealtimeActions()
 
   const unreadCount = notifications.filter(n => !n.read).length
   const recentNotifications = notifications.slice(0, 10)

@@ -130,8 +130,46 @@ export function useFeedMeErrorHandler() {
   const handleError = React.useCallback((error: Error, context?: string) => {
     console.error(`FeedMe Error${context ? ` in ${context}` : ''}:`, error)
     
-    // You could integrate with error reporting service here
-    // e.g., Sentry.captureException(error)
+    // Integrate with error reporting service
+    try {
+      // Check if Sentry is available (would be configured globally)
+      if (typeof window !== 'undefined' && (window as any).Sentry) {
+        (window as any).Sentry.captureException(error, {
+          tags: {
+            component: 'feedme',
+            context: context || 'unknown'
+          },
+          extra: {
+            timestamp: new Date().toISOString(),
+            userAgent: navigator.userAgent,
+            url: window.location.href
+          }
+        })
+      } else {
+        // Fallback: send to custom error reporting endpoint
+        fetch('/api/errors', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            error: {
+              message: error.message,
+              stack: error.stack,
+              name: error.name
+            },
+            context,
+            timestamp: new Date().toISOString(),
+            url: window.location.href,
+            userAgent: navigator.userAgent
+          })
+        }).catch(reportingError => {
+          console.warn('Failed to report error:', reportingError)
+        })
+      }
+    } catch (reportingError) {
+      console.warn('Error reporting failed:', reportingError)
+    }
   }, [])
 
   return { handleError }

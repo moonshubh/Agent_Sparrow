@@ -15,15 +15,41 @@ import {
   editConversation as apiEditConversation,
   approveConversation as apiApproveConversation,
   rejectConversation as apiRejectConversation,
-  reprocessConversation as apiReprocessConversation,
+  feedMeApi,
   type UploadTranscriptResponse,
   type ConversationListResponse,
   type ConversationEditRequest,
   type ApprovalRequest,
   type RejectionRequest
 } from '@/lib/feedme-api'
+import { useUIStore } from '@/lib/stores/ui-store'
 
 // Types
+export interface FeedMeExample {
+  id: number
+  conversation_id: number
+  question_text: string
+  answer_text: string
+  context_before?: string
+  context_after?: string
+  tags: string[]
+  issue_type?: string
+  resolution_type?: string
+  confidence_score: number
+  usefulness_score: number
+  is_active: boolean
+  created_at: string
+  updated_at: string
+}
+
+export interface ExampleListResponse {
+  examples: FeedMeExample[]
+  total_examples: number
+  page: number
+  page_size: number
+  has_next: boolean
+}
+
 export interface Conversation extends UploadTranscriptResponse {
   folder_id?: number
   last_updated?: string
@@ -81,10 +107,21 @@ export interface SelectionState {
   lastSelectedId: number | null
 }
 
+export interface ExamplesState {
+  examplesByConversation: Record<number, FeedMeExample[]>
+  examplesLoading: Record<number, boolean>
+  examplesError: Record<number, string | null>
+  examplesLastUpdated: Record<number, string>
+  optimisticUpdates: Record<number, FeedMeExample>
+}
+
 interface ConversationsState {
   // Data State
   conversations: Record<number, Conversation>
   conversationsList: ConversationListState
+  
+  // Examples State
+  examples: ExamplesState
   
   // Processing State
   processing: ProcessingState
@@ -97,6 +134,11 @@ interface ConversationsState {
     lastListRequest: string | null
     listCacheExpiry: number
     conversationDetails: Record<number, { data: Conversation, expiry: number }>
+  }
+  
+  // Internal state for managing timeouts
+  _internal: {
+    searchTimeoutId: NodeJS.Timeout | null
   }
 }
 
@@ -121,6 +163,13 @@ interface ConversationsActions {
   removeConversation: (id: number) => void
   deleteConversation: (id: number) => Promise<void>
   deleteMultipleConversations: (ids: number[]) => Promise<void>
+  
+  // Examples Operations
+  loadExamples: (conversationId: number, forceRefresh?: boolean) => Promise<void>
+  updateExample: (exampleId: number, updates: Partial<FeedMeExample>) => Promise<void>
+  deleteExample: (exampleId: number) => Promise<void>
+  refreshExamples: (conversationId: number) => Promise<void>
+  getExamplesByConversation: (conversationId: number) => FeedMeExample[]
   
   // Upload Operations
   uploadConversation: (upload: Omit<ConversationUpload, 'id' | 'status' | 'progress'>) => Promise<string>
@@ -161,6 +210,7 @@ interface ConversationsActions {
     rejected: number
     processing: number
   }
+  cleanup: () => void
 }
 
 export interface ConversationsStore extends ConversationsState {
@@ -186,6 +236,14 @@ export const useConversationsStore = create<ConversationsStore>()(
         sortOrder: 'desc'
       },
       
+      examples: {
+        examplesByConversation: {},
+        examplesLoading: {},
+        examplesError: {},
+        examplesLastUpdated: {},
+        optimisticUpdates: {}
+      },
+      
       processing: {
         activeUploads: {},
         processingQueue: [],
@@ -202,6 +260,10 @@ export const useConversationsStore = create<ConversationsStore>()(
         lastListRequest: null,
         listCacheExpiry: 0,
         conversationDetails: {}
+      },
+      
+      _internal: {
+        searchTimeoutId: null
       },
       
       actions: {
@@ -306,13 +368,24 @@ export const useConversationsStore = create<ConversationsStore>()(
             }
           }))
           
+          // Clear any existing timeout to prevent memory leaks
+          const currentState = get()
+          if (currentState._internal.searchTimeoutId) {
+            clearTimeout(currentState._internal.searchTimeoutId)
+          }
+          
           // Debounce search
           const timeoutId = setTimeout(() => {
             get().actions.loadConversations({ page: 1 })
           }, 300)
           
-          // Store timeout for cleanup if needed
-          ;(globalThis as any).searchTimeoutId = timeoutId
+          // Store timeout for cleanup
+          set(state => ({
+            _internal: {
+              ...state._internal,
+              searchTimeoutId: timeoutId
+            }
+          }))
         },
         
         setSorting: (sortBy, sortOrder) => {
@@ -468,8 +541,14 @@ export const useConversationsStore = create<ConversationsStore>()(
           }
           
           if (errors.length > 0) {
+            const errorDetails = errors.map(({ id, error }) => 
+              `Conversation ${id}: ${error.message}`
+            ).join('; ')
+            
             console.error('Some deletions failed:', errors)
-            throw new Error(`Failed to delete ${errors.length} conversations`)
+            throw new Error(
+              `Failed to delete ${errors.length} of ${ids.length} conversations. Details: ${errorDetails}`
+            )
           }
         },
         
@@ -478,7 +557,20 @@ export const useConversationsStore = create<ConversationsStore>()(
         // ===========================
         
         uploadConversation: async (uploadData) => {
-          const uploadId = `upload-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
+          // Generate robust unique ID with crypto.randomUUID() or fallback
+          const generateUploadId = (): string => {
+            if (typeof crypto !== 'undefined' && crypto.randomUUID) {
+              return `upload-${crypto.randomUUID()}`
+            } else {
+              // Fallback for environments without crypto.randomUUID
+              const timestamp = Date.now().toString(36)
+              const randomPart = Math.random().toString(36).substr(2, 12)
+              const extraRandom = Math.random().toString(36).substr(2, 8)
+              return `upload-${timestamp}-${randomPart}-${extraRandom}`
+            }
+          }
+          
+          const uploadId = generateUploadId()
           
           const upload: ConversationUpload = {
             ...uploadData,
@@ -557,6 +649,14 @@ export const useConversationsStore = create<ConversationsStore>()(
               }
             }))
             
+            // Show success toast notification
+            useUIStore.getState().actions.showToast({
+              type: 'success',
+              title: 'Upload queued',
+              message: `${upload.title} is processing…`,
+              duration: 4000
+            })
+            
             // If auto-processing, add to processing queue
             if (upload.autoProcess) {
               set(state => ({
@@ -573,6 +673,14 @@ export const useConversationsStore = create<ConversationsStore>()(
                   }
                 }
               }))
+            } else {
+              // Show success toast for manual processing
+              useUIStore.getState().actions.showToast({
+                type: 'success',
+                title: 'Upload complete',
+                message: `${upload.title} uploaded successfully`,
+                duration: 3000
+              })
             }
             
             // Mark upload as completed
@@ -614,6 +722,14 @@ export const useConversationsStore = create<ConversationsStore>()(
                 }
               }
             }))
+            
+            // Show error toast notification
+            useUIStore.getState().actions.showToast({
+              type: 'error',
+              title: 'Upload failed',
+              message: `Failed to upload ${upload.title}: ${error instanceof Error ? error.message : 'Unknown error'}`,
+              duration: 6000
+            })
             
             throw error
           }
@@ -694,7 +810,7 @@ export const useConversationsStore = create<ConversationsStore>()(
               }
             }))
             
-            await apiReprocessConversation(id)
+            await feedMeApi.reprocessConversation(id)
             
             // The processing status will be updated via WebSocket
             
@@ -743,6 +859,8 @@ export const useConversationsStore = create<ConversationsStore>()(
         // ===========================
         
         approveConversation: async (id, request) => {
+          const { showToast } = useUIStore.getState().actions
+          
           try {
             // Optimistic update
             get().actions.updateConversation(id, { 
@@ -750,13 +868,72 @@ export const useConversationsStore = create<ConversationsStore>()(
               last_updated: new Date().toISOString()
             })
             
-            await apiApproveConversation(id, request)
+            // Get selected example IDs from the examples state if available
+            const selectedExampleIds = get().examples.examplesByConversation[id]
+              ?.filter(ex => ex.is_active)
+              ?.map(ex => ex.id)
+            
+            // Use new Supabase-integrated endpoint
+            const supabaseRequest = {
+              approved_by: request.approved_by,
+              example_ids: selectedExampleIds?.length ? selectedExampleIds : null, // null means approve all
+              reviewer_notes: request.reviewer_notes || request.approval_notes
+            }
+            
+            const response = await fetch(`/api/v1/feedme/conversations/${id}/examples/approve`, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify(supabaseRequest),
+            })
+            
+            if (!response.ok) {
+              const error = await response.json()
+              throw new Error(error.detail || 'Failed to approve conversation')
+            }
+            
+            const data = await response.json()
+            
+            // Update conversation with sync status
+            get().actions.updateConversation(id, {
+              processing_status: 'approved' as any,
+              metadata: {
+                ...get().conversations[id]?.metadata,
+                supabase_synced: true,
+                approved_count: data.approved_count
+              }
+            })
+            
+            showToast({
+              id: `approve-${id}`,
+              title: 'Conversation Approved',
+              description: data.message || `Successfully approved ${data.approved_count} examples. Syncing to Supabase...`,
+              variant: 'success',
+              duration: 5000
+            })
+            
+            // If folder_id is present, trigger folder refresh
+            const conversation = get().conversations[id]
+            if (conversation?.folder_id) {
+              // Import folders store dynamically to avoid circular dependencies
+              import('@/lib/stores/folders-store').then(({ useFoldersStore }) => {
+                useFoldersStore.getState().actions.loadFolders(true)
+              })
+            }
             
           } catch (error) {
             console.error(`Failed to approve conversation ${id}:`, error)
             
             // Revert optimistic update
             await get().actions.refreshConversations()
+            
+            showToast({
+              id: `approve-error-${id}`,
+              title: 'Approval Failed',
+              description: error instanceof Error ? error.message : 'Failed to approve conversation',
+              variant: 'error'
+            })
             
             throw error
           }
@@ -891,7 +1068,13 @@ export const useConversationsStore = create<ConversationsStore>()(
           }
           
           if (errors.length > 0) {
-            throw new Error(`Failed to approve ${errors.length} conversations`)
+            const errorDetails = errors.map(({ id, error }) => 
+              `Conversation ${id}: ${error.message}`
+            ).join('; ')
+            
+            throw new Error(
+              `Failed to approve ${errors.length} of ${ids.length} conversations. Details: ${errorDetails}`
+            )
           }
         },
         
@@ -907,7 +1090,13 @@ export const useConversationsStore = create<ConversationsStore>()(
           }
           
           if (errors.length > 0) {
-            throw new Error(`Failed to reject ${errors.length} conversations`)
+            const errorDetails = errors.map(({ id, error }) => 
+              `Conversation ${id}: ${error.message}`
+            ).join('; ')
+            
+            throw new Error(
+              `Failed to reject ${errors.length} of ${ids.length} conversations. Details: ${errorDetails}`
+            )
           }
         },
         
@@ -918,9 +1107,21 @@ export const useConversationsStore = create<ConversationsStore>()(
           })
           
           try {
-            // In a real implementation, this would be a bulk API call
-            // For now, we'll update individually
-            console.log(`Bulk assigning ${ids.length} conversations to folder ${folderId}`)
+            // Import the Supabase-enabled API function
+            const { assignConversationsToFolderSupabase } = await import('@/lib/feedme-api')
+            
+            // Make the API call with Supabase sync
+            const result = await assignConversationsToFolderSupabase(folderId, ids)
+            
+            console.log(`Successfully assigned ${ids.length} conversations to folder ${folderId}`)
+            
+            // Show success notification with Supabase sync status
+            useUIStore.getState().actions.showToast({
+              type: 'success',
+              title: 'Conversations Assigned',
+              message: result.message || `Assigned ${ids.length} conversations to folder`,
+              duration: 3000
+            })
             
           } catch (error) {
             console.error('Bulk folder assignment failed:', error)
@@ -930,6 +1131,312 @@ export const useConversationsStore = create<ConversationsStore>()(
             
             throw error
           }
+        },
+        
+        // ===========================
+        // Examples Operations
+        // ===========================
+        
+        loadExamples: async (conversationId, forceRefresh = false) => {
+          const state = get()
+          
+          // Check if already loading
+          if (state.examples.examplesLoading[conversationId]) {
+            return
+          }
+          
+          // Check cache
+          const lastUpdated = state.examples.examplesLastUpdated[conversationId]
+          const cacheValid = lastUpdated && (Date.now() - new Date(lastUpdated).getTime()) < 5 * 60 * 1000 // 5 minutes
+          
+          if (!forceRefresh && cacheValid && state.examples.examplesByConversation[conversationId]) {
+            return
+          }
+          
+          // Set loading state
+          set(state => ({
+            examples: {
+              ...state.examples,
+              examplesLoading: {
+                ...state.examples.examplesLoading,
+                [conversationId]: true
+              },
+              examplesError: {
+                ...state.examples.examplesError,
+                [conversationId]: null
+              }
+            }
+          }))
+          
+          try {
+            const response = await feedMeApi.getConversationExamples(conversationId)
+            
+            set(state => ({
+              examples: {
+                ...state.examples,
+                examplesByConversation: {
+                  ...state.examples.examplesByConversation,
+                  [conversationId]: response.examples
+                },
+                examplesLoading: {
+                  ...state.examples.examplesLoading,
+                  [conversationId]: false
+                },
+                examplesLastUpdated: {
+                  ...state.examples.examplesLastUpdated,
+                  [conversationId]: new Date().toISOString()
+                }
+              }
+            }))
+            
+          } catch (error) {
+            console.error(`Failed to load examples for conversation ${conversationId}:`, error)
+            
+            set(state => ({
+              examples: {
+                ...state.examples,
+                examplesLoading: {
+                  ...state.examples.examplesLoading,
+                  [conversationId]: false
+                },
+                examplesError: {
+                  ...state.examples.examplesError,
+                  [conversationId]: error instanceof Error ? error.message : 'Failed to load examples'
+                }
+              }
+            }))
+            
+            throw error
+          }
+        },
+        
+        updateExample: async (exampleId, updates) => {
+          const state = get()
+          
+          // Find the example and conversation
+          let conversationId: number | null = null
+          let originalExample: FeedMeExample | null = null
+          
+          for (const [convId, examples] of Object.entries(state.examples.examplesByConversation)) {
+            const example = examples.find(ex => ex.id === exampleId)
+            if (example) {
+              conversationId = parseInt(convId)
+              originalExample = example
+              break
+            }
+          }
+          
+          if (!conversationId || !originalExample) {
+            throw new Error('Example not found')
+          }
+          
+          // Optimistic update
+          const optimisticExample = { ...originalExample, ...updates }
+          
+          set(state => ({
+            examples: {
+              ...state.examples,
+              examplesByConversation: {
+                ...state.examples.examplesByConversation,
+                [conversationId!]: state.examples.examplesByConversation[conversationId!].map(ex =>
+                  ex.id === exampleId ? optimisticExample : ex
+                )
+              },
+              optimisticUpdates: {
+                ...state.examples.optimisticUpdates,
+                [exampleId]: optimisticExample
+              }
+            }
+          }))
+          
+          try {
+            // Make API call (to be implemented)
+            await feedMeApi.updateExample(exampleId, updates)
+            
+            // Remove from optimistic updates on success
+            set(state => {
+              const optimisticUpdates = { ...state.examples.optimisticUpdates }
+              delete optimisticUpdates[exampleId]
+              
+              return {
+                examples: {
+                  ...state.examples,
+                  optimisticUpdates
+                }
+              }
+            })
+            
+          } catch (error) {
+            console.error(`Failed to update example ${exampleId}:`, error)
+            
+            // Revert optimistic update
+            set(state => {
+              const optimisticUpdates = { ...state.examples.optimisticUpdates }
+              delete optimisticUpdates[exampleId]
+              
+              return {
+                examples: {
+                  ...state.examples,
+                  examplesByConversation: {
+                    ...state.examples.examplesByConversation,
+                    [conversationId!]: state.examples.examplesByConversation[conversationId!].map(ex =>
+                      ex.id === exampleId ? originalExample! : ex
+                    )
+                  },
+                  optimisticUpdates
+                }
+              }
+            })
+            
+            throw error
+          }
+        },
+        
+        deleteExample: async (exampleId) => {
+          const state = get()
+          
+          // Find the conversation that contains this example
+          let conversationId: number | null = null
+          let originalExample: FeedMeExample | null = null
+          
+          for (const [convId, examples] of Object.entries(state.examples.examplesByConversation)) {
+            const example = examples.find(ex => ex.id === exampleId)
+            if (example) {
+              conversationId = parseInt(convId)
+              originalExample = example
+              break
+            }
+          }
+          
+          if (!conversationId || !originalExample) {
+            throw new Error('Example not found')
+          }
+          
+          // Optimistic update - remove the example from the store
+          set(state => ({
+            examples: {
+              ...state.examples,
+              examplesByConversation: {
+                ...state.examples.examplesByConversation,
+                [conversationId!]: state.examples.examplesByConversation[conversationId!].filter(ex => ex.id !== exampleId)
+              }
+            }
+          }))
+          
+          try {
+            // Import and call the delete API function
+            const { deleteExample } = await import('@/lib/feedme-api')
+            const result = await deleteExample(exampleId)
+            
+            // Update conversation total_examples count if we have it
+            if (state.conversations[conversationId]) {
+              const currentExamples = get().examples.examplesByConversation[conversationId] || []
+              set(state => ({
+                conversations: {
+                  ...state.conversations,
+                  [conversationId!]: {
+                    ...state.conversations[conversationId!],
+                    total_examples: currentExamples.length
+                  }
+                }
+              }))
+            }
+            
+            // Show success notification
+            useUIStore.getState().actions.showToast({
+              type: 'success',
+              title: 'Example Deleted',
+              message: result.message,
+              duration: 3000
+            })
+            
+          } catch (error) {
+            console.error(`Failed to delete example ${exampleId}:`, error)
+            
+            // Revert optimistic update by restoring the example
+            set(state => ({
+              examples: {
+                ...state.examples,
+                examplesByConversation: {
+                  ...state.examples.examplesByConversation,
+                  [conversationId!]: [...(state.examples.examplesByConversation[conversationId!] || []), originalExample!]
+                    .sort((a, b) => a.id - b.id) // Maintain order
+                }
+              }
+            }))
+            
+            // Show error notification
+            useUIStore.getState().actions.showToast({
+              type: 'error',
+              title: 'Delete Failed',
+              message: error instanceof Error ? error.message : 'Failed to delete example',
+              duration: 4000
+            })
+            
+            throw error
+          }
+        },
+        
+        refreshExamples: async (conversationId) => {
+          // First, try to load examples from the server
+          await get().actions.loadExamples(conversationId, true)
+          
+          // If no examples found, trigger reprocessing to generate them
+          const state = get()
+          const examples = state.examples.examplesByConversation[conversationId] || []
+          
+          if (examples.length === 0) {
+            // Show a toast that we're reprocessing
+            useUIStore.getState().actions.showToast({
+              type: 'info',
+              title: 'Reprocessing conversation',
+              message: 'No examples found. Attempting to extract Q&A pairs...',
+              duration: 4000
+            })
+            
+            try {
+              // Trigger reprocessing
+              await get().actions.reprocessConversation(conversationId)
+              
+              // Wait a moment for processing to start
+              await new Promise(resolve => setTimeout(resolve, 2000))
+              
+              // Reload examples after reprocessing
+              await get().actions.loadExamples(conversationId, true)
+              
+              const updatedState = get()
+              const updatedExamples = updatedState.examples.examplesByConversation[conversationId] || []
+              
+              if (updatedExamples.length > 0) {
+                useUIStore.getState().actions.showToast({
+                  type: 'success',
+                  title: 'Examples generated',
+                  message: `Found ${updatedExamples.length} Q&A examples after reprocessing`,
+                  duration: 3000
+                })
+              } else {
+                useUIStore.getState().actions.showToast({
+                  type: 'warning',
+                  title: 'No examples available',
+                  message: 'This conversation does not contain extractable Q&A examples',
+                  duration: 4000
+                })
+              }
+            } catch (error) {
+              console.error('Failed to reprocess conversation:', error)
+              useUIStore.getState().actions.showToast({
+                type: 'error',
+                title: 'Reprocessing failed',
+                message: 'Could not reprocess the conversation. Please try again.',
+                duration: 5000
+              })
+            }
+          }
+        },
+        
+        getExamplesByConversation: (conversationId) => {
+          const state = get()
+          return state.examples.examplesByConversation[conversationId] || []
         },
         
         // ===========================
@@ -1030,6 +1537,21 @@ export const useConversationsStore = create<ConversationsStore>()(
             rejected: conversations.filter(c => (c as any).processing_status === 'rejected').length,
             processing: Object.keys(state.processing.processingStatus).length
           }
+        },
+        
+        cleanup: () => {
+          const state = get()
+          
+          // Clear any active search timeout to prevent memory leaks
+          if (state._internal.searchTimeoutId) {
+            clearTimeout(state._internal.searchTimeoutId)
+            set(currentState => ({
+              _internal: {
+                ...currentState._internal,
+                searchTimeoutId: null
+              }
+            }))
+          }
         }
       }
     })),
@@ -1049,3 +1571,11 @@ export const useProcessingState = () => useConversationsStore(state => state.pro
 export const useConversationsActions = () => useConversationsStore(state => state.actions)
 
 export const useConversationById = (id: number) => useConversationsStore(state => state.conversations[id])
+
+export const useExamplesState = () => useConversationsStore(state => state.examples)
+
+export const useExamplesByConversation = (conversationId: number) => useConversationsStore(state => state.examples.examplesByConversation[conversationId])
+
+export const useExamplesLoading = (conversationId: number) => useConversationsStore(state => state.examples.examplesLoading[conversationId] || false)
+
+export const useExamplesError = (conversationId: number) => useConversationsStore(state => state.examples.examplesError[conversationId] || null)

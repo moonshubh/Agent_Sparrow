@@ -90,50 +90,44 @@ class FolderListResponse(BaseModel):
     folders: List[FeedMeFolder]
     total_count: int
 
+# Supabase integration schemas
+class SupabaseApprovalRequest(BaseModel):
+    approved_by: str
+    example_ids: Optional[List[int]] = None  # None means all examples
+    reviewer_notes: Optional[str] = None
+
 # Import database utilities
-from app.db.connection_manager import get_connection_manager
 from app.db.embedding_utils import get_embedding_model
-import psycopg2
-import psycopg2.extras as psycopg2_extras
+from app.db.supabase_client import get_supabase_client
+from .feedme_db_helper import get_db_connection
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
 async def update_conversation_status(conversation_id: int, status: ProcessingStatus, error_message: Optional[str] = None):
-    """Updates the processing status and error message of a conversation."""
-    sql = """
-        UPDATE feedme_conversations
-        SET processing_status = %s, error_message = %s, updated_at = NOW()
-        WHERE id = %s
-    """
-    
-    loop = asyncio.get_running_loop()
+    """Updates the processing status and error message of a conversation in Supabase."""
+    try:
+        client = get_supabase_client()
+        await client.update_conversation(
+            conversation_id=conversation_id,
+            update_data={
+                'processing_status': status.value,
+                'error_message': error_message
+            }
+        )
+    except Exception as e:
+        logger.error(f"Failed to update status for conversation {conversation_id}: {e}")
 
-    def _exec_update():
-        try:
-            manager = get_connection_manager()
-            with manager.get_connection() as conn:
-                with conn.cursor() as cursor:
-                    cursor.execute(sql, (status.value, error_message, conversation_id))
-                    conn.commit()
-        except psycopg2.Error as e:
-            logger.error(f"Failed to update status for conversation {conversation_id}: {e}")
-        except Exception as e:
-            logger.error(f"An unexpected error occurred while updating status for conversation {conversation_id}: {e}")
-    
-    await loop.run_in_executor(None, _exec_update)
-
-# Database connection helper
-def get_db_connection():
-    """Get a database connection from the connection manager"""
-    manager = get_connection_manager()
-    return manager.get_connection(cursor_factory=psycopg2_extras.RealDictCursor)
+# Supabase client helper
+def get_supabase_connection():
+    """Get Supabase client instance"""
+    return get_supabase_client()
 
 # Database helper functions
 
 async def get_conversation_by_id(conversation_id: int) -> Optional[FeedMeConversation]:
     """
-    Retrieve a conversation record from the database by its unique ID.
+    Retrieve a conversation record from Supabase by its unique ID.
     
     Parameters:
         conversation_id (int): The unique identifier of the conversation to retrieve.
@@ -142,15 +136,11 @@ async def get_conversation_by_id(conversation_id: int) -> Optional[FeedMeConvers
         Optional[FeedMeConversation]: The conversation object if found, otherwise None.
     """
     try:
-        with get_db_connection() as conn:
-            with conn.cursor(cursor_factory=psycopg2_extras.RealDictCursor) as cur:
-                cur.execute("""
-                    SELECT * FROM feedme_conversations WHERE id = %s
-                """, (conversation_id,))
-                row = cur.fetchone()
-                if row:
-                    return FeedMeConversation(**dict(row))
-                return None
+        client = get_supabase_client()
+        result = await client.get_conversation(conversation_id)
+        if result:
+            return FeedMeConversation(**result)
+        return None
     except Exception as e:
         logger.error(f"Error fetching conversation {conversation_id}: {e}")
         return None
@@ -158,7 +148,7 @@ async def get_conversation_by_id(conversation_id: int) -> Optional[FeedMeConvers
 
 async def create_conversation_in_db(conversation_data: ConversationCreate) -> FeedMeConversation:
     """
-    Inserts a new conversation record into the database using the provided conversation data.
+    Inserts a new conversation record into Supabase using the provided conversation data.
     
     Parameters:
     	conversation_data (ConversationCreate): The data required to create a new conversation, including title, original filename, transcript content, metadata, and uploader.
@@ -170,23 +160,15 @@ async def create_conversation_in_db(conversation_data: ConversationCreate) -> Fe
     	HTTPException: If the database operation fails, an HTTP 500 error is raised with details.
     """
     try:
-        with get_db_connection() as conn:
-            with conn.cursor(cursor_factory=psycopg2_extras.RealDictCursor) as cur:
-                cur.execute("""
-                    INSERT INTO feedme_conversations 
-                    (title, original_filename, raw_transcript, metadata, uploaded_by)
-                    VALUES (%s, %s, %s, %s, %s)
-                    RETURNING *
-                """, (
-                    conversation_data.title,
-                    conversation_data.original_filename,
-                    conversation_data.raw_transcript,
-                    psycopg2.extras.Json(conversation_data.metadata),
-                    conversation_data.uploaded_by
-                ))
-                row = cur.fetchone()
-                conn.commit()
-                return FeedMeConversation(**dict(row))
+        client = get_supabase_client()
+        result = await client.insert_conversation(
+            title=conversation_data.title,
+            original_filename=conversation_data.original_filename,
+            raw_transcript=conversation_data.raw_transcript,
+            metadata=conversation_data.metadata,
+            uploaded_by=conversation_data.uploaded_by
+        )
+        return FeedMeConversation(**result)
     except Exception as e:
         logger.error(f"Error creating conversation: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to create conversation: {str(e)}")
@@ -389,18 +371,15 @@ async def process_uploaded_transcript(conversation_id: int, processed_by: str):
     """Background task to process a newly uploaded transcript."""
     try:
         from app.feedme.tasks import process_transcript
-        logger.info(f"Starting background processing for conversation {conversation_id}")
-        await update_conversation_status(conversation_id, ProcessingStatus.PROCESSING)
+        logger.info(f"Starting background processing for conversation {conversation_id} - scheduling Celery task")
+        await update_conversation_status(conversation_id, ProcessingStatus.PENDING)
         
-        # This is where the heavy lifting happens
-        # In a real system, this would be a Celery task
-        process_transcript(conversation_id, processed_by)
-        
-        await update_conversation_status(conversation_id, ProcessingStatus.COMPLETED)
-        logger.info(f"Successfully processed conversation {conversation_id}")
+        # Schedule the actual processing as a Celery task
+        task = process_transcript.delay(conversation_id, processed_by)
+        logger.info(f"Scheduled Celery task {task.id} for conversation {conversation_id}")
         
     except Exception as e:
-        logger.error(f"Background processing failed for conversation {conversation_id}: {e}")
+        logger.error(f"Background processing scheduling failed for conversation {conversation_id}: {e}")
         await update_conversation_status(conversation_id, ProcessingStatus.FAILED)
 
 
@@ -637,51 +616,143 @@ async def list_conversation_examples(
         raise HTTPException(status_code=404, detail="Conversation not found")
     
     try:
-        with get_db_connection() as conn:
-            # Build query with filters
-            conditions = ["conversation_id = %s"]
-            params = [conversation_id]
-            
-            if is_active is not None:
-                conditions.append("is_active = %s")
-                params.append(is_active)
-            
-            where_clause = " WHERE " + " AND ".join(conditions)
-            
-            # Count total items
-            count_query = f"SELECT COUNT(*) as count FROM feedme_examples{where_clause}"
-            
-            # Get paginated results
-            offset = (page - 1) * page_size
-            data_query = f"""
-                SELECT * FROM feedme_examples{where_clause}
-                ORDER BY created_at DESC
-                LIMIT %s OFFSET %s
-            """
-            
-            with conn.cursor(cursor_factory=psycopg2_extras.RealDictCursor) as cur:
-                # Get total count
-                cur.execute(count_query, params)
-                count_result = cur.fetchone()
-                total_count = count_result['count'] if count_result else 0
+        # Use Supabase client instead of local database
+        client = get_supabase_client()
+        
+        # Build query with filters - select only fields needed for FeedMeExample
+        query = client.client.table('feedme_examples').select("""
+            id, uuid, conversation_id, question_text, answer_text, 
+            context_before, context_after, tags, issue_type, resolution_type,
+            confidence_score, usefulness_score, is_active, version,
+            review_status, reviewed_by, reviewed_at, created_at, updated_at
+        """)
+        query = query.eq('conversation_id', conversation_id)
+        
+        if is_active is not None:
+            query = query.eq('is_active', is_active)
+        
+        # Get total count first
+        count_response = client.client.table('feedme_examples')\
+            .select('id', count='exact')\
+            .eq('conversation_id', conversation_id)
+        
+        if is_active is not None:
+            count_response = count_response.eq('is_active', is_active)
+        
+        count_result = count_response.execute()
+        total_count = count_result.count if count_result.count else 0
+        
+        # Get paginated data
+        offset = (page - 1) * page_size
+        query = query.order('created_at', desc=True)\
+                     .range(offset, offset + page_size - 1)
+        
+        response = query.execute()
+        
+        # Convert to FeedMeExample objects
+        examples = []
+        for row in response.data:
+            try:
+                # Add missing fields with defaults if needed
+                example_data = dict(row)
                 
-                # Get paginated data
-                cur.execute(data_query, params + [page_size, offset])
-                rows = cur.fetchall()
+                # Ensure optional fields have proper defaults
+                if 'reviewer_notes' not in example_data:
+                    example_data['reviewer_notes'] = None
+                if 'generated_by_model' not in example_data:
+                    example_data['generated_by_model'] = None
                 
-                examples = [FeedMeExample(**dict(row)) for row in rows]
-                
-                return ExampleListResponse(
-                    examples=examples,
-                    total_count=total_count,
-                    page=page,
-                    page_size=page_size,
-                    has_next=offset + len(examples) < total_count
-                )
+                examples.append(FeedMeExample(**example_data))
+            except Exception as e:
+                logger.error(f"Failed to parse example {row.get('id', 'unknown')}: {e}")
+                logger.error(f"Row data: {row}")
+                continue
+        
+        # Calculate total pages
+        total_pages = (total_count + page_size - 1) // page_size if total_count > 0 else 1
+        
+        return ExampleListResponse(
+            examples=examples,
+            total_examples=total_count,
+            page=page,
+            page_size=page_size,
+            total_pages=total_pages
+        )
             
     except Exception as e:
         logger.error(f"Error listing examples for conversation {conversation_id}: {e}")
         raise HTTPException(status_code=500, detail="Failed to list examples")
+
+
+@router.put("/examples/{example_id}", response_model=FeedMeExample, tags=["FeedMe"])
+async def update_example(
+    example_id: int,
+    updates: ExampleUpdate
+):
+    """
+    Update an existing Q&A example.
+    
+    Parameters:
+        example_id (int): The ID of the example to update.
+        updates (ExampleUpdate): The fields to update.
+    
+    Returns:
+        FeedMeExample: The updated example.
+    
+    Raises:
+        HTTPException: Returns 404 if the example does not exist, 503 if the FeedMe service is disabled, or 500 on database errors.
+    """
+    
+    if not settings.feedme_enabled:
+        raise HTTPException(status_code=503, detail="FeedMe service is currently disabled")
+    
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor(cursor_factory=psycopg2_extras.RealDictCursor) as cur:
+                # Check if example exists
+                cur.execute("SELECT * FROM feedme_examples WHERE id = %s", (example_id,))
+                existing_example = cur.fetchone()
+                
+                if not existing_example:
+                    raise HTTPException(status_code=404, detail="Example not found")
+                
+                # Build update query
+                update_fields = []
+                update_values = []
+                
+                for field, value in updates.dict(exclude_unset=True).items():
+                    if value is not None:
+                        update_fields.append(f"{field} = %s")
+                        update_values.append(value)
+                
+                if not update_fields:
+                    # No updates to apply, return existing example
+                    return FeedMeExample(**dict(existing_example))
+                
+                # Add updated timestamp
+                update_fields.append("updated_at = CURRENT_TIMESTAMP")
+                
+                update_query = f"""
+                    UPDATE feedme_examples 
+                    SET {', '.join(update_fields)}
+                    WHERE id = %s
+                    RETURNING *
+                """
+                
+                update_values.append(example_id)
+                cur.execute(update_query, update_values)
+                updated_row = cur.fetchone()
+                
+                if not updated_row:
+                    raise HTTPException(status_code=500, detail="Failed to update example")
+                
+                return FeedMeExample(**dict(updated_row))
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error updating example {example_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to update example")
 
 
 @router.get("/conversations/{conversation_id}/formatted-content", tags=["FeedMe"])
@@ -1239,10 +1310,10 @@ async def feedme_health_check():
             "components": {}
         }
         
-        # Check database health
+        # Check Supabase health
         try:
-            from app.db.connection_manager import health_check
-            db_health = health_check()
+            client = get_supabase_client()
+            db_health = await client.health_check() if hasattr(client, 'health_check') else {"status": "healthy"}
             health_status["components"]["database"] = db_health
         except Exception as e:
             health_status["components"]["database"] = {
@@ -2680,4 +2751,644 @@ async def list_folder_conversations(
     except Exception as e:
         logger.error(f"Error listing conversations for folder {folder_id}: {e}")
         raise HTTPException(status_code=500, detail="Failed to list folder conversations")
+
+
+# =====================================================
+# SUPABASE INTEGRATION ENDPOINTS
+# =====================================================
+
+@router.post("/conversations/{conversation_id}/examples/approve", response_model=Dict[str, Any], tags=["FeedMe"])
+async def approve_conversation_examples_supabase(
+    conversation_id: int,
+    approval_request: SupabaseApprovalRequest,
+    background_tasks: BackgroundTasks
+):
+    """
+    Approve conversation examples and persist to Supabase
+    
+    This endpoint approves selected examples from a conversation and syncs them
+    to Supabase for retrieval by the Primary Agent. It handles both local database
+    updates and Supabase synchronization.
+    
+    Args:
+        conversation_id: ID of the conversation containing examples
+        approval_request: Approval details including approved_by and optional example_ids
+        background_tasks: FastAPI background task handler for async Supabase sync
+        
+    Returns:
+        Dict containing approval summary and sync status
+    """
+    
+    if not settings.feedme_enabled:
+        raise HTTPException(status_code=503, detail="FeedMe service is currently disabled")
+    
+    try:
+        # Initialize Supabase client
+        supabase_client = get_supabase_client()
+        
+        # Get conversation and examples from local DB
+        conversation = await get_conversation_by_id(conversation_id)
+        if not conversation:
+            raise HTTPException(status_code=404, detail="Conversation not found")
+        
+        # Get examples to approve
+        example_ids = approval_request.example_ids
+        approved_examples = []
+        
+        with get_db_connection() as conn:
+            with conn.cursor(cursor_factory=psycopg2_extras.RealDictCursor) as cur:
+                # Build query to get examples
+                if example_ids:
+                    # Specific examples
+                    cur.execute("""
+                        SELECT * FROM feedme_examples 
+                        WHERE conversation_id = %s AND id = ANY(%s)
+                        AND is_active = true
+                    """, (conversation_id, example_ids))
+                else:
+                    # All examples from conversation
+                    cur.execute("""
+                        SELECT * FROM feedme_examples 
+                        WHERE conversation_id = %s AND is_active = true
+                    """, (conversation_id,))
+                
+                example_rows = cur.fetchall()
+                
+                if not example_rows:
+                    raise HTTPException(
+                        status_code=404, 
+                        detail="No active examples found for approval"
+                    )
+                
+                # Update examples as approved in local DB
+                approved_at = datetime.now(timezone.utc)
+                example_ids_to_approve = [row['id'] for row in example_rows]
+                
+                cur.execute("""
+                    UPDATE feedme_examples 
+                    SET approved_at = %s, 
+                        approved_by = %s,
+                        updated_at = NOW()
+                    WHERE id = ANY(%s)
+                """, (approved_at, approval_request.approved_by, example_ids_to_approve))
+                
+                # Update conversation status
+                cur.execute("""
+                    UPDATE feedme_conversations
+                    SET processing_status = 'approved',
+                        updated_at = NOW()
+                    WHERE id = %s
+                """, (conversation_id,))
+                
+                conn.commit()
+                
+                # Prepare examples for Supabase
+                for row in example_rows:
+                    example_dict = dict(row)
+                    example_dict['approved_at'] = approved_at
+                    example_dict['approved_by'] = approval_request.approved_by
+                    approved_examples.append(example_dict)
+        
+        # Sync to Supabase asynchronously
+        async def sync_to_supabase():
+            try:
+                # Ensure conversation exists in Supabase
+                if conversation.get('folder_id'):
+                    await supabase_client.insert_conversation(
+                        title=conversation['title'],
+                        raw_transcript=conversation.get('raw_transcript', ''),
+                        folder_id=conversation.get('folder_id'),
+                        metadata=conversation.get('metadata', {}),
+                        uploaded_by=conversation.get('uploaded_by')
+                    )
+                
+                # Insert approved examples to Supabase
+                supabase_examples = []
+                for example in approved_examples:
+                    supabase_example = {
+                        'conversation_id': conversation_id,
+                        'question_text': example['question_text'],
+                        'answer_text': example['answer_text'],
+                        'context_before': example.get('context_before'),
+                        'context_after': example.get('context_after'),
+                        'tags': example.get('tags', []),
+                        'issue_type': example.get('issue_type'),
+                        'resolution_type': example.get('resolution_type'),
+                        'confidence_score': example.get('confidence_score', 0.0),
+                        'usefulness_score': example.get('usefulness_score', 0.0),
+                        'is_active': True,
+                        'approved_at': approved_at.isoformat(),
+                        'approved_by': approval_request.approved_by
+                    }
+                    
+                    # Add embeddings if available
+                    if example.get('question_embedding'):
+                        supabase_example['question_embedding'] = example['question_embedding']
+                    if example.get('answer_embedding'):
+                        supabase_example['answer_embedding'] = example['answer_embedding']
+                    if example.get('combined_embedding'):
+                        supabase_example['combined_embedding'] = example['combined_embedding']
+                    
+                    supabase_examples.append(supabase_example)
+                
+                # Bulk insert to Supabase
+                await supabase_client.insert_examples(supabase_examples, mark_approved=True)
+                
+                # Mark as synced in local DB
+                with get_db_connection() as conn:
+                    with conn.cursor() as cur:
+                        cur.execute("""
+                            UPDATE feedme_examples 
+                            SET supabase_synced = true,
+                                supabase_sync_at = NOW()
+                            WHERE id = ANY(%s)
+                        """, (example_ids_to_approve,))
+                        conn.commit()
+                
+                logger.info(f"Successfully synced {len(supabase_examples)} examples to Supabase")
+                
+            except Exception as e:
+                logger.error(f"Failed to sync to Supabase: {e}")
+                # Don't fail the main request if Supabase sync fails
+        
+        # Add sync task to background
+        background_tasks.add_task(sync_to_supabase)
+        
+        return {
+            "conversation_id": conversation_id,
+            "approved_count": len(approved_examples),
+            "approved_by": approval_request.approved_by,
+            "approved_at": approved_at.isoformat(),
+            "example_ids": example_ids_to_approve,
+            "supabase_sync": "pending",
+            "message": f"Successfully approved {len(approved_examples)} examples. Supabase sync in progress."
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error approving conversation examples: {e}")
+        raise HTTPException(status_code=500, detail="Failed to approve examples")
+
+
+@router.put("/folders/{folder_id}/assign", response_model=Dict[str, Any], tags=["FeedMe"])
+async def assign_conversations_to_folder_supabase(
+    folder_id: int,
+    assign_request: AssignFolderRequest,
+    background_tasks: BackgroundTasks
+):
+    """
+    Assign conversations to a folder with Supabase sync
+    
+    This endpoint assigns multiple conversations to a folder and syncs the
+    changes to Supabase for consistent folder organization.
+    
+    Args:
+        folder_id: Target folder ID
+        assign_request: Request containing conversation IDs to assign
+        background_tasks: Background task handler for Supabase sync
+        
+    Returns:
+        Dict containing assignment summary
+    """
+    
+    if not settings.feedme_enabled:
+        raise HTTPException(status_code=503, detail="FeedMe service is currently disabled")
+    
+    try:
+        # Validate folder exists
+        with get_db_connection() as conn:
+            with conn.cursor(cursor_factory=psycopg2_extras.RealDictCursor) as cur:
+                cur.execute("SELECT * FROM feedme_folders WHERE id = %s", (folder_id,))
+                folder = cur.fetchone()
+                
+                if not folder:
+                    raise HTTPException(status_code=404, detail="Folder not found")
+                
+                # Update conversations in local DB
+                cur.execute("""
+                    UPDATE feedme_conversations
+                    SET folder_id = %s, updated_at = NOW()
+                    WHERE id = ANY(%s)
+                    RETURNING id
+                """, (folder_id, assign_request.conversation_ids))
+                
+                updated_rows = cur.fetchall()
+                updated_count = len(updated_rows)
+                
+                conn.commit()
+        
+        # Sync to Supabase asynchronously
+        async def sync_folder_assignment():
+            try:
+                supabase_client = get_supabase_client()
+                
+                # Ensure folder exists in Supabase
+                await supabase_client.insert_folder(
+                    name=folder['name'],
+                    color=folder.get('color', '#0095ff'),
+                    description=folder.get('description'),
+                    parent_id=folder.get('parent_id'),
+                    created_by=folder.get('created_by')
+                )
+                
+                # Update conversations in Supabase
+                await supabase_client.bulk_assign_conversations_to_folder(
+                    conversation_ids=assign_request.conversation_ids,
+                    folder_id=folder_id
+                )
+                
+                logger.info(f"Successfully synced folder assignment to Supabase")
+                
+            except Exception as e:
+                logger.error(f"Failed to sync folder assignment to Supabase: {e}")
+        
+        # Add sync task to background
+        background_tasks.add_task(sync_folder_assignment)
+        
+        return {
+            "folder_id": folder_id,
+            "folder_name": folder['name'],
+            "assigned_count": updated_count,
+            "conversation_ids": [row['id'] for row in updated_rows],
+            "supabase_sync": "pending",
+            "message": f"Successfully assigned {updated_count} conversations to folder '{folder['name']}'"
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error assigning conversations to folder: {e}")
+        raise HTTPException(status_code=500, detail="Failed to assign conversations")
+
+
+# Supabase-enabled Folder Management Endpoints
+
+@router.post("/folders/create", response_model=Dict[str, Any], tags=["FeedMe"])
+async def create_folder_supabase(
+    folder_data: FolderCreate,
+    background_tasks: BackgroundTasks
+):
+    """
+    Create a new folder with Supabase synchronization
+    
+    Creates folder in local database and syncs to Supabase in background.
+    
+    Args:
+        folder_data: Folder creation data
+        
+    Returns:
+        Dict with folder info and sync status
+    """
+    
+    if not settings.feedme_enabled:
+        raise HTTPException(status_code=503, detail="FeedMe service is currently disabled")
+    
+    try:
+        created_folder = None
+        
+        with get_db_connection() as conn:
+            with conn.cursor(cursor_factory=psycopg2_extras.RealDictCursor) as cur:
+                # Check if folder name already exists
+                cur.execute("SELECT id FROM feedme_folders WHERE name = %s", (folder_data.name,))
+                if cur.fetchone():
+                    raise HTTPException(status_code=409, detail="Folder name already exists")
+                
+                # Create folder in local DB
+                cur.execute("""
+                    INSERT INTO feedme_folders (name, color, description, created_by)
+                    VALUES (%s, %s, %s, %s)
+                    RETURNING *
+                """, (folder_data.name, folder_data.color, folder_data.description, folder_data.created_by))
+                
+                folder_row = cur.fetchone()
+                conn.commit()
+                
+                created_folder = dict(folder_row)
+                created_folder['conversation_count'] = 0
+                
+                logger.info(f"Created folder locally: {folder_data.name} (ID: {created_folder['id']})")
+        
+        # Schedule Supabase sync in background
+        async def sync_folder_to_supabase():
+            try:
+                supabase_client = get_supabase_client()
+                
+                # Create folder in Supabase
+                supabase_folder = await supabase_client.insert_folder(
+                    name=folder_data.name,
+                    color=folder_data.color,
+                    description=folder_data.description,
+                    created_by=folder_data.created_by
+                )
+                
+                logger.info(f"Successfully synced folder {created_folder['id']} to Supabase")
+                
+            except Exception as e:
+                logger.error(f"Failed to sync folder to Supabase: {e}")
+                # Don't fail the entire operation if Supabase sync fails
+        
+        background_tasks.add_task(sync_folder_to_supabase)
+        
+        return {
+            "folder": FeedMeFolder(**created_folder),
+            "supabase_sync": "pending",
+            "message": f"Successfully created folder '{folder_data.name}'. Supabase sync in progress."
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error creating folder: {e}")
+        raise HTTPException(status_code=500, detail="Failed to create folder")
+
+
+@router.put("/folders/{folder_id}/update", response_model=Dict[str, Any], tags=["FeedMe"])
+async def update_folder_supabase(
+    folder_id: int,
+    folder_data: FolderUpdate,
+    background_tasks: BackgroundTasks
+):
+    """
+    Update folder with Supabase synchronization
+    
+    Updates folder in local database and syncs to Supabase in background.
+    
+    Args:
+        folder_id: ID of folder to update
+        folder_data: Update data
+        
+    Returns:
+        Dict with updated folder info and sync status
+    """
+    
+    if not settings.feedme_enabled:
+        raise HTTPException(status_code=503, detail="FeedMe service is currently disabled")
+    
+    try:
+        updated_folder = None
+        
+        with get_db_connection() as conn:
+            with conn.cursor(cursor_factory=psycopg2_extras.RealDictCursor) as cur:
+                # Check if folder exists
+                cur.execute("SELECT * FROM feedme_folders WHERE id = %s", (folder_id,))
+                folder_row = cur.fetchone()
+                if not folder_row:
+                    raise HTTPException(status_code=404, detail="Folder not found")
+                
+                # Check if new name conflicts with existing folder
+                if folder_data.name:
+                    cur.execute("SELECT id FROM feedme_folders WHERE name = %s AND id != %s", 
+                              (folder_data.name, folder_id))
+                    if cur.fetchone():
+                        raise HTTPException(status_code=409, detail="Folder name already exists")
+                
+                # Build update query
+                update_fields = []
+                update_values = []
+                
+                if folder_data.name is not None:
+                    update_fields.append("name = %s")
+                    update_values.append(folder_data.name)
+                
+                if folder_data.color is not None:
+                    update_fields.append("color = %s")
+                    update_values.append(folder_data.color)
+                
+                if folder_data.description is not None:
+                    update_fields.append("description = %s")
+                    update_values.append(folder_data.description)
+                
+                update_fields.append("updated_at = NOW()")
+                
+                # Update folder
+                update_values.append(folder_id)
+                cur.execute(f"""
+                    UPDATE feedme_folders 
+                    SET {', '.join(update_fields)}
+                    WHERE id = %s
+                    RETURNING *
+                """, update_values)
+                
+                updated_row = cur.fetchone()
+                conn.commit()
+                
+                # Get conversation count
+                cur.execute("SELECT COUNT(*) as count FROM feedme_conversations WHERE folder_id = %s", (folder_id,))
+                count_row = cur.fetchone()
+                
+                updated_folder = dict(updated_row)
+                updated_folder['conversation_count'] = count_row['count'] if count_row else 0
+                
+                logger.info(f"Updated folder locally: {folder_id}")
+        
+        # Schedule Supabase sync in background
+        async def sync_folder_update_to_supabase():
+            try:
+                supabase_client = get_supabase_client()
+                
+                # Update folder in Supabase
+                await supabase_client.update_folder(
+                    folder_id=folder_id,
+                    name=folder_data.name,
+                    color=folder_data.color,
+                    description=folder_data.description
+                )
+                
+                logger.info(f"Successfully synced folder update {folder_id} to Supabase")
+                
+            except Exception as e:
+                logger.error(f"Failed to sync folder update to Supabase: {e}")
+                # Don't fail the entire operation if Supabase sync fails
+        
+        background_tasks.add_task(sync_folder_update_to_supabase)
+        
+        return {
+            "folder": FeedMeFolder(**updated_folder),
+            "supabase_sync": "pending",
+            "message": f"Successfully updated folder. Supabase sync in progress."
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error updating folder: {e}")
+        raise HTTPException(status_code=500, detail="Failed to update folder")
+
+
+@router.delete("/folders/{folder_id}/remove", response_model=Dict[str, Any], tags=["FeedMe"])
+async def delete_folder_supabase(
+    folder_id: int,
+    background_tasks: BackgroundTasks,
+    move_conversations_to: Optional[int] = Query(None, description="Folder ID to move conversations to")
+):
+    """
+    Delete folder with Supabase synchronization
+    
+    Deletes folder from local database and Supabase in background.
+    Optionally moves conversations to another folder.
+    
+    Args:
+        folder_id: ID of folder to delete
+        move_conversations_to: Optional folder ID to move conversations to
+        
+    Returns:
+        Dict with deletion status and sync info
+    """
+    
+    if not settings.feedme_enabled:
+        raise HTTPException(status_code=503, detail="FeedMe service is currently disabled")
+    
+    try:
+        deleted_folder_name = None
+        conversation_count = 0
+        
+        with get_db_connection() as conn:
+            with conn.cursor(cursor_factory=psycopg2_extras.RealDictCursor) as cur:
+                # Check if folder exists
+                cur.execute("SELECT * FROM feedme_folders WHERE id = %s", (folder_id,))
+                folder_row = cur.fetchone()
+                if not folder_row:
+                    raise HTTPException(status_code=404, detail="Folder not found")
+                
+                deleted_folder_name = folder_row['name']
+                
+                # Count conversations in folder
+                cur.execute("SELECT COUNT(*) as count FROM feedme_conversations WHERE folder_id = %s", (folder_id,))
+                count_row = cur.fetchone()
+                conversation_count = count_row['count'] if count_row else 0
+                
+                # Handle conversation reassignment
+                if move_conversations_to is not None:
+                    # Verify target folder exists
+                    cur.execute("SELECT id FROM feedme_folders WHERE id = %s", (move_conversations_to,))
+                    if not cur.fetchone():
+                        raise HTTPException(status_code=404, detail="Target folder not found")
+                    
+                    # Move conversations
+                    cur.execute("""
+                        UPDATE feedme_conversations 
+                        SET folder_id = %s 
+                        WHERE folder_id = %s
+                    """, (move_conversations_to, folder_id))
+                else:
+                    # Remove folder assignment from conversations
+                    cur.execute("""
+                        UPDATE feedme_conversations 
+                        SET folder_id = NULL 
+                        WHERE folder_id = %s
+                    """, (folder_id,))
+                
+                # Delete folder
+                cur.execute("DELETE FROM feedme_folders WHERE id = %s", (folder_id,))
+                conn.commit()
+                
+                logger.info(f"Deleted folder locally: {folder_id} ({deleted_folder_name})")
+        
+        # Schedule Supabase sync in background
+        async def sync_folder_deletion_to_supabase():
+            try:
+                supabase_client = get_supabase_client()
+                
+                # Delete folder from Supabase
+                await supabase_client.delete_folder(folder_id=folder_id)
+                
+                logger.info(f"Successfully synced folder deletion {folder_id} to Supabase")
+                
+            except Exception as e:
+                logger.error(f"Failed to sync folder deletion to Supabase: {e}")
+                # Don't fail the entire operation if Supabase sync fails
+        
+        background_tasks.add_task(sync_folder_deletion_to_supabase)
+        
+        return {
+            "folder_id": folder_id,
+            "folder_name": deleted_folder_name,
+            "conversations_affected": conversation_count,
+            "conversations_moved_to": move_conversations_to,
+            "supabase_sync": "pending",
+            "message": f"Successfully deleted folder '{deleted_folder_name}'. Supabase sync in progress."
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error deleting folder: {e}")
+        raise HTTPException(status_code=500, detail="Failed to delete folder")
+
+
+@router.delete("/examples/{example_id}", response_model=Dict[str, Any], tags=["FeedMe"])
+async def delete_example(example_id: int):
+    """
+    Delete a specific Q&A example from the database.
+    
+    This endpoint allows for granular deletion of individual Q&A examples
+    while preserving the conversation and other examples.
+    
+    Args:
+        example_id: ID of the example to delete
+        
+    Returns:
+        Dict with deletion confirmation and example details
+        
+    Raises:
+        HTTPException: If service disabled (503), example not found (404), or deletion fails (500)
+    """
+    
+    if not settings.feedme_enabled:
+        raise HTTPException(status_code=503, detail="FeedMe service is currently disabled")
+    
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor(cursor_factory=psycopg2_extras.RealDictCursor) as cur:
+                # Check if example exists and get details
+                cur.execute("""
+                    SELECT fe.id, fe.conversation_id, fe.question_text, fe.answer_text,
+                           fc.title as conversation_title
+                    FROM feedme_examples fe
+                    JOIN feedme_conversations fc ON fe.conversation_id = fc.id
+                    WHERE fe.id = %s
+                """, (example_id,))
+                
+                example = cur.fetchone()
+                if not example:
+                    raise HTTPException(status_code=404, detail="Example not found")
+                
+                # Delete the example
+                cur.execute("""
+                    DELETE FROM feedme_examples 
+                    WHERE id = %s
+                """, (example_id,))
+                
+                if cur.rowcount == 0:
+                    raise HTTPException(status_code=404, detail="Example not found or already deleted")
+                
+                # Update the conversation's total_examples count
+                cur.execute("""
+                    UPDATE feedme_conversations 
+                    SET total_examples = (
+                        SELECT COUNT(*) FROM feedme_examples 
+                        WHERE conversation_id = %s
+                    ),
+                    updated_at = CURRENT_TIMESTAMP
+                    WHERE id = %s
+                """, (example['conversation_id'], example['conversation_id']))
+                
+                conn.commit()
+                
+                logger.info(f"Successfully deleted example {example_id} from conversation {example['conversation_id']}")
+                
+                return {
+                    "example_id": example_id,
+                    "conversation_id": example['conversation_id'],
+                    "conversation_title": example['conversation_title'],
+                    "question_preview": example['question_text'][:100] + "..." if len(example['question_text']) > 100 else example['question_text'],
+                    "message": f"Successfully deleted Q&A example from conversation '{example['conversation_title']}'"
+                }
+                
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to delete example {example_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to delete example")
 

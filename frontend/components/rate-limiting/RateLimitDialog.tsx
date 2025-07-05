@@ -79,7 +79,7 @@ export const RateLimitDialog: React.FC<RateLimitDialogProps> = ({
   const getModelIcon = () => {
     return blockedModel === 'gemini-2.5-flash' ? 
       <Zap className="h-5 w-5 text-blue-500" /> : 
-      <Zap className="h-5 w-5 text-purple-500" />;
+      <Zap className="h-5 w-5 text-accent" />;
   };
 
   return (

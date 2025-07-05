@@ -3,6 +3,29 @@
 .env.*
 !.env.example
 
+# Ignore all .md files except claude.md
+*.md
+!CLAUDE.md
+!claude.md
+
+# Ignore test files
+**/test_*.py
+**/*_test.py
+**/*.test.*
+**/__tests__/
+**/*.test.js
+**/*.test.ts
+**/*.test.jsx
+**/*.test.tsx
+**/test/
+**/tests/
+**/*.spec.*
+**/spec/
+**/fixtures/
+**/__mocks__/
+**/test-results/
+**/coverage/
+
 # Python byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]

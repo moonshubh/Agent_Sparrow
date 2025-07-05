@@ -65,6 +65,8 @@ export interface SearchSuggestion {
 
 export interface SearchAnalytics {
   total_searches: number
+  total_impressions: number
+  total_clicks: number
   avg_response_time: number
   popular_queries: Array<{ query: string; count: number }>
   filter_usage: Record<string, number>
@@ -166,6 +168,8 @@ const DEFAULT_FILTERS: SearchFilters = {
 
 const DEFAULT_ANALYTICS: SearchAnalytics = {
   total_searches: 0,
+  total_impressions: 0,
+  total_clicks: 0,
   avg_response_time: 0,
   popular_queries: [],
   filter_usage: {},
@@ -544,6 +548,11 @@ export const useSearchStore = create<SearchStore>()(
                 const analytics = { ...state.analytics }
                 
                 analytics.total_searches++
+                // Track impressions (results shown) only when results are returned
+                if (resultCount > 0) {
+                  analytics.total_impressions++
+                }
+                
                 analytics.avg_response_time = (
                   (analytics.avg_response_time * (analytics.total_searches - 1) + responseTime) /
                   analytics.total_searches
@@ -575,11 +584,13 @@ export const useSearchStore = create<SearchStore>()(
               set(state => {
                 const analytics = { ...state.analytics }
                 
-                // Update click-through rate
-                analytics.result_click_through_rate = (
-                  (analytics.result_click_through_rate * analytics.total_searches + 1) /
-                  (analytics.total_searches + 1)
-                )
+                // Increment click count
+                analytics.total_clicks++
+                
+                // Calculate click-through rate as clicks divided by impressions
+                analytics.result_click_through_rate = analytics.total_impressions > 0
+                  ? analytics.total_clicks / analytics.total_impressions
+                  : 0
                 
                 return { analytics }
               })
@@ -587,13 +598,19 @@ export const useSearchStore = create<SearchStore>()(
             
             getAnalytics: async () => {
               try {
-                // In a real implementation, this would fetch from an analytics API
+                // TODO: Implement actual API call to retrieve analytics data
+                // This is a placeholder implementation that will be replaced with:
                 // const analyticsData = await feedMeApi.getSearchAnalytics()
                 // set({ analytics: analyticsData })
                 
-                console.log('Search analytics:', get().analytics)
+                const state = get()
+                console.log('Search analytics (placeholder):', state.analytics)
+                
+                // For now, just return the current analytics state
+                return state.analytics
               } catch (error) {
                 console.error('Failed to load search analytics:', error)
+                throw error
               }
             },
             
@@ -707,31 +724,61 @@ export const useSearchStore = create<SearchStore>()(
   )
 )
 
-// Convenience hooks
-export const useSearch = () => useSearchStore(state => ({
-  query: state.query,
-  filters: state.filters,
-  results: state.results,
-  totalResults: state.totalResults,
-  currentPage: state.currentPage,
-  hasMore: state.hasMore,
-  isSearching: state.isSearching,
-  searchError: state.searchError,
-  responseTime: state.responseTime
-}))
+// Convenience hooks with individual selectors to avoid infinite loops
+export const useSearch = () => {
+  // Individual selectors to avoid object creation on every render
+  const query = useSearchStore(state => state.query)
+  const filters = useSearchStore(state => state.filters)
+  const results = useSearchStore(state => state.results)
+  const totalResults = useSearchStore(state => state.totalResults)
+  const currentPage = useSearchStore(state => state.currentPage)
+  const hasMore = useSearchStore(state => state.hasMore)
+  const isSearching = useSearchStore(state => state.isSearching)
+  const searchError = useSearchStore(state => state.searchError)
+  const responseTime = useSearchStore(state => state.responseTime)
 
-export const useSearchHistory = () => useSearchStore(state => ({
-  searchHistory: state.searchHistory,
-  recentSearches: state.recentSearches,
-  suggestions: state.suggestions
-}))
+  return {
+    query,
+    filters,
+    results,
+    totalResults,
+    currentPage,
+    hasMore,
+    isSearching,
+    searchError,
+    responseTime
+  }
+}
 
-export const useSavedSearches = () => useSearchStore(state => ({
-  savedSearches: state.savedSearches
-}))
+export const useSearchHistory = () => {
+  // Individual selectors to avoid object creation on every render
+  const searchHistory = useSearchStore(state => state.searchHistory)
+  const recentSearches = useSearchStore(state => state.recentSearches)
+  const suggestions = useSearchStore(state => state.suggestions)
 
-export const useSearchAnalytics = () => useSearchStore(state => ({
-  analytics: state.analytics
-}))
+  return {
+    searchHistory,
+    recentSearches,
+    suggestions
+  }
+}
+
+export const useSavedSearches = () => {
+  // Individual selectors to avoid object creation on every render
+  const savedSearches = useSearchStore(state => state.savedSearches)
+
+  return {
+    savedSearches
+  }
+}
+
+export const useSearchAnalytics = () => {
+  // Individual selectors to avoid object creation on every render
+  const analytics = useSearchStore(state => state.analytics)
+
+  return {
+    analytics
+  }
+}
 
 export const useSearchActions = () => useSearchStore(state => state.actions)

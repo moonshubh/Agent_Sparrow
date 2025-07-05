@@ -48,11 +48,31 @@ kill_process_on_port() {
     if [ -z "$PIDS" ]; then
         echo "No process found on port $PORT."
     else
-        echo "Killing processes on port $PORT: $PIDS"
-        if ! kill -9 $PIDS; then
-            echo "Failed to kill processes on port $PORT. Manual intervention may be required."
+        echo "Gracefully terminating processes on port $PORT: $PIDS"
+        # First, try graceful shutdown with SIGTERM
+        if kill -15 $PIDS 2>/dev/null; then
+            echo "Sent SIGTERM to processes. Waiting for graceful shutdown..."
+            sleep 3
+            
+            # Check if processes are still running
+            REMAINING_PIDS=$(lsof -t -i:$PORT 2>/dev/null || true)
+            if [ -z "$REMAINING_PIDS" ]; then
+                echo "Processes terminated gracefully."
+            else
+                echo "Some processes still running. Forcing termination with SIGKILL..."
+                if kill -9 $REMAINING_PIDS 2>/dev/null; then
+                    echo "Processes killed with SIGKILL."
+                else
+                    echo "Failed to kill processes on port $PORT. Manual intervention may be required."
+                fi
+            fi
         else
-            echo "Processes killed successfully."
+            echo "Failed to send SIGTERM. Trying SIGKILL directly..."
+            if kill -9 $PIDS 2>/dev/null; then
+                echo "Processes killed with SIGKILL."
+            else
+                echo "Failed to kill processes on port $PORT. Manual intervention may be required."
+            fi
         fi
     fi
 }

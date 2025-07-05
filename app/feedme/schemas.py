@@ -50,6 +50,8 @@ class IssueType(str, Enum):
     TECHNICAL_ISSUE = "technical-issue"
     HOW_TO = "how-to"
     TROUBLESHOOTING = "troubleshooting"
+    SENDING_RECEIVING = "sending/receiving"  # Added: AI-generated value
+    AVAILABILITY = "availability"  # Added: AI-generated value
     OTHER = "other"
 
 
@@ -61,6 +63,9 @@ class ResolutionType(str, Enum):
     FEATURE_EXPLANATION = "feature-explanation"
     ESCALATION = "escalation"
     NO_RESOLUTION = "no-resolution"
+    TROUBLESHOOTING = "troubleshooting"  # Added: AI-generated value  
+    DATA_REQUEST = "data_request"  # Added: AI-generated value
+    TICKET_HOLD = "ticket_hold"  # Added: AI-generated value
     OTHER = "other"
 
 

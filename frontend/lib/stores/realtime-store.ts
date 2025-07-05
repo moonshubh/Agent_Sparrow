@@ -5,9 +5,16 @@
  * and exponential backoff for reliable real-time communication.
  */
 
+import React from 'react'
 import { create } from 'zustand'
 import { devtools, subscribeWithSelector } from 'zustand/middleware'
 import { feedMeAuth } from '@/lib/auth/feedme-auth'
+
+// Configuration constants for notification timeouts
+const NOTIFICATION_TIMEOUTS = {
+  PROCESSING_UPDATE_REMOVAL: 10000, // 10 seconds for completed/failed processing updates
+  INFO_NOTIFICATION_REMOVAL: 5000,  // 5 seconds for info notifications
+} as const
 
 // Types
 export interface ProcessingUpdate {
@@ -185,8 +192,11 @@ export const useRealtimeStore = create<RealtimeStore>()(
             const baseUrl = process.env.NODE_ENV === 'development' 
               ? 'ws://localhost:8000' 
               : window.location.origin.replace('http', 'ws')
-            wsUrl = `${baseUrl}/api/v1/ws/feedme/global`
+            wsUrl = `${baseUrl}/ws/feedme/global`
           }
+          
+          // Ensure authentication is initialized
+          feedMeAuth.autoLogin()
           
           // Add authentication token
           const authUrl = feedMeAuth.getWebSocketUrl(wsUrl)
@@ -269,7 +279,9 @@ export const useRealtimeStore = create<RealtimeStore>()(
               get().actions.cleanupTimers()
               
               // Attempt reconnection if not intentional disconnect
-              if (event.code !== 1000 && DEFAULT_RECONNECTION_CONFIG.enabled) {
+              // Exclude close codes that indicate intentional disconnection: 1000 (normal), 1001 (going away)
+              const intentionalCloseCodes = [1000, 1001]
+              if (!intentionalCloseCodes.includes(event.code) && DEFAULT_RECONNECTION_CONFIG.enabled) {
                 get().actions.scheduleReconnection()
               }
             }
@@ -367,7 +379,7 @@ export const useRealtimeStore = create<RealtimeStore>()(
           if (update.status === 'completed' || update.status === 'failed') {
             setTimeout(() => {
               get().actions.clearProcessingUpdate(update.conversation_id)
-            }, 10000)
+            }, NOTIFICATION_TIMEOUTS.PROCESSING_UPDATE_REMOVAL)
           }
         },
         
@@ -398,11 +410,11 @@ export const useRealtimeStore = create<RealtimeStore>()(
             notifications: [newNotification, ...state.notifications]
           }))
           
-          // Auto-remove info notifications after 5 seconds
+          // Auto-remove info notifications after configured delay
           if (notification.type === 'info') {
             setTimeout(() => {
               get().actions.markNotificationRead(newNotification.id)
-            }, 5000)
+            }, NOTIFICATION_TIMEOUTS.INFO_NOTIFICATION_REMOVAL)
           }
           
           return newNotification.id
@@ -629,7 +641,10 @@ export const useRealtimeStore = create<RealtimeStore>()(
             case 'pong':
               // Handle heartbeat response
               const pongTime = Date.now()
-              const pingTime = data.timestamp || Date.now()
+              // Defensive check for timestamp - ensure it's a valid number
+              const pingTime = (data.timestamp && typeof data.timestamp === 'number' && !isNaN(data.timestamp)) 
+                ? data.timestamp 
+                : pongTime // Use current time as fallback to avoid negative latency
               const latency = pongTime - pingTime
               
               // Clear heartbeat timeout
@@ -656,6 +671,18 @@ export const useRealtimeStore = create<RealtimeStore>()(
               }
               break
               
+            case 'folder_counts_update':
+              // Update folder conversation counts
+              if (data.folder_counts && typeof data.folder_counts === 'object') {
+                // Import folders store dynamically to avoid circular dependency
+                import('./folders-store').then(({ useFoldersStore }) => {
+                  useFoldersStore.getState().actions.updateConversationCounts(data.folder_counts)
+                }).catch(err => {
+                  console.error('Failed to update folder counts:', err)
+                })
+              }
+              break
+              
             case 'notification':
               state.actions.addNotification({
                 type: data.level || 'info',
@@ -677,16 +704,51 @@ export const useRealtimeStore = create<RealtimeStore>()(
   )
 )
 
-// Convenience hooks
-export const useRealtime = () => useRealtimeStore(state => ({
-  isConnected: state.isConnected,
-  connectionStatus: state.connectionStatus,
-  lastUpdate: state.lastUpdate,
-  processingUpdates: state.processingUpdates,
-  notifications: state.notifications,
-  heartbeat: state.heartbeat,
-  reconnection: state.reconnection
-}))
+// Stable default state for SSR
+const SSR_DEFAULT_STATE = {
+  isConnected: false,
+  connectionStatus: 'disconnected' as const,
+  lastUpdate: null,
+  processingUpdates: {},
+  notifications: [],
+  heartbeat: { isActive: false, lastPing: null, lastPong: null, latency: null },
+  reconnection: { attempts: 0, isReconnecting: false, nextRetryIn: 0 }
+}
+
+// Convenience hooks with SSR safety - using individual selectors to avoid infinite loops
+export const useRealtime = () => {
+  // Only access store after client-side hydration
+  const [isClient, setIsClient] = React.useState(false)
+  
+  React.useEffect(() => {
+    setIsClient(true)
+  }, [])
+  
+  // Individual selectors to avoid object creation on every render
+  const isConnected = useRealtimeStore(state => state.isConnected)
+  const connectionStatus = useRealtimeStore(state => state.connectionStatus)
+  const lastUpdate = useRealtimeStore(state => state.lastUpdate)
+  const processingUpdates = useRealtimeStore(state => state.processingUpdates)
+  const notifications = useRealtimeStore(state => state.notifications)
+  const heartbeat = useRealtimeStore(state => state.heartbeat)
+  const reconnection = useRealtimeStore(state => state.reconnection)
+  
+  // Return stable default state during SSR
+  if (!isClient) {
+    return SSR_DEFAULT_STATE
+  }
+  
+  // Return actual store values on client
+  return {
+    isConnected,
+    connectionStatus,
+    lastUpdate,
+    processingUpdates,
+    notifications,
+    heartbeat,
+    reconnection
+  }
+}
 
 export const useRealtimeActions = () => useRealtimeStore(state => state.actions)
 

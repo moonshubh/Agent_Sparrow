@@ -83,8 +83,18 @@ def count_remaining_components() -> Dict[str, int]:
     if not feedme_dir.exists():
         return {"total": 0, "test_files": 0}
     
-    components = list(feedme_dir.glob("*.tsx"))
-    test_files = list((feedme_dir / "__tests__").glob("*.tsx")) if (feedme_dir / "__tests__").exists() else []
+    # Count component files with multiple extensions
+    component_patterns = ["*.tsx", "*.ts", "*.jsx", "*.js"]
+    components = []
+    for pattern in component_patterns:
+        components.extend(feedme_dir.glob(pattern))
+    
+    # Count test files with multiple extensions
+    test_patterns = ["*.tsx", "*.ts", "*.jsx", "*.js"]
+    test_files = []
+    if (feedme_dir / "__tests__").exists():
+        for pattern in test_patterns:
+            test_files.extend((feedme_dir / "__tests__").glob(pattern))
     
     return {
         "total": len(components),

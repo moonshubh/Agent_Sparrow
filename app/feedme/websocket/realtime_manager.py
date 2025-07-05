@@ -371,7 +371,7 @@ class FeedMeRealtimeManager:
         Args:
             room_id: Specific room to ping, or None for all rooms
         """
-        heartbeat_message = HeartbeatMessage().model_dump()
+        heartbeat_message = HeartbeatMessage().model_dump(mode='json')
         
         if room_id:
             await self.broadcast_to_room(room_id, heartbeat_message)

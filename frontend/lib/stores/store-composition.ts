@@ -6,26 +6,77 @@
  */
 
 import { useEffect, useCallback, useMemo } from 'react'
-import { useConversationsStore } from './conversations-store'
+import { useConversationsStore, type Conversation } from './conversations-store'
 import { useRealtimeStore } from './realtime-store'
 import { useSearchStore } from './search-store'
-import { useFoldersStore } from './folders-store'
+import { useFoldersStore, type Folder } from './folders-store'
 import { useAnalyticsStore } from './analytics-store'
 import { useUIStore } from './ui-store'
 
-// Cross-store event types
+// Strongly typed event payload interfaces
+export interface ConversationUpdatedPayload {
+  id: number
+  updates: Partial<Conversation>
+}
+
+export interface ConversationDeletedPayload {
+  id: number
+}
+
+export interface ConversationUploadedPayload {
+  conversation: Conversation
+}
+
+export interface ProcessingStartedPayload {
+  conversationId: number
+}
+
+export interface ProcessingCompletedPayload {
+  conversationId: number
+  result: {
+    processing_status: 'completed' | 'failed'
+    extracted_examples?: number
+    processing_time_ms?: number
+    ai_confidence?: number
+    error_message?: string
+  }
+}
+
+export interface FolderCreatedPayload {
+  folder: Folder
+}
+
+export interface FolderUpdatedPayload {
+  id: number
+  updates: Partial<Folder>
+}
+
+export interface FolderDeletedPayload {
+  id: number
+}
+
+export interface SearchPerformedPayload {
+  query: string
+  results: number
+}
+
+export interface WebSocketConnectedPayload {}
+
+export interface WebSocketDisconnectedPayload {}
+
+// Cross-store event types with proper typing
 export type StoreEvent = 
-  | { type: 'conversation_updated'; payload: { id: number; updates: any } }
-  | { type: 'conversation_deleted'; payload: { id: number } }
-  | { type: 'conversation_uploaded'; payload: { conversation: any } }
-  | { type: 'processing_started'; payload: { conversationId: number } }
-  | { type: 'processing_completed'; payload: { conversationId: number; result: any } }
-  | { type: 'folder_created'; payload: { folder: any } }
-  | { type: 'folder_updated'; payload: { id: number; updates: any } }
-  | { type: 'folder_deleted'; payload: { id: number } }
-  | { type: 'search_performed'; payload: { query: string; results: number } }
-  | { type: 'websocket_connected'; payload: {} }
-  | { type: 'websocket_disconnected'; payload: {} }
+  | { type: 'conversation_updated'; payload: ConversationUpdatedPayload }
+  | { type: 'conversation_deleted'; payload: ConversationDeletedPayload }
+  | { type: 'conversation_uploaded'; payload: ConversationUploadedPayload }
+  | { type: 'processing_started'; payload: ProcessingStartedPayload }
+  | { type: 'processing_completed'; payload: ProcessingCompletedPayload }
+  | { type: 'folder_created'; payload: FolderCreatedPayload }
+  | { type: 'folder_updated'; payload: FolderUpdatedPayload }
+  | { type: 'folder_deleted'; payload: FolderDeletedPayload }
+  | { type: 'search_performed'; payload: SearchPerformedPayload }
+  | { type: 'websocket_connected'; payload: WebSocketConnectedPayload }
+  | { type: 'websocket_disconnected'; payload: WebSocketDisconnectedPayload }
 
 // Event bus for cross-store communication
 class StoreEventBus {
@@ -140,7 +191,7 @@ export function useStoreSync() {
       unsubscribeWsConnect()
       unsubscribeWsDisconnect()
     }
-  }, [conversationsActions, analyticsActions, uiActions])
+  }, [conversationsActions, analyticsActions, uiActions, searchActions, foldersActions, realtimeActions])
 }
 
 // Composite hooks for complex operations
@@ -151,40 +202,55 @@ export function useConversationManagement() {
   const realtimeActions = useRealtimeStore(state => state.actions)
   
   const deleteConversationWithConfirmation = useCallback(async (id: number) => {
-    const confirmed = window.confirm('Are you sure you want to delete this conversation?')
-    if (!confirmed) return false
+    // Use modal confirmation instead of window.confirm
+    return new Promise<boolean>((resolve) => {
+      uiActions.openModal('deleteConfirmation', {
+        title: 'Delete Conversation',
+        message: 'Are you sure you want to delete this conversation? This action cannot be undone.',
+        confirmText: 'Delete',
+        cancelText: 'Cancel',
+        confirmVariant: 'destructive',
+        onConfirm: async () => {
+          try {
+            uiActions.setOperationLoading('delete-conversation', true)
+            
+            await conversationsActions.deleteConversation(id)
+            
+            // Emit event for other stores
+            storeEventBus.emit({
+              type: 'conversation_deleted',
+              payload: { id }
+            })
+            
+            uiActions.showToast({
+              type: 'success',
+              title: 'Conversation Deleted',
+              message: 'The conversation has been successfully deleted.'
+            })
+            
+            uiActions.closeModal()
+            resolve(true)
+            
+          } catch (error) {
+            uiActions.showToast({
+              type: 'error',
+              title: 'Delete Failed',
+              message: error instanceof Error ? error.message : 'Failed to delete conversation'
+            })
+            
+            resolve(false)
+            
+          } finally {
+            uiActions.setOperationLoading('delete-conversation', false)
+          }
+        },
+        onCancel: () => {
+          uiActions.closeModal()
+          resolve(false)
+        }
+      })
+    })
     
-    try {
-      uiActions.setOperationLoading('delete-conversation', true)
-      
-      await conversationsActions.deleteConversation(id)
-      
-      // Emit event for other stores
-      storeEventBus.emit({
-        type: 'conversation_deleted',
-        payload: { id }
-      })
-      
-      uiActions.showToast({
-        type: 'success',
-        title: 'Conversation Deleted',
-        message: 'The conversation has been successfully deleted.'
-      })
-      
-      return true
-      
-    } catch (error) {
-      uiActions.showToast({
-        type: 'error',
-        title: 'Delete Failed',
-        message: error instanceof Error ? error.message : 'Failed to delete conversation'
-      })
-      
-      return false
-      
-    } finally {
-      uiActions.setOperationLoading('delete-conversation', false)
-    }
   }, [conversationsActions, uiActions])
   
   const uploadWithProgress = useCallback(async (
@@ -207,8 +273,45 @@ export function useConversationManagement() {
       
       // Assign to folder if specified
       if (folderId) {
-        // Wait for upload to complete and get conversation ID
-        // This would be handled by the upload process in real implementation
+        try {
+          // Set up event listener to handle folder assignment after upload completes
+          const unsubscribe = storeEventBus.subscribe('conversation_uploaded', (event) => {
+            if (event.type === 'conversation_uploaded' && event.payload.conversation.id) {
+              // Assign the uploaded conversation to the specified folder
+              foldersActions.assignConversationsToFolder(
+                [event.payload.conversation.id],
+                folderId
+              ).then(() => {
+                // Update the conversation to reflect folder assignment
+                conversationsActions.updateConversation(event.payload.conversation.id, {
+                  folder_id: folderId
+                })
+                
+                uiActions.showToast({
+                  type: 'success',
+                  title: 'Conversation Assigned',
+                  message: 'The conversation has been assigned to the selected folder.'
+                })
+              }).catch((error) => {
+                uiActions.showToast({
+                  type: 'warning',
+                  title: 'Folder Assignment Failed',
+                  message: 'The conversation was uploaded but could not be assigned to the folder.'
+                })
+              }).finally(() => {
+                unsubscribe()
+              })
+            }
+          })
+          
+          // Clean up listener after a reasonable timeout
+          setTimeout(() => {
+            unsubscribe()
+          }, 30000) // 30 second timeout
+          
+        } catch (error) {
+          console.warn('Failed to set up folder assignment listener:', error)
+        }
       }
       
       uiActions.showToast({
@@ -234,7 +337,7 @@ export function useConversationManagement() {
     } finally {
       uiActions.setOperationLoading('upload-conversation', false)
     }
-  }, [conversationsActions, uiActions])
+  }, [conversationsActions, foldersActions, uiActions])
   
   return {
     deleteConversationWithConfirmation,
@@ -362,12 +465,13 @@ export function useSearchIntegration() {
       // Get result count from search store
       const searchState = useSearchStore.getState()
       
-      // Emit analytics event
+      // Emit analytics event with response time
       storeEventBus.emit({
         type: 'search_performed',
         payload: {
           query,
-          results: searchState.totalResults
+          results: searchState.totalResults,
+          responseTime
         }
       })
       
@@ -468,33 +572,48 @@ export function useBulkOperations() {
   const bulkDeleteConversations = useCallback(async () => {
     if (selectedConversationIds.length === 0) return
     
-    const confirmed = window.confirm(
-      `Are you sure you want to delete ${selectedConversationIds.length} conversation(s)?`
-    )
-    
-    if (!confirmed) return
-    
-    try {
-      uiActions.setOperationLoading('bulk-delete', true)
-      
-      await conversationsActions.deleteMultipleConversations(selectedConversationIds)
-      
-      uiActions.clearBulkSelection()
-      uiActions.showToast({
-        type: 'success',
-        title: 'Conversations Deleted',
-        message: `Successfully deleted ${selectedConversationIds.length} conversation(s).`
+    // Use modal confirmation instead of window.confirm
+    return new Promise<void>((resolve) => {
+      uiActions.openModal('bulkDeleteConfirmation', {
+        title: 'Delete Conversations',
+        message: `Are you sure you want to delete ${selectedConversationIds.length} conversation(s)? This action cannot be undone.`,
+        confirmText: 'Delete All',
+        cancelText: 'Cancel',
+        confirmVariant: 'destructive',
+        onConfirm: async () => {
+          try {
+            uiActions.setOperationLoading('bulk-delete', true)
+            
+            await conversationsActions.deleteMultipleConversations(selectedConversationIds)
+            
+            uiActions.clearBulkSelection()
+            uiActions.showToast({
+              type: 'success',
+              title: 'Conversations Deleted',
+              message: `Successfully deleted ${selectedConversationIds.length} conversation(s).`
+            })
+            
+            uiActions.closeModal()
+            resolve()
+            
+          } catch (error) {
+            uiActions.showToast({
+              type: 'error',
+              title: 'Bulk Delete Failed',
+              message: error instanceof Error ? error.message : 'Failed to delete conversations'
+            })
+            resolve()
+          } finally {
+            uiActions.setOperationLoading('bulk-delete', false)
+          }
+        },
+        onCancel: () => {
+          uiActions.closeModal()
+          resolve()
+        }
       })
-      
-    } catch (error) {
-      uiActions.showToast({
-        type: 'error',
-        title: 'Bulk Delete Failed',
-        message: error instanceof Error ? error.message : 'Failed to delete conversations'
-      })
-    } finally {
-      uiActions.setOperationLoading('bulk-delete', false)
-    }
+    })
+    
   }, [selectedConversationIds, conversationsActions, uiActions])
   
   const bulkMoveToFolder = useCallback(async (folderId: number | null) => {
