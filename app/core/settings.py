@@ -42,12 +42,10 @@ class Settings(BaseSettings):
     feedme_similarity_threshold: float = Field(default=0.7, alias="FEEDME_SIMILARITY_THRESHOLD")
     feedme_max_retrieval_results: int = Field(default=3, alias="FEEDME_MAX_RETRIEVAL_RESULTS")
     
-    # FeedMe v2.0 Configuration
-    feedme_min_db_connections: int = Field(default=2, alias="FEEDME_MIN_DB_CONNECTIONS")
-    feedme_max_db_connections: int = Field(default=20, alias="FEEDME_MAX_DB_CONNECTIONS")
-    feedme_db_timeout: int = Field(default=30, alias="FEEDME_DB_TIMEOUT")
-    feedme_db_retry_attempts: int = Field(default=3, alias="FEEDME_DB_RETRY_ATTEMPTS")
-    feedme_db_retry_delay: float = Field(default=1.0, alias="FEEDME_DB_RETRY_DELAY")
+    # Supabase Configuration
+    supabase_url: Optional[str] = Field(default=None, alias="SUPABASE_URL")
+    supabase_anon_key: Optional[str] = Field(default=None, alias="SUPABASE_ANON_KEY")
+    supabase_service_key: Optional[str] = Field(default=None, alias="SUPABASE_SERVICE_KEY")
     feedme_async_processing: bool = Field(default=True, alias="FEEDME_ASYNC_PROCESSING")
     feedme_celery_broker: str = Field(default="redis://localhost:6379/1", alias="FEEDME_CELERY_BROKER")
     feedme_result_backend: str = Field(default="redis://localhost:6379/2", alias="FEEDME_RESULT_BACKEND")

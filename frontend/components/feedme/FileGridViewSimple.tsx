@@ -37,6 +37,8 @@ import { formatDistanceToNow } from 'date-fns'
 
 interface FileGridViewProps {
   onConversationSelect?: (conversationId: number) => void
+  currentFolderId?: number | null
+  onFolderSelect?: (folderId: number | null) => void
   className?: string
 }
 
@@ -53,7 +55,7 @@ const StatusIcon = ({ status }: { status: string }) => {
   }
 }
 
-export function FileGridView({ onConversationSelect, className }: FileGridViewProps) {
+export function FileGridView({ onConversationSelect, currentFolderId, onFolderSelect, className }: FileGridViewProps) {
   const { items: conversations, isLoading } = useConversations()
   const conversationsActions = useConversationsActions()
   const uiActions = useUIActions()
@@ -125,15 +127,32 @@ export function FileGridView({ onConversationSelect, className }: FileGridViewPr
     )
   }
 
+  // Get current folder name for display
+  const currentFolder = currentFolderId ? Object.values(folders).find(f => f.id === currentFolderId) : null
+  const folderDisplayName = currentFolderId === 0 ? "Unassigned" : currentFolder?.name || "All Conversations"
+
   if (conversations.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center h-64 text-center">
         <FileText className="h-12 w-12 text-muted-foreground mb-4" />
-        <h3 className="text-lg font-medium">No conversations yet</h3>
-        <p className="text-muted-foreground">Upload your first transcript to get started</p>
-        <Button className="mt-4" onClick={() => uiActions.setActiveTab('upload')}>
-          Upload Transcript
-        </Button>
+        <h3 className="text-lg font-medium">
+          {currentFolderId !== null ? `No conversations in ${folderDisplayName}` : "No conversations yet"}
+        </h3>
+        <p className="text-muted-foreground">
+          {currentFolderId !== null 
+            ? "This folder is empty. Try moving conversations here or switch to view all conversations."
+            : "Upload your first transcript to get started"
+          }
+        </p>
+        {currentFolderId !== null ? (
+          <Button className="mt-4" onClick={() => onFolderSelect?.(null)}>
+            View All Conversations
+          </Button>
+        ) : (
+          <Button className="mt-4" onClick={() => uiActions.setActiveTab('upload')}>
+            Upload Transcript
+          </Button>
+        )}
       </div>
     )
   }
@@ -141,6 +160,22 @@ export function FileGridView({ onConversationSelect, className }: FileGridViewPr
   return (
     <ScrollArea className={`${className} feedme-scrollbar`}>
       <div className="p-6">
+        {/* Folder navigation header */}
+        {currentFolderId !== null && (
+          <div className="mb-6 flex items-center gap-2 text-sm text-muted-foreground">
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => onFolderSelect?.(null)}
+              className="text-accent hover:text-accent-foreground"
+            >
+              All Conversations
+            </Button>
+            <span>/</span>
+            <span className="font-medium text-foreground">{folderDisplayName}</span>
+          </div>
+        )}
+        
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
           {conversations.map((conversation) => (
             <Card 

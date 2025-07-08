@@ -43,9 +43,7 @@ class HybridSearchEngineSupabase:
         filters: Optional[Dict[str, Any]] = None,
         min_confidence: float = 0.7,
         enable_stemming: bool = False,
-        track_performance: bool = False,
-        search_supabase: bool = True,
-        search_local: bool = False  # Deprecated - always use Supabase
+        track_performance: bool = False
     ) -> List[Dict[str, Any]]:
         """
         Perform hybrid search combining vector and text search with Supabase
@@ -254,10 +252,6 @@ class HybridSearchEngineSupabase:
             self.vector_weight = 0.7
             self.text_weight = 0.3
         
-        # Determine which sources to search
-        search_supabase = context.get('include_approved_only', True)
-        search_local = context.get('include_pending', True)
-        
         # Extract filters from context
         filters = {}
         if 'min_confidence' in context:
@@ -265,16 +259,14 @@ class HybridSearchEngineSupabase:
         if 'issue_category' in context:
             filters['issue_category'] = context['issue_category']
         
-        # Perform search
+        # Perform search (Supabase only)
         return await self.search(
             query=query,
             query_embedding=query_embedding,
             limit=limit,
             filters=filters,
             enable_stemming=context.get('enable_stemming', False),
-            track_performance=True,
-            search_supabase=search_supabase,
-            search_local=search_local
+            track_performance=True
         )
     
     def get_last_search_performance(self) -> Dict[str, Any]:
