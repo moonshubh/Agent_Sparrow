@@ -300,7 +300,8 @@ export class FeedMeApiClient {
     pageSize: number = 20,
     status?: string,
     uploadedBy?: string,
-    searchQuery?: string
+    searchQuery?: string,
+    folderId?: number | null
   ): Promise<ConversationListResponse> {
     const params = new URLSearchParams({
       page: page.toString(),
@@ -317,6 +318,10 @@ export class FeedMeApiClient {
 
     if (searchQuery) {
       params.append('search', searchQuery)
+    }
+
+    if (folderId !== undefined) {
+      params.append('folder_id', folderId?.toString() || '0')
     }
 
     const response = await fetchWithRetry(`${this.baseUrl}/conversations?${params.toString()}`)
@@ -511,8 +516,10 @@ export function listConversations(
   page?: number,
   pageSize?: number,
   searchQuery?: string,
+  sortBy?: string,
+  folderId?: number | null
 ) {
-  return feedMeApi.listConversations(page, pageSize, undefined, undefined, searchQuery)
+  return feedMeApi.listConversations(page, pageSize, undefined, undefined, searchQuery, folderId)
 }
 
 // Helper function to simulate upload progress
@@ -959,12 +966,13 @@ export async function updateFolder(folderId: number, folderData: FolderUpdate): 
  * Delete a folder and optionally move conversations
  */
 export async function deleteFolder(folderId: number, moveConversationsTo?: number): Promise<any> {
-  const url = new URL(`${FEEDME_API_BASE}/folders/${folderId}`)
+  let url = `${FEEDME_API_BASE}/folders/${folderId}`
   if (moveConversationsTo !== undefined) {
-    url.searchParams.set('move_conversations_to', moveConversationsTo.toString())
+    const params = new URLSearchParams({ move_conversations_to: moveConversationsTo.toString() })
+    url += `?${params.toString()}`
   }
 
-  const response = await fetchWithRetry(url.toString(), {
+  const response = await fetchWithRetry(url, {
     method: 'DELETE',
   })
 
@@ -1061,12 +1069,13 @@ export async function updateFolderSupabase(folderId: number, folderData: FolderU
  * Delete folder with Supabase sync
  */
 export async function deleteFolderSupabase(folderId: number, moveConversationsTo?: number): Promise<any> {
-  const url = new URL(`${FEEDME_API_BASE}/folders/${folderId}/remove`)
+  let url = `${FEEDME_API_BASE}/folders/${folderId}/remove`
   if (moveConversationsTo !== undefined) {
-    url.searchParams.set('move_conversations_to', moveConversationsTo.toString())
+    const params = new URLSearchParams({ move_conversations_to: moveConversationsTo.toString() })
+    url += `?${params.toString()}`
   }
 
-  const response = await fetchWithRetry(url.toString(), {
+  const response = await fetchWithRetry(url, {
     method: 'DELETE',
   })
 
@@ -1096,6 +1105,7 @@ export async function assignConversationsToFolderSupabase(folderId: number | nul
     // Move to specific folder - use the folder-specific endpoint
     url = `${FEEDME_API_BASE}/folders/${folderId}/assign`
     body = {
+      folder_id: folderId,
       conversation_ids: conversationIds,
     }
   }

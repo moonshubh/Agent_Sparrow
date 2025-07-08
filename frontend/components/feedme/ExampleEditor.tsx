@@ -31,6 +31,7 @@ import { Input } from '@/components/ui/input'
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from '@/components/ui/alert-dialog'
 import { MarkdownMessage } from '@/components/markdown/MarkdownMessage'
 import { useConversationsActions, type FeedMeExample } from '@/lib/stores/conversations-store'
+import { autoFormatContent } from '@/lib/content-formatter'
 
 interface ExampleEditorProps {
   example: FeedMeExample
@@ -277,7 +278,7 @@ export function ExampleEditor({ example, onCancel, onSave, onDelete }: ExampleEd
               )}
             </>
           ) : (
-            <MarkdownMessage content={example.question_text} />
+            <MarkdownMessage content={autoFormatContent(example.question_text, false)} />
           )}
         </div>
 
@@ -303,7 +304,7 @@ export function ExampleEditor({ example, onCancel, onSave, onDelete }: ExampleEd
                 )}
               </>
             ) : (
-              <MarkdownMessage content={example.answer_text} />
+              <MarkdownMessage content={autoFormatContent(example.answer_text, true)} />
             )}
           </div>
         </div>

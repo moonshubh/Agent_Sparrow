@@ -52,6 +52,10 @@ class IssueType(str, Enum):
     TROUBLESHOOTING = "troubleshooting"
     SENDING_RECEIVING = "sending/receiving"  # Added: AI-generated value
     AVAILABILITY = "availability"  # Added: AI-generated value
+    COMMUNICATION = "communication"  # Added: AI-generated value
+    EMAIL_SENDING = "email sending"  # Added: AI-generated value
+    TICKET_MANAGEMENT = "ticket management"  # Added: AI-generated value
+    GENERAL = "general"  # Added: AI-generated value
     OTHER = "other"
 
 
@@ -65,7 +69,11 @@ class ResolutionType(str, Enum):
     NO_RESOLUTION = "no-resolution"
     TROUBLESHOOTING = "troubleshooting"  # Added: AI-generated value  
     DATA_REQUEST = "data_request"  # Added: AI-generated value
+    DATA_REQUEST_SPACE = "data request"  # Added: AI-generated value with space
     TICKET_HOLD = "ticket_hold"  # Added: AI-generated value
+    TICKET_HOLD_SPACE = "ticket hold"  # Added: AI-generated value with space
+    CLARIFICATION = "clarification"  # Added: AI-generated value
+    RESOLVED = "resolved"  # Added: AI-generated value
     OTHER = "other"
 
 
@@ -428,12 +436,15 @@ class FolderBase(BaseModel):
 
 class FolderCreate(FolderBase):
     """Model for creating a new folder"""
-    pass
+    color: str = Field(default="#0095ff", description="Folder color in hex format")
+    created_by: Optional[str] = Field(default="system", description="User who created the folder")
 
 
 class FolderUpdate(FolderBase):
     """Model for updating a folder"""
     name: Optional[str] = Field(None, min_length=1, max_length=100)
+    color: Optional[str] = Field(None, description="Folder color in hex format")
+    description: Optional[str] = Field(None, max_length=255, description="Folder description")
 
 
 class Folder(FolderBase):

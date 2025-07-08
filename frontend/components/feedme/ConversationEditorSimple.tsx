@@ -33,6 +33,18 @@ export function ConversationEditor({ conversationId, isOpen, onClose }: Conversa
   const conversationActions = useConversationsActions()
 
   const loadConversation = useCallback(async () => {
+    // Validate conversation ID before attempting to load
+    if (!conversationId || conversationId <= 0) {
+      console.warn('Invalid conversation ID:', conversationId)
+      uiActions.showToast({
+        type: 'error',
+        title: 'Invalid Request',
+        message: 'Invalid conversation ID provided.'
+      })
+      onClose()
+      return
+    }
+
     try {
       setLoading(true)
       const conversation = await feedMeApi.getConversation(conversationId)
@@ -44,7 +56,7 @@ export function ConversationEditor({ conversationId, isOpen, onClose }: Conversa
         type: 'error',
         title: 'Load Failed',
         message: error instanceof Error && error.message.includes('not found') 
-          ? 'Conversation not found. It may have been deleted.'
+          ? 'Conversation not found. It may have been deleted or moved.'
           : 'Failed to load conversation details.'
       })
       // Close the editor if conversation doesn't exist

@@ -19,6 +19,7 @@ import {
   type CreateFolderRequest,
   type UpdateFolderRequest
 } from '@/lib/feedme-api'
+import { useUIStore } from '@/lib/stores/ui-store'
 
 // Types
 export interface Folder extends FeedMeFolder {

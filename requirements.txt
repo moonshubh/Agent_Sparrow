@@ -20,8 +20,7 @@ torch
 torchvision
 
 # Database & Auth
-psycopg2-binary # For PostgreSQL
-pgvector # For pgvector PostgreSQL extension integration
+supabase==2.0.0 # For Supabase integration
 qdrant-client
 PyJWT==2.8.0
 python-jose[cryptography]==3.3.0
@@ -55,4 +54,3 @@ sqlparse
 sentence-transformers
 psutil
 python-dateutil
-pgvector==0.4.1

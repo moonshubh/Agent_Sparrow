@@ -87,6 +87,7 @@ export interface ConversationListState {
   searchQuery: string
   sortBy: 'created_at' | 'updated_at' | 'title' | 'quality_score'
   sortOrder: 'asc' | 'desc'
+  currentFolderId: number | null // null = show all, 0 = unassigned, >0 = specific folder
 }
 
 export interface ProcessingState {
@@ -150,12 +151,14 @@ interface ConversationsActions {
     search?: string
     sortBy?: ConversationListState['sortBy']
     sortOrder?: ConversationListState['sortOrder']
+    folderId?: number | null
     forceRefresh?: boolean
   }) => Promise<void>
   
   refreshConversations: () => Promise<void>
   setSearchQuery: (query: string) => void
   setSorting: (sortBy: ConversationListState['sortBy'], sortOrder: ConversationListState['sortOrder']) => void
+  setCurrentFolder: (folderId: number | null) => void
   
   // CRUD Operations
   getConversation: (id: number, forceRefresh?: boolean) => Promise<Conversation | null>
@@ -233,7 +236,8 @@ export const useConversationsStore = create<ConversationsStore>()(
         lastUpdated: null,
         searchQuery: '',
         sortBy: 'created_at',
-        sortOrder: 'desc'
+        sortOrder: 'desc',
+        currentFolderId: null
       },
       
       examples: {
@@ -279,11 +283,12 @@ export const useConversationsStore = create<ConversationsStore>()(
             search = state.conversationsList.searchQuery,
             sortBy = state.conversationsList.sortBy,
             sortOrder = state.conversationsList.sortOrder,
+            folderId = state.conversationsList.currentFolderId,
             forceRefresh = false
           } = options
           
           // Check cache
-          const cacheKey = `${page}-${pageSize}-${search}-${sortBy}-${sortOrder}`
+          const cacheKey = `${page}-${pageSize}-${search}-${sortBy}-${sortOrder}-${folderId}`
           const now = Date.now()
           
           if (!forceRefresh && 
@@ -301,7 +306,8 @@ export const useConversationsStore = create<ConversationsStore>()(
               pageSize,
               searchQuery: search,
               sortBy,
-              sortOrder
+              sortOrder,
+              currentFolderId: folderId
             }
           }))
           
@@ -310,7 +316,8 @@ export const useConversationsStore = create<ConversationsStore>()(
               page,
               pageSize,
               search || undefined,
-              `${sortBy}:${sortOrder}`
+              `${sortBy}:${sortOrder}`,
+              folderId
             )
             
             // Update conversations map
@@ -399,6 +406,18 @@ export const useConversationsStore = create<ConversationsStore>()(
           }))
           
           get().actions.loadConversations({ page: 1 })
+        },
+        
+        setCurrentFolder: (folderId) => {
+          set(state => ({
+            conversationsList: {
+              ...state.conversationsList,
+              currentFolderId: folderId,
+              currentPage: 1
+            }
+          }))
+          
+          get().actions.loadConversations({ page: 1, folderId })
         },
         
         // ===========================
@@ -1190,6 +1209,39 @@ export const useConversationsStore = create<ConversationsStore>()(
             }))
             
           } catch (error) {
+            // Handle conversation not found errors gracefully
+            if (error instanceof Error && error.message.includes('Conversation not found')) {
+              console.warn(`Conversation ${conversationId} no longer exists, removing from state`)
+              
+              // Remove the stale conversation from state
+              set(state => {
+                const conversations = { ...state.conversations }
+                delete conversations[conversationId]
+                
+                return {
+                  ...state,
+                  conversations,
+                  examples: {
+                    ...state.examples,
+                    examplesLoading: {
+                      ...state.examples.examplesLoading,
+                      [conversationId]: false
+                    },
+                    examplesError: {
+                      ...state.examples.examplesError,
+                      [conversationId]: null
+                    },
+                    examplesByConversation: {
+                      ...state.examples.examplesByConversation,
+                      [conversationId]: []
+                    }
+                  }
+                }
+              })
+              
+              return // Don't throw, just return silently
+            }
+            
             console.error(`Failed to load examples for conversation ${conversationId}:`, error)
             
             set(state => ({

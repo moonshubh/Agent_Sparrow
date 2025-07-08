@@ -16,6 +16,17 @@
 import React, { useState, useEffect, useCallback } from 'react'
 import { Button } from '@/components/ui/button'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import { Textarea } from '@/components/ui/textarea'
+import { 
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
 import { 
   Home, 
   Upload, 
@@ -39,7 +50,7 @@ import { FeedMeErrorBoundary } from './ErrorBoundary'
 import { useConversations, useConversationsActions } from '@/lib/stores/conversations-store'
 import { useRealtime, useRealtimeActions } from '@/lib/stores/realtime-store'
 import { useSearch, useSearchActions } from '@/lib/stores/search-store'
-import { useFolders, useFoldersActions } from '@/lib/stores/folders-store'
+import { useFolders, useFoldersActions, useFolderModals } from '@/lib/stores/folders-store'
 import { useAnalytics, useAnalyticsActions } from '@/lib/stores/analytics-store'
 import { useUITabs, useUIActions } from '@/lib/stores/ui-store'
 import { useStoreInitialization } from '@/lib/stores/store-composition'
@@ -47,6 +58,12 @@ import { useStoreInitialization } from '@/lib/stores/store-composition'
 export function FeedMePageManager() {
   const [uploadModalOpen, setUploadModalOpen] = useState(false)
   const [selectedConversationId, setSelectedConversationId] = useState<number | null>(null)
+  const [currentFolderId, setCurrentFolderId] = useState<number | null>(null)
+  
+  // Folder modal state
+  const [folderName, setFolderName] = useState('')
+  const [folderDescription, setFolderDescription] = useState('')
+  const [folderColor, setFolderColor] = useState('#0095ff')
 
   // Modular store hooks - specific subscriptions for performance
   const { activeTab } = useUITabs()
@@ -67,6 +84,7 @@ export function FeedMePageManager() {
   // Folders and Analytics
   const folders = useFolders()
   const foldersActions = useFoldersActions()
+  const folderModals = useFolderModals()
   const analytics = useAnalytics()
   const analyticsActions = useAnalyticsActions()
 
@@ -83,11 +101,41 @@ export function FeedMePageManager() {
   }
 
   const handleConversationSelect = (conversationId: number) => {
+    // Validate conversation ID before setting
+    if (!conversationId || conversationId <= 0) {
+      console.warn('Invalid conversation ID selected:', conversationId)
+      return
+    }
     setSelectedConversationId(conversationId)
   }
 
   const handleConversationClose = () => {
     setSelectedConversationId(null)
+  }
+
+  const handleFolderSelect = (folderId: number | null) => {
+    setCurrentFolderId(folderId)
+    conversationsActions.setCurrentFolder(folderId)
+  }
+
+  const handleCreateFolder = async () => {
+    if (!folderName.trim()) return
+    
+    try {
+      await foldersActions.createFolder({
+        name: folderName.trim(),
+        color: folderColor,
+        description: folderDescription.trim() || undefined
+      })
+      
+      // Reset form
+      setFolderName('')
+      setFolderDescription('')
+      setFolderColor('#0095ff')
+      foldersActions.closeModals()
+    } catch (error) {
+      console.error('Failed to create folder:', error)
+    }
   }
 
   const unreadNotifications = notifications.filter(n => !n.read).length
@@ -198,6 +246,8 @@ export function FeedMePageManager() {
               <TabsContent value="conversations" className="h-full">
                 <FileGridView 
                   onConversationSelect={handleConversationSelect}
+                  currentFolderId={currentFolderId}
+                  onFolderSelect={handleFolderSelect}
                 />
               </TabsContent>
 
@@ -206,7 +256,7 @@ export function FeedMePageManager() {
                   <div className="flex items-center justify-between">
                     <h2 className="text-xl font-semibold">Folder Management</h2>
                     <Button 
-                      onClick={() => foldersActions.createFolder({ name: "New Folder" })}
+                      onClick={() => foldersActions.openCreateModal()}
                       size="sm"
                     >
                       <FolderOpen className="h-4 w-4 mr-2" />
@@ -215,6 +265,7 @@ export function FeedMePageManager() {
                   </div>
                   <FolderTreeView 
                     onConversationSelect={handleConversationSelect}
+                    onFolderSelect={handleFolderSelect}
                     expanded={true}
                   />
                 </div>
@@ -242,6 +293,65 @@ export function FeedMePageManager() {
         isOpen={uploadModalOpen}
         onClose={() => setUploadModalOpen(false)}
       />
+      
+      {/* Create Folder Modal */}
+      <Dialog open={folderModals.createModalOpen} onOpenChange={() => foldersActions.closeModals()}>
+        <DialogContent className="sm:max-w-[425px]">
+          <DialogHeader>
+            <DialogTitle>Create New Folder</DialogTitle>
+            <DialogDescription>
+              Create a new folder to organize your conversations.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-4 py-4">
+            <div className="grid grid-cols-4 items-center gap-4">
+              <Label htmlFor="folder-name" className="text-right">
+                Name
+              </Label>
+              <Input
+                id="folder-name"
+                value={folderName}
+                onChange={(e) => setFolderName(e.target.value)}
+                placeholder="Folder name"
+                className="col-span-3"
+              />
+            </div>
+            <div className="grid grid-cols-4 items-center gap-4">
+              <Label htmlFor="folder-color" className="text-right">
+                Color
+              </Label>
+              <Input
+                id="folder-color"
+                type="color"
+                value={folderColor}
+                onChange={(e) => setFolderColor(e.target.value)}
+                className="col-span-3 h-10"
+              />
+            </div>
+            <div className="grid grid-cols-4 items-center gap-4">
+              <Label htmlFor="folder-description" className="text-right">
+                Description
+              </Label>
+              <Textarea
+                id="folder-description"
+                value={folderDescription}
+                onChange={(e) => setFolderDescription(e.target.value)}
+                placeholder="Optional description"
+                className="col-span-3"
+                rows={3}
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => foldersActions.closeModals()}>
+              Cancel
+            </Button>
+            <Button onClick={handleCreateFolder} disabled={!folderName.trim()}>
+              Create Folder
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
       </div>
     </FeedMeErrorBoundary>
   )

@@ -21,6 +21,7 @@ import { Label } from '@/components/ui/label'
 
 interface FolderTreeViewProps {
   onConversationSelect?: (conversationId: number) => void
+  onFolderSelect?: (folderId: number | null) => void
   expanded?: boolean
   className?: string
 }
@@ -43,9 +44,10 @@ interface FolderItemProps {
   folder: Folder
   level: number
   onSelect?: (folderId: number) => void
+  onFolderSelect?: (folderId: number | null) => void
 }
 
-const FolderItem: React.FC<FolderItemProps> = ({ folder, level, onSelect }) => {
+const FolderItem: React.FC<FolderItemProps> = ({ folder, level, onSelect, onFolderSelect }) => {
   const actions = useFoldersActions()
   const [isExpanded, setIsExpanded] = useState(folder.isExpanded || false)
 
@@ -56,8 +58,9 @@ const FolderItem: React.FC<FolderItemProps> = ({ folder, level, onSelect }) => {
 
   const handleSelect = useCallback(() => {
     onSelect?.(folder.id)
+    onFolderSelect?.(folder.id) // Trigger conversation filtering
     actions.selectFolder(folder.id, true)
-  }, [folder.id, onSelect, actions])
+  }, [folder.id, onSelect, onFolderSelect, actions])
 
   return (
     <div className="w-full">
@@ -123,6 +126,7 @@ const FolderItem: React.FC<FolderItemProps> = ({ folder, level, onSelect }) => {
 
 export function FolderTreeView({ 
   onConversationSelect, 
+  onFolderSelect,
   expanded = false,
   className 
 }: FolderTreeViewProps) {
@@ -173,6 +177,26 @@ export function FolderTreeView({
       {/* Tree Content */}
       <ScrollArea className="flex-1">
         <div className="p-2 space-y-1">
+          {/* All Conversations item */}
+          <div 
+            className="flex items-center gap-2 px-2 py-1 hover:bg-accent/50 cursor-pointer rounded-sm"
+            onClick={() => onFolderSelect?.(null)}
+          >
+            <div className="h-4 w-4" /> {/* Spacer for alignment */}
+            <FolderOpen className="h-4 w-4 text-accent" />
+            <span className="flex-1 text-sm font-medium">All Conversations</span>
+          </div>
+          
+          {/* Unassigned conversations */}
+          <div 
+            className="flex items-center gap-2 px-2 py-1 hover:bg-accent/50 cursor-pointer rounded-sm"
+            onClick={() => onFolderSelect?.(0)}
+          >
+            <div className="h-4 w-4" /> {/* Spacer for alignment */}
+            <Folder className="h-4 w-4 text-muted-foreground" />
+            <span className="flex-1 text-sm">Unassigned</span>
+          </div>
+          
           {folderList.length === 0 ? (
             <div className="text-center text-muted-foreground p-4">
               <Folder className="h-8 w-8 mx-auto mb-2 opacity-50" />
@@ -194,6 +218,7 @@ export function FolderTreeView({
                 folder={folder}
                 level={0}
                 onSelect={onConversationSelect}
+                onFolderSelect={onFolderSelect}
               />
             ))
           )}
