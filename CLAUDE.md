@@ -54,6 +54,10 @@ User Query → Unified Interface → Router → [Primary | Log Analyst | Researc
 - **Features**: Upload management, processing status tracking, similarity search
 - **Database**: PostgreSQL + pgvector for embedding-based retrieval
 - **Config**: `FEEDME_ENABLED=true`, configurable thresholds and limits
+- **Zendesk Support**: Specialized parser for Zendesk HTML emails with <150ms performance
+  - Automatic noise removal (signatures, headers, metadata)
+  - Intelligent role detection (customer/agent/system)
+  - Hybrid extraction: structured parsing + AI enhancement
 
 ## UI Components & Design System
 

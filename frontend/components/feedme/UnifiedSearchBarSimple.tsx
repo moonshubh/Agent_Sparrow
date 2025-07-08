@@ -9,7 +9,7 @@ import React, { useState, useCallback } from 'react'
 import { Search, Filter } from 'lucide-react'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
-import { useActions } from '@/lib/stores/feedme-store'
+import { useSearchActions } from '@/lib/stores/search-store'
 
 interface UnifiedSearchBarProps {
   className?: string
@@ -21,13 +21,13 @@ export function UnifiedSearchBar({
   placeholder = "Search conversations, examples..." 
 }: UnifiedSearchBarProps) {
   const [query, setQuery] = useState('')
-  const actions = useActions()
+  const searchActions = useSearchActions()
 
   const handleSearch = useCallback(async () => {
     if (query.trim()) {
-      await actions.performSearch(query)
+      await searchActions.performSearch(query)
     }
-  }, [query, actions])
+  }, [query, searchActions])
 
   const handleKeyPress = useCallback((e: React.KeyboardEvent) => {
     if (e.key === 'Enter') {
@@ -46,15 +46,23 @@ export function UnifiedSearchBar({
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             onKeyPress={handleKeyPress}
-            className="pl-10"
+            className="pl-10 ring-1 ring-accent/60 focus-visible:ring-accent"
           />
         </div>
         
-        <Button variant="outline" size="sm">
+        <Button 
+          variant="outline" 
+          size="sm"
+          onClick={() => {
+            // TODO: Implement filter functionality
+            console.log('Filter functionality coming soon')
+          }}
+          title="Filter feature coming soon"
+        >
           <Filter className="h-4 w-4" />
         </Button>
         
-        <Button onClick={handleSearch} size="sm">
+        <Button onClick={handleSearch} variant="default" size="sm">
           Search
         </Button>
       </div>

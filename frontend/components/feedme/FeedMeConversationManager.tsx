@@ -50,9 +50,7 @@ import {
   type DeleteConversationResponse,
   type FeedMeFolder
 } from '@/lib/feedme-api'
-import { FeedMeModal } from './FeedMeModal'
-import { EditConversationModal } from './EditConversationModal'
-import { FolderManager } from './FolderManager'
+import { EnhancedFeedMeModal } from './EnhancedFeedMeModal'
 
 interface FeedMeConversationManagerProps {
   isOpen: boolean
@@ -200,7 +198,6 @@ export function FeedMeConversationManager({ isOpen, onClose }: FeedMeConversatio
 
   // Folder management state
   const [folders, setFolders] = useState<FeedMeFolder[]>([])
-  const [isFolderManagerOpen, setIsFolderManagerOpen] = useState(false)
   const [selectedConversations, setSelectedConversations] = useState<number[]>([])
   const [selectedFolderId, setSelectedFolderId] = useState<number | null>(null)
 
@@ -493,7 +490,7 @@ export function FeedMeConversationManager({ isOpen, onClose }: FeedMeConversatio
                     </p>
                   </div>
                   <Button 
-                    onClick={() => setIsFolderManagerOpen(true)}
+                    onClick={() => setIsUploadModalOpen(true)}
                     className="flex items-center gap-2"
                   >
                     <Settings className="h-4 w-4" />
@@ -511,9 +508,9 @@ export function FeedMeConversationManager({ isOpen, onClose }: FeedMeConversatio
                         <p className="text-sm text-muted-foreground mb-4">
                           Create your first folder to organize conversations
                         </p>
-                        <Button onClick={() => setIsFolderManagerOpen(true)}>
+                        <Button onClick={() => setIsUploadModalOpen(true)}>
                           <Plus className="h-4 w-4 mr-2" />
-                          Create Folder
+                          Upload Transcript
                         </Button>
                       </div>
                     </div>
@@ -590,30 +587,12 @@ export function FeedMeConversationManager({ isOpen, onClose }: FeedMeConversatio
       </Dialog>
 
       {/* Upload Modal */}
-      <FeedMeModal
+      <EnhancedFeedMeModal
         isOpen={isUploadModalOpen}
         onClose={() => setIsUploadModalOpen(false)}
       />
 
-      {/* Edit Modal */}
-      {selectedConversation && (
-        <EditConversationModal
-          isOpen={isEditModalOpen}
-          onClose={() => {
-            setIsEditModalOpen(false)
-            setSelectedConversation(null)
-          }}
-          conversation={selectedConversation}
-          onConversationUpdated={handleConversationUpdated}
-        />
-      )}
 
-      {/* Folder Manager Modal */}
-      <FolderManager
-        isOpen={isFolderManagerOpen}
-        onClose={() => setIsFolderManagerOpen(false)}
-        onConversationsUpdated={loadFolders}
-      />
 
       {/* Delete Confirmation Dialog */}
       <AlertDialog open={isDeleteDialogOpen} onOpenChange={setIsDeleteDialogOpen}>

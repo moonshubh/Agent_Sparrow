@@ -5,13 +5,34 @@
 
 'use client'
 
-import React, { useEffect } from 'react'
-import { FileText, Clock, User, CheckCircle2, AlertCircle, Loader2 } from 'lucide-react'
-import { useConversations, useActions } from '@/lib/stores/feedme-store'
+import React, { useEffect, useState } from 'react'
+import { FileText, Clock, User, CheckCircle2, AlertCircle, Loader2, Trash2, MoreHorizontal, Folder, Move } from 'lucide-react'
+import { useConversations, useConversationsActions } from '@/lib/stores/conversations-store'
+import { useUIActions } from '@/lib/stores/ui-store'
+import { useFoldersStore } from '@/lib/stores/folders-store'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { ScrollArea } from '@/components/ui/scroll-area'
+import { 
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
+import { 
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
+import { cn } from '@/lib/utils'
 import { formatDistanceToNow } from 'date-fns'
 
 interface FileGridViewProps {
@@ -22,9 +43,9 @@ interface FileGridViewProps {
 const StatusIcon = ({ status }: { status: string }) => {
   switch (status) {
     case 'completed':
-      return <CheckCircle2 className="h-4 w-4 text-green-500" />
+      return <CheckCircle2 className="h-4 w-4 text-accent" />
     case 'processing':
-      return <Loader2 className="h-4 w-4 text-blue-500 animate-spin" />
+      return <Loader2 className="h-4 w-4 text-accent animate-spin" />
     case 'failed':
       return <AlertCircle className="h-4 w-4 text-red-500" />
     default:
@@ -34,12 +55,66 @@ const StatusIcon = ({ status }: { status: string }) => {
 
 export function FileGridView({ onConversationSelect, className }: FileGridViewProps) {
   const { items: conversations, isLoading } = useConversations()
-  const actions = useActions()
+  const conversationsActions = useConversationsActions()
+  const uiActions = useUIActions()
+  const { folders, actions: foldersActions } = useFoldersStore()
+  
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
+  const [conversationToDelete, setConversationToDelete] = useState<number | null>(null)
 
   useEffect(() => {
-    // Load conversations on mount
-    actions.loadConversations()
-  }, [actions])
+    // Load conversations and folders on mount
+    conversationsActions.loadConversations()
+    foldersActions.loadFolders()
+  }, []) // Empty dependency array - only run once on mount
+
+  const handleDeleteClick = (e: React.MouseEvent, conversationId: number) => {
+    e.stopPropagation() // Prevent card click
+    setConversationToDelete(conversationId)
+    setDeleteDialogOpen(true)
+  }
+
+  const handleMoveToFolder = async (conversationId: number, folderId: number | null) => {
+    try {
+      await conversationsActions.bulkAssignToFolder([conversationId], folderId)
+      const folderName = folderId ? Object.values(folders).find(f => f.id === folderId)?.name || 'Unknown Folder' : 'Root'
+      
+      uiActions.showToast({
+        type: 'success',
+        title: 'Conversation Moved',
+        message: `Conversation moved to ${folderName} successfully.`
+      })
+    } catch (error) {
+      console.error('Failed to move conversation:', error)
+      uiActions.showToast({
+        type: 'error',
+        title: 'Move Failed',
+        message: 'Failed to move conversation. Please try again.'
+      })
+    }
+  }
+
+  const handleDeleteConfirm = async () => {
+    if (conversationToDelete) {
+      try {
+        await conversationsActions.deleteConversation(conversationToDelete)
+        uiActions.showToast({
+          type: 'success',
+          title: 'Conversation Deleted',
+          message: 'The conversation has been successfully deleted.'
+        })
+      } catch (error) {
+        console.error('Failed to delete conversation:', error)
+        uiActions.showToast({
+          type: 'error',
+          title: 'Delete Failed',
+          message: 'Failed to delete the conversation. Please try again.'
+        })
+      }
+    }
+    setDeleteDialogOpen(false)
+    setConversationToDelete(null)
+  }
 
   if (isLoading) {
     return (
@@ -56,7 +131,7 @@ export function FileGridView({ onConversationSelect, className }: FileGridViewPr
         <FileText className="h-12 w-12 text-muted-foreground mb-4" />
         <h3 className="text-lg font-medium">No conversations yet</h3>
         <p className="text-muted-foreground">Upload your first transcript to get started</p>
-        <Button className="mt-4" onClick={() => actions.setActiveTab('upload')}>
+        <Button className="mt-4" onClick={() => uiActions.setActiveTab('upload')}>
           Upload Transcript
         </Button>
       </div>
@@ -64,22 +139,92 @@ export function FileGridView({ onConversationSelect, className }: FileGridViewPr
   }
 
   return (
-    <ScrollArea className={className}>
+    <ScrollArea className={`${className} feedme-scrollbar`}>
       <div className="p-6">
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
           {conversations.map((conversation) => (
             <Card 
               key={conversation.id} 
-              className="cursor-pointer hover:shadow-md transition-shadow"
+              className="cursor-pointer hover:shadow-md hover:border-accent/50 focus-within:ring-2 focus-within:ring-accent/50 transition-all duration-200 relative group"
               onClick={() => onConversationSelect?.(conversation.id)}
+              tabIndex={0}
             >
+              {/* Actions dropdown - shows on hover */}
+              <div className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity duration-200 z-10">
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="p-1 h-8 w-8 bg-background/80 hover:bg-accent"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <MoreHorizontal className="h-4 w-4" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end" className="w-56">
+                    <DropdownMenuLabel>Actions</DropdownMenuLabel>
+                    <DropdownMenuSeparator />
+                    
+                    {/* Move to Folder submenu */}
+                    <DropdownMenuItem 
+                      className="flex items-center gap-2 cursor-pointer"
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        handleMoveToFolder(conversation.id, null)
+                      }}
+                    >
+                      <Folder className="h-4 w-4" />
+                      Move to Root
+                    </DropdownMenuItem>
+                    
+                    {Object.values(folders).map((folder) => (
+                      <DropdownMenuItem 
+                        key={folder.id}
+                        className="flex items-center gap-2 cursor-pointer"
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          handleMoveToFolder(conversation.id, folder.id)
+                        }}
+                      >
+                        <div className="flex items-center gap-2">
+                          <div 
+                            className="w-3 h-3 rounded-full border"
+                            style={{ backgroundColor: folder.color }}
+                          />
+                          <span>Move to {folder.name}</span>
+                        </div>
+                      </DropdownMenuItem>
+                    ))}
+                    
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem 
+                      className="flex items-center gap-2 text-destructive focus:text-destructive cursor-pointer"
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        handleDeleteClick(e, conversation.id)
+                      }}
+                    >
+                      <Trash2 className="h-4 w-4" />
+                      Delete
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              </div>
+
               <CardHeader className="pb-3">
-                <CardTitle className="text-sm line-clamp-2 h-10">
+                <CardTitle className="text-sm line-clamp-2 h-10 pr-8">
                   {conversation.title}
                 </CardTitle>
                 <div className="flex items-center gap-2">
                   <StatusIcon status={conversation.processing_status} />
-                  <Badge variant="secondary" className="text-xs">
+                  <Badge 
+                    variant={conversation.processing_status === 'completed' ? 'default' : 'secondary'}
+                    className={cn(
+                      "text-xs",
+                      conversation.processing_status === 'completed' && "bg-accent text-accent-foreground"
+                    )}
+                  >
                     {conversation.processing_status}
                   </Badge>
                 </div>
@@ -113,6 +258,29 @@ export function FileGridView({ onConversationSelect, className }: FileGridViewPr
           ))}
         </div>
       </div>
+
+      {/* Delete confirmation dialog */}
+      <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete Conversation</AlertDialogTitle>
+            <AlertDialogDescription>
+              Are you sure you want to delete this conversation? This action cannot be undone and will permanently remove all Q&A examples extracted from this transcript.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel onClick={() => setDeleteDialogOpen(false)}>
+              Cancel
+            </AlertDialogCancel>
+            <AlertDialogAction
+              onClick={handleDeleteConfirm}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </ScrollArea>
   )
 }

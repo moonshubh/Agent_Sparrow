@@ -1,0 +1,445 @@
+{
+  "localDBDeps": {
+    "sqlalchemy_models": [
+      {
+        "file": "app/db/models.py",
+        "status": "NOT_FOUND",
+        "note": "No SQLAlchemy models found - system uses direct SQL queries"
+      }
+    ],
+    "local_repositories": [
+      {
+        "file": "app/feedme/repositories/optimized_repository.py",
+        "class": "OptimizedFeedMeRepository",
+        "methods": [
+          "search_examples_hybrid",
+          "vector_similarity_search",
+          "full_text_search",
+          "get_conversations_by_date_range",
+          "get_analytics_dashboard",
+          "get_example",
+          "find_similar_examples",
+          "increment_usage_count",
+          "refresh_materialized_views",
+          "get_table_statistics",
+          "create_temp_example",
+          "get_temp_example",
+          "update_temp_example",
+          "get_temp_examples_by_status",
+          "move_to_production",
+          "get_approval_metrics",
+          "get_reviewer_workload",
+          "get_repository_statistics"
+        ],
+        "uses_connection_manager": true,
+        "direct_sql": true
+      }
+    ],
+    "vector_index_code": [
+      {
+        "file": "app/feedme/search/vector_search.py",
+        "class": "VectorSearchEngine",
+        "methods": ["search", "search_by_similarity"],
+        "pgvector_usage": true,
+        "embedding_dimension": 384
+      },
+      {
+        "file": "app/feedme/search/hybrid_search_engine.py",
+        "class": "HybridSearchEngine",
+        "combines": ["VectorSearchEngine", "TextSearchEngine"],
+        "weights": {"vector": 0.7, "text": 0.3}
+      }
+    ],
+    "migration_points": [
+      {
+        "file": "app/db/connection_manager.py",
+        "class": "ConnectionManager",
+        "singleton": true,
+        "pool_config": {
+          "min_connections": 2,
+          "max_connections": 20,
+          "timeout": 30
+        }
+      },
+      {
+        "file": "app/feedme/ai_extraction_engine.py",
+        "saves_to_local": true,
+        "methods": ["extract_qa_pairs", "save_examples"]
+      },
+      {
+        "file": "app/feedme/tasks.py",
+        "celery_tasks": [
+          "process_conversation_async",
+          "refresh_analytics_async",
+          "cleanup_old_conversations_async"
+        ]
+      }
+    ],
+    "database_migrations": [
+      "002_create_feedme_tables.sql",
+      "003_feedme_v2_phase1_unification.sql",
+      "004_feedme_basic_tables.sql",
+      "005_feedme_indexes.sql",
+      "006_feedme_functions.sql",
+      "007_add_versioning_support.sql",
+      "009_feedme_approval_workflow.sql",
+      "010_feedme_temp_examples.sql",
+      "011_fix_search_path_security.sql",
+      "012_feedme_v2_phase2_optimization.sql"
+    ]
+  },
+  "supabaseDeps": {
+    "existing_integrations": [
+      {
+        "file": "app/db/supabase_client.py",
+        "class": "SupabaseClient",
+        "methods": [
+          "insert_folder",
+          "update_folder",
+          "delete_folder",
+          "list_folders",
+          "insert_conversation",
+          "update_conversation_folder",
+          "bulk_assign_conversations_to_folder",
+          "insert_examples",
+          "approve_conversation_examples",
+          "search_examples",
+          "get_unsynced_examples",
+          "mark_examples_synced",
+          "health_check"
+        ],
+        "env_vars": ["SUPABASE_URL", "SUPABASE_ANON_KEY", "SUPABASE_SERVICE_KEY"]
+      },
+      {
+        "file": "frontend/lib/supabase-client.ts",
+        "class": "SupabaseClient",
+        "methods": [
+          "createFolder",
+          "updateFolder",
+          "deleteFolder",
+          "listFolders",
+          "createConversation",
+          "updateConversationFolder",
+          "bulkAssignConversationsToFolder",
+          "insertExamples",
+          "approveConversationExamples",
+          "searchExamples",
+          "getUnsyncedExamples",
+          "markExamplesSynced",
+          "healthCheck",
+          "subscribeToFolders",
+          "subscribeToConversations"
+        ],
+        "env_vars": ["NEXT_PUBLIC_SUPABASE_URL", "NEXT_PUBLIC_SUPABASE_ANON_KEY"]
+      }
+    ],
+    "client_usage": [
+      {
+        "file": "app/feedme/search/vector_search_supabase.py",
+        "class": "VectorSearchEngineSupabase",
+        "methods": ["search_combined", "search_local", "search_supabase"],
+        "dual_search": true
+      },
+      {
+        "file": "app/feedme/search/hybrid_search_supabase.py",
+        "class": "HybridSearchEngineSupabase",
+        "methods": ["search", "search_adaptive"],
+        "dual_search": true
+      },
+      {
+        "file": "app/feedme/integration/knowledge_source.py",
+        "class": "FeedMeKnowledgeSource",
+        "uses_supabase": "conditional",
+        "check": "getattr(settings, 'SUPABASE_URL', None)"
+      }
+    ],
+    "table_mappings": [
+      {
+        "supabase_table": "feedme_folders",
+        "local_table": "feedme_folders",
+        "migration": "005_feedme_supabase.sql",
+        "features": ["hierarchical", "path_array", "color", "stats_view"]
+      },
+      {
+        "supabase_table": "feedme_conversations",
+        "local_table": "feedme_conversations",
+        "enhanced_fields": ["folder_id", "supabase_sync_status", "supabase_conversation_id"]
+      },
+      {
+        "supabase_table": "feedme_examples",
+        "local_table": "feedme_examples",
+        "enhanced_fields": ["approved_at", "approved_by", "supabase_synced", "supabase_sync_at", "supabase_example_id"]
+      }
+    ],
+    "supabase_migrations": [
+      "005_feedme_supabase.sql",
+      "013_feedme_supabase_sync_metadata.sql"
+    ]
+  },
+  "dualDBSwitches": {
+    "feature_flags": [
+      {
+        "name": "use_supabase",
+        "locations": [
+          "app/feedme/integration/knowledge_source.py:34",
+          "app/feedme/integration/knowledge_source.py:45"
+        ],
+        "default": true,
+        "condition": "getattr(settings, 'SUPABASE_URL', None)"
+      },
+      {
+        "name": "search_supabase",
+        "locations": [
+          "app/feedme/search/vector_search_supabase.py:40",
+          "app/feedme/search/hybrid_search_supabase.py:54"
+        ],
+        "default": true,
+        "runtime_configurable": true
+      },
+      {
+        "name": "search_local",
+        "locations": [
+          "app/feedme/search/vector_search_supabase.py:41",
+          "app/feedme/search/hybrid_search_supabase.py:55"
+        ],
+        "default": true,
+        "runtime_configurable": true
+      }
+    ],
+    "conditional_logic": [
+      {
+        "file": "app/feedme/integration/knowledge_source.py",
+        "lines": "45-52",
+        "logic": "if use_supabase and getattr(settings, 'SUPABASE_URL', None): use HybridSearchEngineSupabase else: use HybridSearchEngine"
+      },
+      {
+        "file": "app/feedme/search/vector_search_supabase.py",
+        "method": "search_combined",
+        "logic": "Search both local and Supabase based on flags, then deduplicate results"
+      },
+      {
+        "file": "app/feedme/search/hybrid_search_supabase.py",
+        "method": "search",
+        "logic": "Determine sources based on search_supabase and search_local flags"
+      }
+    ],
+    "environment_vars": [
+      {
+        "var": "SUPABASE_URL",
+        "required": false,
+        "description": "Supabase project URL",
+        "checked_in": ["app/db/supabase_client.py", "app/feedme/integration/knowledge_source.py"]
+      },
+      {
+        "var": "SUPABASE_ANON_KEY",
+        "required": false,
+        "description": "Supabase anonymous key",
+        "checked_in": ["app/db/supabase_client.py"]
+      },
+      {
+        "var": "SUPABASE_SERVICE_KEY",
+        "required": false,
+        "description": "Supabase service key for admin operations",
+        "checked_in": ["app/db/supabase_client.py"]
+      },
+      {
+        "var": "NEXT_PUBLIC_SUPABASE_URL",
+        "required": false,
+        "description": "Frontend Supabase URL",
+        "checked_in": ["frontend/lib/supabase-client.ts"]
+      },
+      {
+        "var": "NEXT_PUBLIC_SUPABASE_ANON_KEY",
+        "required": false,
+        "description": "Frontend Supabase anonymous key",
+        "checked_in": ["frontend/lib/supabase-client.ts"]
+      }
+    ]
+  },
+  "migrationGaps": {
+    "missing_supabase_features": [
+      {
+        "feature": "Text search integration",
+        "current_state": "TextSearchEngine only works with local DB",
+        "impact": "Hybrid search on Supabase misses text search component",
+        "files": ["app/feedme/search/text_search.py", "app/feedme/search/hybrid_search_supabase.py"]
+      },
+      {
+        "feature": "Background task integration",
+        "current_state": "Celery tasks operate on local DB only",
+        "impact": "Async processing doesn't sync to Supabase automatically",
+        "files": ["app/feedme/tasks.py"]
+      },
+      {
+        "feature": "Analytics materialized views",
+        "current_state": "Local PostgreSQL materialized views",
+        "impact": "Analytics dashboard won't work with Supabase data",
+        "files": ["app/feedme/repositories/optimized_repository.py"]
+      },
+      {
+        "feature": "Approval workflow",
+        "current_state": "Temp examples table and workflow in local DB",
+        "impact": "Approval process bypasses Supabase",
+        "files": ["app/api/v1/endpoints/feedme_endpoints.py"]
+      }
+    ],
+    "data_transformation_needs": [
+      {
+        "transformation": "Embedding format",
+        "from": "PostgreSQL vector type",
+        "to": "Supabase pgvector",
+        "complexity": "low",
+        "note": "Both use pgvector, should be compatible"
+      },
+      {
+        "transformation": "Sync status tracking",
+        "tables": ["feedme_conversations", "feedme_examples"],
+        "fields": ["supabase_sync_status", "supabase_sync_at", "supabase_sync_error"],
+        "migration": "013_feedme_supabase_sync_metadata.sql"
+      },
+      {
+        "transformation": "Folder hierarchy",
+        "from": "Local path array",
+        "to": "Supabase path array with RLS",
+        "complexity": "medium",
+        "note": "Need to handle RLS policies"
+      }
+    ],
+    "api_changes_required": [
+      {
+        "endpoint": "/api/v1/feedme/search",
+        "current": "Searches local DB only",
+        "required": "Add source parameter to choose local/supabase/both"
+      },
+      {
+        "endpoint": "/api/v1/feedme/conversations/{id}/approve",
+        "current": "Updates local DB, triggers async Supabase sync",
+        "required": "Direct Supabase update option"
+      },
+      {
+        "endpoint": "/api/v1/feedme/folders/*",
+        "current": "Not implemented",
+        "required": "Full CRUD for Supabase folders"
+      },
+      {
+        "endpoint": "/api/v1/feedme/sync/status",
+        "current": "Not implemented",
+        "required": "Monitor sync status between DBs"
+      }
+    ]
+  },
+  "testSuites": {
+    "jest_tests": [
+      {
+        "file": "frontend/lib/stores/__tests__/conversations-store.test.ts",
+        "coverage": "conversations store",
+        "supabase_mocks": false
+      },
+      {
+        "file": "frontend/lib/stores/__tests__/folders-store.test.ts",
+        "coverage": "folders store",
+        "supabase_mocks": false
+      },
+      {
+        "file": "frontend/components/feedme/__tests__/integration.test.tsx",
+        "coverage": "component integration",
+        "supabase_mocks": false
+      }
+    ],
+    "pytest_tests": [
+      {
+        "file": "app/api/v1/endpoints/test_feedme_supabase_endpoints.py",
+        "class": "TestSupabaseIntegrationEndpoints",
+        "coverage": "Supabase approval and folder assignment",
+        "uses_mocks": true
+      },
+      {
+        "file": "app/db/test_supabase_client.py",
+        "coverage": "Supabase client operations",
+        "status": "exists"
+      },
+      {
+        "file": "app/feedme/tests/test_zendesk_email_parser.py",
+        "coverage": "Zendesk parser",
+        "supabase_related": false
+      }
+    ],
+    "cypress_tests": [
+      {
+        "directory": "cypress/",
+        "status": "exists",
+        "supabase_coverage": "unknown"
+      }
+    ],
+    "e2e_tests": [
+      {
+        "file": "test_feedme_supabase_e2e.py",
+        "coverage": "End-to-end Supabase integration",
+        "status": "exists"
+      },
+      {
+        "file": "test_supabase_integration.py",
+        "coverage": "Supabase integration testing",
+        "status": "exists"
+      }
+    ]
+  },
+  "envVars": {
+    "current_vars": [
+      "FEEDME_ENABLED",
+      "FEEDME_MAX_FILE_SIZE_MB",
+      "FEEDME_MAX_EXAMPLES_PER_CONVERSATION",
+      "FEEDME_EMBEDDING_BATCH_SIZE",
+      "FEEDME_SIMILARITY_THRESHOLD",
+      "FEEDME_MAX_RETRIEVAL_RESULTS",
+      "FEEDME_MIN_DB_CONNECTIONS",
+      "FEEDME_MAX_DB_CONNECTIONS",
+      "FEEDME_DB_TIMEOUT",
+      "FEEDME_DB_RETRY_ATTEMPTS",
+      "FEEDME_DB_RETRY_DELAY",
+      "FEEDME_ASYNC_PROCESSING",
+      "FEEDME_CELERY_BROKER",
+      "FEEDME_RESULT_BACKEND",
+      "FEEDME_SECURITY_ENABLED",
+      "FEEDME_RATE_LIMIT_PER_MINUTE",
+      "FEEDME_VERSION_CONTROL",
+      "FEEDME_QUALITY_THRESHOLD"
+    ],
+    "required_vars": [
+      "SUPABASE_URL",
+      "SUPABASE_ANON_KEY",
+      "NEXT_PUBLIC_SUPABASE_URL",
+      "NEXT_PUBLIC_SUPABASE_ANON_KEY"
+    ],
+    "deprecated_vars": [
+      {
+        "var": "FEEDME_LOCAL_ONLY",
+        "replacement": "Use runtime flags search_local/search_supabase",
+        "note": "Not found in codebase, may be future consideration"
+      }
+    ]
+  },
+  "sampleFilesPath": {
+    "test_data": [
+      "test_conversation.txt",
+      "real_sample_test_results.json"
+    ],
+    "migration_samples": [
+      "app/db/migrations/005_feedme_supabase.sql",
+      "app/db/migrations/013_feedme_supabase_sync_metadata.sql"
+    ],
+    "integration_examples": [
+      "app/feedme/integration/knowledge_source.py",
+      "app/feedme/search/hybrid_search_supabase.py"
+    ]
+  },
+  "architecture_notes": {
+    "database_design": "Dual-database architecture with local PostgreSQL as primary and Supabase as cloud sync target",
+    "sync_strategy": "Async sync after approval with tracking via supabase_sync_status fields",
+    "search_strategy": "Combined search across both databases with deduplication",
+    "frontend_stores": "7 specialized Zustand stores with no direct Supabase integration",
+    "api_pattern": "RESTful endpoints operate on local DB with optional Supabase sync",
+    "vector_storage": "pgvector in both local and Supabase with 384-dimension embeddings",
+    "approval_flow": "Local temp_examples → approval → production examples → Supabase sync"
+  }
+}

@@ -9,12 +9,15 @@
 
 import React, { useState, useCallback } from 'react'
 import { ChevronRight, ChevronDown, Folder, FolderOpen, MoreHorizontal, Plus } from 'lucide-react'
-import { useFolders, useActions } from '@/lib/stores/feedme-store'
+import { useFolders, useFoldersActions } from '@/lib/stores/folders-store'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { Badge } from '@/components/ui/badge'
 import { ScrollArea } from '@/components/ui/scroll-area'
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
 
 interface FolderTreeViewProps {
   onConversationSelect?: (conversationId: number) => void
@@ -22,19 +25,33 @@ interface FolderTreeViewProps {
   className?: string
 }
 
+interface Folder {
+  id: number
+  name: string
+  parent_id: number | null
+  conversation_count: number
+  isExpanded?: boolean
+  path?: string
+  description?: string
+  color?: string
+  created_at: string
+  updated_at: string
+  children?: Folder[]
+}
+
 interface FolderItemProps {
-  folder: any
+  folder: Folder
   level: number
   onSelect?: (folderId: number) => void
 }
 
 const FolderItem: React.FC<FolderItemProps> = ({ folder, level, onSelect }) => {
-  const actions = useActions()
+  const actions = useFoldersActions()
   const [isExpanded, setIsExpanded] = useState(folder.isExpanded || false)
 
   const handleToggle = useCallback(() => {
     setIsExpanded(!isExpanded)
-    actions.toggleFolderExpanded(folder.id)
+    actions.expandFolder(folder.id, !isExpanded)
   }, [isExpanded, folder.id, actions])
 
   const handleSelect = useCallback(() => {
@@ -109,21 +126,34 @@ export function FolderTreeView({
   expanded = false,
   className 
 }: FolderTreeViewProps) {
-  const folders = useFolders()
-  const actions = useActions()
+  const { folders } = useFolders()
+  const actions = useFoldersActions()
+  const [isCreateModalOpen, setIsCreateModalOpen] = useState(false)
+  const [newFolderName, setNewFolderName] = useState('')
 
-  const folderList = Object.values(folders).sort((a, b) => a.name.localeCompare(b.name))
+  const folderList = folders ? Object.values(folders).sort((a, b) => a.name?.localeCompare(b.name) || 0) : []
 
   const handleCreateFolder = useCallback(async () => {
-    const folderName = prompt('Enter folder name:')
-    if (folderName) {
+    if (newFolderName.trim()) {
       try {
-        await actions.createFolder(folderName)
+        await actions.createFolder(newFolderName.trim())
+        setIsCreateModalOpen(false)
+        setNewFolderName('')
       } catch (error) {
         // Error handling is done in the store action
       }
     }
-  }, [actions])
+  }, [actions, newFolderName])
+
+  const handleOpenCreateModal = useCallback(() => {
+    setIsCreateModalOpen(true)
+    setNewFolderName('')
+  }, [])
+
+  const handleCloseCreateModal = useCallback(() => {
+    setIsCreateModalOpen(false)
+    setNewFolderName('')
+  }, [])
 
   return (
     <div className={cn("h-full flex flex-col", className)}>
@@ -133,7 +163,7 @@ export function FolderTreeView({
         <Button
           variant="ghost"
           size="sm"
-          onClick={handleCreateFolder}
+          onClick={handleOpenCreateModal}
           className="h-8 w-8 p-0"
         >
           <Plus className="h-4 w-4" />
@@ -169,6 +199,47 @@ export function FolderTreeView({
           )}
         </div>
       </ScrollArea>
+      
+      {/* Create Folder Modal */}
+      <Dialog open={isCreateModalOpen} onOpenChange={setIsCreateModalOpen}>
+        <DialogContent className="sm:max-w-[425px]">
+          <DialogHeader>
+            <DialogTitle>Create New Folder</DialogTitle>
+          </DialogHeader>
+          <div className="grid gap-4 py-4">
+            <div className="grid grid-cols-4 items-center gap-4">
+              <Label htmlFor="folder-name" className="text-right">
+                Name
+              </Label>
+              <Input
+                id="folder-name"
+                value={newFolderName}
+                onChange={(e) => setNewFolderName(e.target.value)}
+                className="col-span-3"
+                placeholder="Enter folder name"
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault()
+                    handleCreateFolder()
+                  }
+                }}
+                autoFocus
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={handleCloseCreateModal}>
+              Cancel
+            </Button>
+            <Button 
+              onClick={handleCreateFolder}
+              disabled={!newFolderName.trim()}
+            >
+              Create Folder
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

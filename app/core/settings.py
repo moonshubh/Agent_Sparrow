@@ -98,6 +98,11 @@ class Settings(BaseSettings):
     chat_default_page_size: int = Field(default=10, alias="CHAT_DEFAULT_PAGE_SIZE")
     chat_max_page_size: int = Field(default=100, alias="CHAT_MAX_PAGE_SIZE")
     
+    # Supabase Configuration
+    supabase_url: Optional[str] = Field(default=None, alias="SUPABASE_URL")
+    supabase_anon_key: Optional[str] = Field(default=None, alias="SUPABASE_ANON_KEY")
+    supabase_service_key: Optional[str] = Field(default=None, alias="SUPABASE_SERVICE_KEY")
+    
     # Rate Limiting Configuration
     gemini_flash_rpm_limit: int = Field(default=8, alias="GEMINI_FLASH_RPM_LIMIT")
     gemini_flash_rpd_limit: int = Field(default=200, alias="GEMINI_FLASH_RPD_LIMIT")

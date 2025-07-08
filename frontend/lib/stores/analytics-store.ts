@@ -13,6 +13,9 @@ import {
   type ApprovalWorkflowStats
 } from '@/lib/feedme-api'
 
+// Module-scoped interval ID to prevent namespace pollution
+let analyticsRefreshInterval: NodeJS.Timeout | null = null
+
 // Types
 export interface PerformanceMetrics {
   upload_success_rate: number
@@ -191,7 +194,18 @@ export const useAnalyticsStore = create<AnalyticsStore>()(
         
         loadPerformanceMetrics: async (forceRefresh = false) => {
           try {
-            // Mock performance metrics - in real implementation, this would come from monitoring APIs
+            // TODO: Replace mock data with real API calls before production
+            // Expected API endpoints:
+            // - GET /api/analytics/performance/upload-success-rate
+            // - GET /api/analytics/performance/processing-times
+            // - GET /api/analytics/performance/search-response-times
+            // - GET /api/analytics/system/health
+            // - GET /api/analytics/users/active-count
+            // - GET /api/analytics/websocket/connection-rate
+            // - GET /api/analytics/errors/rate
+            // - GET /api/analytics/cache/hit-rate
+            // Example: const metrics = await analyticsApi.getPerformanceMetrics()
+            
             const metrics: PerformanceMetrics = {
               upload_success_rate: 0.98,
               avg_processing_time: 2300, // ms
@@ -220,7 +234,15 @@ export const useAnalyticsStore = create<AnalyticsStore>()(
         
         loadUsageStats: async (forceRefresh = false) => {
           try {
-            // Mock usage stats - in real implementation, this would come from analytics APIs
+            // TODO: Replace mock data with real API calls before production
+            // Expected API endpoints:
+            // - GET /api/analytics/usage/conversation-counts
+            // - GET /api/analytics/usage/daily-activities (searches, uploads, approvals)
+            // - GET /api/analytics/usage/folder-activities
+            // - GET /api/analytics/usage/trending-tags
+            // - GET /api/analytics/usage/user-activity-timeline
+            // Example: const stats = await analyticsApi.getUsageStats()
+            
             const stats: UsageStats = {
               total_conversations: 1247,
               total_examples: 8532,
@@ -261,7 +283,18 @@ export const useAnalyticsStore = create<AnalyticsStore>()(
         
         loadSystemMetrics: async (forceRefresh = false) => {
           try {
-            // Mock system metrics - in real implementation, this would come from system monitoring
+            // TODO: Replace mock data with real API calls before production
+            // Expected API endpoints:
+            // - GET /api/analytics/system/cpu-usage
+            // - GET /api/analytics/system/memory-usage
+            // - GET /api/analytics/system/disk-usage
+            // - GET /api/analytics/system/network-latency
+            // - GET /api/analytics/system/database-connections
+            // - GET /api/analytics/system/redis-connections
+            // - GET /api/analytics/system/celery-queue-size
+            // Data sources: Prometheus, Grafana, or system monitoring APIs
+            // Example: const metrics = await analyticsApi.getSystemMetrics()
+            
             const metrics: SystemMetrics = {
               cpu_usage: 0.34,
               memory_usage: 0.67,
@@ -289,7 +322,16 @@ export const useAnalyticsStore = create<AnalyticsStore>()(
         
         loadQualityMetrics: async (forceRefresh = false) => {
           try {
-            // Mock quality metrics - in real implementation, this would come from ML/AI APIs
+            // TODO: Replace mock data with real API calls before production
+            // Expected API endpoints:
+            // - GET /api/analytics/quality/confidence-scores
+            // - GET /api/analytics/quality/extraction-accuracy
+            // - GET /api/analytics/quality/false-positive-rate
+            // - GET /api/analytics/quality/user-satisfaction
+            // - GET /api/analytics/quality/review-completion-rate
+            // Data sources: ML model metrics, user feedback, quality assessments
+            // Example: const metrics = await analyticsApi.getQualityMetrics()
+            
             const metrics: QualityMetrics = {
               avg_confidence_score: 0.87,
               avg_quality_score: 0.91,
@@ -405,17 +447,17 @@ export const useAnalyticsStore = create<AnalyticsStore>()(
             get().actions.loadAllMetrics(true)
           }, interval)
           
-          // Store interval ID for cleanup
-          ;(globalThis as any).analyticsRefreshInterval = intervalId
+          // Store interval ID for cleanup in module scope
+          analyticsRefreshInterval = intervalId
         },
         
         disableAutoRefresh: () => {
           set({ autoRefresh: false })
           
-          // Clear interval
-          if ((globalThis as any).analyticsRefreshInterval) {
-            clearInterval((globalThis as any).analyticsRefreshInterval)
-            ;(globalThis as any).analyticsRefreshInterval = null
+          // Clear interval using module-scoped variable
+          if (analyticsRefreshInterval) {
+            clearInterval(analyticsRefreshInterval)
+            analyticsRefreshInterval = null
           }
         },
         
@@ -545,27 +587,62 @@ export const useAnalyticsStore = create<AnalyticsStore>()(
   )
 )
 
-// Convenience hooks
-export const useAnalytics = () => useAnalyticsStore(state => ({
-  workflowStats: state.workflowStats,
-  performanceMetrics: state.performanceMetrics,
-  usageStats: state.usageStats,
-  systemMetrics: state.systemMetrics,
-  qualityMetrics: state.qualityMetrics,
-  isLoading: state.isLoading,
-  lastUpdated: state.lastUpdated,
-  error: state.error
-}))
+// Stable selectors
+const selectWorkflowStats = (state: AnalyticsStore) => state.workflowStats
+const selectPerformanceMetrics = (state: AnalyticsStore) => state.performanceMetrics
+const selectUsageStats = (state: AnalyticsStore) => state.usageStats
+const selectSystemMetrics = (state: AnalyticsStore) => state.systemMetrics
+const selectQualityMetrics = (state: AnalyticsStore) => state.qualityMetrics
+const selectIsLoading = (state: AnalyticsStore) => state.isLoading
+const selectLastUpdated = (state: AnalyticsStore) => state.lastUpdated
+const selectError = (state: AnalyticsStore) => state.error
+const selectTimeRange = (state: AnalyticsStore) => state.timeRange
+const selectCustomDateRange = (state: AnalyticsStore) => state.customDateRange
+const selectFilters = (state: AnalyticsStore) => state.filters
+const selectAutoRefresh = (state: AnalyticsStore) => state.autoRefresh
+const selectRefreshInterval = (state: AnalyticsStore) => state.refreshInterval
+const selectActions = (state: AnalyticsStore) => state.actions
 
-export const useAnalyticsConfig = () => useAnalyticsStore(state => ({
-  timeRange: state.timeRange,
-  customDateRange: state.customDateRange,
-  filters: state.filters,
-  autoRefresh: state.autoRefresh,
-  refreshInterval: state.refreshInterval
-}))
+// Convenience hooks with stable selectors
+export const useAnalytics = () => {
+  const workflowStats = useAnalyticsStore(selectWorkflowStats)
+  const performanceMetrics = useAnalyticsStore(selectPerformanceMetrics)
+  const usageStats = useAnalyticsStore(selectUsageStats)
+  const systemMetrics = useAnalyticsStore(selectSystemMetrics)
+  const qualityMetrics = useAnalyticsStore(selectQualityMetrics)
+  const isLoading = useAnalyticsStore(selectIsLoading)
+  const lastUpdated = useAnalyticsStore(selectLastUpdated)
+  const error = useAnalyticsStore(selectError)
+  
+  return {
+    workflowStats,
+    performanceMetrics,
+    usageStats,
+    systemMetrics,
+    qualityMetrics,
+    isLoading,
+    lastUpdated,
+    error
+  }
+}
 
-export const useAnalyticsActions = () => useAnalyticsStore(state => state.actions)
+export const useAnalyticsConfig = () => {
+  const timeRange = useAnalyticsStore(selectTimeRange)
+  const customDateRange = useAnalyticsStore(selectCustomDateRange)
+  const filters = useAnalyticsStore(selectFilters)
+  const autoRefresh = useAnalyticsStore(selectAutoRefresh)
+  const refreshInterval = useAnalyticsStore(selectRefreshInterval)
+  
+  return {
+    timeRange,
+    customDateRange,
+    filters,
+    autoRefresh,
+    refreshInterval
+  }
+}
+
+export const useAnalyticsActions = () => useAnalyticsStore(selectActions)
 
 // Auto-cleanup on page unload
 if (typeof window !== 'undefined') {

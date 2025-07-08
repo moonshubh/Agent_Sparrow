@@ -8,6 +8,10 @@
 import { create } from 'zustand'
 import { devtools, subscribeWithSelector, persist } from 'zustand/middleware'
 
+// Sidebar width constraints
+const MIN_SIDEBAR_WIDTH = 200
+const MAX_SIDEBAR_WIDTH = 500
+
 // Types
 export interface TabState {
   activeTab: 'conversations' | 'folders' | 'analytics' | 'upload' | 'search'
@@ -434,7 +438,7 @@ export const useUIStore = create<UIStore>()(
               set(state => ({
                 sidebar: {
                   ...state.sidebar,
-                  width: Math.max(200, Math.min(500, width))
+                  width: Math.max(MIN_SIDEBAR_WIDTH, Math.min(MAX_SIDEBAR_WIDTH, width))
                 }
               }))
             },
@@ -808,13 +812,16 @@ export const useUIStore = create<UIStore>()(
                 theme: state.theme
               }
               
-              const blob = new Blob([JSON.stringify(settings, null, 2)], { type: 'application/json' })
-              const url = URL.createObjectURL(blob)
-              const link = document.createElement('a')
-              link.href = url
-              link.download = `feedme-ui-settings-${Date.now()}.json`
-              link.click()
-              URL.revokeObjectURL(url)
+              // Check if we're in a browser environment to prevent SSR errors
+              if (typeof document !== 'undefined') {
+                const blob = new Blob([JSON.stringify(settings, null, 2)], { type: 'application/json' })
+                const url = URL.createObjectURL(blob)
+                const link = document.createElement('a')
+                link.href = url
+                link.download = `feedme-ui-settings-${Date.now()}.json`
+                link.click()
+                URL.revokeObjectURL(url)
+              }
             },
             
             importUISettings: (settings) => {
@@ -863,7 +870,11 @@ export const useUIBulkActions = () => useUIStore(state => state.bulkActions)
 export const useUINotifications = () => useUIStore(state => state.notifications)
 export const useUILoading = () => useUIStore(state => state.loading)
 export const useUITheme = () => useUIStore(state => state.theme)
-export const useUIResponsive = () => useUIStore(state => ({ isMobile: state.isMobile, screenSize: state.screenSize }))
+export const useUIResponsive = () => {
+  const isMobile = useUIStore(state => state.isMobile)
+  const screenSize = useUIStore(state => state.screenSize)
+  return { isMobile, screenSize }
+}
 export const useUIKeyboard = () => useUIStore(state => state.keyboardNavigation)
 export const useUIActions = () => useUIStore(state => state.actions)
 
@@ -886,5 +897,6 @@ if (typeof window !== 'undefined') {
   }
   
   mediaQuery.addEventListener('change', handleMotionChange)
-  handleMotionChange(mediaQuery as any)
+  // Initial call with proper MediaQueryListEvent-like object
+  handleMotionChange({ matches: mediaQuery.matches } as MediaQueryListEvent)
 }

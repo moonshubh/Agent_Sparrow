@@ -122,6 +122,60 @@
     margin-left: auto;
     margin-right: auto;
   }
+  
+  /* Tiptap Editor Styles */
+  .ProseMirror {
+    outline: none;
+    padding: 8px 12px;
+    border-radius: 6px;
+    line-height: 1.5;
+  }
+  
+  .ProseMirror:focus {
+    outline: none;
+    box-shadow: none;
+  }
+  
+  .ProseMirror p {
+    margin: 0.5rem 0;
+  }
+  
+  .ProseMirror p:first-child {
+    margin-top: 0;
+  }
+  
+  .ProseMirror p:last-child {
+    margin-bottom: 0;
+  }
+  
+  .ProseMirror ul, .ProseMirror ol {
+    margin: 0.5rem 0;
+    padding-left: 1.5rem;
+  }
+  
+  .ProseMirror blockquote {
+    border-left: 3px solid hsl(var(--accent));
+    padding-left: 1rem;
+    margin: 0.5rem 0;
+    font-style: italic;
+    color: hsl(var(--muted-foreground));
+  }
+  
+  .ProseMirror strong {
+    font-weight: 600;
+  }
+  
+  .ProseMirror em {
+    font-style: italic;
+  }
+  
+  .ProseMirror .is-editor-empty:first-child::before {
+    color: hsl(var(--muted-foreground));
+    content: attr(data-placeholder);
+    float: left;
+    height: 0;
+    pointer-events: none;
+  }
 }
 
 @layer base {
@@ -304,5 +358,30 @@
   
   .dark ::-webkit-scrollbar-thumb:hover {
     background: hsl(var(--accent));
+  }
+  
+  /* FeedMe custom scrollbar styling */
+  .feedme-scrollbar::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  
+  .feedme-scrollbar::-webkit-scrollbar-track {
+    background: hsl(var(--background));
+    border-radius: 3px;
+  }
+  
+  .feedme-scrollbar::-webkit-scrollbar-thumb {
+    background: hsl(var(--accent) / 0.3);
+    border-radius: 3px;
+    transition: background-color 0.2s ease;
+  }
+  
+  .feedme-scrollbar::-webkit-scrollbar-thumb:hover {
+    background: hsl(var(--accent) / 0.6);
+  }
+  
+  .feedme-scrollbar::-webkit-scrollbar-corner {
+    background: hsl(var(--background));
   }
 }

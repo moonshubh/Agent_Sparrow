@@ -165,6 +165,10 @@ class FeedMeAuth {
   getWebSocketUrl(baseUrl: string): string {
     const token = this.getToken()
     if (token) {
+      // Check if token is already present to avoid duplicates
+      if (baseUrl.includes('token=')) {
+        return baseUrl
+      }
       const separator = baseUrl.includes('?') ? '&' : '?'
       return `${baseUrl}${separator}token=${encodeURIComponent(token)}`
     }
