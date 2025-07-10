@@ -21,6 +21,9 @@ import {
 } from '@/lib/feedme-api'
 import { useUIStore } from '@/lib/stores/ui-store'
 
+// Constants
+const UNASSIGNED_FOLDER_ID = 0
+
 // Types
 export interface Folder extends FeedMeFolder {
   isExpanded?: boolean
@@ -307,7 +310,29 @@ export const useFoldersStore = create<FoldersStore>()(
           const folderMap = new Map<number, Folder>()
           const rootFolders: Folder[] = []
           
-          // Initialize all folders
+          // Create pseudo-folder for unassigned conversations
+          const unassignedFolder: Folder = {
+            id: UNASSIGNED_FOLDER_ID,
+            name: 'All Conversations',
+            color: '#6b7280',
+            description: 'Conversations not assigned to any folder',
+            parent_id: null,
+            created_by: 'system',
+            created_at: new Date(),
+            updated_at: new Date(),
+            is_active: true,
+            conversationCount: 0,
+            children: [],
+            level: 0,
+            isExpanded: true,
+            isSelected: false
+          }
+          
+          // Add unassigned folder to the map and root
+          folderMap.set(UNASSIGNED_FOLDER_ID, unassignedFolder)
+          rootFolders.push(unassignedFolder)
+          
+          // Initialize all real folders
           folders.forEach(folder => {
             folderMap.set(folder.id, {
               ...folder,
@@ -316,7 +341,7 @@ export const useFoldersStore = create<FoldersStore>()(
             })
           })
           
-          // Build parent-child relationships
+          // Build parent-child relationships for real folders only
           folders.forEach(folder => {
             const folderNode = folderMap.get(folder.id)!
             
@@ -329,9 +354,14 @@ export const useFoldersStore = create<FoldersStore>()(
             }
           })
           
-          // Sort folders by name
+          // Sort folders by name (keep unassigned at top)
           const sortFolders = (folders: Folder[]) => {
-            folders.sort((a, b) => a.name.localeCompare(b.name))
+            folders.sort((a, b) => {
+              // Keep unassigned folder at the top
+              if (a.id === UNASSIGNED_FOLDER_ID) return -1
+              if (b.id === UNASSIGNED_FOLDER_ID) return 1
+              return a.name.localeCompare(b.name)
+            })
             folders.forEach(folder => {
               if (folder.children) {
                 sortFolders(folder.children)

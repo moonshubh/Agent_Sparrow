@@ -264,14 +264,21 @@ class GemmaExtractionEngine:
 
     async def extract_conversations(
         self, 
-        html_content: str,
+        content: str,
         metadata: Dict[str, Any]
     ) -> List[Dict[str, Any]]:
         """Extract Q&A pairs with advanced context understanding"""
         
-        if not html_content or not html_content.strip():
-            logger.warning("Empty HTML content provided for extraction")
+        if not content or not content.strip():
+            logger.warning("Empty content provided for extraction")
             return []
+        
+        # Check if this is PDF content
+        if metadata.get('file_format') == 'pdf':
+            return await self._extract_from_pdf(content, metadata)
+        
+        # Original HTML processing
+        html_content = content
         
         # Check if this is a Zendesk email and use specialized parser
         if self.zendesk_parser and self._is_zendesk_email(html_content, metadata):
@@ -1115,7 +1122,475 @@ Return as JSON array matching the original structure but with enhancements.
         
         return '\n'.join(html_parts)
 
-    def extract_conversations_sync(self, html_content: str, metadata: Dict[str, Any] = None) -> List[Dict[str, Any]]:
+    async def _extract_from_pdf(self, pdf_hex_content: str, metadata: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Extract Q&A pairs from PDF content with intelligent conversation detection"""
+        
+        try:
+            # Import enhanced PDF parser
+            from app.feedme.parsers.pdf_parser import EnhancedPDFParser
+            from app.feedme.parsers.ocr_fallback import OCRFallbackProcessor
+            
+            # Convert hex content back to bytes
+            pdf_bytes = bytes.fromhex(pdf_hex_content)
+            
+            # Parse PDF with conversation detection
+            parser = EnhancedPDFParser()
+            conversation_result = await parser.parse_pdf_with_conversations(pdf_bytes)
+            
+            if not conversation_result.success:
+                logger.error(f"PDF parsing failed: {conversation_result.error_message}")
+                return []
+            
+            logger.info(f"PDF parsed successfully: {conversation_result.metadata.pages} pages, {len(conversation_result.conversations)} conversations")
+            
+            # Check if OCR enhancement is needed
+            ocr_processor = OCRFallbackProcessor()
+            if ocr_processor.should_use_ocr(conversation_result.raw_text, ""):
+                logger.info("Poor text extraction detected, attempting OCR enhancement")
+                enhanced_text = await ocr_processor.enhance_text_with_ocr(conversation_result.raw_text, pdf_bytes)
+                conversation_result.raw_text = enhanced_text
+            
+            # Extract Q&A pairs from PDF conversations
+            if conversation_result.conversations:
+                qa_pairs = await self._extract_from_pdf_conversations(conversation_result, metadata)
+            else:
+                # Fallback to basic text extraction
+                qa_pairs = await self._extract_qa_from_pdf_text(conversation_result, metadata)
+            
+            return qa_pairs
+            
+        except Exception as e:
+            logger.error(f"PDF extraction failed: {e}")
+            return []
+    
+    async def _extract_from_pdf_conversations(self, pdf_result, metadata: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Extract Q&A pairs from PDF conversations with intelligent processing"""
+        
+        if not pdf_result.conversations:
+            # Fall back to basic PDF extraction
+            return await self._extract_qa_from_pdf_text(pdf_result, metadata)
+        
+        # Group conversations by thread
+        conversation_threads = self._group_conversations_by_thread(pdf_result.conversations)
+        
+        all_qa_pairs = []
+        
+        for thread in conversation_threads:
+            # Extract Q&A pairs from each thread
+            thread_qa_pairs = await self._extract_qa_from_thread(thread, metadata)
+            all_qa_pairs.extend(thread_qa_pairs)
+        
+        # Apply intelligent deduplication
+        if len(all_qa_pairs) > 1:
+            all_qa_pairs = self._deduplicate_qa_pairs_semantic(all_qa_pairs)
+        
+        return all_qa_pairs
+
+    def _group_conversations_by_thread(self, conversations) -> List[List]:
+        """Group conversations into logical threads"""
+        threads = []
+        current_thread = []
+        
+        for conv in sorted(conversations, key=lambda x: (x.page_number, x.timestamp or datetime.min)):
+            if self._should_start_new_thread(conv, current_thread):
+                if current_thread:
+                    threads.append(current_thread)
+                    current_thread = []
+            
+            current_thread.append(conv)
+        
+        if current_thread:
+            threads.append(current_thread)
+        
+        return threads
+
+    def _should_start_new_thread(self, conv, current_thread) -> bool:
+        """Determine if conversation should start a new thread"""
+        if not current_thread:
+            return False
+        
+        last_conv = current_thread[-1]
+        
+        # Time gap > 1 hour suggests new thread
+        if conv.timestamp and last_conv.timestamp:
+            time_diff = (conv.timestamp - last_conv.timestamp).total_seconds()
+            if time_diff > 3600:  # 1 hour
+                return True
+        
+        # Different page + different speaker suggests new thread
+        if conv.page_number != last_conv.page_number and conv.speaker != last_conv.speaker:
+            return True
+        
+        return False
+
+    async def _extract_qa_from_thread(self, thread, metadata: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Extract Q&A pairs from a conversation thread"""
+        
+        # Create PDF-specific extraction prompt
+        prompt = self._build_pdf_thread_prompt(thread, metadata)
+        
+        try:
+            # Extract using AI
+            response = await self._extract_with_retry(prompt)
+            
+            if response:
+                qa_pairs = self._parse_extraction_response(response.text)
+                
+                # Add thread metadata
+                for qa_pair in qa_pairs:
+                    qa_pair['source_format'] = 'pdf'
+                    qa_pair['thread_id'] = thread[0].thread_id
+                    qa_pair['page_range'] = f"{thread[0].page_number}-{thread[-1].page_number}"
+                    qa_pair['extraction_method'] = 'pdf_conversation_aware'
+                
+                return qa_pairs
+        except Exception as e:
+            logger.warning(f"AI extraction failed for thread {thread[0].thread_id}: {e}")
+        
+        # Fallback to pattern-based extraction
+        return self._extract_qa_from_thread_pattern(thread)
+
+    def _build_pdf_thread_prompt(self, thread, metadata: Dict[str, Any]) -> str:
+        """Build PDF-specific extraction prompt for conversation thread"""
+        
+        thread_context = ""
+        for conv in thread:
+            role_label = "Customer" if conv.role == 'customer' else "Support Agent"
+            timestamp = conv.timestamp.strftime("%Y-%m-%d %H:%M") if conv.timestamp else "Unknown time"
+            
+            thread_context += f"""
+{role_label} ({conv.speaker}) - {timestamp}:
+{conv.content}
+
+"""
+        
+        return f"""
+You are analyzing a customer support conversation from a PDF ticket.
+
+**Conversation Thread:**
+{thread_context}
+
+**Task:** Extract clear question-answer pairs from this conversation thread.
+
+**Instructions:**
+1. Identify customer questions, issues, or requests
+2. Find corresponding support agent responses or solutions
+3. Preserve technical details and context
+4. Consider the conversation flow and dependencies
+5. Only extract complete, meaningful Q&A pairs
+
+**Output Format:** Return JSON array of Q&A pairs:
+```json
+[
+  {{
+    "question_text": "Customer's question or issue",
+    "answer_text": "Support agent's response or solution",
+    "context_before": "Relevant context before the exchange",
+    "context_after": "Relevant context after the exchange", 
+    "confidence_score": 0.0-1.0,
+    "issue_type": "technical|account|general|other",
+    "resolution_type": "resolved|escalated|pending|information_provided",
+    "tags": ["relevant", "keywords"]
+  }}
+]
+```
+
+Extract all relevant Q&A pairs from this conversation thread:
+"""
+    
+    def _extract_qa_from_thread_pattern(self, thread) -> List[Dict[str, Any]]:
+        """Pattern-based extraction fallback for conversation thread"""
+        qa_pairs = []
+        
+        # Simple pattern matching for customer questions followed by agent answers
+        for i, conv in enumerate(thread):
+            if conv.role == 'customer' and i + 1 < len(thread):
+                next_conv = thread[i + 1]
+                if next_conv.role == 'agent':
+                    qa_pair = {
+                        'question_text': conv.content,
+                        'answer_text': next_conv.content,
+                        'context_before': thread[i - 1].content if i > 0 else "",
+                        'context_after': thread[i + 2].content if i + 2 < len(thread) else "",
+                        'confidence_score': 0.6,  # Lower confidence for pattern-based
+                        'extraction_method': 'pdf_pattern',
+                        'source_format': 'pdf',
+                        'thread_id': conv.thread_id,
+                        'page_range': f"{conv.page_number}-{next_conv.page_number}",
+                        'issue_type': 'general',
+                        'resolution_type': 'information_provided',
+                        'tags': ['pdf_extraction', 'pattern_based']
+                    }
+                    qa_pairs.append(qa_pair)
+        
+        return qa_pairs
+
+    def _deduplicate_qa_pairs_semantic(self, qa_pairs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Basic semantic deduplication for Q&A pairs"""
+        if len(qa_pairs) <= 1:
+            return qa_pairs
+        
+        # Simple deduplication based on question similarity
+        unique_pairs = []
+        seen_questions = set()
+        
+        for pair in qa_pairs:
+            question = pair.get('question_text', '').strip().lower()
+            
+            # Create a simple signature for the question
+            question_words = set(question.split())
+            
+            # Check if this question is similar to any we've seen
+            is_duplicate = False
+            for seen_q in seen_questions:
+                seen_words = set(seen_q.split())
+                if question_words and seen_words:
+                    # Simple Jaccard similarity
+                    similarity = len(question_words.intersection(seen_words)) / len(question_words.union(seen_words))
+                    if similarity > 0.7:  # 70% similarity threshold
+                        is_duplicate = True
+                        break
+            
+            if not is_duplicate:
+                seen_questions.add(question)
+                unique_pairs.append(pair)
+        
+        logger.info(f"Semantic deduplication: {len(qa_pairs)} → {len(unique_pairs)} pairs")
+        return unique_pairs
+
+    async def _extract_qa_from_pdf_text(self, parse_result, metadata: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Extract Q&A pairs from parsed PDF text using AI"""
+        
+        if not parse_result.total_text:
+            logger.warning("No text extracted from PDF")
+            return []
+        
+        # Build PDF-specific prompt
+        pdf_prompt = self._build_pdf_extraction_prompt(parse_result, metadata)
+        
+        # Use intelligent chunking for large PDFs
+        if parse_result.total_chars > self.config.max_tokens_per_chunk:
+            return await self._chunked_pdf_extraction(parse_result, metadata)
+        
+        # Extract Q&A pairs using AI
+        try:
+            response = await self._extract_with_retry(pdf_prompt)
+            if response:
+                qa_pairs = self._parse_extraction_response(response.text)
+                
+                # Add PDF-specific metadata to each Q&A pair
+                for qa_pair in qa_pairs:
+                    qa_pair['source_format'] = 'pdf'
+                    qa_pair['source_pages'] = parse_result.metadata.pages
+                    qa_pair['extraction_method'] = 'pdf_ai'
+                
+                logger.info(f"Extracted {len(qa_pairs)} Q&A pairs from PDF")
+                return qa_pairs
+                
+        except Exception as e:
+            logger.error(f"AI extraction from PDF failed: {e}")
+            
+        # Fallback to pattern-based extraction
+        return await self._fallback_pdf_pattern_extraction(parse_result.total_text)
+
+    def _build_pdf_extraction_prompt(self, parse_result, metadata: Dict[str, Any]) -> str:
+        """Build PDF-specific extraction prompt"""
+        
+        pdf_text = parse_result.total_text
+        page_count = parse_result.metadata.pages
+        
+        return f"""
+You are an expert at extracting customer support Q&A pairs from PDF documents.
+
+**PDF Document Information:**
+- Pages: {page_count}
+- Characters: {parse_result.total_chars}
+- Filename: {metadata.get('original_filename', 'Unknown')}
+
+**PDF Content:**
+{pdf_text}
+
+**Task:** Extract clear question-answer pairs from this PDF document. This is likely a customer support ticket or email conversation.
+
+**Instructions:**
+1. Identify customer questions, issues, or requests
+2. Find corresponding support agent responses or solutions
+3. Look for conversation threads across pages
+4. Preserve important context and technical details
+5. Handle multi-page conversations that may span across page breaks
+
+**Output Format:** Return a JSON array of question-answer pairs:
+```json
+[
+  {{
+    "question_text": "Customer's question or issue description",
+    "answer_text": "Support agent's response or solution",
+    "context_before": "Relevant context before the exchange",
+    "context_after": "Relevant context after the exchange",
+    "confidence_score": 0.0-1.0,
+    "issue_type": "technical|account|billing|general|other",
+    "resolution_type": "resolved|escalated|pending|information_provided|workaround",
+    "tags": ["relevant", "topic", "keywords"]
+  }}
+]
+```
+
+**Quality Guidelines:**
+- Only extract clear, meaningful Q&A pairs
+- Maintain technical accuracy and context
+- Focus on actionable information
+- Skip navigation, headers, and boilerplate text
+- Confidence score should reflect clarity and completeness
+
+Extract all relevant Q&A pairs from this PDF document:
+"""
+
+    async def _chunked_pdf_extraction(self, parse_result, metadata: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Handle large PDF extraction with chunking"""
+        
+        all_qa_pairs = []
+        
+        # Process page by page for better context preservation
+        for page in parse_result.pages:
+            if not page.text or len(page.text) < 50:
+                continue
+                
+            try:
+                # Build prompt for this page
+                page_prompt = self._build_page_extraction_prompt(page, metadata)
+                
+                # Extract Q&A pairs from this page
+                response = await self._extract_with_retry(page_prompt)
+                if response:
+                    page_qa_pairs = self._parse_extraction_response(response.text)
+                    
+                    # Add page-specific metadata
+                    for qa_pair in page_qa_pairs:
+                        qa_pair['source_page'] = page.page_number
+                        qa_pair['source_format'] = 'pdf'
+                        qa_pair['extraction_method'] = 'pdf_ai_chunked'
+                    
+                    all_qa_pairs.extend(page_qa_pairs)
+                    
+            except Exception as e:
+                logger.warning(f"Failed to extract from page {page.page_number}: {e}")
+                continue
+        
+        logger.info(f"Chunked PDF extraction complete: {len(all_qa_pairs)} Q&A pairs from {len(parse_result.pages)} pages")
+        return all_qa_pairs
+
+    def _build_page_extraction_prompt(self, page, metadata: Dict[str, Any]) -> str:
+        """Build extraction prompt for a single PDF page"""
+        
+        return f"""
+You are extracting customer support Q&A pairs from page {page.page_number} of a PDF document.
+
+**Page Content:**
+{page.text}
+
+**Task:** Extract clear question-answer pairs from this page. This is part of a customer support ticket or email conversation.
+
+**Instructions:**
+1. Look for customer questions, issues, or requests on this page
+2. Find corresponding support agent responses or solutions
+3. Preserve important context and technical details
+4. Note if conversations appear to continue from previous pages or to next pages
+
+**Output Format:** Return a JSON array of question-answer pairs:
+```json
+[
+  {{
+    "question_text": "Customer's question or issue description",
+    "answer_text": "Support agent's response or solution",
+    "context_before": "Relevant context before the exchange",
+    "context_after": "Relevant context after the exchange",
+    "confidence_score": 0.0-1.0,
+    "issue_type": "technical|account|billing|general|other",
+    "resolution_type": "resolved|escalated|pending|information_provided|workaround",
+    "tags": ["relevant", "topic", "keywords"]
+  }}
+]
+```
+
+Extract all relevant Q&A pairs from this page:
+"""
+
+    async def _fallback_pdf_pattern_extraction(self, pdf_text: str) -> List[Dict[str, Any]]:
+        """Fallback pattern-based extraction for PDF content"""
+        
+        qa_pairs = []
+        
+        # Split text into lines for pattern matching
+        lines = pdf_text.split('\n')
+        
+        current_question = None
+        current_answer = None
+        
+        # PDF-specific patterns
+        question_patterns = [
+            r'^(Customer|Client|User):\s*(.+)',
+            r'^Q:\s*(.+)',
+            r'^Question:\s*(.+)',
+            r'(.+\?)\s*$',  # Lines ending with question mark
+            r'^Issue:\s*(.+)',
+            r'^Problem:\s*(.+)'
+        ]
+        
+        answer_patterns = [
+            r'^(Agent|Support|Admin|Rep):\s*(.+)',
+            r'^A:\s*(.+)',
+            r'^Answer:\s*(.+)',
+            r'^Solution:\s*(.+)',
+            r'^Resolution:\s*(.+)',
+            r'^Response:\s*(.+)'
+        ]
+        
+        for line in lines:
+            line = line.strip()
+            if len(line) < 10:
+                continue
+            
+            # Check for question patterns
+            question_match = None
+            for pattern in question_patterns:
+                match = re.search(pattern, line, re.IGNORECASE)
+                if match:
+                    question_match = match
+                    break
+            
+            if question_match:
+                current_question = question_match.group(-1).strip()
+                continue
+            
+            # Check for answer patterns
+            answer_match = None
+            for pattern in answer_patterns:
+                match = re.search(pattern, line, re.IGNORECASE)
+                if match:
+                    answer_match = match
+                    break
+            
+            if answer_match and current_question:
+                current_answer = answer_match.group(-1).strip()
+                
+                qa_pairs.append({
+                    'question_text': current_question,
+                    'answer_text': current_answer,
+                    'confidence_score': 0.5,  # Lower confidence for pattern-based
+                    'extraction_method': 'pdf_pattern',
+                    'source_format': 'pdf',
+                    'issue_type': 'general',
+                    'resolution_type': 'information_provided',
+                    'tags': ['pdf_extraction']
+                })
+                
+                current_question = None
+                current_answer = None
+        
+        logger.info(f"Pattern-based PDF extraction found {len(qa_pairs)} Q&A pairs")
+        return qa_pairs
+
+    def extract_conversations_sync(self, content: str, metadata: Dict[str, Any] = None) -> List[Dict[str, Any]]:
         """
         Synchronous wrapper for async extract_conversations method
         
@@ -1123,7 +1598,7 @@ Return as JSON array matching the original structure but with enhancements.
         for use in synchronous contexts like Celery tasks.
         
         Args:
-            html_content: HTML content to extract Q&A pairs from
+            content: Content to extract Q&A pairs from (HTML or PDF hex)
             metadata: Optional metadata dictionary
             
         Returns:
@@ -1137,7 +1612,7 @@ Return as JSON array matching the original structure but with enhancements.
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
             try:
-                result = loop.run_until_complete(self.extract_conversations(html_content, metadata))
+                result = loop.run_until_complete(self.extract_conversations(content, metadata))
                 return result
             finally:
                 loop.close()
@@ -1146,7 +1621,7 @@ Return as JSON array matching the original structure but with enhancements.
             # Fallback to pattern-based extraction
             logger.info("Falling back to pattern-based extraction")
             fallback = FallbackExtractor()
-            return fallback.extract_qa_pairs(html_content)
+            return fallback.extract_qa_pairs(content)
 
 
 class FallbackExtractor:

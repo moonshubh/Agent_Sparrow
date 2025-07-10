@@ -24,9 +24,13 @@ import {
 } from '@/lib/feedme-api'
 import { useUIStore } from '@/lib/stores/ui-store'
 
+// Constants
+const UNASSIGNED_FOLDER_ID = 0
+
 // Types
 export interface FeedMeExample {
   id: number
+  uuid: string
   conversation_id: number
   question_text: string
   answer_text: string
@@ -38,6 +42,38 @@ export interface FeedMeExample {
   confidence_score: number
   usefulness_score: number
   is_active: boolean
+  
+  // Source information
+  source_page?: number
+  source_format?: string
+  
+  // Review and approval
+  review_status?: string
+  reviewed_by?: string
+  reviewed_at?: string
+  reviewer_notes?: string
+  
+  // Versioning
+  version?: number
+  
+  // AI-generated fields
+  generated_by_model?: string
+  
+  // Additional database fields for PDF processing compatibility
+  updated_by?: string
+  retrieval_weight?: number
+  usage_count?: number
+  positive_feedback?: number
+  negative_feedback?: number
+  last_used_at?: string
+  source_position?: string
+  extraction_method?: string
+  extraction_confidence?: number
+  supabase_sync_status?: string
+  supabase_sync_at?: string
+  supabase_example_id?: string
+  supabase_sync_error?: string
+  
   created_at: string
   updated_at: string
 }
@@ -137,9 +173,10 @@ interface ConversationsState {
     conversationDetails: Record<number, { data: Conversation, expiry: number }>
   }
   
-  // Internal state for managing timeouts
+  // Internal state for managing timeouts and requests
   _internal: {
     searchTimeoutId: NodeJS.Timeout | null
+    activeRequests: Map<string, Promise<any>>
   }
 }
 
@@ -158,7 +195,7 @@ interface ConversationsActions {
   refreshConversations: () => Promise<void>
   setSearchQuery: (query: string) => void
   setSorting: (sortBy: ConversationListState['sortBy'], sortOrder: ConversationListState['sortOrder']) => void
-  setCurrentFolder: (folderId: number | null) => void
+  setCurrentFolder: (folderId: number | null) => Promise<void>
   
   // CRUD Operations
   getConversation: (id: number, forceRefresh?: boolean) => Promise<Conversation | null>
@@ -237,7 +274,7 @@ export const useConversationsStore = create<ConversationsStore>()(
         searchQuery: '',
         sortBy: 'created_at',
         sortOrder: 'desc',
-        currentFolderId: null
+        currentFolderId: UNASSIGNED_FOLDER_ID
       },
       
       examples: {
@@ -267,7 +304,8 @@ export const useConversationsStore = create<ConversationsStore>()(
       },
       
       _internal: {
-        searchTimeoutId: null
+        searchTimeoutId: null,
+        activeRequests: new Map() // Track ongoing requests to prevent duplicates
       },
       
       actions: {
@@ -317,7 +355,7 @@ export const useConversationsStore = create<ConversationsStore>()(
               pageSize,
               search || undefined,
               `${sortBy}:${sortOrder}`,
-              folderId
+              folderId !== null ? folderId : undefined
             )
             
             // Update conversations map
@@ -347,12 +385,31 @@ export const useConversationsStore = create<ConversationsStore>()(
           } catch (error) {
             console.error('Failed to load conversations:', error)
             
-            set(state => ({
-              conversationsList: {
-                ...state.conversationsList,
-                isLoading: false
-              }
-            }))
+            // Check if it's a folder-related error
+            if (error instanceof Error && 
+                (error.message.includes('Folder not found') || 
+                 error.message.includes('404'))) {
+              
+              // Reset to show all conversations if folder doesn't exist
+              set(state => ({
+                conversationsList: {
+                  ...state.conversationsList,
+                  currentFolderId: null,
+                  isLoading: false,
+                  items: [],
+                  totalCount: 0
+                }
+              }))
+              
+              console.warn(`Folder ${folderId} not found, reset to show all conversations`)
+            } else {
+              set(state => ({
+                conversationsList: {
+                  ...state.conversationsList,
+                  isLoading: false
+                }
+              }))
+            }
             
             throw error
           }
@@ -408,16 +465,40 @@ export const useConversationsStore = create<ConversationsStore>()(
           get().actions.loadConversations({ page: 1 })
         },
         
-        setCurrentFolder: (folderId) => {
+        setCurrentFolder: async (folderId) => {
+          // Clear cache when switching folders to prevent stale data
+          get().actions.clearCache()
+          
           set(state => ({
             conversationsList: {
               ...state.conversationsList,
               currentFolderId: folderId,
-              currentPage: 1
+              currentPage: 1,
+              isLoading: true
             }
           }))
           
-          get().actions.loadConversations({ page: 1, folderId })
+          try {
+            await get().actions.loadConversations({ 
+              page: 1, 
+              folderId, 
+              forceRefresh: true 
+            })
+          } catch (error) {
+            console.error('Failed to load conversations for folder:', folderId, error)
+            
+            // Reset to show all conversations on error
+            set(state => ({
+              conversationsList: {
+                ...state.conversationsList,
+                currentFolderId: null,
+                isLoading: false
+              }
+            }))
+            
+            // Show error to user
+            throw error
+          }
         },
         
         // ===========================
@@ -440,18 +521,40 @@ export const useConversationsStore = create<ConversationsStore>()(
             return state.conversations[id]
           }
           
-          try {
-            // In a real implementation, this would be a specific API call
-            // For now, we'll check if it's in the list or load the list
-            if (!state.conversations[id]) {
-              await state.actions.loadConversations({ forceRefresh: true })
+          // Prevent multiple simultaneous loads for the same conversation
+          const loadingKey = `conversation_${id}`
+          if (state._internal.activeRequests.has(loadingKey)) {
+            // Wait for the existing request to complete
+            try {
+              await state._internal.activeRequests.get(loadingKey)
+              return get().conversations[id] || null
+            } catch {
+              return null
             }
-            
-            const conversation = get().conversations[id]
-            
-            if (conversation) {
-              // Update cache
+          }
+          
+          // Create a new loading promise
+          const loadPromise = (async () => {
+            try {
+              // Make a direct API call to fetch the specific conversation
+              const response = await fetch(`/api/v1/feedme/conversations/${id}`)
+              
+              if (!response.ok) {
+                if (response.status === 404) {
+                  // Conversation doesn't exist
+                  return null
+                }
+                throw new Error(`Failed to fetch conversation: ${response.statusText}`)
+              }
+              
+              const conversation = await response.json()
+              
+              // Update the store with the fetched conversation
               set(state => ({
+                conversations: {
+                  ...state.conversations,
+                  [id]: conversation
+                },
                 cache: {
                   ...state.cache,
                   conversationDetails: {
@@ -465,14 +568,38 @@ export const useConversationsStore = create<ConversationsStore>()(
               }))
               
               return conversation
+              
+            } catch (error) {
+              console.error(`Failed to get conversation ${id}:`, error)
+              
+              // If it's a 404 error, don't remove from store yet
+              // Let the UI handle cleanup to prevent cascading updates
+              
+              return null
+            } finally {
+              // Clean up the loading promise
+              set(state => {
+                const activeRequests = new Map(state._internal.activeRequests)
+                activeRequests.delete(loadingKey)
+                return {
+                  _internal: {
+                    ...state._internal,
+                    activeRequests
+                  }
+                }
+              })
             }
-            
-            return null
-            
-          } catch (error) {
-            console.error(`Failed to get conversation ${id}:`, error)
-            return null
-          }
+          })()
+          
+          // Store the loading promise
+          set(state => ({
+            _internal: {
+              ...state._internal,
+              activeRequests: new Map(state._internal.activeRequests).set(loadingKey, loadPromise)
+            }
+          }))
+          
+          return loadPromise
         },
         
         updateConversation: (id, updates) => {
@@ -631,12 +758,14 @@ export const useConversationsStore = create<ConversationsStore>()(
               response = await uploadTranscriptFile(
                 upload.title,
                 upload.file,
+                undefined,
                 upload.autoProcess
               )
             } else if (upload.type === 'text' && upload.content) {
               response = await uploadTranscriptText(
                 upload.title,
                 upload.content,
+                undefined,
                 upload.autoProcess
               )
             } else {
@@ -896,7 +1025,7 @@ export const useConversationsStore = create<ConversationsStore>()(
             const supabaseRequest = {
               approved_by: request.approved_by,
               example_ids: selectedExampleIds?.length ? selectedExampleIds : null, // null means approve all
-              reviewer_notes: request.reviewer_notes || request.approval_notes
+              reviewer_notes: request.reviewer_notes
             }
             
             const response = await fetch(`/api/v1/feedme/conversations/${id}/examples/approve`, {
@@ -925,10 +1054,9 @@ export const useConversationsStore = create<ConversationsStore>()(
             })
             
             showToast({
-              id: `approve-${id}`,
               title: 'Conversation Approved',
-              description: data.message || `Successfully approved ${data.approved_count} examples. Syncing to Supabase...`,
-              variant: 'success',
+              message: data.message || `Successfully approved ${data.approved_count} examples. Syncing to Supabase...`,
+              type: 'success',
               duration: 5000
             })
             
@@ -948,10 +1076,9 @@ export const useConversationsStore = create<ConversationsStore>()(
             await get().actions.refreshConversations()
             
             showToast({
-              id: `approve-error-${id}`,
               title: 'Approval Failed',
-              description: error instanceof Error ? error.message : 'Failed to approve conversation',
-              variant: 'error'
+              message: error instanceof Error ? error.message : 'Failed to approve conversation',
+              type: 'error'
             })
             
             throw error
@@ -1080,7 +1207,7 @@ export const useConversationsStore = create<ConversationsStore>()(
           
           for (const id of ids) {
             try {
-              await get().actions.approveConversation(id, { ...request, conversation_id: id })
+              await get().actions.approveConversation(id, request)
             } catch (error) {
               errors.push({ id, error: error as Error })
             }
@@ -1102,7 +1229,7 @@ export const useConversationsStore = create<ConversationsStore>()(
           
           for (const id of ids) {
             try {
-              await get().actions.rejectConversation(id, { ...request, conversation_id: id })
+              await get().actions.rejectConversation(id, request)
             } catch (error) {
               errors.push({ id, error: error as Error })
             }
@@ -1120,6 +1247,9 @@ export const useConversationsStore = create<ConversationsStore>()(
         },
         
         bulkAssignToFolder: async (ids, folderId) => {
+          const state = get()
+          const currentFolderId = state.conversationsList.currentFolderId
+          
           // Update optimistically
           ids.forEach(id => {
             get().actions.updateConversation(id, { folder_id: folderId || undefined })
@@ -1133,6 +1263,33 @@ export const useConversationsStore = create<ConversationsStore>()(
             const result = await assignConversationsToFolderSupabase(folderId, ids)
             
             console.log(`Successfully assigned ${ids.length} conversations to folder ${folderId}`)
+            
+            // CRITICAL: Hide-after-move logic - remove conversations from current list
+            // if they were assigned to a different folder than the current view
+            const shouldHideConversations = (
+              currentFolderId !== folderId &&  // Different folder
+              currentFolderId !== null         // Not viewing all conversations
+            )
+            
+            if (shouldHideConversations) {
+              set(state => {
+                // Remove from conversations cache
+                const updatedConversations = { ...state.conversations }
+                ids.forEach(id => {
+                  delete updatedConversations[id]
+                })
+                
+                // Remove from current list
+                return {
+                  conversations: updatedConversations,
+                  conversationsList: {
+                    ...state.conversationsList,
+                    items: state.conversationsList.items.filter(c => !ids.includes(c.id)),
+                    totalCount: Math.max(0, state.conversationsList.totalCount - ids.length)
+                  }
+                }
+              })
+            }
             
             // Show success notification with Supabase sync status
             useUIStore.getState().actions.showToast({
@@ -1559,8 +1716,8 @@ export const useConversationsStore = create<ConversationsStore>()(
               conv.title,
               conv.processing_status,
               conv.created_at,
-              conv.updated_at,
-              conv.examples_count || 0,
+              conv.created_at, // Use created_at as fallback for updated_at
+              conv.total_examples || 0,
               conv.quality_score || 0
             ])
             

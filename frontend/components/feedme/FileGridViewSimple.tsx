@@ -70,6 +70,30 @@ export function FileGridView({ onConversationSelect, currentFolderId, onFolderSe
     foldersActions.loadFolders()
   }, []) // Empty dependency array - only run once on mount
 
+  const handleConversationSelect = (conversationId: number) => {
+    // Validate conversation ID before setting
+    if (!conversationId || conversationId <= 0) {
+      console.warn('Invalid conversation ID selected:', conversationId)
+      return
+    }
+    
+    // Check if conversation exists in current store
+    const conversation = conversations.find(c => c.id === conversationId)
+    if (!conversation) {
+      console.warn(`Conversation ${conversationId} not found in current list`)
+      
+      // Show loading message but don't refresh here - let the editor handle the load
+      uiActions.showToast({
+        type: 'info',
+        title: 'Loading Conversation',
+        message: 'Loading conversation details...'
+      })
+    }
+    
+    // Always call the parent callback - let the editor handle loading/errors
+    onConversationSelect?.(conversationId)
+  }
+
   const handleDeleteClick = (e: React.MouseEvent, conversationId: number) => {
     e.stopPropagation() // Prevent card click
     setConversationToDelete(conversationId)

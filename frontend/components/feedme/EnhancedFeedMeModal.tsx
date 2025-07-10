@@ -51,6 +51,7 @@ interface FileUploadState {
 
 interface FilePreview {
   isHtml: boolean
+  isPdf?: boolean
   messageCount?: number
   attachmentCount?: number
   description?: string
@@ -96,34 +97,48 @@ export function EnhancedFeedMeModal({ isOpen, onClose, onUploadComplete }: Enhan
 
   // File validation
   const validateFile = useCallback((file: File): string | null => {
-    const allowedTypes = ['text/plain', 'text/html', 'application/html', 'text/csv']
-    const allowedExtensions = ['.txt', '.log', '.html', '.htm', '.csv']
+    const allowedTypes = ['text/plain', 'text/html', 'application/html', 'text/csv', 'application/pdf']
+    const allowedExtensions = ['.txt', '.log', '.html', '.htm', '.csv', '.pdf']
     
     const hasValidType = file.type === '' || allowedTypes.includes(file.type) || file.type.startsWith('text/')
     const hasValidExtension = allowedExtensions.some(ext => file.name.toLowerCase().endsWith(ext))
     
     if (!hasValidType && !hasValidExtension) {
-      return 'Please upload a text or HTML file (.txt, .log, .html, .htm, or plain text)'
+      return 'Please upload a text, HTML, or PDF file (.txt, .log, .html, .htm, .csv, .pdf)'
     }
 
-    const maxSize = 10 * 1024 * 1024 // 10MB
+    // Different size limits for different file types
+    const isPdf = file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf')
+    const maxSize = isPdf ? 20 * 1024 * 1024 : 10 * 1024 * 1024 // 20MB for PDF, 10MB for others
+    
     if (file.size > maxSize) {
-      return 'File size must be less than 10MB'
+      return `File size must be less than ${isPdf ? '20MB' : '10MB'}`
     }
 
     return null
   }, [])
 
-  // HTML file analysis
+  // File analysis
   const analyzeFile = useCallback(async (file: File): Promise<FilePreview> => {
     const isHtmlFile = file.name.toLowerCase().endsWith('.html') || 
                       file.name.toLowerCase().endsWith('.htm') ||
                       file.type.includes('html')
     
+    const isPdfFile = file.name.toLowerCase().endsWith('.pdf') ||
+                     file.type === 'application/pdf'
+    
     const basePreview: FilePreview = {
       isHtml: isHtmlFile,
       fileSize: formatFileSize(file.size),
       lastModified: new Date(file.lastModified).toLocaleDateString()
+    }
+
+    if (isPdfFile) {
+      return {
+        ...basePreview,
+        description: `PDF document detected - ${Math.round(file.size / 1024)}KB`,
+        isPdf: true
+      }
     }
 
     if (!isHtmlFile) {
@@ -566,7 +581,7 @@ export function EnhancedFeedMeModal({ isOpen, onClose, onUploadComplete }: Enhan
                   ref={fileInputRef}
                   type="file"
                   multiple
-                  accept=".txt,.log,.html,.htm,.csv,text/*"
+                  accept=".txt,.log,.html,.htm,.csv,.pdf,text/*"
                   onChange={handleFileInputChange}
                   className="hidden"
                   disabled={batchUploadState.isUploading}
@@ -777,7 +792,7 @@ export function EnhancedFeedMeModal({ isOpen, onClose, onUploadComplete }: Enhan
                 <input
                   id="single-file-input"
                   type="file"
-                  accept=".txt,.log,.html,.htm,.csv,text/*"
+                  accept=".txt,.log,.html,.htm,.csv,.pdf,text/*"
                   onChange={(e) => {
                     const files = e.target.files
                     if (files && files.length > 0) {

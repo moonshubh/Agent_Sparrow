@@ -8,7 +8,7 @@
 'use client'
 
 import React, { useState, useCallback } from 'react'
-import { ChevronRight, ChevronDown, Folder, FolderOpen, MoreHorizontal, Plus } from 'lucide-react'
+import { ChevronRight, ChevronDown, Folder, FolderOpen, MoreHorizontal, Plus, MessageCircle } from 'lucide-react'
 import { useFolders, useFoldersActions } from '@/lib/stores/folders-store'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
@@ -50,11 +50,15 @@ interface FolderItemProps {
 const FolderItem: React.FC<FolderItemProps> = ({ folder, level, onSelect, onFolderSelect }) => {
   const actions = useFoldersActions()
   const [isExpanded, setIsExpanded] = useState(folder.isExpanded || false)
+  const isUnassignedFolder = folder.id === 0
 
   const handleToggle = useCallback(() => {
+    // Don't allow toggling for unassigned folder (it doesn't have children)
+    if (isUnassignedFolder) return
+    
     setIsExpanded(!isExpanded)
     actions.expandFolder(folder.id, !isExpanded)
-  }, [isExpanded, folder.id, actions])
+  }, [isExpanded, folder.id, actions, isUnassignedFolder])
 
   const handleSelect = useCallback(() => {
     onSelect?.(folder.id)
@@ -67,34 +71,42 @@ const FolderItem: React.FC<FolderItemProps> = ({ folder, level, onSelect, onFold
       <div 
         className={cn(
           "flex items-center gap-2 px-2 py-1 hover:bg-accent/50 cursor-pointer rounded-sm",
-          folder.isSelected && "bg-accent/30"
+          folder.isSelected && "bg-accent/30",
+          isUnassignedFolder && "border-b border-border/40 mb-2"
         )}
         style={{ paddingLeft: `${level * 16 + 8}px` }}
         onClick={handleSelect}
       >
-        <Button
-          variant="ghost"
-          size="sm"
-          className="h-4 w-4 p-0"
-          onClick={(e) => {
-            e.stopPropagation()
-            handleToggle()
-          }}
-        >
-          {isExpanded ? (
-            <ChevronDown className="h-3 w-3" />
-          ) : (
-            <ChevronRight className="h-3 w-3" />
-          )}
-        </Button>
+        {!isUnassignedFolder && (
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-4 w-4 p-0"
+            onClick={(e) => {
+              e.stopPropagation()
+              handleToggle()
+            }}
+          >
+            {isExpanded ? (
+              <ChevronDown className="h-3 w-3" />
+            ) : (
+              <ChevronRight className="h-3 w-3" />
+            )}
+          </Button>
+        )}
 
-        {isExpanded ? (
+        {isUnassignedFolder ? (
+          <MessageCircle className="h-4 w-4 text-accent ml-6" />
+        ) : isExpanded ? (
           <FolderOpen className="h-4 w-4 text-blue-500" />
         ) : (
           <Folder className="h-4 w-4 text-blue-500" />
         )}
 
-        <span className="flex-1 text-sm truncate">{folder.name}</span>
+        <span className={cn(
+          "flex-1 text-sm truncate",
+          isUnassignedFolder && "font-medium text-accent"
+        )}>{folder.name}</span>
 
         <Badge variant="secondary" className="text-xs">
           {folder.conversation_count || 0}
