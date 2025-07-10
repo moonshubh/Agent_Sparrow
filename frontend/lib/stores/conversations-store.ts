@@ -27,6 +27,39 @@ import { useUIStore } from '@/lib/stores/ui-store'
 // Constants
 const UNASSIGNED_FOLDER_ID = 0
 
+// Helper functions for error handling
+interface ApiError extends Error {
+  status?: number
+  statusText?: string
+}
+
+function isApiError(error: unknown): error is ApiError {
+  return error instanceof Error && 
+    (typeof (error as any).status === 'number' || 
+     typeof (error as any).statusText === 'string')
+}
+
+function getErrorStatus(error: unknown): number | undefined {
+  if (isApiError(error)) {
+    return error.status
+  }
+  return undefined
+}
+
+function isNotFoundError(error: unknown): boolean {
+  const status = getErrorStatus(error)
+  if (status === 404) {
+    return true
+  }
+  
+  if (error instanceof Error) {
+    return error.message.toLowerCase().includes('not found') || 
+           error.message.includes('404')
+  }
+  
+  return false
+}
+
 // Types
 export interface FeedMeExample {
   id: number
@@ -176,7 +209,7 @@ interface ConversationsState {
   // Internal state for managing timeouts and requests
   _internal: {
     searchTimeoutId: NodeJS.Timeout | null
-    activeRequests: Map<string, Promise<any>>
+    activeRequests: Map<string, Promise<Conversation | null>>
   }
 }
 
@@ -386,9 +419,7 @@ export const useConversationsStore = create<ConversationsStore>()(
             console.error('Failed to load conversations:', error)
             
             // Check if it's a folder-related error
-            if (error instanceof Error && 
-                (error.message.includes('Folder not found') || 
-                 error.message.includes('404'))) {
+            if (isNotFoundError(error)) {
               
               // Reset to show all conversations if folder doesn't exist
               set(state => ({

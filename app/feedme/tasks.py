@@ -29,6 +29,11 @@ from app.core.settings import settings
 from app.feedme.ai_extraction_engine import GemmaExtractionEngine
 from app.feedme.parsers.enhanced_html_parser import EnhancedHTMLParser
 
+
+class MissingAPIKeyError(Exception):
+    """Raised when a required API key is missing"""
+    pass
+
 logger = logging.getLogger(__name__)
 
 
@@ -110,8 +115,9 @@ def process_transcript(self, conversation_id: int, user_id: Optional[str] = None
                     examples = engine.extract_conversations_sync(raw_transcript, pdf_metadata)
                     logger.info(f"AI extraction engine extracted {len(examples)} Q&A pairs from PDF with gemma-3-27b-it")
                 else:
-                    logger.warning("No Gemini API key available for PDF extraction")
-                    examples = []
+                    error_msg = "No Gemini API key available for PDF extraction"
+                    logger.error(error_msg)
+                    raise MissingAPIKeyError(error_msg)
                     
             elif raw_transcript.strip().startswith('<') or 'html' in conversation_data.get('original_filename', '').lower():
                 logger.info("Detected HTML content, using AI extraction engine with enhanced HTML parser")

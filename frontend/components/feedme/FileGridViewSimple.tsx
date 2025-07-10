@@ -205,7 +205,7 @@ export function FileGridView({ onConversationSelect, currentFolderId, onFolderSe
             <Card 
               key={conversation.id} 
               className="cursor-pointer hover:shadow-md hover:border-accent/50 focus-within:ring-2 focus-within:ring-accent/50 transition-all duration-200 relative group"
-              onClick={() => onConversationSelect?.(conversation.id)}
+              onClick={() => handleConversationSelect(conversation.id)}
               tabIndex={0}
             >
               {/* Actions dropdown - shows on hover */}

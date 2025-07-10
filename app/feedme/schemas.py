@@ -56,7 +56,7 @@ class IssueType(str, Enum):
     EMAIL_SENDING = "email sending"  # Added: AI-generated value
     TICKET_MANAGEMENT = "ticket management"  # Added: AI-generated value
     GENERAL = "general"  # Added: AI-generated value
-    TECHNICAL = "technical"  # Added: AI-generated value for PDF extraction
+    TECHNICAL_PDF = "technical-pdf"  # Added: AI-generated value for PDF extraction
     OTHER = "other"
 
 

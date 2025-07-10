@@ -96,7 +96,7 @@ const FolderItem: React.FC<FolderItemProps> = ({ folder, level, onSelect, onFold
         )}
 
         {isUnassignedFolder ? (
-          <MessageCircle className="h-4 w-4 text-accent ml-6" />
+          <MessageCircle className="h-4 w-4 text-accent ml-6" aria-label="Unassigned folder icon" />
         ) : isExpanded ? (
           <FolderOpen className="h-4 w-4 text-blue-500" />
         ) : (

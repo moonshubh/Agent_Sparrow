@@ -11,6 +11,7 @@ import re
 from datetime import datetime
 from typing import List, Dict, Optional, Any, Tuple
 from dataclasses import dataclass
+from abc import ABC, abstractmethod
 import pdfplumber
 from pypdf import PdfReader
 import io
@@ -79,7 +80,7 @@ class PDFParseResult:
     warnings: List[str] = None
 
 
-class PDFParser:
+class PDFParser(ABC):
     """
     High-performance PDF parser optimized for Zendesk ticket PDFs.
     
@@ -94,6 +95,19 @@ class PDFParser:
     def __init__(self, max_pages: int = 100, timeout_seconds: int = 30):
         self.max_pages = max_pages
         self.timeout_seconds = timeout_seconds
+    
+    @abstractmethod
+    async def parse_pdf(self, file_content: bytes) -> PDFParseResult:
+        """
+        Parse PDF content and extract text with metadata.
+        
+        Args:
+            file_content: Raw PDF file bytes
+            
+        Returns:
+            PDFParseResult with extracted content and metadata
+        """
+        pass
 
 
 class EnhancedPDFParser(PDFParser):
@@ -352,7 +366,7 @@ class EnhancedPDFParser(PDFParser):
         for fmt in formats:
             try:
                 return datetime.strptime(date_str.strip(), fmt)
-            except:
+            except ValueError:
                 continue
         
         return None
@@ -604,7 +618,7 @@ class EnhancedPDFParser(PDFParser):
             
             # Convert to string
             return str(value)
-        except:
+        except (UnicodeDecodeError, TypeError):
             return None
     
     def _parse_pdf_date(self, date_string: Any) -> Optional[datetime]:
@@ -662,7 +676,7 @@ class EnhancedPDFParser(PDFParser):
 # Convenience function for direct usage
 async def parse_pdf_file(file_path: str) -> PDFParseResult:
     """Parse a PDF file from disk"""
-    parser = PDFParser()
+    parser = EnhancedPDFParser()
     
     with open(file_path, 'rb') as f:
         content = f.read()

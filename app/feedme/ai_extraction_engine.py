@@ -1122,7 +1122,7 @@ Return as JSON array matching the original structure but with enhancements.
         
         return '\n'.join(html_parts)
 
-    async def _extract_from_pdf(self, pdf_hex_content: str, metadata: Dict[str, Any]) -> List[Dict[str, Any]]:
+    async def _extract_from_pdf(self, pdf_base64_content: str, metadata: Dict[str, Any]) -> List[Dict[str, Any]]:
         """Extract Q&A pairs from PDF content with intelligent conversation detection"""
         
         try:
@@ -1130,8 +1130,9 @@ Return as JSON array matching the original structure but with enhancements.
             from app.feedme.parsers.pdf_parser import EnhancedPDFParser
             from app.feedme.parsers.ocr_fallback import OCRFallbackProcessor
             
-            # Convert hex content back to bytes
-            pdf_bytes = bytes.fromhex(pdf_hex_content)
+            # Convert base64 content back to bytes
+            import base64
+            pdf_bytes = base64.b64decode(pdf_base64_content)
             
             # Parse PDF with conversation detection
             parser = EnhancedPDFParser()
@@ -1595,7 +1596,8 @@ Extract all relevant Q&A pairs from this page:
         Synchronous wrapper for async extract_conversations method
         
         This method provides a synchronous interface to the async extraction functionality
-        for use in synchronous contexts like Celery tasks.
+        for use in synchronous contexts like Celery tasks. Supports extracting Q&A pairs
+        from both HTML content (e.g., Zendesk emails) and PDF content (provided as hex string).
         
         Args:
             content: Content to extract Q&A pairs from (HTML or PDF hex)

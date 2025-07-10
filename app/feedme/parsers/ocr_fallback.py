@@ -8,8 +8,13 @@ where standard text extraction fails or produces poor results.
 import logging
 import asyncio
 import io
-from typing import List, Optional, Dict, Any
+import time
+import re
+from typing import List, Optional, Dict, Any, Tuple, Set
 from dataclasses import dataclass
+
+from .word_corpus import WordCorpusLoader
+from .ocr_config import OCRConfigManager, ConfidenceWeights
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +54,11 @@ class OCRFallbackProcessor:
         self.confidence_threshold = confidence_threshold
         self.tesseract_config = '--oem 3 --psm 6'  # Optimized for text blocks
         self.enabled = OCR_ENABLED
+        
+        # Initialize configuration and word corpus managers
+        self.config_manager = OCRConfigManager()
+        self.word_loader = WordCorpusLoader()
+        self._word_corpus: Optional[Set[str]] = None
         
         if not self.enabled:
             logger.warning("OCR fallback processor disabled due to missing dependencies")
@@ -99,7 +109,7 @@ class OCRFallbackProcessor:
     
     def _ocr_image_from_page(self, page, img_ref, page_num: int) -> Optional[OCRResult]:
         """Extract text from image using OCR"""
-        start_time = asyncio.get_event_loop().time()
+        start_time = time.perf_counter()
         
         try:
             # Get image data
@@ -118,7 +128,7 @@ class OCRFallbackProcessor:
             confidences = [int(conf) for conf in confidence_data['conf'] if int(conf) > 0]
             avg_confidence = sum(confidences) / len(confidences) if confidences else 0
             
-            processing_time_ms = (asyncio.get_event_loop().time() - start_time) * 1000
+            processing_time_ms = (time.perf_counter() - start_time) * 1000
             
             if avg_confidence >= self.confidence_threshold * 100:
                 return OCRResult(
@@ -135,7 +145,7 @@ class OCRFallbackProcessor:
     
     def _ocr_rendered_page(self, page, page_num: int) -> Optional[OCRResult]:
         """OCR entire page by rendering it as image"""
-        start_time = asyncio.get_event_loop().time()
+        start_time = time.perf_counter()
         
         try:
             # Render page as image
@@ -151,7 +161,7 @@ class OCRFallbackProcessor:
             # Simple confidence estimation based on text characteristics
             confidence = self._estimate_text_confidence(text)
             
-            processing_time_ms = (asyncio.get_event_loop().time() - start_time) * 1000
+            processing_time_ms = (time.perf_counter() - start_time) * 1000
             
             if confidence >= self.confidence_threshold:
                 return OCRResult(
@@ -166,44 +176,84 @@ class OCRFallbackProcessor:
         
         return None
     
+    def _count_valid_dictionary_words(self, text: str) -> Tuple[int, int]:
+        """Count valid dictionary words in text using configurable word corpus"""
+        # Load word corpus if not cached
+        if self._word_corpus is None:
+            config = self.config_manager.get_config()
+            self._word_corpus = self.word_loader.get_word_corpus(
+                use_nltk=config.use_nltk_corpus,
+                min_word_length=config.min_word_length
+            )
+        
+        # Split text into words and clean them
+        words = re.findall(r'\b[a-zA-Z]+\b', text.lower())
+        if not words:
+            return 0, 0
+        
+        # Count valid dictionary words using the corpus
+        valid_words = sum(
+            1 for word in words 
+            if self.word_loader.is_valid_word(word, self._word_corpus)
+        )
+        
+        return valid_words, len(words)
+    
     def _estimate_text_confidence(self, text: str) -> float:
-        """Estimate confidence based on text characteristics"""
+        """Estimate confidence based on text characteristics and dictionary word matching"""
         if not text.strip():
             return 0.0
+        
+        # Get configuration for thresholds and weights
+        config = self.config_manager.get_config()
+        weights = config.confidence_weights
         
         # Simple heuristics for text quality
         word_count = len(text.split())
         char_count = len(text)
         
-        # Penalize very short or very long strings
-        if word_count < 3 or char_count < 10:
-            return 0.3
+        # Penalize very short or very long strings using configurable thresholds
+        if word_count < config.min_word_count or char_count < config.min_char_count:
+            return config.low_text_confidence
         
         # Check for reasonable character distribution
         alpha_ratio = sum(c.isalpha() for c in text) / len(text)
         digit_ratio = sum(c.isdigit() for c in text) / len(text)
         space_ratio = sum(c.isspace() for c in text) / len(text)
         
-        # Good text has reasonable mix of characters
-        if alpha_ratio > 0.5 and space_ratio > 0.1:  # More than 50% alphabetic, 10% spaces
-            return 0.8
-        elif alpha_ratio > 0.3 and space_ratio > 0.05:  # 30-50% alphabetic, 5%+ spaces
-            return 0.6
-        else:
-            return 0.4
+        # Count valid dictionary words
+        valid_words, total_words = self._count_valid_dictionary_words(text)
+        valid_word_ratio = valid_words / total_words if total_words > 0 else 0.0
+        
+        # Calculate weighted confidence score using configurable weights
+        confidence = (
+            weights.valid_word_ratio * valid_word_ratio +
+            weights.alpha_ratio * min(alpha_ratio * weights.alpha_ratio_scale, 1.0) +
+            weights.space_ratio * min(space_ratio * weights.space_ratio_scale, 1.0)
+        )
+        
+        # Apply additional penalties for suspicious patterns using configurable thresholds
+        if digit_ratio > weights.high_digit_threshold:
+            confidence *= weights.high_digit_penalty
+        
+        # Ensure confidence is clamped between 0.0 and 1.0
+        return max(0.0, min(1.0, confidence))
     
     def should_use_ocr(self, text_extraction_result: str, page_content: str) -> bool:
         """Determine if OCR should be used based on text extraction quality"""
         if not self.enabled:
             return False
         
+        # Get configuration for thresholds
+        config = self.config_manager.get_config()
+        
         # Check if text extraction produced very little text
-        if len(text_extraction_result.strip()) < 50:
+        if len(text_extraction_result.strip()) < config.poor_extraction_threshold:
             return True
         
         # Check for signs of poor extraction (too many special characters)
         special_char_ratio = sum(1 for c in text_extraction_result if not c.isalnum() and not c.isspace()) / len(text_extraction_result)
-        if special_char_ratio > 0.3:  # More than 30% special characters
+        if special_char_ratio > config.special_char_ratio_threshold:
             return True
         
         # Check for garbled text patterns
@@ -214,7 +264,6 @@ class OCRFallbackProcessor:
             r'[0-9]{15,}',        # Very long number sequences
         ]
         
-        import re
         for pattern in garbled_patterns:
             if re.search(pattern, text_extraction_result):
                 return True

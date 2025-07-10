@@ -97,14 +97,14 @@ export function EnhancedFeedMeModal({ isOpen, onClose, onUploadComplete }: Enhan
 
   // File validation
   const validateFile = useCallback((file: File): string | null => {
-    const allowedTypes = ['text/plain', 'text/html', 'application/html', 'text/csv', 'application/pdf']
+    const allowedTypes = ['text/plain', 'text/html', 'application/html', 'text/csv', 'application/pdf', 'application/x-pdf']
     const allowedExtensions = ['.txt', '.log', '.html', '.htm', '.csv', '.pdf']
     
     const hasValidType = file.type === '' || allowedTypes.includes(file.type) || file.type.startsWith('text/')
     const hasValidExtension = allowedExtensions.some(ext => file.name.toLowerCase().endsWith(ext))
     
     if (!hasValidType && !hasValidExtension) {
-      return 'Please upload a text, HTML, or PDF file (.txt, .log, .html, .htm, .csv, .pdf)'
+      return 'Invalid file type. We support text files (.txt, .log), HTML files (.html, .htm), CSV files (.csv), and PDF documents (.pdf). Please ensure your file has one of these extensions.'
     }
 
     // Different size limits for different file types
@@ -592,7 +592,7 @@ export function EnhancedFeedMeModal({ isOpen, onClose, onUploadComplete }: Enhan
                     {isDragActive ? 'Drop files here...' : 'Drag and drop files here, or click to select'}
                   </p>
                   <p className="text-xs text-muted-foreground">
-                    Supports multiple .txt, .log, .html, .htm, .csv files up to 10MB each
+                    Supports multiple .txt, .log, .html, .htm, .csv, and .pdf files (up to 10MB for text files, 20MB for PDFs)
                   </p>
                 </div>
               </div>
@@ -825,7 +825,7 @@ export function EnhancedFeedMeModal({ isOpen, onClose, onUploadComplete }: Enhan
                         {isDragActive ? 'Drop the file here...' : 'Drag and drop a file here, or click to select'}
                       </p>
                       <p className="text-xs text-muted-foreground">
-                        Supports .txt, .log, .html, .htm files up to 10MB
+                        Supports .txt, .log, .html, .htm, .csv, and .pdf files (up to 10MB for text files, 20MB for PDFs)
                       </p>
                     </>
                   )}

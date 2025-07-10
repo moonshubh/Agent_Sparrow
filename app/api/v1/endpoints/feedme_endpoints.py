@@ -331,8 +331,9 @@ async def upload_transcript(
             
             # Handle PDF files differently
             if is_pdf_file:
-                # For PDF files, store raw bytes and mark for special processing
-                final_content = content_bytes.hex()  # Store as hex string
+                # For PDF files, store as base64 for more efficient storage
+                import base64
+                final_content = base64.b64encode(content_bytes).decode('utf-8')
                 mime_type = "application/pdf"
                 file_format = "pdf"
             else:

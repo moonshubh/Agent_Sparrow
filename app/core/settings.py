@@ -6,7 +6,7 @@ from typing import Optional
 
 from dotenv import load_dotenv
 from pydantic_settings import BaseSettings
-from pydantic import Field
+from pydantic import Field, field_validator
 
 # Load environment variables from project root .env if present
 # Calculate the path safely with depth validation
@@ -138,6 +138,21 @@ class Settings(BaseSettings):
     jwt_secret: str = Field(default="change-this-in-production", alias="JWT_SECRET")
     jwt_algorithm: str = Field(default="HS256", alias="JWT_ALGORITHM")
     jwt_token_expire_minutes: int = Field(default=1440, alias="JWT_TOKEN_EXPIRE_MINUTES")  # 24 hours default
+
+    @field_validator('feedme_max_pdf_size_mb')
+    @classmethod
+    def validate_feedme_max_pdf_size_mb(cls, v: int) -> int:
+        """Validate that PDF size limit is within acceptable bounds"""
+        MIN_PDF_SIZE_MB = 1
+        MAX_PDF_SIZE_MB = 100  # Maximum 100MB for server capabilities
+        
+        if v < MIN_PDF_SIZE_MB:
+            raise ValueError(f"feedme_max_pdf_size_mb must be at least {MIN_PDF_SIZE_MB} MB")
+        
+        if v > MAX_PDF_SIZE_MB:
+            raise ValueError(f"feedme_max_pdf_size_mb must not exceed {MAX_PDF_SIZE_MB} MB for server capabilities")
+        
+        return v
 
     class Config:
         case_sensitive = False

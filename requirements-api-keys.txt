@@ -1,0 +1,5 @@
+# Additional dependencies for API key management feature
+cryptography>=41.0.0  # For AES-256 encryption of API keys
+python-jose[cryptography]>=3.3.0  # For JWT token handling (if not already installed)
+psycopg2-binary>=2.9.0  # For PostgreSQL database access (if not already installed)
+sqlalchemy>=2.0.0  # For ORM functionality (if not already installed)
