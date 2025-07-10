@@ -56,6 +56,7 @@ class IssueType(str, Enum):
     EMAIL_SENDING = "email sending"  # Added: AI-generated value
     TICKET_MANAGEMENT = "ticket management"  # Added: AI-generated value
     GENERAL = "general"  # Added: AI-generated value
+    TECHNICAL_PDF = "technical-pdf"  # Added: AI-generated value for PDF extraction
     OTHER = "other"
 
 
@@ -74,6 +75,8 @@ class ResolutionType(str, Enum):
     TICKET_HOLD_SPACE = "ticket hold"  # Added: AI-generated value with space
     CLARIFICATION = "clarification"  # Added: AI-generated value
     RESOLVED = "resolved"  # Added: AI-generated value
+    PENDING = "pending"  # Added: AI-generated value for PDF extraction
+    INFORMATION_PROVIDED = "information_provided"  # Added: AI-generated value for PDF extraction
     OTHER = "other"
 
 
@@ -106,6 +109,9 @@ class FeedMeExampleBase(BaseModel):
 class ConversationCreate(FeedMeConversationBase):
     """Model for creating new conversations"""
     raw_transcript: str = Field(..., min_length=1, description="Full transcript content")
+    mime_type: Optional[str] = Field(None, description="MIME type of the uploaded file")
+    pages: Optional[int] = Field(None, description="Number of pages in PDF documents")
+    pdf_metadata: Optional[Dict[str, Any]] = Field(None, description="PDF metadata (author, creation date, etc.)")
 
 
 class ExampleCreate(FeedMeExampleBase):
@@ -316,6 +322,11 @@ class FeedMeConversation(FeedMeConversationBase):
     # Transcript content
     raw_transcript: str = Field(..., description="Raw transcript content")
     
+    # File format and metadata
+    mime_type: Optional[str] = Field(None, description="MIME type of the uploaded file")
+    pages: Optional[int] = Field(None, description="Number of pages in PDF documents")
+    pdf_metadata: Optional[Dict[str, Any]] = Field(None, description="PDF metadata (author, creation date, etc.)")
+    
     # Processing status
     processing_status: ProcessingStatus = Field(default=ProcessingStatus.PENDING, description="Processing status")
     processing_started_at: Optional[datetime] = Field(None, description="Timestamp when processing started")
@@ -361,6 +372,10 @@ class FeedMeExample(FeedMeExampleBase):
     uuid: UUID = Field(..., description="Globally unique identifier for the example")
     conversation_id: int = Field(..., description="ID of the parent conversation")
     
+    # Source information
+    source_page: Optional[int] = Field(None, description="Page number where this Q&A was extracted from (for PDFs)")
+    source_format: Optional[str] = Field(None, description="Format of source document (pdf, html, text)")
+    
     # Review and approval
     review_status: ReviewStatus = Field(default=ReviewStatus.PENDING, description="Review status")
     reviewed_by: Optional[str] = Field(None, description="User who reviewed the example")
@@ -372,6 +387,21 @@ class FeedMeExample(FeedMeExampleBase):
     
     # AI-generated fields
     generated_by_model: Optional[str] = Field(None, description="Model that generated the example")
+    
+    # Additional database fields for PDF processing compatibility
+    updated_by: Optional[str] = Field(None, description="User who last updated the example")
+    retrieval_weight: Optional[int] = Field(None, description="Weight for retrieval ranking")
+    usage_count: Optional[int] = Field(None, description="Number of times example was used")
+    positive_feedback: Optional[int] = Field(None, description="Positive feedback count")
+    negative_feedback: Optional[int] = Field(None, description="Negative feedback count")
+    last_used_at: Optional[datetime] = Field(None, description="Last time example was used")
+    source_position: Optional[str] = Field(None, description="Position in source document")
+    extraction_method: Optional[str] = Field(None, description="Method used for extraction")
+    extraction_confidence: Optional[float] = Field(None, description="Confidence score for extraction")
+    supabase_sync_status: Optional[str] = Field(None, description="Supabase synchronization status")
+    supabase_sync_at: Optional[datetime] = Field(None, description="Last sync timestamp")
+    supabase_example_id: Optional[str] = Field(None, description="Supabase example ID")
+    supabase_sync_error: Optional[str] = Field(None, description="Supabase sync error message")
     
     created_at: datetime = Field(..., description="Creation timestamp")
     updated_at: datetime = Field(..., description="Last update timestamp")

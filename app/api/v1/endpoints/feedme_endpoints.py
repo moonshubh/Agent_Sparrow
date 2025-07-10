@@ -98,6 +98,9 @@ class SupabaseApprovalRequest(BaseModel):
 
 # Import database utilities
 from app.db.embedding_utils import get_embedding_model
+
+# Constants
+UNASSIGNED_FOLDER_ID = 0
 from app.db.supabase_client import get_supabase_client
 # from .feedme_db_helper import get_db_connection  # Removed - using Supabase exclusively
 
@@ -178,7 +181,10 @@ async def create_conversation_in_db(conversation_data: ConversationCreate) -> Fe
             original_filename=conversation_data.original_filename,
             raw_transcript=conversation_data.raw_transcript,
             metadata=conversation_data.metadata,
-            uploaded_by=conversation_data.uploaded_by
+            uploaded_by=conversation_data.uploaded_by,
+            mime_type=conversation_data.mime_type,
+            pages=conversation_data.pages,
+            pdf_metadata=conversation_data.pdf_metadata
         )
         return FeedMeConversation(**result)
     except Exception as e:
@@ -278,8 +284,8 @@ async def upload_transcript(
             )
         
         # Validate file type and content type
-        allowed_content_types = ["text/plain", "text/html", "application/html", "text/csv", "application/octet-stream"]
-        allowed_extensions = [".txt", ".log", ".html", ".htm", ".csv"]
+        allowed_content_types = ["text/plain", "text/html", "application/html", "text/csv", "application/octet-stream", "application/pdf"]
+        allowed_extensions = [".txt", ".log", ".html", ".htm", ".csv", ".pdf"]
         
         # Check content type if provided
         if transcript_file.content_type and transcript_file.content_type not in allowed_content_types:
@@ -296,10 +302,20 @@ async def upload_transcript(
             is_html_file = transcript_file.filename.lower().endswith(('.html', '.htm')) or \
                           (transcript_file.content_type and transcript_file.content_type in ["text/html", "application/html"])
             
+            # Check if PDF file and PDF support is enabled
+            is_pdf_file = transcript_file.filename.lower().endswith('.pdf') or \
+                         (transcript_file.content_type and transcript_file.content_type == "application/pdf")
+            
             if is_html_file and not settings.feedme_html_enabled:
                 raise HTTPException(
                     status_code=400, 
                     detail="HTML file uploads are not enabled. Please contact your administrator to enable FEEDME_HTML_ENABLED."
+                )
+            
+            if is_pdf_file and not settings.feedme_pdf_enabled:
+                raise HTTPException(
+                    status_code=400, 
+                    detail="PDF file uploads are not enabled. Please contact your administrator to enable FEEDME_PDF_ENABLED."
                 )
             
             if file_extension and file_extension not in allowed_extensions:
@@ -311,14 +327,33 @@ async def upload_transcript(
         # Read file content
         try:
             content_bytes = await transcript_file.read()
-            final_content = content_bytes.decode('utf-8')
             original_filename = transcript_file.filename
+            
+            # Handle PDF files differently
+            if is_pdf_file:
+                # For PDF files, store as base64 for more efficient storage
+                import base64
+                final_content = base64.b64encode(content_bytes).decode('utf-8')
+                mime_type = "application/pdf"
+                file_format = "pdf"
+            else:
+                # For text files, decode as UTF-8
+                final_content = content_bytes.decode('utf-8')
+                mime_type = transcript_file.content_type or "text/plain"
+                file_format = "text"
+                
         except UnicodeDecodeError:
-            raise HTTPException(status_code=400, detail="File must be valid UTF-8 text")
+            if is_pdf_file:
+                raise HTTPException(status_code=400, detail="Invalid PDF file format")
+            else:
+                raise HTTPException(status_code=400, detail="File must be valid UTF-8 text")
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"Error reading file: {str(e)}")
     else:
         final_content = transcript_content
+        mime_type = "text/plain"
+        file_format = "text"
+        is_pdf_file = False
     
     # Validate content length
     if len(final_content.strip()) < 10:
@@ -330,7 +365,10 @@ async def upload_transcript(
         original_filename=original_filename,
         raw_transcript=final_content,
         uploaded_by=uploaded_by,
-        metadata={"auto_process": auto_process}
+        metadata={"auto_process": auto_process, "file_format": file_format},
+        mime_type=mime_type,
+        pages=None,  # Will be populated during PDF processing
+        pdf_metadata=None  # Will be populated during PDF processing
     )
     
     try:
@@ -376,7 +414,8 @@ async def list_conversations(
     page_size: int = Query(20, ge=1, le=100, description="Number of items per page"),
     status: Optional[ProcessingStatus] = Query(None, description="Filter by processing status"),
     uploaded_by: Optional[str] = Query(None, description="Filter by uploader"),
-    folder_id: Optional[int] = Query(None, description="Filter by folder ID (null for unassigned)")
+    folder_id: Optional[int] = Query(UNASSIGNED_FOLDER_ID, description="Filter by folder ID (0 for unassigned, null for all)"),
+    include_all: bool = Query(False, description="Include all conversations regardless of folder")
 ):
     """
     Retrieve a paginated list of conversations with optional filtering by processing status, uploader, and folder.
@@ -402,12 +441,15 @@ async def list_conversations(
         # Use Supabase client for pagination and filtering
         status_value = status.value if status else None
         
+        # Handle include_all flag - if True, set folder_id to None to show all conversations
+        effective_folder_id = None if include_all else folder_id
+        
         result = await supabase_client.get_conversations_with_pagination(
             page=page,
             page_size=page_size,
             status=status_value,
             uploaded_by=uploaded_by,
-            folder_id=folder_id
+            folder_id=effective_folder_id
         )
         
         # Convert to FeedMeConversation objects
@@ -2425,7 +2467,7 @@ async def assign_conversations_to_folder(assign_request: AssignFolderRequest):
             return {
                 "folder_id": assign_request.folder_id,
                 "folder_name": folder_name,
-                "conversation_ids": assign_request.conversation_ids,
+                "conversation_ids": existing_ids,  # Return the actual updated IDs
                 "updated_count": updated_count,
                 "action": action,
                 "message": f"Successfully {action} {updated_count} conversations"

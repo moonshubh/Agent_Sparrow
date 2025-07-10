@@ -1,7 +1,7 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from typing import AsyncIterable, List
+from typing import AsyncIterable, List, Annotated
 from datetime import datetime
 
 from app.agents_v2.primary_agent.agent import run_primary_agent
@@ -15,6 +15,8 @@ from app.agents_v2.log_analysis_agent.agent import run_log_analysis_agent
 from app.agents_v2.research_agent.research_agent import get_research_graph, ResearchState
 from app.agents_v2.orchestration.graph import app as agent_graph
 from app.agents_v2.orchestration.state import GraphState
+from app.core.security import get_current_user, TokenPayload
+from app.core.agent_config import user_agent_context, get_user_agent_config
 
 router = APIRouter()
 
@@ -123,21 +125,36 @@ class ChatRequest(BaseModel):
     message: str
     # trace_id: str | None = None # Optional, if you plan to propagate trace IDs
 
-async def primary_agent_stream_generator(query: str) -> AsyncIterable[str]:
-    """Wraps the primary agent's streaming output."""
-    initial_state = PrimaryAgentState(
-        messages=[HumanMessage(content=query)]
-    )
-    
+async def primary_agent_stream_generator(query: str, user_id: str) -> AsyncIterable[str]:
+    """Wraps the primary agent's streaming output with user-specific API configuration."""
     try:
-        async for chunk in run_primary_agent(initial_state):
-            json_payload = ""
-            if hasattr(chunk, 'content') and chunk.content is not None:
-                role = getattr(chunk, 'role', 'assistant') or 'assistant'
-                json_payload = json.dumps({"role": role, "content": chunk.content}, ensure_ascii=False)
+        # Get user API configuration
+        user_config = await get_user_agent_config(user_id)
+        
+        # Check if user has required API keys
+        if not user_config.get("gemini_api_key"):
+            error_payload = json.dumps({
+                "role": "error", 
+                "content": "🔑 **API Key Required**: To use the AI assistant, please add your Google Gemini API key in Settings.\n\n**How to configure:**\n1. Click the ⚙️ Settings button in the top-right corner\n2. Navigate to the 'API Keys' section\n3. Add your Google Gemini API key (starts with 'AIza')\n4. Get your free API key at: https://makersuite.google.com/app/apikey"
+            }, ensure_ascii=False)
+            yield f"data: {error_payload}\n\n"
+            return
+        
+        # Use user-specific agent context
+        async with user_agent_context(user_id) as config:
+            initial_state = PrimaryAgentState(
+                messages=[HumanMessage(content=query)]
+            )
             
-            if json_payload:
-                yield f"data: {json_payload}\n\n"
+            async for chunk in run_primary_agent(initial_state):
+                json_payload = ""
+                if hasattr(chunk, 'content') and chunk.content is not None:
+                    role = getattr(chunk, 'role', 'assistant') or 'assistant'
+                    json_payload = json.dumps({"role": role, "content": chunk.content}, ensure_ascii=False)
+                
+                if json_payload:
+                    yield f"data: {json_payload}\n\n"
+                    
     except Exception as e:
         # Use logger for consistency if available, otherwise print
         # logger.error(f"Error in primary_agent_stream_generator calling run_primary_agent: {e}", exc_info=True)
@@ -145,20 +162,71 @@ async def primary_agent_stream_generator(query: str) -> AsyncIterable[str]:
         error_payload = json.dumps({"role": "error", "content": f"An error occurred in the agent: {str(e)}"}, ensure_ascii=False)
         yield f"data: {error_payload}\n\n"
 
+# Legacy v1 endpoint - DEPRECATED but maintained for backward compatibility
 @router.post("/agent/chat/stream")
-async def chat_stream(request: ChatRequest):
-    """Endpoint for streaming chat with the Primary Support Agent."""
+async def chat_stream_v1_legacy(
+    request: ChatRequest
+):
+    """
+    DEPRECATED: Legacy streaming chat endpoint without authentication.
+    
+    This endpoint is maintained for backward compatibility but is deprecated.
+    New applications should use /v2/agent/chat/stream with proper authentication.
+    
+    Deprecation Notice:
+    - This endpoint will be removed in v3.0
+    - Please migrate to the authenticated v2 endpoint
+    - See migration guide: /docs/api-migration
+    """
+    if not request.message:
+        raise HTTPException(status_code=400, detail="Message cannot be empty")
+    
+    # Use default configuration for unauthenticated requests
+    return StreamingResponse(
+        primary_agent_stream_generator(request.message, user_id="anonymous"),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-API-Version": "1.0",
+            "X-Deprecation-Warning": "This endpoint is deprecated. Use /v2/agent/chat/stream"
+        }
+    )
+
+# v2 endpoint with authentication - RECOMMENDED
+@router.post("/v2/agent/chat/stream")
+async def chat_stream_v2_authenticated(
+    request: ChatRequest,
+    current_user: Annotated[TokenPayload, Depends(get_current_user)]
+):
+    """
+    Authenticated streaming chat endpoint with the Primary Support Agent.
+    
+    This endpoint requires authentication and provides:
+    - User-specific API key configuration
+    - Personalized agent behavior
+    - Enhanced security and rate limiting
+    - Access to premium features
+    """
     if not request.message:
         raise HTTPException(status_code=400, detail="Message cannot be empty")
     
     return StreamingResponse(
-        primary_agent_stream_generator(request.message),
-        media_type="text/event-stream"
+        primary_agent_stream_generator(request.message, current_user.sub),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-API-Version": "2.0"
+        }
     )
 
 # --- Log Analysis Agent Endpoint ---
 @router.post("/agent/logs", response_model=LogAnalysisV2Response)
-async def analyze_logs(request: LogAnalysisRequest):
+async def analyze_logs(
+    request: LogAnalysisRequest,
+    current_user: Annotated[TokenPayload, Depends(get_current_user)]
+):
     """Endpoint for analyzing logs with the Log Analysis Agent."""
     # Determine which field contains the log content (new `content` or legacy `log_text`)
     log_body = request.content or request.log_text
@@ -166,20 +234,30 @@ async def analyze_logs(request: LogAnalysisRequest):
         raise HTTPException(status_code=400, detail="Log text cannot be empty")
 
     try:
-        initial_state = LogAnalysisAgentState(
-            messages=[HumanMessage(content=log_body)],
-            raw_log_content=log_body,
-            # trace_id is handled within run_log_analysis_agent if passed as kwarg, but not part of state dict
-        )
+        # Check if user has required API keys
+        user_config = await get_user_agent_config(current_user.sub)
+        if not user_config.get("gemini_api_key"):
+            raise HTTPException(
+                status_code=400, 
+                detail="API Key Required: To use log analysis, please add your Google Gemini API key in Settings. Steps: (1) Click Settings ⚙️ in the top-right (2) Go to 'API Keys' section (3) Add your Gemini API key (starts with 'AIza') (4) Get a free key at: https://makersuite.google.com/app/apikey"
+            )
+        
+        # Use user-specific agent context
+        async with user_agent_context(current_user.sub) as config:
+            initial_state = LogAnalysisAgentState(
+                messages=[HumanMessage(content=log_body)],
+                raw_log_content=log_body,
+                # trace_id is handled within run_log_analysis_agent if passed as kwarg, but not part of state dict
+            )
 
-        # Pass trace_id as a keyword argument if the agent function supports it for logging/tracing
-        # The run_log_analysis_agent in agent.py is designed to pick up trace_id from the state dict if present,
-        # or generate one. For explicit passing for the endpoint, let's ensure it's part of the initial call.
-        # However, the agent.py run_log_analysis_agent expects trace_id in the state dictionary.
-        if request.trace_id:
-            initial_state['trace_id'] = request.trace_id
+            # Pass trace_id as a keyword argument if the agent function supports it for logging/tracing
+            # The run_log_analysis_agent in agent.py is designed to pick up trace_id from the state dict if present,
+            # or generate one. For explicit passing for the endpoint, let's ensure it's part of the initial call.
+            # However, the agent.py run_log_analysis_agent expects trace_id in the state dictionary.
+            if request.trace_id:
+                initial_state['trace_id'] = request.trace_id
 
-        raw_agent_output = await run_log_analysis_agent(initial_state)
+            raw_agent_output = await run_log_analysis_agent(initial_state)
 
         final_report: ComprehensiveLogAnalysisOutput = raw_agent_output.get('final_report')
         returned_trace_id = raw_agent_output.get('trace_id')
@@ -228,42 +306,55 @@ async def analyze_logs(request: LogAnalysisRequest):
 
 # --- Research Agent Endpoint ---
 @router.post("/agent/research", response_model=ResearchResponse)
-async def research_query(request: ResearchRequest):
+async def research_query(
+    request: ResearchRequest,
+    current_user: Annotated[TokenPayload, Depends(get_current_user)]
+):
     """Endpoint for performing research with the Research Agent."""
     if not request.query:
         raise HTTPException(status_code=400, detail="Query cannot be empty")
 
     try:
-        research_graph = get_research_graph()
-        initial_graph_state: ResearchState = {
-            "query": request.query,
-            "urls": [],
-            "documents": [],
-            "answer": None,
-            "citations": None,
-            # top_k is not directly used by the graph state but influences search_node's max_results implicitly
-            # The Tavily search tool used by search_node has a max_results parameter.
-            # If request.top_k is intended to control this, it needs to be passed to search_node or the tool config.
-            # For now, the graph uses a default of 5 in search_node.
-        }
+        # Check if user has API key for research (Tavily is optional, but needed for research)
+        user_config = await get_user_agent_config(current_user.sub)
+        if not user_config.get("tavily_api_key"):
+            raise HTTPException(
+                status_code=400, 
+                detail="Please configure your Tavily API key in Settings to use web research functionality."
+            )
+        
+        # Use user-specific agent context
+        async with user_agent_context(current_user.sub) as config:
+            research_graph = get_research_graph()
+            initial_graph_state: ResearchState = {
+                "query": request.query,
+                "urls": [],
+                "documents": [],
+                "answer": None,
+                "citations": None,
+                # top_k is not directly used by the graph state but influences search_node's max_results implicitly
+                # The Tavily search tool used by search_node has a max_results parameter.
+                # If request.top_k is intended to control this, it needs to be passed to search_node or the tool config.
+                # For now, the graph uses a default of 5 in search_node.
+            }
 
-        # LangGraph's invoke is synchronous, ainvoke for async
-        # Assuming the graph nodes (search, scrape, synthesize) are async, we should use ainvoke.
-        # However, the current research_agent.py uses synchronous .invoke() in its CLI test.
-        # For an async FastAPI endpoint, we should ideally use graph.ainvoke if graph nodes support it.
-        # If nodes are synchronous, graph.invoke() would block. Let's assume ainvoke is preferred.
-        # For simplicity and matching the agent's own test harness, let's use invoke for now,
-        # but acknowledge this might need to change to ainvoke and run in a threadpool for a truly async endpoint.
-        # For now, we will call it directly. If it blocks, it needs to be run in a threadpool.
-        # result_state = await asyncio.to_thread(research_graph.invoke, initial_graph_state)
-        # The research_graph nodes (search_node, scrape_node, synthesize_node) are synchronous.
-        # To avoid blocking the event loop, we should run the graph.invoke in a thread pool.
-        # However, for now, let's make a direct call and note this as a point for future improvement.
+            # LangGraph's invoke is synchronous, ainvoke for async
+            # Assuming the graph nodes (search, scrape, synthesize) are async, we should use ainvoke.
+            # However, the current research_agent.py uses synchronous .invoke() in its CLI test.
+            # For an async FastAPI endpoint, we should ideally use graph.ainvoke if graph nodes support it.
+            # If nodes are synchronous, graph.invoke() would block. Let's assume ainvoke is preferred.
+            # For simplicity and matching the agent's own test harness, let's use invoke for now,
+            # but acknowledge this might need to change to ainvoke and run in a threadpool for a truly async endpoint.
+            # For now, we will call it directly. If it blocks, it needs to be run in a threadpool.
+            # result_state = await asyncio.to_thread(research_graph.invoke, initial_graph_state)
+            # The research_graph nodes (search_node, scrape_node, synthesize_node) are synchronous.
+            # To avoid blocking the event loop, we should run the graph.invoke in a thread pool.
+            # However, for now, let's make a direct call and note this as a point for future improvement.
 
-        import asyncio # Make sure to import asyncio if not already
-        # To run synchronous graph.invoke in an async endpoint without blocking:
-        loop = asyncio.get_event_loop()
-        result_state = await loop.run_in_executor(None, research_graph.invoke, initial_graph_state)
+            import asyncio # Make sure to import asyncio if not already
+            # To run synchronous graph.invoke in an async endpoint without blocking:
+            loop = asyncio.get_event_loop()
+            result_state = await loop.run_in_executor(None, research_graph.invoke, initial_graph_state)
 
         answer = result_state.get("answer", "No answer provided.")
         citations = result_state.get("citations", [])

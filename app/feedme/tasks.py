@@ -29,6 +29,11 @@ from app.core.settings import settings
 from app.feedme.ai_extraction_engine import GemmaExtractionEngine
 from app.feedme.parsers.enhanced_html_parser import EnhancedHTMLParser
 
+
+class MissingAPIKeyError(Exception):
+    """Raised when a required API key is missing"""
+    pass
+
 logger = logging.getLogger(__name__)
 
 
@@ -83,8 +88,38 @@ def process_transcript(self, conversation_id: int, user_id: Optional[str] = None
         
         # Phase 1: Use new AI extraction engine with gemma-3-27b-it
         try:
-            # Check if content is HTML and use appropriate extraction strategy
-            if raw_transcript.strip().startswith('<') or 'html' in conversation_data.get('original_filename', '').lower():
+            # Check content type and use appropriate extraction strategy
+            metadata = conversation_data.get('metadata', {})
+            file_format = metadata.get('file_format', 'text')
+            mime_type = conversation_data.get('mime_type', 'text/plain')
+            
+            if file_format == 'pdf' or mime_type == 'application/pdf':
+                logger.info("Detected PDF content, using AI extraction engine with PDF parser")
+                
+                # Use new AI extraction engine for PDF content
+                if settings.gemini_api_key:
+                    # Use Gemma-3-27b-it for intelligent extraction
+                    engine = GemmaExtractionEngine(api_key=settings.gemini_api_key)
+                    
+                    # Prepare PDF metadata
+                    pdf_metadata = metadata.copy()
+                    pdf_metadata.update({
+                        'conversation_id': conversation_id,
+                        'original_filename': conversation_data.get('original_filename', ''),
+                        'file_format': 'pdf',
+                        'mime_type': mime_type,
+                        'pages': conversation_data.get('pages'),
+                        'pdf_metadata': conversation_data.get('pdf_metadata', {})
+                    })
+                    
+                    examples = engine.extract_conversations_sync(raw_transcript, pdf_metadata)
+                    logger.info(f"AI extraction engine extracted {len(examples)} Q&A pairs from PDF with gemma-3-27b-it")
+                else:
+                    error_msg = "No Gemini API key available for PDF extraction"
+                    logger.error(error_msg)
+                    raise MissingAPIKeyError(error_msg)
+                    
+            elif raw_transcript.strip().startswith('<') or 'html' in conversation_data.get('original_filename', '').lower():
                 logger.info("Detected HTML content, using AI extraction engine with enhanced HTML parser")
                 
                 # Use new AI extraction engine for HTML content

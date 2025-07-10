@@ -321,7 +321,13 @@ export class FeedMeApiClient {
     }
 
     if (folderId !== undefined) {
-      params.append('folder_id', folderId?.toString() || '0')
+      if (folderId === null) {
+        // Don't send folder_id parameter to get all conversations
+      } else if (folderId === 0) {
+        params.append('folder_id', '0') // Unassigned conversations
+      } else {
+        params.append('folder_id', folderId.toString())
+      }
     }
 
     const response = await fetchWithRetry(`${this.baseUrl}/conversations?${params.toString()}`)

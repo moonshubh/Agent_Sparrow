@@ -1,0 +1,43 @@
+{
+  "common_english_words": [
+    "the", "be", "to", "of", "and", "a", "in", "that", "have", "i",
+    "it", "for", "not", "on", "with", "he", "as", "you", "do", "at",
+    "this", "but", "his", "by", "from", "they", "we", "say", "her", "she",
+    "or", "an", "will", "my", "one", "all", "would", "there", "their", "what",
+    "so", "up", "out", "if", "about", "who", "get", "which", "go", "me",
+    "when", "make", "can", "like", "time", "no", "just", "him", "know", "take",
+    "people", "into", "year", "your", "good", "some", "could", "them", "see", "other",
+    "than", "then", "now", "look", "only", "come", "its", "over", "think", "also",
+    "back", "after", "use", "two", "how", "our", "work", "first", "well", "way",
+    "even", "new", "want", "because", "any", "these", "give", "day", "most", "us",
+    "is", "was", "are", "been", "has", "had", "were", "said", "did", "getting",
+    "made", "find", "where", "much", "too", "very", "still", "being", "going", "why",
+    "before", "never", "here", "more", "out", "start", "email", "help", "error",
+    "please", "thank", "hello", "sorry", "yes", "no", "account", "password", "login",
+    "problem", "issue", "support", "service", "system", "user", "data", "file",
+    "message", "information", "request", "response", "access", "connection", "network",
+    "server", "client", "settings", "configuration", "update", "version", "application",
+    "software", "program", "computer", "device", "phone", "mobile", "app", "website",
+    "page", "link", "click", "button", "form", "field", "text", "enter", "search",
+    "result", "option", "menu", "list", "item", "select", "choose", "save", "delete",
+    "change", "edit", "view", "show", "display", "open", "close", "exit", "cancel",
+    "confirm", "submit", "send", "receive", "download", "upload", "install", "remove"
+  ],
+  "technical_words": [
+    "api", "database", "server", "client", "endpoint", "authentication", "authorization",
+    "token", "session", "cookie", "cache", "log", "debug", "trace", "exception",
+    "timeout", "connection", "socket", "protocol", "https", "http", "ssl", "tls",
+    "certificate", "encryption", "security", "firewall", "proxy", "gateway",
+    "algorithm", "function", "method", "class", "object", "variable", "parameter",
+    "argument", "return", "response", "request", "header", "body", "payload",
+    "json", "xml", "html", "css", "javascript", "python", "java", "sql",
+    "mysql", "postgresql", "mongodb", "redis", "docker", "kubernetes", "aws",
+    "cloud", "backup", "restore", "migrate", "deploy", "build", "test", "prod"
+  ],
+  "email_words": [
+    "inbox", "outbox", "draft", "sent", "received", "compose", "reply", "forward",
+    "attachment", "subject", "sender", "recipient", "cc", "bcc", "thread",
+    "folder", "archive", "spam", "junk", "filter", "rule", "sync", "synchronize",
+    "mailbox", "email", "mail", "message", "notification", "alert", "reminder"
+  ]
+}

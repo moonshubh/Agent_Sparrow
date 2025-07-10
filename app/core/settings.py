@@ -6,7 +6,7 @@ from typing import Optional
 
 from dotenv import load_dotenv
 from pydantic_settings import BaseSettings
-from pydantic import Field
+from pydantic import Field, field_validator
 
 # Load environment variables from project root .env if present
 # Calculate the path safely with depth validation
@@ -39,8 +39,26 @@ class Settings(BaseSettings):
     feedme_max_file_size_mb: int = Field(default=10, alias="FEEDME_MAX_FILE_SIZE_MB")
     feedme_max_examples_per_conversation: int = Field(default=20, alias="FEEDME_MAX_EXAMPLES_PER_CONVERSATION")
     feedme_embedding_batch_size: int = Field(default=10, alias="FEEDME_EMBEDDING_BATCH_SIZE")
-    feedme_similarity_threshold: float = Field(default=0.7, alias="FEEDME_SIMILARITY_THRESHOLD")
     feedme_max_retrieval_results: int = Field(default=3, alias="FEEDME_MAX_RETRIEVAL_RESULTS")
+    
+    # FeedMe PDF Support Configuration
+    feedme_pdf_enabled: bool = Field(default=True, alias="FEEDME_PDF_ENABLED")
+    feedme_max_pdf_size_mb: int = Field(default=20, alias="FEEDME_MAX_PDF_SIZE_MB")
+    feedme_pdf_processing_timeout: int = Field(default=30, alias="FEEDME_PDF_PROCESSING_TIMEOUT")
+    feedme_pdf_concurrent_limit: int = Field(default=5, alias="FEEDME_PDF_CONCURRENT_LIMIT")
+    
+    # Enhanced PDF Processing Configuration
+    feedme_max_tokens_per_minute: int = Field(default=12000, alias="FEEDME_MAX_TOKENS_PER_MINUTE")
+    feedme_max_tokens_per_chunk: int = Field(default=8000, alias="FEEDME_MAX_TOKENS_PER_CHUNK")
+    feedme_chunk_overlap_tokens: int = Field(default=500, alias="FEEDME_CHUNK_OVERLAP_TOKENS")
+    
+    # OCR Processing Configuration
+    feedme_ocr_enabled: bool = Field(default=True, alias="FEEDME_OCR_ENABLED")
+    feedme_ocr_confidence_threshold: float = Field(default=0.7, alias="FEEDME_OCR_CONFIDENCE_THRESHOLD")
+    
+    # Quality Control Configuration
+    feedme_similarity_threshold: float = Field(default=0.7, alias="FEEDME_SIMILARITY_THRESHOLD")
+    feedme_confidence_threshold: float = Field(default=0.7, alias="FEEDME_CONFIDENCE_THRESHOLD")
     
     # Supabase Configuration
     supabase_url: Optional[str] = Field(default=None, alias="SUPABASE_URL")
@@ -120,6 +138,21 @@ class Settings(BaseSettings):
     jwt_secret: str = Field(default="change-this-in-production", alias="JWT_SECRET")
     jwt_algorithm: str = Field(default="HS256", alias="JWT_ALGORITHM")
     jwt_token_expire_minutes: int = Field(default=1440, alias="JWT_TOKEN_EXPIRE_MINUTES")  # 24 hours default
+
+    @field_validator('feedme_max_pdf_size_mb')
+    @classmethod
+    def validate_feedme_max_pdf_size_mb(cls, v: int) -> int:
+        """Validate that PDF size limit is within acceptable bounds"""
+        MIN_PDF_SIZE_MB = 1
+        MAX_PDF_SIZE_MB = 100  # Maximum 100MB for server capabilities
+        
+        if v < MIN_PDF_SIZE_MB:
+            raise ValueError(f"feedme_max_pdf_size_mb must be at least {MIN_PDF_SIZE_MB} MB")
+        
+        if v > MAX_PDF_SIZE_MB:
+            raise ValueError(f"feedme_max_pdf_size_mb must not exceed {MAX_PDF_SIZE_MB} MB for server capabilities")
+        
+        return v
 
     class Config:
         case_sensitive = False

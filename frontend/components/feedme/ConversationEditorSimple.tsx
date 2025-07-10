@@ -5,7 +5,7 @@
 
 'use client'
 
-import React, { useState, useEffect, useCallback } from 'react'
+import React, { useState, useEffect, useCallback, useRef } from 'react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
@@ -32,6 +32,10 @@ export function ConversationEditor({ conversationId, isOpen, onClose }: Conversa
   const uiActions = useUIActions()
   const conversationActions = useConversationsActions()
 
+  // Stable reference to prevent unnecessary re-renders
+  const loadConversationRef = useRef<number | null>(null)
+  const abortControllerRef = useRef<AbortController | null>(null)
+
   const loadConversation = useCallback(async () => {
     // Validate conversation ID before attempting to load
     if (!conversationId || conversationId <= 0) {
@@ -45,34 +49,125 @@ export function ConversationEditor({ conversationId, isOpen, onClose }: Conversa
       return
     }
 
+    // Prevent multiple simultaneous loads for the same conversation
+    if (loadConversationRef.current === conversationId) {
+      return
+    }
+
+    // Cancel previous request if exists
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort()
+    }
+
+    // Create new abort controller
+    const abortController = new AbortController()
+    abortControllerRef.current = abortController
+    loadConversationRef.current = conversationId
+
     try {
       setLoading(true)
-      const conversation = await feedMeApi.getConversation(conversationId)
+      
+      // Use the store's getConversation method which has proper error handling
+      const conversation = await conversationActions.getConversation(conversationId, true)
+      
+      // Check if request was aborted
+      if (abortController.signal.aborted) {
+        return
+      }
+      
+      if (!conversation) {
+        // Conversation doesn't exist, clean up and close
+        console.warn(`Conversation ${conversationId} not found`)
+        
+        // Remove the stale conversation from the store
+        conversationActions.removeConversation(conversationId)
+        
+        // Show user-friendly message
+        uiActions.showToast({
+          type: 'warning',
+          title: 'Conversation Not Found',
+          message: 'This conversation has been deleted or moved.'
+        })
+        
+        // Close the editor immediately
+        onClose()
+        
+        return
+      }
+      
+      // Check if request was aborted before setting state
+      if (abortController.signal.aborted) {
+        return
+      }
+      
+      // Set the conversation data
       setTitle(conversation.title || '')
-      setContent(conversation.metadata?.content || conversation.raw_transcript || '')
+      setContent(conversation.metadata?.content || (conversation as any).raw_transcript || '')
+      
     } catch (error) {
+      // Check if request was aborted
+      if (abortController.signal.aborted) {
+        return
+      }
+      
+      // Handle different error types
+      const isNotFound = error instanceof Error && 
+        (error.message.includes('not found') || error.message.includes('404'))
+      
+      if (isNotFound) {
+        console.warn(`Conversation ${conversationId} not found`)
+        
+        // Remove the stale conversation from the store
+        conversationActions.removeConversation(conversationId)
+        
+        // Show user-friendly message
+        uiActions.showToast({
+          type: 'warning',
+          title: 'Conversation Not Found',
+          message: 'This conversation has been deleted or moved.'
+        })
+        
+        // Close the editor immediately
+        onClose()
+        
+        return
+      }
+      
+      // Handle other errors
       console.error('Failed to load conversation:', error)
+      
       uiActions.showToast({
         type: 'error',
         title: 'Load Failed',
-        message: error instanceof Error && error.message.includes('not found') 
-          ? 'Conversation not found. It may have been deleted or moved.'
-          : 'Failed to load conversation details.'
+        message: 'Failed to load conversation details. Please try again.'
       })
-      // Close the editor if conversation doesn't exist
-      if (error instanceof Error && error.message.includes('not found')) {
-        onClose()
-      }
+      
+      // Don't close on non-404 errors, let user retry
+      
     } finally {
-      setLoading(false)
+      if (!abortController.signal.aborted) {
+        setLoading(false)
+        loadConversationRef.current = null
+        abortControllerRef.current = null
+      }
     }
-  }, [conversationId, uiActions, onClose])
+  }, [conversationId, uiActions, onClose, conversationActions])
 
   useEffect(() => {
-    if (isOpen && conversationId && conversationId > 0) {
+    if (isOpen && conversationId && conversationId > 0 && !loading && loadConversationRef.current !== conversationId) {
       loadConversation()
     }
-  }, [conversationId, isOpen, loadConversation])
+  }, [conversationId, isOpen, loading, loadConversation])
+
+  // Cleanup on unmount or conversation change
+  useEffect(() => {
+    return () => {
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort()
+      }
+      loadConversationRef.current = null
+    }
+  }, [conversationId])
 
   // Handle escape key to close
   useEffect(() => {

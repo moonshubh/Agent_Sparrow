@@ -4,6 +4,7 @@ import React from 'react'
 import { Avatar, AvatarImage, AvatarFallback } from '@/components/ui/avatar'
 import { LightDarkToggle } from '@/components/ui/LightDarkToggle'
 import { FeedMeButton } from '@/components/ui/FeedMeButton'
+import { SettingsButton } from '@/components/ui/SettingsButton'
 import { RateLimitDropdown } from '@/components/rate-limiting'
 
 export function Header() {
@@ -21,6 +22,7 @@ export function Header() {
           updateInterval={15000}
         />
         <FeedMeButton />
+        <SettingsButton />
         <LightDarkToggle />
       </div>
     </header>

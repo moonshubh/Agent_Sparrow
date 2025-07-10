@@ -198,7 +198,10 @@ class SupabaseClient:
         original_filename: Optional[str] = None,
         folder_id: Optional[int] = None,
         metadata: Optional[Dict] = None,
-        uploaded_by: Optional[str] = None
+        uploaded_by: Optional[str] = None,
+        mime_type: Optional[str] = None,
+        pages: Optional[int] = None,
+        pdf_metadata: Optional[Dict] = None
     ) -> Dict[str, Any]:
         """Create a new conversation"""
         try:
@@ -209,7 +212,10 @@ class SupabaseClient:
                 "folder_id": folder_id,
                 "metadata": metadata or {},
                 "uploaded_by": uploaded_by,
-                "processing_status": "pending"
+                "processing_status": "pending",
+                "mime_type": mime_type,
+                "pages": pages,
+                "pdf_metadata": pdf_metadata
             }
             
             response = self.client.table('feedme_conversations').insert(data).execute()
@@ -235,17 +241,24 @@ class SupabaseClient:
             Dict containing conversation data if found, None otherwise
         """
         try:
-            response = self.client.table('feedme_conversations')\
-                .select('*')\
-                .eq('id', conversation_id)\
+            # Use `maybe_single()` to explicitly request a single row. This returns
+            # `None` when no rows are found instead of an empty list, which makes it
+            # easier to distinguish between "not found" and other error cases.
+            response = (
+                self.client.table('feedme_conversations')
+                .select('*')
+                .eq('id', conversation_id)
+                .maybe_single()
                 .execute()
-            
-            if response.data and len(response.data) > 0:
+            )
+
+            if response.data:
                 logger.info(f"Retrieved conversation {conversation_id}")
-                return response.data[0]
-            else:
-                logger.warning(f"Conversation {conversation_id} not found")
-                return None
+                return response.data
+
+            # If we reach here, the conversation does not exist.
+            logger.warning("Conversation %s not found", conversation_id)
+            return None
                 
         except Exception as e:
             logger.error(f"Error retrieving conversation {conversation_id}: {e}")
@@ -417,13 +430,16 @@ class SupabaseClient:
     ) -> int:
         """Assign multiple conversations to a folder"""
         try:
+            # Handle special case for UNASSIGNED_FOLDER_ID (0) - set to NULL
+            effective_folder_id = None if folder_id == 0 else folder_id
+            
             response = self.client.table('feedme_conversations')\
-                .update({"folder_id": folder_id})\
+                .update({"folder_id": effective_folder_id})\
                 .in_('id', conversation_ids)\
                 .execute()
             
             count = len(response.data) if response.data else 0
-            logger.info(f"Assigned {count} conversations to folder {folder_id}")
+            logger.info(f"Assigned {count} conversations to folder {effective_folder_id} (input: {folder_id})")
             return count
             
         except Exception as e:
