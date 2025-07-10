@@ -24,6 +24,9 @@ supabase==2.0.0 # For Supabase integration
 qdrant-client
 PyJWT==2.8.0
 python-jose[cryptography]==3.3.0
+cryptography>=41.0.0  # For AES-256 encryption of API keys
+psycopg2-binary>=2.9.0  # For PostgreSQL database access
+sqlalchemy>=2.0.0  # For ORM functionality
 
 # External Tools
 tavily-python==0.3.0
