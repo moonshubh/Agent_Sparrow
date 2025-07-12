@@ -206,7 +206,7 @@ export default function RateLimitAdminPage() {
                     <Card>
                       <CardContent className="p-4">
                         <div className="flex items-center space-x-2">
-                          <Zap className="h-4 w-4 text-purple-500" />
+                          <Zap className="h-4 w-4 text-mb-blue-500" />
                           <div>
                             <div className="text-2xl font-bold">
                               {status.details.usage_stats.pro_stats.rpm_used}

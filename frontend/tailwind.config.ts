@@ -8,6 +8,17 @@ const config: Config = {
     "./app/**/*.{js,ts,jsx,tsx,mdx}",
     "*.{js,ts,jsx,tsx,mdx}"
   ],
+  safelist: [
+    // Ensure mb-blue-300 variants are always generated
+    'bg-mb-blue-300',
+    'hover:bg-mb-blue-300',
+    'hover:bg-mb-blue-300/10',
+    'hover:bg-mb-blue-300/15',
+    'hover:bg-mb-blue-300/20',
+    'focus:bg-mb-blue-300/20',
+    'ring-mb-blue-300',
+    'focus-visible:ring-mb-blue-300'
+  ],
   theme: {
   	extend: {
   		colors: {
@@ -17,6 +28,8 @@ const config: Config = {
   				DEFAULT: 'hsl(var(--card))',
   				foreground: 'hsl(var(--card-foreground))'
   			},
+  			// Mailbird Blue-300 for hover states
+  			'mb-blue-300': 'hsl(211.7 96.4% 78.4%)',
   			// Zen neutral base colors
   			neutral: {
   				base: 'hsl(var(--neutral-base))', // zinc-900 equivalent

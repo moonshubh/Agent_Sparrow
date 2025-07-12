@@ -39,8 +39,8 @@ export default function ResearchPanel({
             onClick={() => setIsResearchExpanded(!isResearchExpanded)}
             className="flex items-center gap-3 hover:opacity-70 transition-all duration-300"
           >
-            <div className="p-2 rounded-full bg-gradient-to-r from-purple-400/20 to-pink-400/20">
-              <Search className="w-4 h-4 text-purple-400" />
+            <div className="p-2 rounded-full bg-gradient-to-r from-mb-blue-400/20 to-pink-400/20">
+              <Search className="w-4 h-4 text-mb-blue-400" />
             </div>
             <span className="font-medium">Research</span>
             {isResearchExpanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}

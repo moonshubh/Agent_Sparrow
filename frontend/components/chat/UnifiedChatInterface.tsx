@@ -42,7 +42,7 @@ function AgentStatus({ currentAgent, isProcessing, confidence }: AgentStatusProp
       case 'log_analyst':
         return { icon: FileSearch, label: 'Log Analysis', color: 'bg-orange-500', textColor: 'text-orange-400' }
       case 'researcher':
-        return { icon: Search, label: 'Research Agent', color: 'bg-purple-500', textColor: 'text-purple-400' }
+        return { icon: Search, label: 'Research Agent', color: 'bg-mb-blue-500', textColor: 'text-mb-blue-400' }
       default:
         return { icon: Bot, label: 'Processing', color: 'bg-green-500', textColor: 'text-green-400' }
     }

@@ -46,19 +46,23 @@ import { AnalyticsDashboard } from './AnalyticsDashboardSimple'
 import { EnhancedFeedMeModal } from './EnhancedFeedMeModal'
 import { FeedMeErrorBoundary } from './ErrorBoundary'
 
+// Import new two-panel components
+import { SidebarNav } from './SidebarNav'
+import { SecondaryFolderPanel } from './SecondaryFolderPanel'
+import { ThemeSwitch } from './ThemeSwitch'
+import { MobileDrawer } from './MobileDrawer'
+
 // Import modular store hooks - NO legacy dependencies
 import { useConversations, useConversationsActions } from '@/lib/stores/conversations-store'
 import { useRealtime, useRealtimeActions } from '@/lib/stores/realtime-store'
 import { useSearch, useSearchActions } from '@/lib/stores/search-store'
 import { useFolders, useFoldersActions, useFolderModals } from '@/lib/stores/folders-store'
 import { useAnalytics, useAnalyticsActions } from '@/lib/stores/analytics-store'
-import { useUITabs, useUIActions } from '@/lib/stores/ui-store'
+import { useUITabs, useUIPanels, useUIActions, useUIResponsive } from '@/lib/stores/ui-store'
 import { useStoreInitialization } from '@/lib/stores/store-composition'
 
 export function FeedMePageManager() {
   const [uploadModalOpen, setUploadModalOpen] = useState(false)
-  const [selectedConversationId, setSelectedConversationId] = useState<number | null>(null)
-  const [currentFolderId, setCurrentFolderId] = useState<number | null>(null)
   
   // Folder modal state
   const [folderName, setFolderName] = useState('')
@@ -67,6 +71,8 @@ export function FeedMePageManager() {
 
   // Modular store hooks - specific subscriptions for performance
   const { activeTab } = useUITabs()
+  const { leftPanel, rightPanel, selectedConversationId, leftWidth } = useUIPanels()
+  const { isMobile } = useUIResponsive()
   const uiActions = useUIActions()
   
   // Conversations store
@@ -96,8 +102,17 @@ export function FeedMePageManager() {
     console.log('FeedMe Page Manager ready')
   }, [])
 
+  // Legacy tab change handler (maintain compatibility)
   const handleTabChange = (tab: string) => {
     uiActions.setActiveTab(tab as any)
+    // Map tab changes to panel system
+    if (tab === 'conversations') {
+      uiActions.setRightPanel('conversations')
+    } else if (tab === 'analytics') {
+      uiActions.setRightPanel('analytics')
+    } else if (tab === 'folders') {
+      uiActions.setLeftPanel('folders')
+    }
   }
 
   const handleConversationSelect = (conversationId: number) => {
@@ -106,17 +121,29 @@ export function FeedMePageManager() {
       console.warn('Invalid conversation ID selected:', conversationId)
       return
     }
-    setSelectedConversationId(conversationId)
+    uiActions.selectConversation(conversationId)
   }
 
   const handleConversationClose = () => {
-    setSelectedConversationId(null)
+    uiActions.selectConversation(null)
   }
 
   const handleFolderSelect = (folderId: number | null) => {
-    setCurrentFolderId(folderId)
     conversationsActions.setCurrentFolder(folderId)
+    // Switch to conversations view when folder is selected
+    uiActions.setRightPanel('conversations')
   }
+
+  const handleConversationMove = async (conversationId: number, folderId: number | null) => {
+    try {
+      await conversationsActions.updateConversation(conversationId, { folder_id: folderId === null ? undefined : folderId })
+      // Refresh conversations list to reflect the move
+      await conversationsActions.loadConversations()
+    } catch (error) {
+      console.error('Failed to move conversation:', error)
+    }
+  }
+
 
   const handleCreateFolder = async () => {
     if (!folderName.trim()) return
@@ -142,151 +169,60 @@ export function FeedMePageManager() {
 
   return (
     <FeedMeErrorBoundary>
-      <div className="h-screen flex flex-col bg-background">
-      {/* Header */}
-      <header className="border-b bg-card px-6 py-4 flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold text-foreground">
-            Feed<span className="text-accent">Me</span>
-          </h1>
-          <p className="text-sm text-muted-foreground">
-            AI-powered customer support transcript management
-          </p>
-        </div>
+      <div className="h-screen flex bg-background">
+        {/* Main Sidebar (Desktop Only) */}
+        {!isMobile && (
+          <SidebarNav
+            activeTab={rightPanel === 'editor' ? 'conversations' : rightPanel}
+            onTabChange={(tab) => {
+              if (tab === 'conversations') uiActions.setRightPanel('conversations')
+              else if (tab === 'analytics') uiActions.setRightPanel('analytics')
+              else if (tab === 'folders') uiActions.setLeftPanel('folders')
+            }}
+            conversationCount={conversations.totalCount || 0}
+            folderCount={Object.keys(folders.folders).length}
+          />
+        )}
 
-        <div className="flex items-center gap-4">
-          {/* Home button to return to Agent Sparrow dashboard */}
-          <Button 
-            variant="outline" 
-            size="sm"
-            onClick={() => window.location.href = '/'}
-            className="flex items-center gap-2"
-            title="Return to Agent Sparrow Dashboard"
-          >
-            <Home className="h-4 w-4" />
-            Agent Sparrow
-          </Button>
-
-          {/* Connection status */}
-          <div className="flex items-center gap-2 text-xs text-muted-foreground">
-            <div className={cn(
-              "h-2 w-2 rounded-full",
-              isConnected ? "bg-green-500" : "bg-red-500"
-            )}></div>
-            <span>{isConnected ? "Connected" : "Disconnected"}</span>
-          </div>
-
-          {/* Notifications */}
-          <Button variant="ghost" size="sm" className="relative">
-            <Bell className="h-4 w-4" />
-            {unreadNotifications > 0 && (
-              <span className="absolute -top-1 -right-1 h-5 w-5 rounded-full bg-red-500 text-white text-xs flex items-center justify-center">
-                {unreadNotifications}
-              </span>
-            )}
-          </Button>
-
-          {/* Enhanced Upload button with dropdown */}
-          <div className="relative">
-            <Button 
-              onClick={() => setUploadModalOpen(true)} 
-              size="sm"
-              className="bg-accent hover:bg-accent/90 text-accent-foreground"
-            >
-              <Upload className="h-4 w-4 mr-2" />
-              Upload Transcripts
-            </Button>
-          </div>
-        </div>
-      </header>
-
-      {/* Main Content */}
-      <div className="flex-1 flex flex-col overflow-hidden">
-        {/* Search and filter bar */}
-        <div className="border-b px-6 py-4 bg-card">
-          <div className="flex items-center gap-4">
-            <div className="flex-1">
-              <UnifiedSearchBar />
-            </div>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => handleTabChange("folders")}
-              className="flex items-center gap-2 border-accent/30 text-accent hover:bg-accent hover:text-accent-foreground"
-            >
-              <FolderOpen className="h-4 w-4" />
-              Manage Folders
-            </Button>
-          </div>
-        </div>
-
-        {/* Main content area */}
-        <main className="flex-1 flex flex-col overflow-hidden">
-          {/* Tabs */}
-          <Tabs value={activeTab} onValueChange={handleTabChange} className="flex-1 flex flex-col">
-            <div className="border-b px-6 py-2 flex justify-center">
-              <TabsList className="grid grid-cols-3 max-w-md">
-                <TabsTrigger value="conversations" className="flex items-center gap-2 data-[state=active]:bg-accent data-[state=active]:text-accent-foreground">
-                  <Home className="h-4 w-4" />
-                  Conversations
-                </TabsTrigger>
-                <TabsTrigger value="folders" className="flex items-center gap-2 data-[state=active]:bg-accent data-[state=active]:text-accent-foreground">
-                  <FolderOpen className="h-4 w-4" />
-                  Folders
-                </TabsTrigger>
-                <TabsTrigger value="analytics" className="flex items-center gap-2 data-[state=active]:bg-accent data-[state=active]:text-accent-foreground">
-                  <BarChart3 className="h-4 w-4" />
-                  Analytics
-                </TabsTrigger>
-              </TabsList>
-            </div>
-
-            {/* Tab content */}
-            <div className="flex-1 overflow-hidden">
-              <TabsContent value="conversations" className="h-full">
-                <FileGridView 
-                  onConversationSelect={handleConversationSelect}
-                  currentFolderId={currentFolderId}
-                  onFolderSelect={handleFolderSelect}
-                />
-              </TabsContent>
-
-              <TabsContent value="folders" className="h-full p-6">
-                <div className="grid gap-6">
-                  <div className="flex items-center justify-between">
-                    <h2 className="text-xl font-semibold">Folder Management</h2>
-                    <Button 
-                      onClick={() => foldersActions.openCreateModal()}
-                      size="sm"
-                    >
-                      <FolderOpen className="h-4 w-4 mr-2" />
-                      Create Folder
-                    </Button>
-                  </div>
-                  <FolderTreeView 
-                    onConversationSelect={handleConversationSelect}
-                    onFolderSelect={handleFolderSelect}
-                    expanded={true}
-                  />
-                </div>
-              </TabsContent>
-
-              <TabsContent value="analytics" className="h-full">
-                <AnalyticsDashboard />
-              </TabsContent>
-            </div>
-          </Tabs>
-        </main>
-      </div>
-
-      {/* Conversation Editor Modal */}
-      {selectedConversationId && (
-        <ConversationEditor
-          conversationId={selectedConversationId}
-          isOpen={true}
-          onClose={handleConversationClose}
+        {/* Secondary Folder Panel */}
+        <SecondaryFolderPanel
+          selectedFolderId={conversations.currentFolderId === undefined ? null : conversations.currentFolderId}
+          onFolderSelect={handleFolderSelect}
+          onFolderCreate={() => foldersActions.openCreateModal()}
         />
-      )}
+
+        {/* Main Content */}
+        <main className="flex-1 overflow-hidden flex flex-col transition-all duration-300">
+          {/* Search Bar */}
+          <div className="border-b px-4 py-3 bg-card/50">
+            <UnifiedSearchBar />
+          </div>
+
+          {/* Content Area */}
+          <div className="flex-1 overflow-hidden">
+            {rightPanel === 'conversations' && (
+              <FileGridView 
+                onConversationSelect={handleConversationSelect}
+                currentFolderId={conversations.currentFolderId ?? null}
+                onFolderSelect={handleFolderSelect}
+                onConversationMove={handleConversationMove}
+              />
+            )}
+            
+            {rightPanel === 'analytics' && (
+              <AnalyticsDashboard />
+            )}
+            
+            {rightPanel === 'editor' && selectedConversationId && (
+              <ConversationEditor
+                conversationId={selectedConversationId}
+                isOpen={true}
+                onClose={handleConversationClose}
+              />
+            )}
+          </div>
+        </main>
+
 
       {/* Upload Modal */}
       <EnhancedFeedMeModal 

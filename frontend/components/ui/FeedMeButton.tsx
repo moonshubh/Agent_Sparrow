@@ -51,7 +51,7 @@ export function FeedMeButton({ onClick, mode = 'navigate' }: FeedMeButtonProps) 
               <Button
                 variant="ghost"
                 size="sm"
-                className="h-8 w-8 p-0 hover:bg-accent/10 focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2"
+                className="h-8 w-8 p-0 hover:bg-mb-blue-300/10 focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2"
                 onMouseEnter={() => setIsHovered(true)}
                 onMouseLeave={() => setIsHovered(false)}
                 onClick={handleClick}

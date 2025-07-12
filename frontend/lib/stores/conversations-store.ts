@@ -500,6 +500,9 @@ export const useConversationsStore = create<ConversationsStore>()(
           // Clear cache when switching folders to prevent stale data
           get().actions.clearCache()
           
+          // Close folder panel when folder is selected
+          useUIStore.getState().actions.closeFolderPanel()
+          
           set(state => ({
             conversationsList: {
               ...state.conversationsList,

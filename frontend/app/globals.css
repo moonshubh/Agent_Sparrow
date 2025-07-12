@@ -4,6 +4,9 @@
 @tailwind components;
 @tailwind utilities;
 
+/* FeedMe Navigation Polish */
+@import './feedme-navigation.css';
+
 @layer utilities {
   .text-balance {
     text-wrap: balance;
@@ -74,6 +77,76 @@
   .no-scrollbar {
     -ms-overflow-style: none;
     scrollbar-width: none;
+  }
+  
+  /* FeedMe Two-Panel Layout Styles */
+  .feedme-two-panel {
+    height: 100vh;
+    background: hsl(var(--background));
+    overflow: hidden;
+  }
+  
+  .feedme-left-panel {
+    background: hsl(var(--sidebar-background));
+    border-right: 1px solid hsl(var(--border));
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  
+  .feedme-right-panel {
+    background: hsl(var(--background));
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  
+  .feedme-sidebar-nav {
+    background: hsl(var(--sidebar-background));
+    border-color: hsl(var(--sidebar-border));
+  }
+  
+  .feedme-folder-pane {
+    background: hsl(var(--sidebar-background));
+  }
+  
+  .feedme-mobile-drawer {
+    background: hsl(var(--sidebar-background));
+  }
+  
+  /* Panel resize handle styling */
+  .feedme-panel-handle {
+    background: hsl(var(--border));
+    transition: background-color 0.2s ease;
+  }
+  
+  .feedme-panel-handle:hover {
+    background: hsl(var(--accent));
+  }
+  
+  /* Conversation card transitions */
+  .conversation-card {
+    transition: all 0.2s ease;
+  }
+  
+  .conversation-card:hover {
+    border-color: hsl(var(--accent) / 0.5);
+    box-shadow: 0 4px 12px rgba(0, 149, 255, 0.1);
+  }
+  
+  /* Mobile responsive adjustments */
+  @media (max-width: 768px) {
+    .feedme-two-panel {
+      display: block;
+    }
+    
+    .feedme-left-panel {
+      display: none;
+    }
+    
+    .feedme-mobile-drawer {
+      display: block;
+    }
   }
   
   /* Responsive chat container utilities */
@@ -237,6 +310,9 @@
     --critical: 0 84.2% 60.2%; /* red-500 */
     --high: 45 93.4% 47.5%; /* yellow-500 */
     --medium: 142.1 76.2% 36.3%; /* green-500 */
+    
+    /* Mailbird Blue-300 for hover states */
+    --mb-blue-300: 211.7 96.4% 78.4%;
   }
   
   .dark {
@@ -296,6 +372,9 @@
     --critical: 0 72% 51%; /* red-500 adjusted for dark */
     --high: 48 96% 53%; /* yellow-500 adjusted for dark */
     --medium: 142 71% 45%; /* green-500 adjusted for dark */
+    
+    /* Mailbird Blue-300 for hover states (dark theme) */
+    --mb-blue-300: 211.7 96.4% 78.4%;
   }
 }
 

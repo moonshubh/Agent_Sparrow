@@ -40,6 +40,12 @@ export interface SidebarState {
   width: number
   pinnedSections: Set<string>
   expandedSections: Set<string>
+  showFolderPanel: boolean
+  activeFolderId: number | null
+  hoverTimers: {
+    openTimer: NodeJS.Timeout | null
+    closeTimer: NodeJS.Timeout | null
+  }
 }
 
 export interface BulkActionState {
@@ -81,9 +87,20 @@ export interface ThemeState {
   reducedMotion: boolean
 }
 
+export interface PanelState {
+  leftWidth: number
+  leftPanel: 'folders' | 'search'
+  rightPanel: 'conversations' | 'analytics' | 'editor'
+  selectedConversationId: number | null
+  showMobileDrawer: boolean
+}
+
 interface UIState {
-  // Navigation & Tabs
+  // Navigation & Tabs (legacy - maintain compatibility)
   tabs: TabState
+  
+  // New Panel System
+  panels: PanelState
   
   // View Configuration
   view: ViewState
@@ -119,10 +136,17 @@ interface UIState {
 }
 
 interface UIActions {
-  // Tab Management
+  // Tab Management (legacy - maintain compatibility)
   setActiveTab: (tab: TabState['activeTab']) => void
   navigateBack: () => void
   navigateForward: () => void
+  
+  // Panel Management
+  setPanelWidth: (width: number) => void
+  setLeftPanel: (panel: PanelState['leftPanel']) => void
+  setRightPanel: (panel: PanelState['rightPanel']) => void
+  selectConversation: (id: number | null) => void
+  toggleMobileDrawer: () => void
   
   // View Management
   setViewMode: (mode: ViewState['viewMode']) => void
@@ -141,6 +165,13 @@ interface UIActions {
   setSidebarWidth: (width: number) => void
   toggleSidebarSection: (sectionId: string) => void
   pinSidebarSection: (sectionId: string, pinned: boolean) => void
+  openFolderPanel: () => void
+  closeFolderPanel: () => void
+  toggleFolderPanel: () => void
+  setActiveFolder: (folderId: number | null) => void
+  openFolderPanelHover: () => void
+  closeFolderPanelHover: () => void
+  clearHoverTimers: () => void
   
   // Bulk Actions
   enableBulkActions: (actions: string[]) => void
@@ -198,6 +229,14 @@ const DEFAULT_STATE: UIState = {
     canGoForward: false
   },
   
+  panels: {
+    leftWidth: 280,
+    leftPanel: 'folders',
+    rightPanel: 'conversations',
+    selectedConversationId: null,
+    showMobileDrawer: false
+  },
+  
   view: {
     viewMode: 'grid',
     itemsPerPage: 20,
@@ -217,7 +256,13 @@ const DEFAULT_STATE: UIState = {
     isCollapsed: false,
     width: 280,
     pinnedSections: new Set(['folders', 'recent']),
-    expandedSections: new Set(['folders', 'recent', 'analytics'])
+    expandedSections: new Set(['folders', 'recent', 'analytics']),
+    showFolderPanel: false,
+    activeFolderId: null,
+    hoverTimers: {
+      openTimer: null,
+      closeTimer: null
+    }
   },
   
   bulkActions: {
@@ -335,6 +380,56 @@ export const useUIStore = create<UIStore>()(
                 
                 return state
               })
+            },
+            
+            // ===========================
+            // Panel Management
+            // ===========================
+            
+            setPanelWidth: (width) => {
+              set(state => ({
+                panels: {
+                  ...state.panels,
+                  leftWidth: Math.max(200, Math.min(500, width))
+                }
+              }))
+            },
+            
+            setLeftPanel: (panel) => {
+              set(state => ({
+                panels: {
+                  ...state.panels,
+                  leftPanel: panel
+                }
+              }))
+            },
+            
+            setRightPanel: (panel) => {
+              set(state => ({
+                panels: {
+                  ...state.panels,
+                  rightPanel: panel
+                }
+              }))
+            },
+            
+            selectConversation: (id) => {
+              set(state => ({
+                panels: {
+                  ...state.panels,
+                  selectedConversationId: id,
+                  rightPanel: id ? 'editor' : 'conversations'
+                }
+              }))
+            },
+            
+            toggleMobileDrawer: () => {
+              set(state => ({
+                panels: {
+                  ...state.panels,
+                  showMobileDrawer: !state.panels.showMobileDrawer
+                }
+              }))
             },
             
             // ===========================
@@ -479,6 +574,211 @@ export const useUIStore = create<UIStore>()(
                   }
                 }
               })
+            },
+            
+            openFolderPanel: () => {
+              set(state => ({
+                sidebar: {
+                  ...state.sidebar,
+                  showFolderPanel: true
+                }
+              }))
+            },
+            
+            closeFolderPanel: () => {
+              set(state => ({
+                sidebar: {
+                  ...state.sidebar,
+                  showFolderPanel: false
+                }
+              }))
+            },
+            
+            toggleFolderPanel: () => {
+              set(state => ({
+                sidebar: {
+                  ...state.sidebar,
+                  showFolderPanel: !state.sidebar.showFolderPanel
+                }
+              }))
+            },
+            
+            setActiveFolder: (folderId) => {
+              set(state => ({
+                sidebar: {
+                  ...state.sidebar,
+                  activeFolderId: folderId
+                }
+              }))
+            },
+            
+            openFolderPanelHover: () => {
+              const state = get()
+              
+              // Ensure hoverTimers is initialized
+              if (!state.sidebar.hoverTimers) {
+                set(currentState => ({
+                  sidebar: {
+                    ...currentState.sidebar,
+                    hoverTimers: {
+                      openTimer: null,
+                      closeTimer: null
+                    }
+                  }
+                }))
+              }
+              
+              // If panel is already open, don't set timers
+              if (state.sidebar.showFolderPanel) {
+                // Just clear any close timer
+                if (state.sidebar.hoverTimers?.closeTimer) {
+                  clearTimeout(state.sidebar.hoverTimers.closeTimer)
+                  set(currentState => ({
+                    sidebar: {
+                      ...currentState.sidebar,
+                      hoverTimers: {
+                        ...currentState.sidebar.hoverTimers,
+                        closeTimer: null
+                      }
+                    }
+                  }))
+                }
+                return
+              }
+              
+              // Clear any existing timers
+              if (state.sidebar.hoverTimers?.closeTimer) {
+                clearTimeout(state.sidebar.hoverTimers.closeTimer)
+              }
+              if (state.sidebar.hoverTimers?.openTimer) {
+                clearTimeout(state.sidebar.hoverTimers.openTimer)
+              }
+              
+              // Set timer to open panel after 80ms
+              const openTimer = setTimeout(() => {
+                set(state => ({
+                  sidebar: {
+                    ...state.sidebar,
+                    showFolderPanel: true,
+                    hoverTimers: {
+                      ...state.sidebar.hoverTimers,
+                      openTimer: null
+                    }
+                  }
+                }))
+              }, 80)
+              
+              set(state => ({
+                sidebar: {
+                  ...state.sidebar,
+                  hoverTimers: {
+                    ...state.sidebar.hoverTimers,
+                    openTimer
+                  }
+                }
+              }))
+            },
+            
+            closeFolderPanelHover: () => {
+              const state = get()
+              
+              // Ensure hoverTimers is initialized
+              if (!state.sidebar.hoverTimers) {
+                set(currentState => ({
+                  sidebar: {
+                    ...currentState.sidebar,
+                    hoverTimers: {
+                      openTimer: null,
+                      closeTimer: null
+                    }
+                  }
+                }))
+              }
+              
+              // If panel is not open, don't set close timer
+              if (!state.sidebar.showFolderPanel) {
+                // Just clear any open timer
+                if (state.sidebar.hoverTimers?.openTimer) {
+                  clearTimeout(state.sidebar.hoverTimers.openTimer)
+                  set(currentState => ({
+                    sidebar: {
+                      ...currentState.sidebar,
+                      hoverTimers: {
+                        ...currentState.sidebar.hoverTimers,
+                        openTimer: null
+                      }
+                    }
+                  }))
+                }
+                return
+              }
+              
+              // Clear any existing timers
+              if (state.sidebar.hoverTimers?.openTimer) {
+                clearTimeout(state.sidebar.hoverTimers.openTimer)
+              }
+              if (state.sidebar.hoverTimers?.closeTimer) {
+                clearTimeout(state.sidebar.hoverTimers.closeTimer)
+              }
+              
+              // Set timer to close panel after 150ms (longer delay for stability)
+              const closeTimer = setTimeout(() => {
+                set(state => ({
+                  sidebar: {
+                    ...state.sidebar,
+                    showFolderPanel: false,
+                    hoverTimers: {
+                      ...state.sidebar.hoverTimers,
+                      closeTimer: null
+                    }
+                  }
+                }))
+              }, 150)
+              
+              set(state => ({
+                sidebar: {
+                  ...state.sidebar,
+                  hoverTimers: {
+                    ...state.sidebar.hoverTimers,
+                    closeTimer
+                  }
+                }
+              }))
+            },
+            
+            clearHoverTimers: () => {
+              const state = get()
+              
+              // Ensure hoverTimers is initialized
+              if (!state.sidebar.hoverTimers) {
+                set(currentState => ({
+                  sidebar: {
+                    ...currentState.sidebar,
+                    hoverTimers: {
+                      openTimer: null,
+                      closeTimer: null
+                    }
+                  }
+                }))
+                return
+              }
+              
+              if (state.sidebar.hoverTimers.openTimer) {
+                clearTimeout(state.sidebar.hoverTimers.openTimer)
+              }
+              if (state.sidebar.hoverTimers.closeTimer) {
+                clearTimeout(state.sidebar.hoverTimers.closeTimer)
+              }
+              
+              set(state => ({
+                sidebar: {
+                  ...state.sidebar,
+                  hoverTimers: {
+                    openTimer: null,
+                    closeTimer: null
+                  }
+                }
+              }))
             },
             
             // ===========================
@@ -845,10 +1145,12 @@ export const useUIStore = create<UIStore>()(
           name: 'feedme-ui-store',
           partialize: (state) => ({
             view: state.view,
+            panels: state.panels,
             sidebar: {
               ...state.sidebar,
               pinnedSections: Array.from(state.sidebar.pinnedSections),
               expandedSections: Array.from(state.sidebar.expandedSections)
+              // Note: hoverTimers are excluded from persistence (not persisted)
             },
             theme: state.theme
           })
@@ -863,6 +1165,7 @@ export const useUIStore = create<UIStore>()(
 
 // Convenience hooks
 export const useUITabs = () => useUIStore(state => state.tabs)
+export const useUIPanels = () => useUIStore(state => state.panels)
 export const useUIView = () => useUIStore(state => state.view)
 export const useUIModals = () => useUIStore(state => state.modals)
 export const useUISidebar = () => useUIStore(state => state.sidebar)

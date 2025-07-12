@@ -63,7 +63,7 @@ export default function Component() {
       case "log-analysis":
         return <FileSearch className="w-3 h-3 text-green-400" />
       case "research":
-        return <Search className="w-3 h-3 text-purple-400" />
+        return <Search className="w-3 h-3 text-mb-blue-400" />
       default:
         return <Brain className="w-3 h-3 text-gray-400" />
     }
@@ -71,7 +71,7 @@ export default function Component() {
 
   const themeClasses = isDarkMode
     ? "bg-slate-950 text-slate-100"
-    : "bg-gradient-to-br from-slate-50 via-blue-50 to-indigo-50 text-slate-900"
+    : "bg-gradient-to-br from-slate-50 via-blue-50 to-mb-blue-50 text-slate-900"
 
   const cardClasses = isDarkMode
     ? "bg-slate-900/40 border-slate-800/50 backdrop-blur-xl"
@@ -106,8 +106,8 @@ export default function Component() {
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-4">
                 <div className="flex items-center gap-3">
-                  <div className="p-2 rounded-full bg-gradient-to-r from-purple-400/20 to-pink-400/20">
-                    <Sparkles className="w-5 h-5 text-purple-400 animate-pulse" />
+                  <div className="p-2 rounded-full bg-gradient-to-r from-mb-blue-400/20 to-pink-400/20">
+                    <Sparkles className="w-5 h-5 text-mb-blue-400 animate-pulse" />
                   </div>
                   <h1 className="font-medium text-lg">AI Research Assistant</h1>
                 </div>
@@ -222,7 +222,7 @@ export default function Component() {
                   </Button>
                   <Button
                     variant="default"
-                    className="rounded-xl bg-gradient-to-r from-purple-500 to-pink-500 text-white hover:opacity-90 transition-all duration-300"
+                    className="rounded-xl bg-gradient-to-r from-mb-blue-500 to-pink-500 text-white hover:opacity-90 transition-all duration-300"
                     onClick={() => {
                       sendQuery(inputValue);
                       setInputValue('');

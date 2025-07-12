@@ -39,7 +39,7 @@ export default function Message({ message, isDarkMode, handleFeedback, getAgentI
             <User className="w-3 h-3 text-blue-400" />
           </div>
         ) : (
-          <div className="p-1 rounded-full bg-purple-400/20">
+          <div className="p-1 rounded-full bg-mb-blue-400/20">
             {getAgentIcon(message.agentType || "general")}
           </div>
         )}
