@@ -130,7 +130,7 @@ function FileUploadZone({
             "relative border-2 border-dashed rounded-lg transition-all duration-200",
             isDragOver 
               ? "border-primary bg-primary/5" 
-              : "border-border/50 hover:border-primary/50 hover:bg-primary/5"
+              : "border-border/50 hover:bg-mb-blue-300/50 hover:bg-mb-blue-300/5"
           )}
           onDragOver={handleDragOver}
           onDragLeave={handleDragLeave}
@@ -399,7 +399,7 @@ export default function InputSystem({
               className={cn(
                 "h-8 w-8 p-0 rounded-lg transition-all",
                 canSubmit 
-                  ? "bg-primary hover:bg-primary/90 text-primary-foreground" 
+                  ? "bg-primary hover:bg-mb-blue-300/90 text-primary-foreground" 
                   : "bg-muted text-muted-foreground cursor-not-allowed"
               )}
             >

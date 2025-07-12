@@ -86,7 +86,7 @@ export default function PrimaryAgentPage() {
 
   const themeClasses = isDarkMode
     ? "bg-slate-950 text-slate-100"
-    : "bg-gradient-to-br from-slate-50 via-blue-50 to-indigo-50 text-slate-900"
+    : "bg-gradient-to-br from-slate-50 via-blue-50 to-mb-blue-50 text-slate-900"
 
   const cardClasses = isDarkMode
     ? "bg-slate-900/40 border-slate-800/50 backdrop-blur-xl"
@@ -104,7 +104,7 @@ export default function PrimaryAgentPage() {
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-4">
               <div className="flex items-center gap-3">
-                <div className="p-2 rounded-full bg-gradient-to-r from-blue-400/20 to-purple-400/20">
+                <div className="p-2 rounded-full bg-gradient-to-r from-blue-400/20 to-mb-blue-400/20">
                   <MessageCircle className="w-5 h-5 text-blue-400 animate-pulse" />
                 </div>
                 <h1 className="font-medium text-lg">Mailbird Support Assistant</h1>
@@ -151,7 +151,7 @@ export default function PrimaryAgentPage() {
                           className={cn(
                             "w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0",
                             message.type === "user"
-                              ? "bg-gradient-to-r from-blue-500 to-purple-500"
+                              ? "bg-gradient-to-r from-blue-500 to-mb-blue-500"
                               : "bg-gradient-to-r from-green-500 to-blue-500"
                           )}
                         >
@@ -166,8 +166,8 @@ export default function PrimaryAgentPage() {
                             "rounded-2xl px-4 py-3 shadow-sm",
                             message.type === "user"
                               ? isDarkMode
-                                ? "bg-gradient-to-r from-blue-900/40 to-purple-900/40 border border-blue-700/30"
-                                : "bg-gradient-to-r from-blue-50 to-purple-100/70 border border-blue-200/50"
+                                ? "bg-gradient-to-r from-blue-900/40 to-mb-blue-900/40 border border-blue-700/30"
+                                : "bg-gradient-to-r from-blue-50 to-mb-blue-100/70 border border-blue-200/50"
                               : isDarkMode
                               ? "bg-gradient-to-r from-slate-800/40 to-slate-700/40 border border-slate-600/30"
                               : "bg-gradient-to-r from-slate-50 to-slate-100/70 border border-slate-200/50"
@@ -230,7 +230,7 @@ export default function PrimaryAgentPage() {
             <Button
               onClick={handleSendMessage}
               disabled={isStreaming || !inputValue.trim()}
-              className="absolute right-2 top-1/2 -translate-y-1/2 rounded-xl bg-gradient-to-r from-blue-500 to-purple-500 text-white hover:opacity-90 transition-all duration-300"
+              className="absolute right-2 top-1/2 -translate-y-1/2 rounded-xl bg-gradient-to-r from-blue-500 to-mb-blue-500 text-white hover:opacity-90 transition-all duration-300"
               size="sm"
             >
               {isStreaming ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}

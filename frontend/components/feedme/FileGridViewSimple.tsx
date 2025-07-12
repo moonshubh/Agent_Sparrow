@@ -39,6 +39,7 @@ interface FileGridViewProps {
   onConversationSelect?: (conversationId: number) => void
   currentFolderId?: number | null
   onFolderSelect?: (folderId: number | null) => void
+  onConversationMove?: (conversationId: number, folderId: number | null) => void
   className?: string
 }
 
@@ -55,7 +56,7 @@ const StatusIcon = ({ status }: { status: string }) => {
   }
 }
 
-export function FileGridView({ onConversationSelect, currentFolderId, onFolderSelect, className }: FileGridViewProps) {
+export function FileGridView({ onConversationSelect, currentFolderId, onFolderSelect, onConversationMove, className }: FileGridViewProps) {
   const { items: conversations, isLoading } = useConversations()
   const conversationsActions = useConversationsActions()
   const uiActions = useUIActions()
@@ -191,7 +192,7 @@ export function FileGridView({ onConversationSelect, currentFolderId, onFolderSe
               variant="ghost"
               size="sm"
               onClick={() => onFolderSelect?.(null)}
-              className="text-accent hover:text-accent-foreground"
+              className="text-accent hover:bg-mb-blue-300-foreground"
             >
               All Conversations
             </Button>
@@ -204,7 +205,7 @@ export function FileGridView({ onConversationSelect, currentFolderId, onFolderSe
           {conversations.map((conversation) => (
             <Card 
               key={conversation.id} 
-              className="cursor-pointer hover:shadow-md hover:border-accent/50 focus-within:ring-2 focus-within:ring-accent/50 transition-all duration-200 relative group"
+              className="cursor-pointer hover:shadow-md hover:bg-mb-blue-300/50 focus-within:ring-2 focus-within:ring-accent/50 transition-all duration-200 relative group"
               onClick={() => handleConversationSelect(conversation.id)}
               tabIndex={0}
             >
@@ -215,7 +216,7 @@ export function FileGridView({ onConversationSelect, currentFolderId, onFolderSe
                     <Button
                       variant="ghost"
                       size="sm"
-                      className="p-1 h-8 w-8 bg-background/80 hover:bg-accent"
+                      className="p-1 h-8 w-8 bg-background/80 hover:bg-mb-blue-300"
                       onClick={(e) => e.stopPropagation()}
                     >
                       <MoreHorizontal className="h-4 w-4" />

@@ -70,7 +70,7 @@ const FolderItem: React.FC<FolderItemProps> = ({ folder, level, onSelect, onFold
     <div className="w-full">
       <div 
         className={cn(
-          "flex items-center gap-2 px-2 py-1 hover:bg-accent/50 cursor-pointer rounded-sm",
+          "flex items-center gap-2 px-2 py-1 hover:bg-mb-blue-300/50 cursor-pointer rounded-sm",
           folder.isSelected && "bg-accent/30",
           isUnassignedFolder && "border-b border-border/40 mb-2"
         )}
@@ -173,25 +173,13 @@ export function FolderTreeView({
 
   return (
     <div className={cn("h-full flex flex-col", className)}>
-      {/* Header */}
-      <div className="flex items-center justify-between p-4 border-b">
-        <h3 className="font-medium">Folders</h3>
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={handleOpenCreateModal}
-          className="h-8 w-8 p-0"
-        >
-          <Plus className="h-4 w-4" />
-        </Button>
-      </div>
 
       {/* Tree Content */}
       <ScrollArea className="flex-1">
         <div className="p-2 space-y-1">
           {/* All Conversations item */}
           <div 
-            className="flex items-center gap-2 px-2 py-1 hover:bg-accent/50 cursor-pointer rounded-sm"
+            className="flex items-center gap-2 px-2 py-1 hover:bg-mb-blue-300/50 cursor-pointer rounded-sm"
             onClick={() => onFolderSelect?.(null)}
           >
             <div className="h-4 w-4" /> {/* Spacer for alignment */}
@@ -201,7 +189,7 @@ export function FolderTreeView({
           
           {/* Unassigned conversations */}
           <div 
-            className="flex items-center gap-2 px-2 py-1 hover:bg-accent/50 cursor-pointer rounded-sm"
+            className="flex items-center gap-2 px-2 py-1 hover:bg-mb-blue-300/50 cursor-pointer rounded-sm"
             onClick={() => onFolderSelect?.(0)}
           >
             <div className="h-4 w-4" /> {/* Spacer for alignment */}

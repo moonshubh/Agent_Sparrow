@@ -574,7 +574,7 @@ export function EnhancedFeedMeModal({ isOpen, onClose, onUploadComplete }: Enhan
                   "border-2 border-dashed rounded-lg p-8 text-center cursor-pointer transition-colors",
                   isDragActive ? "border-accent bg-accent/5" : "border-muted-foreground/25",
                   files.length > 0 ? "border-accent bg-accent/5" : "",
-                  batchUploadState.isUploading ? "pointer-events-none opacity-50" : "hover:border-accent hover:bg-accent/5"
+                  batchUploadState.isUploading ? "pointer-events-none opacity-50" : "hover:bg-mb-blue-300 hover:bg-mb-blue-300/5"
                 )}
               >
                 <input
@@ -614,7 +614,7 @@ export function EnhancedFeedMeModal({ isOpen, onClose, onUploadComplete }: Enhan
                       <Button
                         onClick={handleBatchUpload}
                         disabled={files.length === 0 || batchUploadState.isUploading}
-                        className="bg-accent hover:bg-accent/90"
+                        className="bg-accent hover:bg-mb-blue-300/90"
                         size="sm"
                       >
                         {batchUploadState.isUploading ? (
@@ -786,7 +786,7 @@ export function EnhancedFeedMeModal({ isOpen, onClose, onUploadComplete }: Enhan
                   "border-2 border-dashed rounded-lg p-8 text-center cursor-pointer transition-colors",
                   isDragActive ? "border-accent bg-accent/5" : "border-muted-foreground/25",
                   singleFile ? "border-accent bg-accent/5" : "",
-                  batchUploadState.isUploading ? "pointer-events-none opacity-50" : "hover:border-accent hover:bg-accent/5"
+                  batchUploadState.isUploading ? "pointer-events-none opacity-50" : "hover:bg-mb-blue-300 hover:bg-mb-blue-300/5"
                 )}
               >
                 <input
@@ -844,7 +844,7 @@ export function EnhancedFeedMeModal({ isOpen, onClose, onUploadComplete }: Enhan
                 <Button
                   type="submit"
                   disabled={!singleTitle.trim() || !singleFile || batchUploadState.isUploading}
-                  className="bg-accent hover:bg-accent/90"
+                  className="bg-accent hover:bg-mb-blue-300/90"
                 >
                   {batchUploadState.isUploading ? (
                     <>
@@ -947,7 +947,7 @@ export function EnhancedFeedMeModal({ isOpen, onClose, onUploadComplete }: Enhan
                 <Button
                   type="submit"
                   disabled={!singleTitle.trim() || !textContent.trim() || batchUploadState.isUploading}
-                  className="bg-accent hover:bg-accent/90"
+                  className="bg-accent hover:bg-mb-blue-300/90"
                 >
                   {batchUploadState.isUploading ? (
                     <>
