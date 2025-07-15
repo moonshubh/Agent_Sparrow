@@ -40,6 +40,8 @@ export interface SidebarState {
   width: number
   pinnedSections: Set<string>
   expandedSections: Set<string>
+  showFolderPanel: boolean
+  activeFolderId: number | null
 }
 
 export interface BulkActionState {
@@ -81,9 +83,20 @@ export interface ThemeState {
   reducedMotion: boolean
 }
 
+export interface PanelState {
+  leftWidth: number
+  leftPanel: 'folders' | 'search'
+  rightPanel: 'conversations' | 'analytics' | 'editor'
+  selectedConversationId: number | null
+  showMobileDrawer: boolean
+}
+
 interface UIState {
-  // Navigation & Tabs
+  // Navigation & Tabs (legacy - maintain compatibility)
   tabs: TabState
+  
+  // New Panel System
+  panels: PanelState
   
   // View Configuration
   view: ViewState
@@ -119,10 +132,17 @@ interface UIState {
 }
 
 interface UIActions {
-  // Tab Management
+  // Tab Management (legacy - maintain compatibility)
   setActiveTab: (tab: TabState['activeTab']) => void
   navigateBack: () => void
   navigateForward: () => void
+  
+  // Panel Management
+  setPanelWidth: (width: number) => void
+  setLeftPanel: (panel: PanelState['leftPanel']) => void
+  setRightPanel: (panel: PanelState['rightPanel']) => void
+  selectConversation: (id: number | null) => void
+  toggleMobileDrawer: () => void
   
   // View Management
   setViewMode: (mode: ViewState['viewMode']) => void
@@ -141,6 +161,13 @@ interface UIActions {
   setSidebarWidth: (width: number) => void
   toggleSidebarSection: (sectionId: string) => void
   pinSidebarSection: (sectionId: string, pinned: boolean) => void
+  openFolderPanel: () => void
+  closeFolderPanel: () => void
+  toggleFolderPanel: () => void
+  setActiveFolder: (folderId: number | null) => void
+  openFolderPanelHover: () => void
+  closeFolderPanelHover: () => void
+  clearHoverTimers: () => void
   
   // Bulk Actions
   enableBulkActions: (actions: string[]) => void
@@ -183,6 +210,7 @@ interface UIActions {
   resetToDefaults: () => void
   exportUISettings: () => void
   importUISettings: (settings: Partial<UIState>) => void
+  cleanupStore: () => void
 }
 
 export interface UIStore extends UIState {
@@ -196,6 +224,14 @@ const DEFAULT_STATE: UIState = {
     tabHistory: ['conversations'],
     canGoBack: false,
     canGoForward: false
+  },
+  
+  panels: {
+    leftWidth: 280,
+    leftPanel: 'folders',
+    rightPanel: 'conversations',
+    selectedConversationId: null,
+    showMobileDrawer: false
   },
   
   view: {
@@ -217,7 +253,9 @@ const DEFAULT_STATE: UIState = {
     isCollapsed: false,
     width: 280,
     pinnedSections: new Set(['folders', 'recent']),
-    expandedSections: new Set(['folders', 'recent', 'analytics'])
+    expandedSections: new Set(['folders', 'recent', 'analytics']),
+    showFolderPanel: false,
+    activeFolderId: null
   },
   
   bulkActions: {
@@ -254,6 +292,28 @@ const DEFAULT_STATE: UIState = {
     currentFocus: null,
     focusHistory: []
   }
+}
+
+// Global timer manager for hover effects
+const hoverTimers = new Map<string, NodeJS.Timeout>()
+
+const setHoverTimer = (key: string, callback: () => void, delay: number): void => {
+  clearHoverTimer(key)
+  const timer = setTimeout(callback, delay)
+  hoverTimers.set(key, timer)
+}
+
+const clearHoverTimer = (key: string): void => {
+  const timer = hoverTimers.get(key)
+  if (timer) {
+    clearTimeout(timer)
+    hoverTimers.delete(key)
+  }
+}
+
+const clearAllHoverTimers = (): void => {
+  hoverTimers.forEach(timer => clearTimeout(timer))
+  hoverTimers.clear()
 }
 
 // Store Implementation
@@ -335,6 +395,56 @@ export const useUIStore = create<UIStore>()(
                 
                 return state
               })
+            },
+            
+            // ===========================
+            // Panel Management
+            // ===========================
+            
+            setPanelWidth: (width) => {
+              set(state => ({
+                panels: {
+                  ...state.panels,
+                  leftWidth: Math.max(200, Math.min(500, width))
+                }
+              }))
+            },
+            
+            setLeftPanel: (panel) => {
+              set(state => ({
+                panels: {
+                  ...state.panels,
+                  leftPanel: panel
+                }
+              }))
+            },
+            
+            setRightPanel: (panel) => {
+              set(state => ({
+                panels: {
+                  ...state.panels,
+                  rightPanel: panel
+                }
+              }))
+            },
+            
+            selectConversation: (id) => {
+              set(state => ({
+                panels: {
+                  ...state.panels,
+                  selectedConversationId: id,
+                  rightPanel: id ? 'editor' : 'conversations'
+                }
+              }))
+            },
+            
+            toggleMobileDrawer: () => {
+              set(state => ({
+                panels: {
+                  ...state.panels,
+                  showMobileDrawer: !state.panels.showMobileDrawer
+                }
+              }))
             },
             
             // ===========================
@@ -479,6 +589,95 @@ export const useUIStore = create<UIStore>()(
                   }
                 }
               })
+            },
+            
+            openFolderPanel: () => {
+              set(state => ({
+                sidebar: {
+                  ...state.sidebar,
+                  showFolderPanel: true
+                }
+              }))
+            },
+            
+            closeFolderPanel: () => {
+              set(state => ({
+                sidebar: {
+                  ...state.sidebar,
+                  showFolderPanel: false
+                }
+              }))
+            },
+            
+            toggleFolderPanel: () => {
+              set(state => ({
+                sidebar: {
+                  ...state.sidebar,
+                  showFolderPanel: !state.sidebar.showFolderPanel
+                }
+              }))
+            },
+            
+            setActiveFolder: (folderId) => {
+              set(state => ({
+                sidebar: {
+                  ...state.sidebar,
+                  activeFolderId: folderId
+                }
+              }))
+            },
+            
+            openFolderPanelHover: () => {
+              const state = get()
+              
+              // If panel is already open, just clear close timer
+              if (state.sidebar.showFolderPanel) {
+                clearHoverTimer('closeFolderPanel')
+                return
+              }
+              
+              // Clear any existing timers
+              clearHoverTimer('closeFolderPanel')
+              clearHoverTimer('openFolderPanel')
+              
+              // Set timer to open panel after 80ms
+              setHoverTimer('openFolderPanel', () => {
+                set(state => ({
+                  sidebar: {
+                    ...state.sidebar,
+                    showFolderPanel: true
+                  }
+                }))
+              }, 80)
+            },
+            
+            closeFolderPanelHover: () => {
+              const state = get()
+              
+              // If panel is not open, just clear open timer
+              if (!state.sidebar.showFolderPanel) {
+                clearHoverTimer('openFolderPanel')
+                return
+              }
+              
+              // Clear any existing timers
+              clearHoverTimer('openFolderPanel')
+              clearHoverTimer('closeFolderPanel')
+              
+              // Set timer to close panel after 150ms (longer delay for stability)
+              setHoverTimer('closeFolderPanel', () => {
+                set(state => ({
+                  sidebar: {
+                    ...state.sidebar,
+                    showFolderPanel: false
+                  }
+                }))
+              }, 150)
+            },
+            
+            clearHoverTimers: () => {
+              clearHoverTimer('openFolderPanel')
+              clearHoverTimer('closeFolderPanel')
             },
             
             // ===========================
@@ -838,6 +1037,10 @@ export const useUIStore = create<UIStore>()(
                   }
                 })
               }))
+            },
+            
+            cleanupStore: () => {
+              clearAllHoverTimers()
             }
           }
         }),
@@ -845,10 +1048,12 @@ export const useUIStore = create<UIStore>()(
           name: 'feedme-ui-store',
           partialize: (state) => ({
             view: state.view,
+            panels: state.panels,
             sidebar: {
               ...state.sidebar,
               pinnedSections: Array.from(state.sidebar.pinnedSections),
               expandedSections: Array.from(state.sidebar.expandedSections)
+              // Note: hoverTimers are excluded from persistence (not persisted)
             },
             theme: state.theme
           })
@@ -863,6 +1068,7 @@ export const useUIStore = create<UIStore>()(
 
 // Convenience hooks
 export const useUITabs = () => useUIStore(state => state.tabs)
+export const useUIPanels = () => useUIStore(state => state.panels)
 export const useUIView = () => useUIStore(state => state.view)
 export const useUIModals = () => useUIStore(state => state.modals)
 export const useUISidebar = () => useUIStore(state => state.sidebar)

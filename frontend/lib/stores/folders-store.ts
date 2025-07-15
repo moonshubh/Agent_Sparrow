@@ -679,6 +679,9 @@ export const useFoldersStore = create<FoldersStore>()(
                 state.dragState.draggedConversationIds,
                 targetFolderId
               )
+              
+              // Set as active folder in UI store
+              useUIStore.getState().actions.setActiveFolder(targetFolderId)
             }
             
             // Handle folder drag-drop operations here if needed

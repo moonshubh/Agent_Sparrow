@@ -483,7 +483,7 @@ export default function MessageBubble({
       case 'log_analyst':
         return { icon: FileSearch, label: 'Log Analysis', color: 'text-orange-400' }
       case 'researcher':
-        return { icon: Search, label: 'Research', color: 'text-purple-400' }
+        return { icon: Search, label: 'Research', color: 'text-mb-blue-400' }
       default:
         return { icon: Bot, label: 'Assistant', color: 'text-green-400' }
     }
@@ -651,7 +651,7 @@ export default function MessageBubble({
                     variant="ghost"
                     size="sm"
                     onClick={onRetry}
-                    className="h-6 w-6 p-0 text-chat-metadata hover:text-primary"
+                    className="h-6 w-6 p-0 text-chat-metadata hover:bg-mb-blue-300"
                   >
                     <RotateCcw className="w-3 h-3" />
                   </Button>

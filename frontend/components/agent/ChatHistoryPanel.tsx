@@ -50,8 +50,8 @@ export default function ChatHistoryPanel({
           <div className="flex items-center justify-between">
             {isChatHistoryOpen && (
               <div className="flex items-center gap-3">
-                <div className="p-2 rounded-full bg-gradient-to-r from-purple-400/20 to-pink-400/20">
-                  <History className="w-4 h-4 text-purple-400" />
+                <div className="p-2 rounded-full bg-gradient-to-r from-mb-blue-400/20 to-pink-400/20">
+                  <History className="w-4 h-4 text-mb-blue-400" />
                 </div>
                 <span className="font-medium text-sm">Chat History</span>
               </div>
@@ -103,7 +103,7 @@ export default function ChatHistoryPanel({
               variant="outline"
               size="sm"
               onClick={exportToMarkdown}
-              className="w-full text-xs rounded-xl bg-gradient-to-r from-purple-500/10 to-pink-500/10 border-purple-300/30 hover:from-purple-500/20 hover:to-pink-500/20 transition-all duration-300"
+              className="w-full text-xs rounded-xl bg-gradient-to-r from-mb-blue-500/10 to-pink-500/10 border-mb-blue-300/30 hover:from-mb-blue-500/20 hover:to-pink-500/20 transition-all duration-300"
             >
               <Download className="w-3 h-3 mr-2" />
               Export History

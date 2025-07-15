@@ -139,7 +139,7 @@ export function ExecutiveSummaryRenderer({ content, className }: ExecutiveSummar
               [rehypeAutolinkHeadings, { 
                 behavior: 'wrap',
                 properties: {
-                  className: 'anchor-link hover:text-primary transition-colors'
+                  className: 'anchor-link hover:bg-mb-blue-300 transition-colors'
                 }
               }]
             ]}

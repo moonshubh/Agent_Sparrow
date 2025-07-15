@@ -144,7 +144,7 @@ export function ChatSidebar({
             <Button
               variant="default"
               className={cn(
-                "w-full justify-start gap-2 bg-accent hover:bg-accent/90",
+                "w-full justify-start gap-2 bg-accent hover:bg-mb-blue-300/90",
                 isCollapsed && "justify-center px-2"
               )}
               onClick={() => onNewChat('primary')}
@@ -346,10 +346,10 @@ function SessionItem({
             <div
               className={cn(
                 "w-full h-9 pl-2 pr-1 text-sm font-normal group flex items-center overflow-hidden cursor-pointer",
-                "rounded-md border border-transparent hover:bg-accent hover:text-accent-foreground",
+                "rounded-md border border-transparent hover:bg-mb-blue-300 hover:bg-mb-blue-300-foreground",
                 "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
                 "transition-colors",
-                isActive ? "bg-secondary text-secondary-foreground" : "hover:bg-accent",
+                isActive ? "bg-secondary text-secondary-foreground" : "hover:bg-mb-blue-300",
                 isActive && "bg-accent/20 text-accent border-l-2 border-accent shadow-sm"
               )}
               onClick={onSelect}

@@ -170,10 +170,10 @@ export const RateLimitMetrics: React.FC<RateLimitMetricsProps> = ({
 
   const pieData = [
     { name: 'Flash Requests', value: metrics.gemini_flash_rpm_used + metrics.gemini_flash_rpd_used, color: '#3b82f6' },
-    { name: 'Pro Requests', value: metrics.gemini_pro_rpm_used + metrics.gemini_pro_rpd_used, color: '#8b5cf6' },
+    { name: 'Pro Requests', value: metrics.gemini_pro_rpm_used + metrics.gemini_pro_rpd_used, color: '#0967d2' },
   ];
 
-  const COLORS = ['#3b82f6', '#8b5cf6'];
+  const COLORS = ['#3b82f6', '#0967d2'];
 
   return (
     <Card className={className}>
