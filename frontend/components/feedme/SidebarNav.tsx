@@ -12,7 +12,7 @@
 
 'use client'
 
-import React from 'react'
+import React, { useRef, useEffect } from 'react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { 
@@ -43,6 +43,16 @@ export function SidebarNav({
 }: SidebarNavProps) {
   const { isCollapsed, showFolderPanel } = useUISidebar()
   const { toggleSidebar, openFolderPanel, closeFolderPanel, openFolderPanelHover, closeFolderPanelHover } = useUIActions()
+  const mouseLeaveTimerRef = useRef<NodeJS.Timeout | null>(null)
+
+  // Cleanup timer on unmount
+  useEffect(() => {
+    return () => {
+      if (mouseLeaveTimerRef.current) {
+        clearTimeout(mouseLeaveTimerRef.current)
+      }
+    }
+  }, [])
 
   const tabs = [
     {
@@ -154,6 +164,11 @@ export function SidebarNav({
               }}
               onMouseLeave={(e) => {
                 if (tab.id === 'folders') {
+                  // Clear any existing timer
+                  if (mouseLeaveTimerRef.current) {
+                    clearTimeout(mouseLeaveTimerRef.current)
+                  }
+                  
                   // Check if mouse is moving towards the panel (right side)
                   const rect = e.currentTarget.getBoundingClientRect()
                   const mouseX = e.clientX
@@ -161,7 +176,7 @@ export function SidebarNav({
                   
                   // If mouse is moving towards panel area, delay close slightly
                   if (mouseX > tabRightEdge - 10) {
-                    setTimeout(() => closeFolderPanelHover(), 50)
+                    mouseLeaveTimerRef.current = setTimeout(() => closeFolderPanelHover(), 50)
                   } else {
                     closeFolderPanelHover()
                   }

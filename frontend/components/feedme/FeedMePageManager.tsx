@@ -13,9 +13,8 @@
 
 'use client'
 
-import React, { useState, useEffect, useCallback } from 'react'
+import React, { useEffect } from 'react'
 import { Button } from '@/components/ui/button'
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
@@ -27,19 +26,10 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
-import { 
-  Home, 
-  Upload, 
-  FolderOpen, 
-  BarChart3, 
-  Settings,
-  Bell
-} from 'lucide-react'
 import { cn } from '@/lib/utils'
 
 // Import the FeedMe components
 import { UnifiedSearchBar } from './UnifiedSearchBarSimple'
-import { FolderTreeView } from './FolderTreeViewSimple'
 import { FileGridView } from './FileGridViewSimple'
 import { ConversationEditor } from './ConversationEditorSimple'
 import { AnalyticsDashboard } from './AnalyticsDashboardSimple'
@@ -49,50 +39,46 @@ import { FeedMeErrorBoundary } from './ErrorBoundary'
 // Import new two-panel components
 import { SidebarNav } from './SidebarNav'
 import { SecondaryFolderPanel } from './SecondaryFolderPanel'
-import { ThemeSwitch } from './ThemeSwitch'
-import { MobileDrawer } from './MobileDrawer'
 
-// Import modular store hooks - NO legacy dependencies
-import { useConversations, useConversationsActions } from '@/lib/stores/conversations-store'
-import { useRealtime, useRealtimeActions } from '@/lib/stores/realtime-store'
-import { useSearch, useSearchActions } from '@/lib/stores/search-store'
+// Import modular store hooks
+import { useConversations } from '@/lib/stores/conversations-store'
+import { useRealtime } from '@/lib/stores/realtime-store'
 import { useFolders, useFoldersActions, useFolderModals } from '@/lib/stores/folders-store'
-import { useAnalytics, useAnalyticsActions } from '@/lib/stores/analytics-store'
-import { useUITabs, useUIPanels, useUIActions, useUIResponsive } from '@/lib/stores/ui-store'
+import { useUIPanels, useUIResponsive } from '@/lib/stores/ui-store'
 import { useStoreInitialization } from '@/lib/stores/store-composition'
 
-export function FeedMePageManager() {
-  const [uploadModalOpen, setUploadModalOpen] = useState(false)
-  
-  // Folder modal state
-  const [folderName, setFolderName] = useState('')
-  const [folderDescription, setFolderDescription] = useState('')
-  const [folderColor, setFolderColor] = useState('#0095ff')
+// Import custom hooks for extracted functionality
+import { useFeedMeModals } from '@/hooks/useFeedMeModals'
+import { useFeedMeNavigation } from '@/hooks/useFeedMeNavigation'
 
-  // Modular store hooks - specific subscriptions for performance
-  const { activeTab } = useUITabs()
-  const { leftPanel, rightPanel, selectedConversationId, leftWidth } = useUIPanels()
+export function FeedMePageManager() {
+  // Extract functionality into custom hooks
+  const {
+    uploadModalOpen,
+    folderFormData,
+    openUploadModal,
+    closeUploadModal,
+    openFolderCreateModal,
+    updateFolderForm,
+    handleCreateFolder,
+  } = useFeedMeModals()
+
+  const {
+    handleTabChange,
+    handleConversationSelect,
+    handleConversationClose,
+    handleFolderSelect,
+    handleConversationMove,
+  } = useFeedMeNavigation()
+
+  // Store hooks - only what's needed for rendering
+  const { rightPanel, selectedConversationId } = useUIPanels()
   const { isMobile } = useUIResponsive()
-  const uiActions = useUIActions()
-  
-  // Conversations store
   const conversations = useConversations()
-  const conversationsActions = useConversationsActions()
-  
-  // Realtime store  
-  const { notifications, isConnected } = useRealtime()
-  const realtimeActions = useRealtimeActions()
-  
-  // Search store
-  const search = useSearch()
-  const searchActions = useSearchActions()
-  
-  // Folders and Analytics
+  const { notifications } = useRealtime()
   const folders = useFolders()
   const foldersActions = useFoldersActions()
   const folderModals = useFolderModals()
-  const analytics = useAnalytics()
-  const analyticsActions = useAnalyticsActions()
 
   // Auto-initialize all stores with cross-store synchronization
   useStoreInitialization()
@@ -101,69 +87,6 @@ export function FeedMePageManager() {
   useEffect(() => {
     console.log('FeedMe Page Manager ready')
   }, [])
-
-  // Legacy tab change handler (maintain compatibility)
-  const handleTabChange = (tab: string) => {
-    uiActions.setActiveTab(tab as any)
-    // Map tab changes to panel system
-    if (tab === 'conversations') {
-      uiActions.setRightPanel('conversations')
-    } else if (tab === 'analytics') {
-      uiActions.setRightPanel('analytics')
-    } else if (tab === 'folders') {
-      uiActions.setLeftPanel('folders')
-    }
-  }
-
-  const handleConversationSelect = (conversationId: number) => {
-    // Validate conversation ID before setting
-    if (!conversationId || conversationId <= 0) {
-      console.warn('Invalid conversation ID selected:', conversationId)
-      return
-    }
-    uiActions.selectConversation(conversationId)
-  }
-
-  const handleConversationClose = () => {
-    uiActions.selectConversation(null)
-  }
-
-  const handleFolderSelect = (folderId: number | null) => {
-    conversationsActions.setCurrentFolder(folderId)
-    // Switch to conversations view when folder is selected
-    uiActions.setRightPanel('conversations')
-  }
-
-  const handleConversationMove = async (conversationId: number, folderId: number | null) => {
-    try {
-      await conversationsActions.updateConversation(conversationId, { folder_id: folderId === null ? undefined : folderId })
-      // Refresh conversations list to reflect the move
-      await conversationsActions.loadConversations()
-    } catch (error) {
-      console.error('Failed to move conversation:', error)
-    }
-  }
-
-
-  const handleCreateFolder = async () => {
-    if (!folderName.trim()) return
-    
-    try {
-      await foldersActions.createFolder({
-        name: folderName.trim(),
-        color: folderColor,
-        description: folderDescription.trim() || undefined
-      })
-      
-      // Reset form
-      setFolderName('')
-      setFolderDescription('')
-      setFolderColor('#0095ff')
-      foldersActions.closeModals()
-    } catch (error) {
-      console.error('Failed to create folder:', error)
-    }
-  }
 
   const unreadNotifications = notifications.filter(n => !n.read).length
 
@@ -188,7 +111,7 @@ export function FeedMePageManager() {
         <SecondaryFolderPanel
           selectedFolderId={conversations.currentFolderId === undefined ? null : conversations.currentFolderId}
           onFolderSelect={handleFolderSelect}
-          onFolderCreate={() => foldersActions.openCreateModal()}
+          onFolderCreate={openFolderCreateModal}
         />
 
         {/* Main Content */}
@@ -227,7 +150,7 @@ export function FeedMePageManager() {
       {/* Upload Modal */}
       <EnhancedFeedMeModal 
         isOpen={uploadModalOpen}
-        onClose={() => setUploadModalOpen(false)}
+        onClose={closeUploadModal}
       />
       
       {/* Create Folder Modal */}
@@ -246,8 +169,8 @@ export function FeedMePageManager() {
               </Label>
               <Input
                 id="folder-name"
-                value={folderName}
-                onChange={(e) => setFolderName(e.target.value)}
+                value={folderFormData.name}
+                onChange={(e) => updateFolderForm({ name: e.target.value })}
                 placeholder="Folder name"
                 className="col-span-3"
               />
@@ -259,8 +182,8 @@ export function FeedMePageManager() {
               <Input
                 id="folder-color"
                 type="color"
-                value={folderColor}
-                onChange={(e) => setFolderColor(e.target.value)}
+                value={folderFormData.color}
+                onChange={(e) => updateFolderForm({ color: e.target.value })}
                 className="col-span-3 h-10"
               />
             </div>
@@ -270,8 +193,8 @@ export function FeedMePageManager() {
               </Label>
               <Textarea
                 id="folder-description"
-                value={folderDescription}
-                onChange={(e) => setFolderDescription(e.target.value)}
+                value={folderFormData.description}
+                onChange={(e) => updateFolderForm({ description: e.target.value })}
                 placeholder="Optional description"
                 className="col-span-3"
                 rows={3}
@@ -282,7 +205,7 @@ export function FeedMePageManager() {
             <Button variant="outline" onClick={() => foldersActions.closeModals()}>
               Cancel
             </Button>
-            <Button onClick={handleCreateFolder} disabled={!folderName.trim()}>
+            <Button onClick={handleCreateFolder} disabled={!folderFormData.name.trim()}>
               Create Folder
             </Button>
           </DialogFooter>

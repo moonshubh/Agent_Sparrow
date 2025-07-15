@@ -87,11 +87,21 @@ export function ConversationCard({
   const availableFolders = Object.values(folders).filter(f => f.id !== conversation.folder_id)
 
   const formatDate = (dateString: string) => {
-    return new Date(dateString).toLocaleDateString('en-US', {
-      month: 'short',
-      day: 'numeric',
-      year: 'numeric'
-    })
+    if (!dateString) return 'Unknown'
+    
+    try {
+      const date = new Date(dateString)
+      // Check if date is invalid
+      if (isNaN(date.getTime())) return 'Invalid date'
+      
+      return date.toLocaleDateString('en-US', {
+        month: 'short',
+        day: 'numeric',
+        year: 'numeric'
+      })
+    } catch {
+      return 'Invalid date'
+    }
   }
 
   const handleCardClick = () => {

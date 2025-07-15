@@ -53,6 +53,7 @@ export function FolderTreeItem({
 }: FolderTreeItemProps) {
   const [isContextMenuOpen, setIsContextMenuOpen] = useState(false)
   const [contextMenuPosition, setContextMenuPosition] = useState({ x: 0, y: 0 })
+  const [isHovered, setIsHovered] = useState(false)
   const moreButtonRef = useRef<HTMLButtonElement>(null)
   
   const foldersActions = useFoldersActions()
@@ -142,26 +143,12 @@ export function FolderTreeItem({
         )}
         style={{ 
           paddingLeft: `${level * 16 + 8}px`,
-          backgroundColor: isActive ? activeBackgroundColor : baseBackgroundColor,
+          backgroundColor: isHovered ? hoverBackgroundColor : (isActive ? activeBackgroundColor : baseBackgroundColor),
           '--hover-color': hoverBackgroundColor,
           '--text-color': textColor
         } as React.CSSProperties & { '--hover-color': string; '--text-color': string }}
-        onMouseEnter={(e) => {
-          e.currentTarget.style.backgroundColor = hoverBackgroundColor
-          // Show hover elements
-          const badge = e.currentTarget.querySelector('[data-badge]') as HTMLElement
-          const moreButton = e.currentTarget.querySelector('[data-more-button]') as HTMLElement
-          if (badge) badge.style.opacity = '1'
-          if (moreButton) moreButton.style.opacity = '1'
-        }}
-        onMouseLeave={(e) => {
-          e.currentTarget.style.backgroundColor = isActive ? activeBackgroundColor : baseBackgroundColor
-          // Hide hover elements
-          const badge = e.currentTarget.querySelector('[data-badge]') as HTMLElement
-          const moreButton = e.currentTarget.querySelector('[data-more-button]') as HTMLElement
-          if (badge) badge.style.opacity = '0'
-          if (moreButton) moreButton.style.opacity = '0'
-        }}
+        onMouseEnter={() => setIsHovered(true)}
+        onMouseLeave={() => setIsHovered(false)}
         onClick={handleSelect}
         role="treeitem"
         aria-selected={isActive}
@@ -215,11 +202,9 @@ export function FolderTreeItem({
             "text-xs h-5 px-1.5 transition-opacity duration-200",
             isActive 
               ? "bg-white/20 text-current border-current/20" 
-              : "bg-accent/20 text-accent border-accent/30"
+              : "bg-accent/20 text-accent border-accent/30",
+            isHovered ? "opacity-100" : "opacity-0"
           )}
-          style={{
-            opacity: 0 // Force initial opacity
-          }}
         >
           {conversationCount}
         </Badge>
@@ -233,11 +218,9 @@ export function FolderTreeItem({
               size="sm" 
               data-more-button
               className={cn(
-                "h-6 w-6 p-0 hover:bg-mb-blue-300/20 transition-all duration-200"
+                "h-6 w-6 p-0 hover:bg-mb-blue-300/20 transition-all duration-200",
+                isHovered ? "opacity-100" : "opacity-0"
               )}
-              style={{
-                opacity: 0 // Force initial opacity
-              }}
               onClick={handleMoreClick}
               aria-label={`More actions for ${folder.name}`}
             >

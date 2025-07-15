@@ -36,33 +36,40 @@ export function ThemeSwitch({
   const { theme } = useUITheme()
   const { setTheme } = useUIActions()
 
-  // Apply theme to document
-  useEffect(() => {
-    const root = window.document.documentElement
-    root.classList.remove('light', 'dark')
-
+  // Get computed theme based on system preference
+  const getComputedTheme = React.useCallback(() => {
     if (theme === 'system') {
-      const systemTheme = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
-      root.classList.add(systemTheme)
-    } else {
-      root.classList.add(theme)
+      return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
     }
+    return theme
   }, [theme])
 
-  // Listen for system theme changes
-  useEffect(() => {
-    if (theme !== 'system') return
+  const [computedTheme, setComputedTheme] = React.useState<'light' | 'dark'>(() => {
+    if (typeof window === 'undefined') return 'light'
+    return getComputedTheme()
+  })
 
-    const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)')
-    const handleChange = () => {
+  // Update computed theme when theme changes or system preference changes
+  useEffect(() => {
+    const updateComputedTheme = () => {
+      const newComputedTheme = getComputedTheme()
+      setComputedTheme(newComputedTheme)
+      
+      // Apply theme class only as a side effect, not as primary state management
       const root = window.document.documentElement
       root.classList.remove('light', 'dark')
-      root.classList.add(mediaQuery.matches ? 'dark' : 'light')
+      root.classList.add(newComputedTheme)
     }
 
-    mediaQuery.addEventListener('change', handleChange)
-    return () => mediaQuery.removeEventListener('change', handleChange)
-  }, [theme])
+    updateComputedTheme()
+
+    // Listen for system theme changes only when theme is 'system'
+    if (theme === 'system') {
+      const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)')
+      mediaQuery.addEventListener('change', updateComputedTheme)
+      return () => mediaQuery.removeEventListener('change', updateComputedTheme)
+    }
+  }, [theme, getComputedTheme])
 
   const themes = [
     { value: 'light', label: 'Light', icon: Sun },

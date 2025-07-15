@@ -130,7 +130,7 @@ function FileUploadZone({
             "relative border-2 border-dashed rounded-lg transition-all duration-200",
             isDragOver 
               ? "border-primary bg-primary/5" 
-              : "border-border/50 hover:bg-mb-blue-300/50 hover:bg-mb-blue-300/5"
+              : "border-border/50 hover:bg-mb-blue-300/5"
           )}
           onDragOver={handleDragOver}
           onDragLeave={handleDragLeave}

@@ -28,6 +28,18 @@ import { useFolders, useFoldersActions } from '@/lib/stores/folders-store'
 import { useUISidebar, useUIActions } from '@/lib/stores/ui-store'
 import { useOutsideClick } from '@/hooks/useOutsideClick'
 
+// UI Layout Constants
+const UI_CONSTANTS = {
+  HEADER_HEIGHT: 48,           // h-12 (compact header)
+  FOLDER_ITEM_HEIGHT: 40,      // approximate height per folder item
+  TREE_PADDING: 24,            // top/bottom padding in folder tree
+  SEARCH_INPUT_HEIGHT: 32,     // search input when active
+  MIN_PANEL_HEIGHT: 200,       // minimum usable height
+  MAX_PANEL_HEIGHT: 600,       // maximum height before scrolling
+  VIEWPORT_MARGIN: 100,        // account for app bar and margins
+  BRIDGE_WIDTH: 8,             // hover bridge gap between sidebar and panel
+} as const
+
 interface SecondaryFolderPanelProps {
   selectedFolderId: number | null
   onFolderSelect: (folderId: number | null) => void
@@ -103,26 +115,23 @@ export function SecondaryFolderPanel({
   // Calculate dynamic panel height based on folder count
   const calculatePanelHeight = React.useMemo(() => {
     const folderCount = filteredFolders.length
-    const headerHeight = 48 // h-12 (compact header)
-    const itemHeight = 40 // approximate height per folder item
-    const padding = 24 // top/bottom padding in folder tree
-    const searchHeight = searchQuery ? 32 : 0 // search input when active
+    const searchHeight = searchQuery ? UI_CONSTANTS.SEARCH_INPUT_HEIGHT : 0
     
     // Calculate content height
-    const contentHeight = (folderCount * itemHeight) + padding + searchHeight
+    const contentHeight = (folderCount * UI_CONSTANTS.FOLDER_ITEM_HEIGHT) + 
+                          UI_CONSTANTS.TREE_PADDING + 
+                          searchHeight
     
-    // Define constraints
-    const minHeight = 200 // minimum usable height
-    const maxHeight = 600 // maximum height before scrolling
+    // Calculate available viewport height
     const availableViewportHeight = typeof window !== 'undefined' 
-      ? window.innerHeight - 100 // account for app bar and margins
+      ? window.innerHeight - UI_CONSTANTS.VIEWPORT_MARGIN
       : 800
     
     // Calculate optimal height (no footer)
-    const totalHeight = headerHeight + contentHeight
+    const totalHeight = UI_CONSTANTS.HEADER_HEIGHT + contentHeight
     const constrainedHeight = Math.min(
-      Math.max(totalHeight, minHeight),
-      Math.min(maxHeight, availableViewportHeight)
+      Math.max(totalHeight, UI_CONSTANTS.MIN_PANEL_HEIGHT),
+      Math.min(UI_CONSTANTS.MAX_PANEL_HEIGHT, availableViewportHeight)
     )
     
     return {
@@ -151,7 +160,7 @@ export function SecondaryFolderPanel({
         className="fixed left-16 z-40 bg-transparent"
         style={{
           top: 'var(--app-bar-height, 0px)',
-          width: '8px', // bridge gap
+          width: `${UI_CONSTANTS.BRIDGE_WIDTH}px`,
           height: `${calculatePanelHeight.height}px`
         }}
         onMouseEnter={handleMouseEnter}
@@ -170,7 +179,7 @@ export function SecondaryFolderPanel({
           className
         )}
         style={{
-          left: 'calc(64px + 8px)', // sidebar width + bridge width
+          left: `calc(64px + ${UI_CONSTANTS.BRIDGE_WIDTH}px)`, // sidebar width + bridge width
           top: 'var(--app-bar-height, 0px)',
           height: `${calculatePanelHeight.height}px`,
           zIndex: 45,
@@ -181,8 +190,11 @@ export function SecondaryFolderPanel({
         role="complementary"
         aria-label="Folder navigation panel"
       >
-        {/* Compact Header - 48px */}
-        <div className="h-12 px-4 border-b bg-card/30 rounded-t-lg">
+        {/* Compact Header */}
+        <div 
+          className="px-4 border-b bg-card/30 rounded-t-lg"
+          style={{ height: `${UI_CONSTANTS.HEADER_HEIGHT}px` }}
+        >
           <div className="flex items-center justify-between h-full">
             {/* Create Folder Button (Left) */}
             <Button 
@@ -209,7 +221,7 @@ export function SecondaryFolderPanel({
         <div 
           className="flex-1 overflow-hidden"
           style={{ 
-            height: `${calculatePanelHeight.height - 48}px` 
+            height: `${calculatePanelHeight.height - UI_CONSTANTS.HEADER_HEIGHT}px` 
           }}
         >
           <ScrollArea className={cn(

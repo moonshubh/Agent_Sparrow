@@ -84,13 +84,11 @@ export function FolderContextMenu({
         "fixed z-[300] min-w-[160px]",
         "border rounded-md shadow-lg",
         "animate-in fade-in-0 zoom-in-95 duration-200",
-        // Enhanced contrast background
-        "backdrop-blur-sm",
+        // Enhanced contrast background and border
+        "backdrop-blur-sm bg-gray-900/95 border-white/[0.08]",
         className
       )}
       style={{
-        backgroundColor: 'rgba(38, 38, 40, 0.95)',
-        borderColor: 'rgba(255, 255, 255, 0.08)',
         left: position?.x || 0,
         top: position?.y || 0
       }}

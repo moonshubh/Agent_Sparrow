@@ -192,7 +192,7 @@ export function FileGridView({ onConversationSelect, currentFolderId, onFolderSe
               variant="ghost"
               size="sm"
               onClick={() => onFolderSelect?.(null)}
-              className="text-accent hover:bg-mb-blue-300-foreground"
+              className="text-accent hover:bg-mb-blue-300/20"
             >
               All Conversations
             </Button>

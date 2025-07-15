@@ -42,10 +42,6 @@ export interface SidebarState {
   expandedSections: Set<string>
   showFolderPanel: boolean
   activeFolderId: number | null
-  hoverTimers: {
-    openTimer: NodeJS.Timeout | null
-    closeTimer: NodeJS.Timeout | null
-  }
 }
 
 export interface BulkActionState {
@@ -214,6 +210,7 @@ interface UIActions {
   resetToDefaults: () => void
   exportUISettings: () => void
   importUISettings: (settings: Partial<UIState>) => void
+  cleanupStore: () => void
 }
 
 export interface UIStore extends UIState {
@@ -258,11 +255,7 @@ const DEFAULT_STATE: UIState = {
     pinnedSections: new Set(['folders', 'recent']),
     expandedSections: new Set(['folders', 'recent', 'analytics']),
     showFolderPanel: false,
-    activeFolderId: null,
-    hoverTimers: {
-      openTimer: null,
-      closeTimer: null
-    }
+    activeFolderId: null
   },
   
   bulkActions: {
@@ -299,6 +292,28 @@ const DEFAULT_STATE: UIState = {
     currentFocus: null,
     focusHistory: []
   }
+}
+
+// Global timer manager for hover effects
+const hoverTimers = new Map<string, NodeJS.Timeout>()
+
+const setHoverTimer = (key: string, callback: () => void, delay: number): void => {
+  clearHoverTimer(key)
+  const timer = setTimeout(callback, delay)
+  hoverTimers.set(key, timer)
+}
+
+const clearHoverTimer = (key: string): void => {
+  const timer = hoverTimers.get(key)
+  if (timer) {
+    clearTimeout(timer)
+    hoverTimers.delete(key)
+  }
+}
+
+const clearAllHoverTimers = (): void => {
+  hoverTimers.forEach(timer => clearTimeout(timer))
+  hoverTimers.clear()
 }
 
 // Store Implementation
@@ -615,170 +630,54 @@ export const useUIStore = create<UIStore>()(
             openFolderPanelHover: () => {
               const state = get()
               
-              // Ensure hoverTimers is initialized
-              if (!state.sidebar.hoverTimers) {
-                set(currentState => ({
-                  sidebar: {
-                    ...currentState.sidebar,
-                    hoverTimers: {
-                      openTimer: null,
-                      closeTimer: null
-                    }
-                  }
-                }))
-              }
-              
-              // If panel is already open, don't set timers
+              // If panel is already open, just clear close timer
               if (state.sidebar.showFolderPanel) {
-                // Just clear any close timer
-                if (state.sidebar.hoverTimers?.closeTimer) {
-                  clearTimeout(state.sidebar.hoverTimers.closeTimer)
-                  set(currentState => ({
-                    sidebar: {
-                      ...currentState.sidebar,
-                      hoverTimers: {
-                        ...currentState.sidebar.hoverTimers,
-                        closeTimer: null
-                      }
-                    }
-                  }))
-                }
+                clearHoverTimer('closeFolderPanel')
                 return
               }
               
               // Clear any existing timers
-              if (state.sidebar.hoverTimers?.closeTimer) {
-                clearTimeout(state.sidebar.hoverTimers.closeTimer)
-              }
-              if (state.sidebar.hoverTimers?.openTimer) {
-                clearTimeout(state.sidebar.hoverTimers.openTimer)
-              }
+              clearHoverTimer('closeFolderPanel')
+              clearHoverTimer('openFolderPanel')
               
               // Set timer to open panel after 80ms
-              const openTimer = setTimeout(() => {
+              setHoverTimer('openFolderPanel', () => {
                 set(state => ({
                   sidebar: {
                     ...state.sidebar,
-                    showFolderPanel: true,
-                    hoverTimers: {
-                      ...state.sidebar.hoverTimers,
-                      openTimer: null
-                    }
+                    showFolderPanel: true
                   }
                 }))
               }, 80)
-              
-              set(state => ({
-                sidebar: {
-                  ...state.sidebar,
-                  hoverTimers: {
-                    ...state.sidebar.hoverTimers,
-                    openTimer
-                  }
-                }
-              }))
             },
             
             closeFolderPanelHover: () => {
               const state = get()
               
-              // Ensure hoverTimers is initialized
-              if (!state.sidebar.hoverTimers) {
-                set(currentState => ({
-                  sidebar: {
-                    ...currentState.sidebar,
-                    hoverTimers: {
-                      openTimer: null,
-                      closeTimer: null
-                    }
-                  }
-                }))
-              }
-              
-              // If panel is not open, don't set close timer
+              // If panel is not open, just clear open timer
               if (!state.sidebar.showFolderPanel) {
-                // Just clear any open timer
-                if (state.sidebar.hoverTimers?.openTimer) {
-                  clearTimeout(state.sidebar.hoverTimers.openTimer)
-                  set(currentState => ({
-                    sidebar: {
-                      ...currentState.sidebar,
-                      hoverTimers: {
-                        ...currentState.sidebar.hoverTimers,
-                        openTimer: null
-                      }
-                    }
-                  }))
-                }
+                clearHoverTimer('openFolderPanel')
                 return
               }
               
               // Clear any existing timers
-              if (state.sidebar.hoverTimers?.openTimer) {
-                clearTimeout(state.sidebar.hoverTimers.openTimer)
-              }
-              if (state.sidebar.hoverTimers?.closeTimer) {
-                clearTimeout(state.sidebar.hoverTimers.closeTimer)
-              }
+              clearHoverTimer('openFolderPanel')
+              clearHoverTimer('closeFolderPanel')
               
               // Set timer to close panel after 150ms (longer delay for stability)
-              const closeTimer = setTimeout(() => {
+              setHoverTimer('closeFolderPanel', () => {
                 set(state => ({
                   sidebar: {
                     ...state.sidebar,
-                    showFolderPanel: false,
-                    hoverTimers: {
-                      ...state.sidebar.hoverTimers,
-                      closeTimer: null
-                    }
+                    showFolderPanel: false
                   }
                 }))
               }, 150)
-              
-              set(state => ({
-                sidebar: {
-                  ...state.sidebar,
-                  hoverTimers: {
-                    ...state.sidebar.hoverTimers,
-                    closeTimer
-                  }
-                }
-              }))
             },
             
             clearHoverTimers: () => {
-              const state = get()
-              
-              // Ensure hoverTimers is initialized
-              if (!state.sidebar.hoverTimers) {
-                set(currentState => ({
-                  sidebar: {
-                    ...currentState.sidebar,
-                    hoverTimers: {
-                      openTimer: null,
-                      closeTimer: null
-                    }
-                  }
-                }))
-                return
-              }
-              
-              if (state.sidebar.hoverTimers.openTimer) {
-                clearTimeout(state.sidebar.hoverTimers.openTimer)
-              }
-              if (state.sidebar.hoverTimers.closeTimer) {
-                clearTimeout(state.sidebar.hoverTimers.closeTimer)
-              }
-              
-              set(state => ({
-                sidebar: {
-                  ...state.sidebar,
-                  hoverTimers: {
-                    openTimer: null,
-                    closeTimer: null
-                  }
-                }
-              }))
+              clearHoverTimer('openFolderPanel')
+              clearHoverTimer('closeFolderPanel')
             },
             
             // ===========================
@@ -1138,6 +1037,10 @@ export const useUIStore = create<UIStore>()(
                   }
                 })
               }))
+            },
+            
+            cleanupStore: () => {
+              clearAllHoverTimers()
             }
           }
         }),

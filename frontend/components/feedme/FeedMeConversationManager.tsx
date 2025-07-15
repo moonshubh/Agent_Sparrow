@@ -574,7 +574,7 @@ export function FeedMeConversationManager({ isOpen, onClose }: FeedMeConversatio
                   </p>
                   <Button 
                     onClick={() => setIsUploadModalOpen(true)}
-                    className="flex items-center gap-2 mx-auto bg-accent hover:bg-mb-blue-300/90 text-accent-foreground"
+                    className="flex items-center gap-2 mx-auto bg-mb-blue-300/10 hover:bg-mb-blue-300/90 text-mb-blue-300 hover:text-white focus-visible:ring-2 focus-visible:ring-mb-blue-300 transition-colors"
                   >
                     <Plus className="h-4 w-4" />
                     Upload Transcript
