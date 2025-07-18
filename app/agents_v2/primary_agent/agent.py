@@ -1,4 +1,21 @@
 import logging
+import os
+import anyio
+from dotenv import load_dotenv
+from typing import AsyncIterator
+
+from langchain_core.messages import AIMessageChunk
+from langchain_google_genai import ChatGoogleGenerativeAI, HarmCategory, HarmBlockThreshold
+from opentelemetry import trace
+from opentelemetry.trace import Status, StatusCode
+
+from app.core.rate_limiting.agent_wrapper import wrap_gemini_agent
+from app.agents_v2.primary_agent.schemas import PrimaryAgentState
+from app.agents_v2.primary_agent.tools import mailbird_kb_search, tavily_web_search
+from app.agents_v2.primary_agent.reasoning import ReasoningEngine, ReasoningConfig
+from app.agents_v2.primary_agent.prompts import AgentSparrowV9Prompts
+
+# Standard logger setup
 logger = logging.getLogger(__name__)
 if not logger.handlers:
     handler = logging.StreamHandler()
@@ -7,85 +24,18 @@ if not logger.handlers:
     logger.addHandler(handler)
     logger.setLevel(logging.INFO)
 
-import os
-from dotenv import load_dotenv
-from langchain_core.messages import BaseMessage, SystemMessage, AIMessage, AIMessageChunk, HumanMessage, ToolMessage
-from langchain_google_genai import ChatGoogleGenerativeAI, HarmCategory, HarmBlockThreshold
-from app.core.rate_limiting.agent_wrapper import wrap_gemini_agent
-from app.agents_v2.primary_agent.schemas import PrimaryAgentState
-from typing import Iterator, List, AsyncIterator # Added for streaming return type and List
-from app.agents_v2.primary_agent.tools import mailbird_kb_search, tavily_web_search
-from qdrant_client import QdrantClient
-try:
-    from langchain_qdrant import Qdrant  # Preferred modern package
-except ImportError:
-    from langchain_community.vectorstores.qdrant import Qdrant  # Fallback
-from langchain_google_genai import embeddings as gen_embeddings
-from opentelemetry import trace
-import anyio
-from opentelemetry.trace import Status, StatusCode
-from app.db.embedding_utils import (
-    find_similar_documents, 
-    find_combined_similar_content,
-    SearchResult as InternalSearchResult,
-    CombinedSearchResult
-) # Added for internal search and FeedMe integration
-
-# Import Agent Sparrow modular prompt system
-from app.agents_v2.primary_agent.prompts import (
-    load_agent_sparrow_prompt, 
-    PromptLoadConfig, 
-    PromptVersion,
-    EmotionTemplates,
-    ResponseFormatter
-)
-from app.agents_v2.primary_agent.reasoning.schemas import ProblemCategory
-
-# Import Agent Sparrow reasoning framework
-from app.agents_v2.primary_agent.reasoning import (
-    ReasoningEngine,
-    ReasoningConfig,
-    ReasoningState
-)
-
-# Import Agent Sparrow structured troubleshooting framework
-from app.agents_v2.primary_agent.troubleshooting import (
-    TroubleshootingEngine,
-    TroubleshootingConfig,
-    TroubleshootingState,
-    TroubleshootingSessionManager
-)
-
 # Get a tracer instance for OpenTelemetry
 tracer = trace.get_tracer(__name__)
 
-# Load environment variables
+# Load environment variables from .env file
 load_dotenv()
 
-# Ensure the GEMINI_API_KEY is set
+# Ensure the GEMINI_API_KEY is set, raising an error if not found
 if "GEMINI_API_KEY" not in os.environ:
     logger.error("GEMINI_API_KEY not found in environment variables.")
     raise ValueError("GEMINI_API_KEY not found in environment variables.")
-else:
-    logger.debug("GEMINI_API_KEY found.")
 
-# Qdrant setup (assumes local Qdrant running or env vars set)
-QDRANT_URL = os.getenv("QDRANT_URL", "http://localhost:6333")
-QDRANT_COLLECTION = os.getenv("KB_COLLECTION", "mailbird_kb")
-
-# Threshold for deciding if KB docs are relevant
-RELEVANCE_THRESHOLD = float(os.getenv("KB_RELEVANCE_THRESHOLD", "0.25"))
-INTERNAL_SEARCH_SIMILARITY_THRESHOLD = 0.75  # Trigger web search if best internal score is below this (higher is better for similarity)
-MIN_INTERNAL_RESULTS_FOR_NO_WEB_SEARCH = 2 # If we get at least this many good results, maybe skip web search
-
-# Build embeddings & vector store interface
-emb = gen_embeddings.GoogleGenerativeAIEmbeddings(model="models/embedding-001", google_api_key=os.environ.get("GEMINI_API_KEY"))
-qdrant_client = QdrantClient(url=QDRANT_URL)
-vector_store = Qdrant(client=qdrant_client, collection_name=QDRANT_COLLECTION, embeddings=emb)
-
-# 1. Initialize the model
-# We use a temperature of 0 to get more deterministic results.
-logger.info("Initializing ChatGoogleGenerativeAI model")
+# Initialize the Gemini model for the primary agent
 try:
     safety_settings = {
         HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
@@ -94,75 +44,30 @@ try:
         HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
     }
     model_base = ChatGoogleGenerativeAI(
-        model="gemini-2.5-flash", # Updated to latest 2.5 Flash model as per user
+        model="gemini-2.5-flash",
         temperature=0,
         google_api_key=os.environ.get("GEMINI_API_KEY"),
         safety_settings=safety_settings,
-        convert_system_message_to_human=True # Recommended for some Gemini models with system messages
+        convert_system_message_to_human=True
     )
-    logger.info("ChatGoogleGenerativeAI model initialized")
+    # Bind tools and then wrap for rate limiting
+    model_with_tools_base = model_base.bind_tools([mailbird_kb_search, tavily_web_search])
+    model_with_tools = wrap_gemini_agent(model_with_tools_base, "gemini-2.5-flash")
+    logger.info("Primary agent model initialized and wrapped successfully.")
 except Exception as e:
-    logger.exception("Error during ChatGoogleGenerativeAI initialization: %s", e)
+    logger.exception("Fatal error during ChatGoogleGenerativeAI initialization: %s", e)
     raise
 
-# 2. Bind the tool to the model FIRST, then wrap
-logger.debug("Binding tools to model")
-model_with_tools_base = model_base.bind_tools([mailbird_kb_search, tavily_web_search])
-logger.info("Tools bound to model.")
-
-# 3. NOW wrap the model with tools to apply rate limiting
-logger.info(f"Wrapping model with tools: {type(model_with_tools_base)}")
-model_with_tools = wrap_gemini_agent(model_with_tools_base, "gemini-2.5-flash")
-logger.info(f"Final wrapped model with tools type: {type(model_with_tools)}")
-logger.info(f"Final model has stream: {hasattr(model_with_tools, 'stream')}")
-logger.info("Rate-limited model with tools created")
-
-# 3. Initialize Agent Sparrow Troubleshooting System
-logger.info("Initializing Agent Sparrow structured troubleshooting system")
-try:
-    # Initialize troubleshooting configuration
-    troubleshooting_config = TroubleshootingConfig(
-        enable_adaptive_workflows=True,
-        enable_progressive_complexity=True,
-        enable_verification_checkpoints=True,
-        enable_automatic_escalation=True,
-        enable_session_persistence=True,
-        default_step_timeout_minutes=int(os.getenv("TROUBLESHOOTING_STEP_TIMEOUT", "10")),
-        max_session_duration_minutes=int(os.getenv("TROUBLESHOOTING_MAX_DURATION", "60")),
-        verification_interval_steps=int(os.getenv("TROUBLESHOOTING_VERIFICATION_INTERVAL", "3")),
-        emotional_adaptation_enabled=True,
-        technical_level_adaptation=True,
-        integrate_with_reasoning_engine=True,
-        debug_mode=bool(os.getenv("TROUBLESHOOTING_DEBUG", "false").lower() == "true")
-    )
-    
-    # Initialize troubleshooting engine
-    troubleshooting_engine = TroubleshootingEngine(troubleshooting_config)
-    
-    # Initialize session manager
-    session_manager = TroubleshootingSessionManager(troubleshooting_config)
-    
-    logger.info("Agent Sparrow troubleshooting system initialized successfully")
-    
-except Exception as e:
-    logger.exception("Error during troubleshooting system initialization: %s", e)
-    # Initialize fallback None values to prevent errors
-    troubleshooting_engine = None
-    session_manager = None
-    logger.warning("Continuing with troubleshooting system disabled")
-
-logger.info("Module initialization complete.")
-
-# 3. Create the agent logic
 async def run_primary_agent(state: PrimaryAgentState) -> AsyncIterator[AIMessageChunk]:
     """
     Asynchronously processes a user query using the primary agent system, yielding AI message chunks as a streaming response.
-    
-    This function orchestrates advanced reasoning, structured troubleshooting, internal knowledge base search, and web search to generate a comprehensive answer to Mailbird-related queries. It integrates Agent Sparrow's reasoning and troubleshooting engines, dynamically assembles context from multiple sources, constructs a modular system prompt, and streams the AI's response in real time. Extensive telemetry and error handling ensure robust operation and detailed observability.
-    
+
+    This function orchestrates the reasoning engine to generate a comprehensive, self-critiqued answer.
+    It handles input validation, calls the reasoning engine, logs telemetry, and streams the final response.
+
     Parameters:
         state (PrimaryAgentState): The current agent state, including user messages and session context.
-    
+
     Yields:
         AIMessageChunk: Streamed chunks of the AI assistant's response.
     """
@@ -176,434 +81,61 @@ async def run_primary_agent(state: PrimaryAgentState) -> AsyncIterator[AIMessage
             if len(user_query) > MAX_QUERY_LENGTH:
                 parent_span.set_attribute("input.query.error", "Query too long")
                 parent_span.set_status(Status(StatusCode.ERROR, "Query too long"))
-                # Yield a single error message chunk and return
-                yield AIMessageChunk(content="Your query is too long. Please shorten it and try again.", role="assistant") # Add role
-                return # Bare return to exit the async generator
+                yield AIMessageChunk(content="Your query is too long. Please shorten it and try again.", role="assistant")
+                return
 
             parent_span.set_attribute("input.query", user_query)
             parent_span.set_attribute("state.message_count", len(state.messages))
 
-            # Agent Sparrow Advanced Reasoning
-            reasoning_state = None
-            with tracer.start_as_current_span("agent_sparrow.reasoning") as reasoning_span:
-                try:
-                    # Initialize reasoning engine with configuration from settings
-                    from app.core.settings import settings
-                    reasoning_config = ReasoningConfig(
-                        enable_chain_of_thought=settings.reasoning_enable_chain_of_thought,
-                        enable_problem_solving_framework=settings.reasoning_enable_problem_solving,
-                        enable_tool_intelligence=settings.reasoning_enable_tool_intelligence,
-                        enable_quality_assessment=settings.reasoning_enable_quality_assessment,
-                        enable_reasoning_transparency=settings.reasoning_enable_reasoning_transparency,
-                        debug_mode=settings.reasoning_debug_mode
-                    )
-                    reasoning_engine = ReasoningEngine(reasoning_config)
-                    
-                    # Perform comprehensive reasoning about the query
-                    reasoning_state = await reasoning_engine.reason_about_query(
-                        query=user_query,
-                        context={"messages": state.messages},
-                        session_id=getattr(state, 'session_id', 'default')
-                    )
-                    
-                    # Log reasoning results
-                    reasoning_span.set_attribute("reasoning.confidence", reasoning_state.overall_confidence)
-                    reasoning_span.set_attribute("reasoning.emotion", reasoning_state.query_analysis.emotional_state.value)
-                    reasoning_span.set_attribute("reasoning.category", reasoning_state.query_analysis.problem_category.value)
-                    reasoning_span.set_attribute("reasoning.tool_decision", reasoning_state.tool_reasoning.decision_type.value)
-                    reasoning_span.set_attribute("reasoning.processing_time", reasoning_state.total_processing_time)
-                    
-                    logger.info(f"Agent Sparrow reasoning completed: "
-                              f"emotion={reasoning_state.query_analysis.emotional_state.value}, "
-                              f"category={reasoning_state.query_analysis.problem_category.value}, "
-                              f"confidence={reasoning_state.overall_confidence:.2f}, "
-                              f"tool_decision={reasoning_state.tool_reasoning.decision_type.value}")
-                              
-                except Exception as e:
-                    logger.error(f"Agent Sparrow reasoning failed: {e}")
-                    reasoning_span.record_exception(e)
-                    reasoning_span.set_status(Status(StatusCode.ERROR, f"Reasoning error: {str(e)}"))
-                    # Continue with fallback behavior
-                    reasoning_state = None
+            # Initialize reasoning engine with self-critique enabled
+            from app.core.settings import settings
+            reasoning_config = ReasoningConfig(
+                enable_self_critique=True,
+                enable_chain_of_thought=settings.reasoning_enable_chain_of_thought,
+                enable_problem_solving_framework=settings.reasoning_enable_problem_solving,
+                enable_tool_intelligence=settings.reasoning_enable_tool_intelligence,
+                enable_quality_assessment=settings.reasoning_enable_quality_assessment,
+                enable_reasoning_transparency=settings.reasoning_enable_reasoning_transparency,
+                debug_mode=settings.reasoning_debug_mode
+            )
+            reasoning_engine = ReasoningEngine(model=model_with_tools, config=reasoning_config)
 
-            # Agent Sparrow Structured Troubleshooting Integration
-            troubleshooting_state = None
-            active_troubleshooting_session = None
-            
-            if troubleshooting_engine and reasoning_state and reasoning_state.query_analysis:
-                with tracer.start_as_current_span("agent_sparrow.troubleshooting") as troubleshooting_span:
-                    try:
-                        qa = reasoning_state.query_analysis
-                        
-                        # Check if this is a complex technical issue that would benefit from structured troubleshooting
-                        should_use_troubleshooting = (
-                            qa.problem_category in [
-                                ProblemCategory.TECHNICAL_ISSUE,
-                                ProblemCategory.ACCOUNT_SETUP,
-                                ProblemCategory.PERFORMANCE_OPTIMIZATION
-                            ] and
-                            (qa.complexity_score >= 0.5 or qa.urgency_level >= 3 or 
-                             len(qa.key_entities) >= 2)
-                        )
-                        
-                        if should_use_troubleshooting:
-                            # Initiate structured troubleshooting
-                            troubleshooting_state = await troubleshooting_engine.initiate_troubleshooting(
-                                query_text=user_query,
-                                problem_category=qa.problem_category,
-                                customer_emotion=qa.emotional_state,
-                                reasoning_state=reasoning_state,
-                                session_id=getattr(state, 'session_id', None)
-                            )
-                            
-                            if troubleshooting_state.recommended_workflow:
-                                # Start troubleshooting session
-                                active_troubleshooting_session = await troubleshooting_engine.start_troubleshooting_session(
-                                    troubleshooting_state=troubleshooting_state,
-                                    session_id=getattr(state, 'session_id', None)
-                                )
-                                
-                                # Track session with session manager
-                                if session_manager:
-                                    await session_manager.create_session(
-                                        workflow=active_troubleshooting_session.workflow,
-                                        customer_emotional_state=qa.emotional_state,
-                                        customer_technical_level=active_troubleshooting_session.customer_technical_level,
-                                        session_id=active_troubleshooting_session.session_id,
-                                        context={
-                                            'reasoning_insights': reasoning_state.reasoning_summary,
-                                            'solution_candidates': [
-                                                {
-                                                    'summary': sc.solution_summary,
-                                                    'confidence': sc.confidence_score
-                                                }
-                                                for sc in reasoning_state.solution_candidates
-                                            ]
-                                        }
-                                    )
-                                
-                                troubleshooting_span.set_attribute("troubleshooting.workflow", troubleshooting_state.recommended_workflow.name)
-                                troubleshooting_span.set_attribute("troubleshooting.session_id", active_troubleshooting_session.session_id)
-                                troubleshooting_span.set_attribute("troubleshooting.technical_level", active_troubleshooting_session.customer_technical_level)
-                                
-                                logger.info(f"Initiated structured troubleshooting session {active_troubleshooting_session.session_id} "
-                                          f"with workflow: {troubleshooting_state.recommended_workflow.name}")
-                            
-                        troubleshooting_span.set_attribute("troubleshooting.enabled", should_use_troubleshooting)
-                        
-                    except Exception as e:
-                        logger.error(f"Agent Sparrow troubleshooting initialization failed: {e}")
-                        troubleshooting_span.record_exception(e)
-                        troubleshooting_span.set_status(Status(StatusCode.ERROR, f"Troubleshooting error: {str(e)}"))
-                        # Continue without structured troubleshooting
-                        troubleshooting_state = None
-                        active_troubleshooting_session = None
+            # Perform comprehensive reasoning. This is a single, blocking call that includes self-critique.
+            reasoning_state = await reasoning_engine.reason_about_query(
+                query=user_query,
+                context={"messages": state.messages},
+                session_id=getattr(state, 'session_id', 'default')
+            )
 
-            # 1. Combined Knowledge Base + FeedMe Search (PostgreSQL + pgvector)
-            context_chunks = []
-            best_internal_score = 0.0
-            total_results_count = 0
-            kb_results_count = 0
-            feedme_results_count = 0
+            # Log key reasoning results for observability
+            parent_span.set_attribute("reasoning.confidence", reasoning_state.overall_confidence)
+            if reasoning_state.query_analysis:
+                parent_span.set_attribute("reasoning.emotion", reasoning_state.query_analysis.emotional_state.value)
+                parent_span.set_attribute("reasoning.category", reasoning_state.query_analysis.problem_category.value)
+            if reasoning_state.self_critique_result:
+                parent_span.set_attribute("reasoning.critique_score", reasoning_state.self_critique_result.critique_score)
+                parent_span.set_attribute("reasoning.critique_passed", reasoning_state.self_critique_result.passed_critique)
 
-            with tracer.start_as_current_span("primary_agent.combined_search") as search_span:
-                try:
-                    # Use combined search to get both KB and FeedMe results
-                    combined_results: List[CombinedSearchResult] = find_combined_similar_content(
-                        query=user_query,
-                        top_k_total=6,  # Slightly more than before to account for both sources
-                        kb_weight=0.6,  # Favor KB slightly
-                        feedme_weight=0.4,  # But include FeedMe examples
-                        min_kb_similarity=0.25,  # Keep existing threshold
-                        min_feedme_similarity=0.7  # Higher threshold for FeedMe (more specific)
-                    )
-                    
-                    total_results_count = len(combined_results)
-                    
-                    if combined_results:
-                        best_internal_score = combined_results[0].similarity_score
-                        
-                        for result in combined_results:
-                            if result.source_type == "knowledge_base":
-                                kb_results_count += 1
-                                content_to_add = result.content
-                                if content_to_add:
-                                    context_chunks.append(f"Source: Knowledge Base ({result.url})\nContent: {content_to_add}")
-                            
-                            elif result.source_type == "feedme":
-                                feedme_results_count += 1
-                                # Format FeedMe content with Q&A structure
-                                additional_data = result.additional_data or {}
-                                question = additional_data.get('question', '')
-                                answer = additional_data.get('answer', '')
-                                
-                                # Determine if this is from HTML source
-                                source_format = "FeedMe"
-                                if result.title and ("html" in result.title.lower() or "zendesk" in result.title.lower()):
-                                    source_format = "FeedMe (HTML ticket)"
-                                elif result.metadata and result.metadata.get('conversation_id'):
-                                    # Check conversation title for HTML indicators
-                                    conv_title = str(result.metadata.get('conversation_title', ''))
-                                    if any(term in conv_title.lower() for term in ['html', 'zendesk', 'ticket']):
-                                        source_format = "FeedMe (HTML ticket)"
-                                
-                                if question and answer:
-                                    feedme_content = f"Q: {question}\n\nA: {answer}"
-                                    context_chunks.append(f"Source: {source_format} ({result.title})\nContent: {feedme_content}")
-                    
-                    logger.info(f"Combined search found {total_results_count} results "
-                              f"({kb_results_count} KB, {feedme_results_count} FeedMe). "
-                              f"Best score: {best_internal_score:.4f}")
-                    
-                except Exception as e:
-                    logger.error(f"Error during combined knowledge search: {e}")
-                    search_span.record_exception(e)
-                    search_span.set_status(Status(StatusCode.ERROR, f"Combined search failed: {e}"))
-                    
-                    # Fallback to legacy KB-only search
-                    try:
-                        logger.info("Falling back to legacy KB-only search")
-                        internal_docs: List[InternalSearchResult] = find_similar_documents(user_query, top_k=4)
-                        total_results_count = len(internal_docs)
-                        kb_results_count = total_results_count
-                        
-                        if internal_docs:
-                            best_internal_score = internal_docs[0].similarity_score
-                            for doc in internal_docs:
-                                content_to_add = doc.markdown if doc.markdown else doc.content
-                                if content_to_add:
-                                    context_chunks.append(f"Source: Knowledge Base ({doc.url})\nContent: {content_to_add}")
-                        
-                        logger.info(f"Fallback search found {total_results_count} KB documents")
-                    except Exception as fallback_error:
-                        logger.error(f"Fallback search also failed: {fallback_error}")
-                
-                # Set telemetry attributes
-                search_span.set_attribute("search.total_results", total_results_count)
-                search_span.set_attribute("search.kb_results", kb_results_count)
-                search_span.set_attribute("search.feedme_results", feedme_results_count)
-                if total_results_count > 0:
-                    search_span.set_attribute("search.top_score", best_internal_score)
+            # The final, critiqued response is now ready to be streamed.
+            final_response = reasoning_state.response_orchestration.final_response_preview
 
-            # 2. Enhanced tool decision using Agent Sparrow reasoning
-            should_web_search = False
-            web_search_reasoning = "Legacy fallback logic"
-            
-            if reasoning_state and reasoning_state.tool_reasoning:
-                # Use Agent Sparrow intelligent tool decision
-                from app.agents_v2.primary_agent.reasoning.schemas import ToolDecisionType
-                
-                tool_decision = reasoning_state.tool_reasoning.decision_type
-                web_search_reasoning = reasoning_state.tool_reasoning.reasoning
-                
-                if tool_decision in [ToolDecisionType.WEB_SEARCH_REQUIRED, ToolDecisionType.BOTH_SOURCES_NEEDED]:
-                    should_web_search = True
-                    logger.info(f"Agent Sparrow reasoning recommends web search: {web_search_reasoning}")
-                elif tool_decision == ToolDecisionType.INTERNAL_KB_ONLY:
-                    should_web_search = False
-                    logger.info(f"Agent Sparrow reasoning recommends internal KB only: {web_search_reasoning}")
-                elif tool_decision == ToolDecisionType.NO_TOOLS_NEEDED:
-                    should_web_search = False
-                    logger.info(f"Agent Sparrow reasoning: no additional tools needed: {web_search_reasoning}")
-                else:
-                    # Fallback to legacy logic for escalation or unknown decisions
-                    should_web_search = True
-                    logger.info(f"Agent Sparrow reasoning suggests escalation, using web search as fallback")
-                    
-                parent_span.set_attribute("tool_decision.reasoning", web_search_reasoning)
-                parent_span.set_attribute("tool_decision.type", tool_decision.value)
-                parent_span.set_attribute("tool_decision.confidence", reasoning_state.tool_reasoning.confidence)
-                
-            else:
-                # Fallback to legacy logic if reasoning failed
-                if total_results_count == 0:
-                    should_web_search = True
-                    web_search_reasoning = "No internal results found, proceeding to web search."
-                    logger.info(web_search_reasoning)
-                elif best_internal_score < INTERNAL_SEARCH_SIMILARITY_THRESHOLD:
-                    should_web_search = True
-                    web_search_reasoning = f"Best search score {best_internal_score:.4f} < {INTERNAL_SEARCH_SIMILARITY_THRESHOLD}, proceeding to web search."
-                    logger.info(web_search_reasoning)
-                elif total_results_count < MIN_INTERNAL_RESULTS_FOR_NO_WEB_SEARCH:
-                    should_web_search = True
-                    web_search_reasoning = f"Number of search results {total_results_count} < {MIN_INTERNAL_RESULTS_FOR_NO_WEB_SEARCH}, proceeding to web search."
-                    logger.info(web_search_reasoning)
-                else:
-                    web_search_reasoning = "Sufficient internal knowledge available, skipping web search."
-                    logger.info(web_search_reasoning)
+            if not final_response:
+                logger.warning("Reasoning completed but no final response was generated.")
+                yield AIMessageChunk(content="I'm sorry, I was unable to generate a response. Please try again.", role="assistant")
+                return
 
-            if should_web_search:
-                with tracer.start_as_current_span("primary_agent.web_search") as web_span:
-                    web_span.set_attribute("web.query", user_query)
-                    # The official TavilySearchTool returns a list of dictionaries, so we process the results accordingly.
-                    if tavily_web_search:
-                        try:
-                            web_search_results = tavily_web_search.invoke({"query": user_query})
+            # Stream the final, cleaned response chunk by chunk to the client.
+            chunk_size = 200  # Increased for better performance
+            for i in range(0, len(final_response), chunk_size):
+                chunk_content = final_response[i:i+chunk_size]
+                yield AIMessageChunk(content=chunk_content, role="assistant")
+                await anyio.sleep(0.005)  # Reduced delay for smoother streaming
 
-                            if isinstance(web_search_results, list) and web_search_results:
-                                web_urls_found = [result.get("url") for result in web_search_results if result.get("url")]
-                                web_snippets_added = 0
-                                for result in web_search_results:
-                                    url = result.get("url")
-                                    content_snippet = result.get("content", "")
-                                    if url and content_snippet:
-                                        # Prioritize adding web search snippets if available
-                                        context_chunks.append(f"Source: Web Search ({url})\nContent: {content_snippet}")
-                                        web_snippets_added += 1
-                                if web_snippets_added > 0:
-                                    web_span.set_attribute("web.results_count", web_snippets_added)
-                                    logger.info(f"Web search added {web_snippets_added} content snippets to context.")
-                                else:
-                                    web_span.set_attribute("web.results_count", 0)
-                                    logger.info("Web search executed but returned no usable content snippets (URL + content).")
-                            elif isinstance(web_search_results, list) and not web_search_results:
-                                logger.info("Web search executed but returned no results.")
-                                web_span.set_attribute("web.results_count", 0)
-                            else:
-                                logger.error(f"Tavily web search returned an unexpected result (not a list): {web_search_results}")
-                                web_span.set_attribute("web.error", f"Unexpected Tavily result: {type(web_search_results).__name__}")
-                        except Exception as e:
-                            logger.error(f"Error during web search execution: {e}")
-                            web_span.record_exception(e)
-                            web_span.set_status(Status(StatusCode.ERROR, f"Web search execution failed: {e}"))
-                    else:
-                        logger.warning("Web search fallback triggered, but Tavily tool is not available.")
-                        web_span.set_attribute("web.tool_available", False)
+            parent_span.set_status(Status(StatusCode.OK))
 
-    # Build prompt with context
-            # If a previous reflection suggested corrections, incorporate them
-            correction_note = ""
-            if getattr(state, "reflection_feedback", None) and state.reflection_feedback.correction_suggestions:
-                correction_note = (
-                    "\nPlease address the following feedback to improve your answer: "
-                    f"{state.reflection_feedback.correction_suggestions}\n"
-                )
-
-            # Build context_text, ensuring not to exceed the character limit
-            # We'll give some preference to web search results if they exist by adding them first to a temporary list
-            # This is a simple way to ensure they are less likely to be truncated if KB content is very long.
-            # A more sophisticated approach might involve token counting and smarter selection.
-            
-            temp_context_parts = []
-            # Add web search results first if they were intended to be used
-            if should_web_search:
-                for chunk in context_chunks:
-                    if "Source: Web Search" in chunk:
-                        temp_context_parts.append(chunk)
-            
-            # Then add internal KB results
-            for chunk in context_chunks:
-                if "Source: Internal KB" in chunk:
-                    temp_context_parts.append(chunk)
-
-            # Join and truncate
-            full_context_str = "\n\n".join(temp_context_parts) # Use double newline for better separation
-            if len(full_context_str) > 3500:
-                logger.warning(f"Combined context length ({len(full_context_str)}) exceeds 3500 chars. Truncating.")
-                context_text = full_context_str[:3500]
-            else:
-                context_text = full_context_str
-            logger.info(f"Final context_text length: {len(context_text)}")
-
-            # Load Agent Sparrow prompt using modular system
-            with tracer.start_as_current_span("agent_sparrow.load_prompt") as prompt_span:
-                # Detect customer emotion from the query
-                current_message = state.messages[-1].content if state.messages else ""
-                emotion_result = EmotionTemplates.detect_emotion(current_message)
-                prompt_span.set_attribute("emotion.detected", emotion_result.primary_emotion.value)
-                prompt_span.set_attribute("emotion.confidence", emotion_result.confidence_score)
-                
-                # Configure Agent Sparrow prompt
-                prompt_config = PromptLoadConfig(
-                    version=PromptVersion.V3_SPARROW,
-                    include_reasoning=True,
-                    include_emotions=True,
-                    include_technical=True,
-                    quality_enforcement=True,
-                    debug_mode=False,  # Set to True for development
-                    environment="production"
-                )
-                
-                # Load the sophisticated Agent Sparrow system prompt
-                agent_sparrow_prompt = load_agent_sparrow_prompt(prompt_config)
-                logger.info(f"Loaded Agent Sparrow prompt (emotion: {emotion_result.primary_emotion.value}, confidence: {emotion_result.confidence_score:.2f})")
-                
-            # Add structured troubleshooting context if active
-            troubleshooting_context = ""
-            if active_troubleshooting_session:
-                troubleshooting_context = f"""
-                
-## Structured Troubleshooting Active:
-**Workflow**: {active_troubleshooting_session.workflow.name}
-**Session ID**: {active_troubleshooting_session.session_id}
-**Customer Technical Level**: {active_troubleshooting_session.customer_technical_level}/5
-**Current Phase**: {active_troubleshooting_session.current_phase.value}
-
-**Current Diagnostic Step**: {active_troubleshooting_session.current_step.title if active_troubleshooting_session.current_step else "Initializing"}
-
-**Approach**: Provide systematic troubleshooting guidance following the structured workflow. 
-- Break down complex solutions into step-by-step diagnostic procedures
-- Include verification checkpoints to ensure progress
-- Adapt complexity to customer technical level
-- Monitor for escalation criteria
-- Maintain structured approach while being empathetic and supportive
-
-**Workflow Description**: {active_troubleshooting_session.workflow.description}
-"""
-                
-            # Build system prompt parts in a list for efficient string joining
-            prompt_parts = [
-                agent_sparrow_prompt,
-                "\n\n## Context from Knowledge Base, FeedMe References (plain+html), and Web Search:\n",
-                "<!-- FeedMe HTML examples come from real tickets. They are reference-only.\nWeigh them against KB accuracy before finalising your answer. -->\n\n",
-                context_text,
-                troubleshooting_context,
-                correction_note
-            ]
-            refined_system_prompt = "".join(part for part in prompt_parts if part)
-            system_msg = SystemMessage(content=refined_system_prompt)
-            # Ensure messages list doesn't grow indefinitely if state is reused across turns in a single graph invocation (though typically not the case for primary agent)
-            # For this agent, state.messages usually contains the current user query as the last message.
-            # We construct the prompt with the current user query and the new system message.
-            current_user_message = state.messages[-1]
-            prompt_messages = [system_msg, current_user_message] # System message first, then user query
-            logger.info(f"Prompt being sent to LLM: {prompt_messages}") # Log the prompt
-            parent_span.add_event("primary_agent.llm_stream_start", {"prompt": str(prompt_messages)})
-
-            try:
-                # Rate limiting is handled by the model_with_tools wrapper automatically
-                # No need for manual rate limiting check here as it would be redundant
-                logger.info("Initializing LLM stream iterator...")
-                stream_iter = model_with_tools.stream(prompt_messages)
-                logger.info("LLM stream iterator initialized. Starting iteration...")
-                chunk_count = 0
-                while True:
-                    logger.debug(f"Attempting to get next chunk (iteration {chunk_count})...")
-                    chunk = await anyio.to_thread.run_sync(lambda: next(stream_iter, None))
-                    
-                    if chunk is None:
-                        logger.info(f"LLM stream ended after {chunk_count} chunks.")
-                        break
-                    
-                    chunk_count += 1
-                    logger.info(f"Received chunk {chunk_count}. Content: '{chunk.content}' Role: {getattr(chunk, 'role', 'N/A')}")
-                    parent_span.add_event("primary_agent.llm_chunk_received", {"chunk_number": chunk_count, "chunk_content_length": len(chunk.content or ""), "chunk_role": getattr(chunk, 'role', 'N/A')})
-                    yield chunk
-                
-                if chunk_count == 0:
-                    logger.warning("LLM stream produced 0 chunks.")
-                parent_span.set_status(Status(StatusCode.OK))
-            except Exception as e:
-                error_message = f"I encountered an issue processing your request. Details: {type(e).__name__}"
-                if "safety" in str(e).lower() or "blocked" in str(e).lower():
-                    error_message = "I'm sorry, I cannot respond to that query due to safety guidelines."
-                
-                parent_span.record_exception(e)
-                parent_span.set_status(Status(StatusCode.ERROR, f"LLM stream error: {str(e)}"))
-                yield AIMessageChunk(content=error_message, role="assistant") # Ensure role for error chunks
-        except Exception as e: # Outer exception for agent logic errors
-            logger.exception("Error in run_primary_agent main logic: %s", e)
-            if 'parent_span' in locals():
+        except Exception as e:
+            logger.exception("Error in run_primary_agent: %s", e)
+            if 'parent_span' in locals() and parent_span.is_recording():
                 parent_span.record_exception(e)
                 parent_span.set_status(Status(StatusCode.ERROR, str(e)))
-            yield AIMessageChunk(content=f"An internal error occurred: {str(e)}", role="assistant") 
+            yield AIMessageChunk(content=f"I'm sorry, an unexpected error occurred. Please try again later.", role="assistant") 

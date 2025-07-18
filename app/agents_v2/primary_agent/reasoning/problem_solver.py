@@ -280,7 +280,8 @@ class ProblemSolvingFramework:
             # Add prevention measures
             prevention_measures = self._generate_prevention_measures(solution, problem_category)
             if prevention_measures:
-                solution.detailed_approach += f"\n\n**Prevention**: {prevention_measures}"
+                # Prevention measures are now handled in SolutionCandidate.preventive_measures
+                pass
             
             # Add risk assessment
             solution.risk_factors = self._assess_solution_risks(solution, problem_category)
@@ -397,10 +398,18 @@ class ProblemSolvingFramework:
         if emotional_state == EmotionalState.FRUSTRATED:
             solution_data['confidence'] += 0.05  # Be more confident
         
+        # Create detailed steps as a proper list
+        if isinstance(solution_data['approach'], str):
+            # Split by numbered steps and clean up
+            steps = [step.strip() for step in solution_data['approach'].split('\n') if step.strip() and not step.strip().startswith('**')]
+            detailed_steps = steps[:5] if len(steps) > 5 else steps  # Limit to reasonable number
+        else:
+            detailed_steps = solution_data['approach']
+        
         return SolutionCandidate(
             solution_summary=solution_data['summary'],
-            detailed_approach=solution_data['approach'],
-            expected_outcome="Email functionality should be restored with proper synchronization and stable connection.",
+            detailed_steps=detailed_steps or ["Analyze the issue", "Apply appropriate solution", "Verify resolution"],
+            preventive_measures=["Regularly check email server settings", "Monitor connection stability"],
             confidence_score=min(solution_data['confidence'] * hypothesis['confidence'], 1.0),
             estimated_time_minutes=solution_data['time'],
             required_tools=['internal_knowledge', 'configuration_access']
@@ -425,25 +434,14 @@ class ProblemSolvingFramework:
         
         return SolutionCandidate(
             solution_summary="Complete Email Account Setup",
-            detailed_approach="""1. **Account Information Gathering**
-   - Collect email address and password
-   - Identify email provider (Gmail, Outlook, etc.)
-   - Determine account type (personal/business)
-
-2. **Automatic Configuration**
-   - Use Mailbird's auto-setup feature
-   - Allow automatic server detection
-   - Verify detected settings accuracy
-
-3. **Manual Configuration (if needed)**
-   - Input IMAP/SMTP settings manually
-   - Configure security and port settings
-   - Test connection and troubleshoot
-
-4. **Final Setup and Optimization**
-   - Configure sync preferences
-   - Set up folder organization
-   - Test send/receive functionality""",
+            detailed_steps=[
+                "Collect email address and password",
+                "Use Mailbird's auto-setup feature", 
+                "Input IMAP/SMTP settings manually if needed",
+                "Configure sync preferences",
+                "Test send/receive functionality"
+            ],
+            preventive_measures=["Keep credentials secure", "Regular account maintenance"],
             expected_outcome="Email account will be fully configured and ready for use with proper send/receive functionality.",
             confidence_score=0.9,
             estimated_time_minutes=10,
@@ -466,7 +464,7 @@ class ProblemSolvingFramework:
         
         return SolutionCandidate(
             solution_summary="Master Mailbird Feature Usage",
-            detailed_approach="""1. **Feature Discovery**
+            detailed_steps="""1. **Feature Discovery**
    - Identify the specific feature of interest
    - Locate feature in Mailbird interface
    - Understand feature capabilities and benefits
@@ -507,7 +505,7 @@ class ProblemSolvingFramework:
         
         return SolutionCandidate(
             solution_summary="Resolve Billing Questions and Issues",
-            detailed_approach="""1. **Account and Billing Review**
+            detailed_steps="""1. **Account and Billing Review**
    - Verify current subscription status
    - Review billing history and charges
    - Identify specific billing concern
@@ -548,7 +546,7 @@ class ProblemSolvingFramework:
         
         return SolutionCandidate(
             solution_summary="Optimize Mailbird Performance",
-            detailed_approach="""1. **Performance Assessment**
+            detailed_steps="""1. **Performance Assessment**
    - Analyze current system resource usage
    - Identify performance bottlenecks
    - Measure baseline performance metrics
@@ -591,7 +589,7 @@ class ProblemSolvingFramework:
         
         return SolutionCandidate(
             solution_summary="Systematic Problem Troubleshooting",
-            detailed_approach="""1. **Problem Isolation**
+            detailed_steps="""1. **Problem Isolation**
    - Reproduce the issue consistently
    - Identify specific error messages
    - Determine affected functionality
@@ -632,7 +630,7 @@ class ProblemSolvingFramework:
         
         return SolutionCandidate(
             solution_summary="Comprehensive Support Assistance",
-            detailed_approach="""1. **Needs Assessment**
+            detailed_steps="""1. **Needs Assessment**
    - Clarify specific requirements
    - Understand user goals and context
    - Identify priority areas for assistance
@@ -1005,10 +1003,10 @@ class ProblemSolvingFramework:
         
         risks = []
         
-        if "restart" in solution.detailed_approach.lower():
+        if "restart" in ' '.join(solution.detailed_steps).lower():
             risks.append("Temporary interruption of email access during restart")
         
-        if "remove" in solution.detailed_approach.lower() or "delete" in solution.detailed_approach.lower():
+        if "remove" in ' '.join(solution.detailed_steps).lower() or "delete" in ' '.join(solution.detailed_steps).lower():
             risks.append("Potential data loss if not backed up properly")
         
         if category == ProblemCategory.TECHNICAL_ISSUE:
@@ -1084,7 +1082,7 @@ class ProblemSolvingFramework:
                 score *= (0.8 + 0.2 * solution.confidence_score)
             elif emotional_state == EmotionalState.CONFUSED:
                 # Prefer solutions with clearer steps
-                step_clarity = len(solution.detailed_approach.split('\n')) / 20  # Normalize
+                step_clarity = len(solution.detailed_steps) / 20  # Normalize
                 score *= (0.9 + 0.1 * min(step_clarity, 1.0))
             
             # Store ranking score

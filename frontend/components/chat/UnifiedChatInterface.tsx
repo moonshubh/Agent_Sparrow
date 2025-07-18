@@ -329,20 +329,16 @@ export default function UnifiedChatInterface() {
         
         {/* Chat Area */}
         <div className="flex-1 flex flex-col overflow-hidden">
-        {/* Welcome Hero (hidden when messages exist) */}
-        <div className={cn(
-          "flex-shrink-0 transition-all duration-500",
-          hasMessages ? "h-0" : "h-auto pt-24"
-        )}>
-          <Welcome hasMessages={hasMessages} />
-        </div>
+        {/* Welcome Hero (shown when no messages exist) */}
+        {!hasMessages && (
+          <div className="flex-1 flex items-center justify-center">
+            <Welcome hasMessages={hasMessages} />
+          </div>
+        )}
 
         {/* Messages Area */}
-        <div className={cn(
-          "flex-1 overflow-hidden transition-all duration-500",
-          !hasMessages && "opacity-0"
-        )}>
-          {hasMessages && (
+        {hasMessages && (
+          <div className="flex-1 overflow-hidden">
             <div className="h-full relative">
               {/* Agent Status Bar */}
               {(state.isProcessing || state.currentAgent) && (
@@ -467,7 +463,8 @@ export default function UnifiedChatInterface() {
                 </div>
               )}
             </div>
-          )}
+          </div>
+        )}
         </div>
         
         {/* Input Area */}
@@ -496,7 +493,6 @@ export default function UnifiedChatInterface() {
           </div>
         </div>
       </div>
-    </div>
       
       {/* Live region for screen readers */}
       <div 

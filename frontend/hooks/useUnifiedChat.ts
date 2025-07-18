@@ -302,6 +302,22 @@ export function useUnifiedChat(): UseUnifiedChatReturn {
                 messages: [...prev.messages, systemMessage],
                 currentAgent: event.agent_type || prev.currentAgent
               }))
+            } else if (event.role === 'error' && event.content) {
+              // Handle error messages (e.g., API key missing)
+              const errorMessage: UnifiedMessage = {
+                id: generateUniqueId('error'),
+                type: "agent",
+                content: event.content,
+                timestamp: new Date(),
+                agentType: "primary",
+                metadata: { isError: true }
+              }
+              
+              setState(prev => ({ 
+                ...prev, 
+                messages: [...prev.messages, errorMessage],
+                isProcessing: false
+              }))
             } else if (event.role === 'assistant' && event.content) {
               accumulatedContent += event.content
 

@@ -25,6 +25,7 @@ class ReasoningPhase(Enum):
     RESPONSE_STRATEGY = "response_strategy"
     EXECUTION = "execution"
     VALIDATION = "validation"
+    SELF_CRITIQUE = "self_critique"
 
 
 class ProblemCategory(Enum):
@@ -36,6 +37,21 @@ class ProblemCategory(Enum):
     PERFORMANCE_OPTIMIZATION = "performance_optimization"
     TROUBLESHOOTING = "troubleshooting"
     GENERAL_SUPPORT = "general_support"
+
+
+class BusinessImpact(Enum):
+    """Business impact levels"""
+    CRITICAL = "critical"
+    HIGH = "high"
+    MEDIUM = "medium"
+    LOW = "low"
+
+
+class TimeSensitivity(Enum):
+    """Time sensitivity levels"""
+    IMMEDIATE = "immediate"
+    HOURS = "hours"
+    DAYS = "days"
 
 
 class ToolDecisionType(Enum):
@@ -88,33 +104,87 @@ class ReasoningStep:
 
 
 @dataclass
+class SituationalAnalysis:
+    """V9 Situational Analysis from the deep reasoning matrix"""
+    technical_complexity: int  # Scale 1-10
+    emotional_intensity: int  # Scale 1-10
+    business_impact: BusinessImpact
+    time_sensitivity: TimeSensitivity
+
+
+@dataclass
 class QueryAnalysis:
-    """Analysis of the customer query"""
+    """Analysis of the customer query, enhanced for V9"""
     query_text: str
+    # V9 Query Deconstruction
+    surface_meaning: str
+    latent_intent: str
+    emotional_subtext: str
+    historical_context: str
+
+    # Core attributes
     emotional_state: EmotionalState
     emotion_confidence: float
     problem_category: ProblemCategory
     category_confidence: float
-    urgency_level: int  # 1-5 scale
-    complexity_score: float  # 0-1 scale
     key_entities: List[str] = field(default_factory=list)
-    inferred_intent: str = ""
-    context_clues: List[str] = field(default_factory=list)
+
+    # V9 Situational Analysis
+    situational_analysis: Optional[SituationalAnalysis] = None
+    
+    # Additional attributes for compatibility
+    complexity_score: float = 0.5
+    urgency_level: int = 3
 
 
 @dataclass
 class SolutionCandidate:
-    """Potential solution with reasoning"""
+    """A potential solution pathway."""
     solution_summary: str
-    detailed_approach: str
-    expected_outcome: str
+    detailed_steps: List[str]
+    preventive_measures: List[str]
     confidence_score: float
     estimated_time_minutes: int
     solution_id: str = field(default_factory=lambda: str(uuid.uuid4()))
     required_tools: List[str] = field(default_factory=list)
+    fallback_options: List[str] = field(default_factory=list)
     risk_factors: List[str] = field(default_factory=list)
     success_indicators: List[str] = field(default_factory=list)
-    fallback_options: List[str] = field(default_factory=list)
+
+
+@dataclass
+class SolutionArchitecture:
+    """V9 Solution Architecture"""
+    primary_pathway: SolutionCandidate
+    alternative_routes: List[SolutionCandidate] = field(default_factory=list)
+    enhancement_opportunities: List[str] = field(default_factory=list)
+
+
+@dataclass
+class PredictiveInsight:
+    """An insight from the predictive intelligence engine."""
+    pattern_detected: str
+    proactive_suggestion: str
+    confidence: float
+
+
+@dataclass
+class ResponseOrchestration:
+    """V9 Response Orchestration strategy"""
+    emotional_acknowledgment_strategy: str
+    technical_solution_delivery_method: str
+    relationship_strengthening_elements: List[str]
+    delight_injection_points: List[str]
+    final_response_preview: Optional[str] = None
+
+
+@dataclass
+class SelfCritiqueResult:
+    """Result of the self-critique process."""
+    passed_critique: bool
+    critique_score: float  # Score from 0.0 to 1.0
+    suggested_improvements: List[str] = field(default_factory=list)
+    refined_response: Optional[str] = None
 
 
 @dataclass
@@ -174,20 +244,17 @@ class ReasoningState:
     # Problem solving
     problem_solving_phases: List[ProblemSolvingPhase] = field(default_factory=list)
     
-    # Solution development
-    solution_candidates: List[SolutionCandidate] = field(default_factory=list)
-    selected_solution: Optional[SolutionCandidate] = None
-    
-    # Tool decisions
+    # Reasoning outputs
+    predictive_insights: List[PredictiveInsight] = field(default_factory=list)
+    solution_architecture: Optional[SolutionArchitecture] = None
     tool_reasoning: Optional[ToolDecisionReasoning] = None
-    
-    # Quality assessment
+    response_orchestration: Optional[ResponseOrchestration] = None
+    self_critique_result: Optional[SelfCritiqueResult] = None
     quality_assessment: Optional[QualityAssessment] = None
     
     # Final outputs
     response_strategy: str = ""
     reasoning_summary: str = ""
-    transparency_explanation: str = ""
     
     # Metadata
     total_processing_time: float = 0.0
@@ -270,11 +337,12 @@ class ReasoningState:
                     trace_lines.append(f"   *Alternatives*: {', '.join(step.alternatives_considered)}")
                 trace_lines.append("")
         
-        if self.selected_solution:
-            trace_lines.append("## Selected Solution")
-            trace_lines.append(f"**Summary**: {self.selected_solution.solution_summary}")
-            trace_lines.append(f"**Confidence**: {self.selected_solution.confidence_score:.2f}")
-            trace_lines.append(f"**Estimated Time**: {self.selected_solution.estimated_time_minutes} minutes")
+        if self.solution_architecture and self.solution_architecture.primary_pathway:
+            primary = self.solution_architecture.primary_pathway
+            trace_lines.append("## Selected Solution (Primary Pathway)")
+            trace_lines.append(f"**Summary**: {primary.solution_summary}")
+            trace_lines.append(f"**Confidence**: {primary.confidence_score:.2f}")
+            trace_lines.append(f"**Estimated Time**: {primary.estimated_time_minutes} minutes")
             trace_lines.append("")
         
         if self.tool_reasoning:
@@ -294,6 +362,7 @@ class ReasoningConfig:
     enable_tool_intelligence: bool = True
     enable_quality_assessment: bool = True
     enable_reasoning_transparency: bool = True
+    enable_self_critique: bool = True
     
     # Confidence thresholds
     minimum_confidence_threshold: float = 0.6

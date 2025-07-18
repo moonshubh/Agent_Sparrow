@@ -1,4 +1,4 @@
-# MB-Sparrow Primary Agent Developer Guide (v25-07-03)
+# MB-Sparrow Primary Agent Developer Guide (v25-07-17)
 
 ## 1. Overview
 
@@ -428,7 +428,66 @@ TROUBLESHOOTING_CONFIG = {
    - Horizontal scaling with load balancing
    - Advanced caching and CDN integration
 
-## 11. Changelog Reference Links
+## 11. Recent System Fixes (2025-07-17)
+
+### Critical System Repair Implementation
+
+Following a system failure analysis, the following critical fixes were implemented:
+
+#### Backend Fixes
+
+1. **Missing Import Resolution**
+   - **File**: `app/agents_v2/primary_agent/agent.py`
+   - **Fix**: Added missing `AgentSparrowV9Prompts` import
+   - **Impact**: Resolved module loading failures
+
+2. **Streaming Response Cleaning**
+   - **File**: `app/api/v1/endpoints/agent_endpoints.py` (lines 548-562)
+   - **Fix**: Applied self-critique cleaning to each chunk during streaming instead of post-processing
+   - **Impact**: Prevents XML blocks from appearing in user interface
+
+3. **Response Generation Reliability**
+   - **File**: `app/agents_v2/primary_agent/reasoning/reasoning_engine.py` (lines 389-393)
+   - **Fix**: Added fallback response generation when empty responses detected
+   - **Impact**: Ensures users always receive meaningful responses
+
+4. **Streaming Performance Optimization**
+   - **File**: `app/agents_v2/primary_agent/agent.py` (lines 128-132)
+   - **Changes**: 
+     - Increased chunk size: 50 → 200 characters
+     - Reduced delay: 0.02s → 0.005s
+   - **Impact**: Smoother, faster streaming experience
+
+#### Frontend Fixes
+
+1. **Duplicate Rendering Removal**
+   - **File**: `frontend/components/chat/UnifiedChatInterface.tsx`
+   - **Fix**: Removed duplicate Rate Limit Warning and message rendering (lines 465-552)
+   - **Impact**: Eliminated React rendering errors
+
+2. **Error Message Display**
+   - **File**: `frontend/hooks/useUnifiedChat.ts` (lines 305-320)
+   - **Fix**: Added handling for `role: "error"` messages
+   - **Impact**: API key configuration messages now display properly
+
+#### Infrastructure Additions
+
+1. **Embedding Rate Limiter**
+   - **File**: `app/core/rate_limiting/embedding_limiter.py` (new)
+   - **Features**: Rate limiting for gemini-embedding-001 free tier
+   - **Limits**: 90 RPM, 27k TPM, 900 RPD (90% of actual limits)
+
+### Configuration Updates
+
+#### Gemini Embeddings (Latest as of 2025-07-17)
+- **Model**: `gemini-embedding-001`
+- **Dimensions**: 3072 (with MRL support for 768/1536)
+- **Free Tier Limits**:
+  - 100 requests per minute
+  - 30,000 tokens per minute
+  - 1,000 requests per day
+
+## 12. Changelog Reference Links
 
 - **Agent Sparrow v8.0**: Structured troubleshooting implementation (2025-06-24)
 - **Agent Sparrow v7.0**: Advanced reasoning framework (2025-06-24)
@@ -447,4 +506,4 @@ TROUBLESHOOTING_CONFIG = {
 
 ---
 
-*This document represents the current state of the Primary Agent system as of 2025-07-03. For the most up-to-date information, refer to the codebase and recent commit history.*
+*This document represents the current state of the Primary Agent system as of 2025-07-17. For the most up-to-date information, refer to the codebase and recent commit history.*

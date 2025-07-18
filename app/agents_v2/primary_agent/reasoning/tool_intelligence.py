@@ -367,7 +367,7 @@ class ToolIntelligence:
             gaps.append("Alternative solution approaches")
         
         # Check for incomplete solutions
-        incomplete_solutions = [sol for sol in solution_candidates if len(sol.detailed_approach) < 50]
+        incomplete_solutions = [sol for sol in solution_candidates if len(' '.join(sol.detailed_steps)) < 50]
         if incomplete_solutions:
             reasoning.append(f"{len(incomplete_solutions)} solutions lack sufficient detail")
             gaps.append("Detailed implementation steps")
