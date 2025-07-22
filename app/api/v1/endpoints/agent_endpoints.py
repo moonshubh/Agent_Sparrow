@@ -10,6 +10,7 @@ from app.agents_v2.log_analysis_agent.schemas import LogAnalysisAgentState, Stru
 from app.agents_v2.log_analysis_agent.enhanced_schemas import ComprehensiveLogAnalysisOutput
 from langchain_core.messages import HumanMessage
 import json
+import re
 
 from app.agents_v2.log_analysis_agent.agent import run_log_analysis_agent
 from app.agents_v2.research_agent.research_agent import get_research_graph, ResearchState
@@ -540,15 +541,25 @@ async def unified_agent_stream_generator(request: UnifiedAgentRequest) -> AsyncI
                 messages=[HumanMessage(content=request.message)]
             )
             
+            # Stream the primary agent's response
+            routing_message = f"🎯 Routing to {agent_type.replace('_', ' ').title()}"
+            yield f'data: {json.dumps({"role": "system", "content": routing_message, "agent_type": agent_type, "trace_id": request.trace_id})}\n\n'
+            
+            # Stream each chunk after cleaning
             async for chunk in run_primary_agent(initial_state):
-                if hasattr(chunk, 'content') and chunk.content:
-                    json_payload = json.dumps({
-                        "role": "assistant", 
-                        "content": chunk.content,
-                        "agent_type": agent_type,
-                        "trace_id": request.trace_id
-                    }, ensure_ascii=False)
-                    yield f"data: {json_payload}\n\n"
+                if hasattr(chunk, 'content') and chunk.content is not None:
+                    # Clean self-critique blocks from each chunk
+                    cleaned_content = re.sub(r'<self_critique>.*?</self_critique>', '', chunk.content, flags=re.DOTALL)
+                    
+                    if cleaned_content.strip():  # Only send non-empty content
+                        role = getattr(chunk, 'role', 'assistant') or 'assistant'
+                        json_payload = json.dumps({
+                            "role": role,
+                            "content": cleaned_content,
+                            "agent_type": agent_type,
+                            "trace_id": request.trace_id
+                        }, ensure_ascii=False)
+                        yield f"data: {json_payload}\n\n"
                 
         # Send completion signal
         yield f"data: {json.dumps({'role': 'system', 'content': '[DONE]'})}\n\n"

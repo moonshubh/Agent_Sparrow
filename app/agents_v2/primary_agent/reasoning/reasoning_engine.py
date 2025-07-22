@@ -13,30 +13,26 @@ from datetime import datetime
 import asyncio
 import re
 
-from langchain_core.messages import BaseMessage, HumanMessage
+from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 from opentelemetry import trace
 
 from .schemas import (
-    ReasoningState,
-    ReasoningStep,
-    ReasoningPhase,
-    QueryAnalysis,
-    SolutionCandidate,
-    ToolDecisionReasoning,
-    QualityAssessment,
-    ProblemCategory,
-    ToolDecisionType,
-    ConfidenceLevel,
-    ReasoningConfig
+    ReasoningState, ReasoningStep, ReasoningPhase, QueryAnalysis,
+    ToolDecisionReasoning, QualityAssessment, ProblemCategory, ToolDecisionType,
+    ConfidenceLevel, ReasoningConfig, BusinessImpact, TimeSensitivity,
+    SituationalAnalysis, SolutionArchitecture, SolutionCandidate, PredictiveInsight,
+    ResponseOrchestration, SelfCritiqueResult
 )
 from .problem_solver import ProblemSolvingFramework
 from .tool_intelligence import ToolIntelligence
-from app.agents_v2.primary_agent.prompts import EmotionTemplates
+from app.agents_v2.primary_agent.prompts import EmotionTemplates, AgentSparrowV9Prompts
 from app.agents_v2.primary_agent.prompts.emotion_templates import EmotionalState
 
 logger = logging.getLogger(__name__)
 tracer = trace.get_tracer(__name__)
 
+
+from langchain_google_genai import ChatGoogleGenerativeAI
 
 class ReasoningEngine:
     """
@@ -50,12 +46,13 @@ class ReasoningEngine:
     - Emotional intelligence integration
     """
     
-    def __init__(self, config: Optional[ReasoningConfig] = None):
+    def __init__(self, model: ChatGoogleGenerativeAI, config: Optional[ReasoningConfig] = None):
         """
         Initialize the ReasoningEngine with optional configuration.
         
         If no configuration is provided, a default ReasoningConfig is used. Instantiates the problem-solving and tool intelligence components required for the reasoning process.
         """
+        self.model = model
         self.config = config or ReasoningConfig()
         self.problem_solver = ProblemSolvingFramework(self.config)
         self.tool_intelligence = ToolIntelligence(self.config)
@@ -88,56 +85,50 @@ class ReasoningEngine:
             span.set_attribute("query_length", len(query))
             
             try:
-                # Phase 1: Query Analysis
+                # Phase 1: V9 Query Deconstruction & Situational Analysis
                 if self.config.enable_chain_of_thought:
-                    await self._analyze_query(query, reasoning_state, context)
+                    await self._analyze_query_v9(query, reasoning_state, context)
                     span.set_attribute("emotion_detected", reasoning_state.query_analysis.emotional_state.value)
                     span.set_attribute("problem_category", reasoning_state.query_analysis.problem_category.value)
-                
-                # Phase 2: Context Recognition
-                await self._recognize_context(reasoning_state, context)
-                
-                # Phase 3: Solution Mapping
+
+                # Phase 2: Predictive Intelligence
+                if self.config.enable_chain_of_thought: 
+                    await self._apply_predictive_intelligence(reasoning_state)
+
+                # Phase 3: V9 Solution Architecture
                 if self.config.enable_problem_solving_framework:
-                    await self._map_solutions(reasoning_state)
-                    span.set_attribute("solution_candidates", len(reasoning_state.solution_candidates))
+                    await self._map_solutions_v9(reasoning_state)
                 
-                # Phase 4: Tool Assessment
+                # Phase 4: Tool Assessment (remains largely the same)
                 if self.config.enable_tool_intelligence:
                     await self._assess_tool_needs(reasoning_state)
-                    span.set_attribute("tool_decision", reasoning_state.tool_reasoning.decision_type.value)
                 
-                # Phase 5: Response Strategy
-                await self._develop_response_strategy(reasoning_state)
+                # Phase 5: V9 Response Orchestration
+                if self.config.enable_chain_of_thought:
+                    await self._develop_response_strategy_v9(reasoning_state)
                 
+                # Phase 5: Self-Critique
+                if self.config.enable_self_critique:
+                    await self._perform_self_critique_v9(reasoning_state)
+
                 # Phase 6: Quality Assessment
                 if self.config.enable_quality_assessment:
                     await self._assess_quality(reasoning_state)
-                    span.set_attribute("quality_score", reasoning_state.quality_assessment.overall_quality_score)
-                
-                # Finalize reasoning
-                await self._finalize_reasoning(reasoning_state, start_time)
-                span.set_attribute("reasoning_confidence", reasoning_state.overall_confidence)
-                span.set_attribute("processing_time", reasoning_state.total_processing_time)
-                
-                logger.info(f"Reasoning completed for session {session_id}: "
-                          f"confidence={reasoning_state.overall_confidence:.2f}, "
-                          f"time={reasoning_state.total_processing_time:.2f}s")
-                
-                return reasoning_state
-                
+
             except Exception as e:
-                logger.error(f"Reasoning engine error for session {session_id}: {e}")
+                logger.error(f"Error during reasoning process: {e}", exc_info=True)
+                reasoning_state.is_escalated = True
+                reasoning_state.escalation_reason = f"An unexpected error occurred: {e}"
                 span.record_exception(e)
+            
+            # Finalize reasoning state
+            await self._finalize_reasoning(reasoning_state, start_time)
+            span.set_attribute("total_processing_time", reasoning_state.total_processing_time)
+            span.set_attribute("overall_confidence", reasoning_state.overall_confidence)
+            
+            return reasoning_state
                 
-                # Create fallback reasoning state
-                reasoning_state.escalation_reasons.append(f"Reasoning engine error: {str(e)}")
-                reasoning_state.requires_human_review = True
-                reasoning_state.overall_confidence = 0.2
-                
-                return reasoning_state
-    
-    async def _analyze_query(
+    async def _analyze_query_v9(
         self, 
         query: str, 
         reasoning_state: ReasoningState, 
@@ -168,15 +159,23 @@ class ReasoningEngine:
             # Create query analysis
             reasoning_state.query_analysis = QueryAnalysis(
                 query_text=query,
+                surface_meaning=query, 
+                latent_intent=inferred_intent,
+                emotional_subtext=f"Detected primary emotion: {emotion_result.primary_emotion.value}", 
+                historical_context="No historical context available in this session.", 
                 emotional_state=emotion_result.primary_emotion,
                 emotion_confidence=emotion_result.confidence_score,
                 problem_category=problem_category,
                 category_confidence=category_confidence,
-                urgency_level=urgency_level,
-                complexity_score=complexity_score,
                 key_entities=key_entities,
-                inferred_intent=inferred_intent,
-                context_clues=context_clues
+                complexity_score=complexity_score,
+                urgency_level=urgency_level,
+                situational_analysis=SituationalAnalysis(
+                    technical_complexity=int(complexity_score * 10),
+                    emotional_intensity=self._assess_urgency(query, emotion_result.primary_emotion) * 2, 
+                    business_impact=BusinessImpact.MEDIUM, 
+                    time_sensitivity=TimeSensitivity.IMMEDIATE 
+                )
             )
             
             # Add reasoning step
@@ -195,197 +194,214 @@ class ReasoningEngine:
             )
             reasoning_state.add_reasoning_step(step)
     
-    async def _recognize_context(
-        self, 
-        reasoning_state: ReasoningState, 
-        context: Optional[Dict[str, Any]]
-    ) -> None:
+    async def _apply_predictive_intelligence(self, reasoning_state: ReasoningState):
         """
-        Analyzes and enriches the reasoning state with contextual insights and confidence factors based on provided context and query analysis.
+        Applies the V9 Predictive Intelligence Engine based on query analysis.
+        This is a placeholder for a more sophisticated implementation.
+        """
+        if not reasoning_state.query_analysis:
+            return
+
+        insights = []
+        query_lower = reasoning_state.query_analysis.query_text.lower()
+
+        if "slow" in query_lower and "email" in query_lower:
+            insights.append(PredictiveInsight(
+                pattern_detected="'Slow email' mentioned",
+                proactive_suggestion="User might have large attachments, a large local database, or incorrect sync settings. Prepare to investigate these areas.",
+                confidence=0.8
+            ))
         
-        This phase identifies relevant situational factors such as previous conversation history, user profile, system state, emotional urgency, problem category, and entity complexity. It computes an overall context confidence score and records a reasoning step summarizing the context recognition process.
-        """
-        with tracer.start_as_current_span("reasoning_engine.recognize_context"):
-            
-            context_insights = []
-            confidence_factors = []
-            
-            # Analyze provided context
-            if context:
-                if 'previous_messages' in context:
-                    context_insights.append("Previous conversation context available")
-                    confidence_factors.append(0.8)
-                
-                if 'user_profile' in context:
-                    context_insights.append("User profile information available")
-                    confidence_factors.append(0.7)
-                
-                if 'system_state' in context:
-                    context_insights.append("System state information available")
-                    confidence_factors.append(0.6)
-            
-            # Infer additional context from query analysis
-            if reasoning_state.query_analysis:
-                qa = reasoning_state.query_analysis
-                
-                if qa.emotional_state in [EmotionalState.URGENT, EmotionalState.ANXIOUS]:
-                    context_insights.append("Time-sensitive situation requiring immediate attention")
-                    confidence_factors.append(0.9)
-                
-                if qa.problem_category == ProblemCategory.TECHNICAL_ISSUE:
-                    context_insights.append("Technical troubleshooting context required")
-                    confidence_factors.append(0.8)
-                
-                if len(qa.key_entities) > 3:
-                    context_insights.append("Complex multi-entity problem")
-                    confidence_factors.append(0.7)
-            
-            # Calculate context confidence
-            context_confidence = sum(confidence_factors) / len(confidence_factors) if confidence_factors else 0.5
-            
-            # Add reasoning step
-            step = ReasoningStep(
-                phase=ReasoningPhase.CONTEXT_RECOGNITION,
-                description="Analyzed available context and situational factors",
-                reasoning=f"Identified {len(context_insights)} relevant context factors. "
-                         f"Context richness supports confidence level of {context_confidence:.2f}",
-                confidence=context_confidence,
-                evidence=context_insights
-            )
-            reasoning_state.add_reasoning_step(step)
-    
-    async def _map_solutions(self, reasoning_state: ReasoningState) -> None:
+        if reasoning_state.query_analysis.emotional_state in [EmotionalState.FRUSTRATED, EmotionalState.DISAPPOINTED]:
+            insights.append(PredictiveInsight(
+                pattern_detected="High user frustration",
+                proactive_suggestion="Immediate empathy and confidence boost required. Consider offering premium support or a quicker solution path.",
+                confidence=0.9
+            ))
+
+        reasoning_state.predictive_insights = insights
+        
+        reasoning_state.add_reasoning_step(ReasoningStep(
+            phase=ReasoningPhase.CONTEXT_RECOGNITION, 
+            description="Applied Predictive Intelligence Engine.",
+            reasoning=f"Generated {len(insights)} predictive insights.",
+            confidence=0.85
+        ))
+
+    async def _map_solutions_v9(self, reasoning_state: ReasoningState): 
         """
         Generates and selects solution candidates for the analyzed query using the problem-solving framework.
         
         This phase creates potential solutions based on the query analysis attributes, selects the most confident solution if available, and records the process as a reasoning step in the reasoning state.
         """
-        with tracer.start_as_current_span("reasoning_engine.map_solutions"):
-            
-            if not reasoning_state.query_analysis:
-                return
-                
-            qa = reasoning_state.query_analysis
-            
-            # Use problem solving framework to generate solutions
-            solutions = await self.problem_solver.generate_solution_candidates(
-                problem_category=qa.problem_category,
-                emotional_state=qa.emotional_state,
-                urgency_level=qa.urgency_level,
-                complexity_score=qa.complexity_score,
-                key_entities=qa.key_entities,
-                query_text=qa.query_text
-            )
-            
-            reasoning_state.solution_candidates = solutions
-            
-            # Select best solution
-            if solutions:
-                # Sort by confidence and select highest
-                best_solution = max(solutions, key=lambda s: s.confidence_score)
-                reasoning_state.selected_solution = best_solution
-            
-            # Add reasoning step
-            step = ReasoningStep(
-                phase=ReasoningPhase.SOLUTION_MAPPING,
-                description=f"Generated {len(solutions)} solution candidates",
-                reasoning=f"Mapped problem to {len(solutions)} potential solutions. "
-                         f"Selected solution with confidence {reasoning_state.selected_solution.confidence_score:.2f}" 
-                         if reasoning_state.selected_solution else "No viable solutions identified",
-                confidence=reasoning_state.selected_solution.confidence_score if reasoning_state.selected_solution else 0.2,
-                evidence=[f"Solution: {s.solution_summary}" for s in solutions[:3]]  # Top 3
-            )
-            reasoning_state.add_reasoning_step(step)
-    
-    async def _assess_tool_needs(self, reasoning_state: ReasoningState) -> None:
-        """
-        Evaluates whether external tools are needed to address the query and records the tool usage decision in the reasoning state.
+        if not reasoning_state.query_analysis:
+            return
+
+        qa = reasoning_state.query_analysis
         
-        This phase uses tool intelligence to analyze the query and solution candidates, determines the necessity and type of tool usage, and documents the decision along with confidence, evidence, and considered alternatives in the reasoning process.
-        """
-        with tracer.start_as_current_span("reasoning_engine.assess_tool_needs"):
-            
-            if not reasoning_state.query_analysis:
-                return
-                
-            # Use tool intelligence to make decisions
-            tool_reasoning = await self.tool_intelligence.decide_tool_usage(
-                query_analysis=reasoning_state.query_analysis,
-                solution_candidates=reasoning_state.solution_candidates
+        solution_candidates = await self.problem_solver.generate_solution_candidates(
+            problem_category=reasoning_state.query_analysis.problem_category,
+            emotional_state=reasoning_state.query_analysis.emotional_state,
+            urgency_level=5,  # Default urgency
+            complexity_score=reasoning_state.query_analysis.situational_analysis.technical_complexity / 10,
+            key_entities=reasoning_state.query_analysis.key_entities,
+            query_text=reasoning_state.query_analysis.query_text
+        )
+
+        if solution_candidates:
+            primary_pathway = max(solution_candidates, key=lambda s: s.confidence_score)
+            alternative_routes = [s for s in solution_candidates if s.solution_id != primary_pathway.solution_id]
+
+            # detailed_steps should already be populated by the problem solver
+            primary_pathway.preventive_measures = ["Run maintenance checks regularly."] 
+
+            solution_arch = SolutionArchitecture(
+                primary_pathway=primary_pathway,
+                alternative_routes=alternative_routes,
+                enhancement_opportunities=["Introduce user to the new 'Speedy Sync' feature."] 
             )
-            
-            reasoning_state.tool_reasoning = tool_reasoning
-            
-            # Add reasoning step
-            step = ReasoningStep(
-                phase=ReasoningPhase.TOOL_ASSESSMENT,
-                description="Analyzed tool requirements for optimal response",
-                reasoning=tool_reasoning.reasoning,
-                confidence=tool_reasoning.confidence,
-                evidence=tool_reasoning.required_information,
-                alternatives_considered=[dt.value for dt in ToolDecisionType if dt != tool_reasoning.decision_type]
-            )
-            reasoning_state.add_reasoning_step(step)
-    
-    async def _develop_response_strategy(self, reasoning_state: ReasoningState) -> None:
+            reasoning_state.solution_architecture = solution_arch
+            confidence = primary_pathway.confidence_score
+            reasoning = f"Constructed solution architecture with primary pathway: {primary_pathway.solution_summary}"
+        else:
+            confidence = 0.1
+            reasoning = "No suitable solution candidates could be generated."
+            reasoning_state.is_escalated = True
+            reasoning_state.escalation_reason = "Solution mapping failed."
+        
+        reasoning_state.add_reasoning_step(ReasoningStep(
+            phase=ReasoningPhase.SOLUTION_MAPPING,
+            description="Generated solution candidates",
+            reasoning=reasoning,
+            confidence=confidence,
+            evidence=[f"Solution: {s.solution_summary}" for s in solution_candidates[:3]] 
+        ))
+
+    async def _develop_response_strategy_v9(self, reasoning_state: ReasoningState): 
         """
         Constructs a comprehensive response strategy by integrating emotional state, urgency, complexity, tool decisions, and solution attributes into actionable guidance for customer interaction.
         
         The strategy adapts tone, structure, and content to the customer's emotional and situational context, and is recorded in the reasoning state for downstream use.
         """
-        with tracer.start_as_current_span("reasoning_engine.develop_response_strategy"):
+        if not reasoning_state.query_analysis or not reasoning_state.solution_architecture:
+            return
+
+        qa = reasoning_state.query_analysis
+        
+        emotional_strategy = EmotionTemplates.get_frustration_template() if qa.emotional_state in [EmotionalState.FRUSTRATED, EmotionalState.DISAPPOINTED] else "Acknowledge the user's emotional state and state the goal."
+
+        # Generate the final response based on the query analysis and solution architecture
+        final_response = await self._generate_final_response(reasoning_state)
+
+        orchestration = ResponseOrchestration(
+            emotional_acknowledgment_strategy=emotional_strategy,
+            technical_solution_delivery_method="Use analogies and break complex concepts into digestible pieces.",
+            relationship_strengthening_elements=["Reference previous successes.", "Provide bonus tips."],
+            delight_injection_points=["Use a fun fact related to their issue.", "Celebrate their success in solving the problem."],
+            final_response_preview=final_response
+        )
+
+        reasoning_state.response_orchestration = orchestration
+        
+        reasoning_state.add_reasoning_step(ReasoningStep(
+            phase=ReasoningPhase.RESPONSE_STRATEGY,
+            description="Developed comprehensive response strategy with final response",
+            reasoning=f"Crafted multi-faceted response strategy incorporating emotional intelligence, "
+                     f"urgency handling, and solution complexity. Generated final response of {len(final_response) if final_response else 0} characters.",
+            confidence=0.8,  
+            evidence=orchestration.relationship_strengthening_elements
+        ))
+
+    async def _assess_tool_needs(self, reasoning_state: ReasoningState) -> None:
+        """
+        Assess what tools are needed for this query using the tool intelligence system.
+        """
+        if not reasoning_state.query_analysis:
+            return
             
-            strategy_elements = []
-            
-            if reasoning_state.query_analysis:
+        # Use the tool intelligence system to decide on tool usage
+        tool_decision = await self.tool_intelligence.decide_tool_usage(
+            query_analysis=reasoning_state.query_analysis,
+            solution_candidates=reasoning_state.solution_architecture.alternative_routes if reasoning_state.solution_architecture else None
+        )
+        
+        reasoning_state.tool_reasoning = tool_decision
+        
+        # Add reasoning step
+        reasoning_state.add_reasoning_step(ReasoningStep(
+            phase=ReasoningPhase.TOOL_ASSESSMENT,
+            description="Assessed tool usage requirements",
+            reasoning=f"Determined {tool_decision.decision_type.value} based on query analysis and solution requirements",
+            confidence=tool_decision.confidence,
+            evidence=tool_decision.required_information
+        ))
+
+    async def _generate_final_response(self, reasoning_state: ReasoningState) -> Optional[str]:
+        """
+        Generates the final polished response based on all reasoning analysis.
+        
+        This method uses the LLM to create a comprehensive, well-structured response that incorporates
+        the emotional state, solution architecture, and response orchestration strategy.
+        """
+        with tracer.start_as_current_span("reasoning_engine._generate_final_response") as span:
+            try:
+                if not reasoning_state.query_analysis or not reasoning_state.solution_architecture:
+                    return "I'm sorry, I wasn't able to fully analyze your query. Please try rephrasing it."
+
                 qa = reasoning_state.query_analysis
+                solution = reasoning_state.solution_architecture.primary_pathway
                 
-                # Emotional adaptation
-                if qa.emotional_state == EmotionalState.FRUSTRATED:
-                    strategy_elements.append("Lead with sincere apology and immediate action plan")
-                elif qa.emotional_state == EmotionalState.CONFUSED:
-                    strategy_elements.append("Use step-by-step educational approach with simple language")
-                elif qa.emotional_state == EmotionalState.ANXIOUS:
-                    strategy_elements.append("Provide immediate reassurance followed by quick resolution")
-                elif qa.emotional_state == EmotionalState.PROFESSIONAL:
-                    strategy_elements.append("Match professional tone with comprehensive technical details")
+                # Build a comprehensive prompt for final response generation
+                response_prompt = f"""Based on my analysis, please generate a helpful, professional response to the customer's query.
+
+**Customer Query**: {qa.query_text}
+
+**Analysis Results**:
+- Emotional State: {qa.emotional_state.value}
+- Problem Category: {qa.problem_category.value}
+- Technical Complexity: {qa.situational_analysis.technical_complexity}/10
+- Business Impact: {qa.situational_analysis.business_impact.value}
+
+**Recommended Solution**:
+{solution.solution_summary}
+
+**Detailed Steps**:
+{chr(10).join(f"{i+1}. {step}" for i, step in enumerate(solution.detailed_steps))}
+
+**Response Guidelines**:
+- Use a warm, professional tone
+- Acknowledge the customer's situation appropriately
+- Provide clear, actionable steps
+- Include preventive measures if relevant
+- Be concise but thorough
+
+Please generate a well-structured response that follows these guidelines and addresses the customer's needs directly."""
+
+                messages = [
+                    SystemMessage(content="You are Agent Sparrow, an expert customer support assistant for Mailbird. Generate helpful, professional responses."),
+                    HumanMessage(content=response_prompt)
+                ]
+
+                response = await self.model.ainvoke(messages)
+                final_response = response.content
                 
-                # Urgency adaptation
-                if qa.urgency_level >= 4:
-                    strategy_elements.append("Prioritize quick fix before detailed solution")
+                # Ensure we have a valid response
+                if not final_response or len(final_response.strip()) == 0:
+                    logger.warning("Empty response generated, using fallback")
+                    # Generate a contextual fallback based on the query analysis
+                    problem_type = qa.problem_category.value if qa.problem_category else "general"
+                    final_response = f"I understand you're experiencing {problem_type} issues with Mailbird. Let me help you with that. Could you provide more details about what specific issue you're facing?"
                 
-                # Complexity adaptation
-                if qa.complexity_score > 0.7:
-                    strategy_elements.append("Break down solution into manageable phases")
-            
-            # Tool-based strategy
-            if reasoning_state.tool_reasoning:
-                tr = reasoning_state.tool_reasoning
-                if tr.decision_type == ToolDecisionType.WEB_SEARCH_REQUIRED:
-                    strategy_elements.append("Enhance response with current information from web search")
-                elif tr.decision_type == ToolDecisionType.INTERNAL_KB_ONLY:
-                    strategy_elements.append("Leverage internal knowledge base for comprehensive response")
-            
-            # Solution-based strategy
-            if reasoning_state.selected_solution:
-                sol = reasoning_state.selected_solution
-                if sol.estimated_time_minutes <= 5:
-                    strategy_elements.append("Focus on immediate resolution")
-                else:
-                    strategy_elements.append("Provide timeline expectations and progress checkpoints")
-            
-            reasoning_state.response_strategy = " | ".join(strategy_elements)
-            
-            # Add reasoning step
-            step = ReasoningStep(
-                phase=ReasoningPhase.RESPONSE_STRATEGY,
-                description="Developed comprehensive response strategy",
-                reasoning=f"Crafted multi-faceted response strategy incorporating emotional intelligence, "
-                         f"urgency handling, and solution complexity. Strategy includes {len(strategy_elements)} key elements.",
-                confidence=0.8,  # High confidence in strategy development
-                evidence=strategy_elements
-            )
-            reasoning_state.add_reasoning_step(step)
+                span.set_attribute("response_length", len(final_response))
+                span.set_attribute("emotional_state", qa.emotional_state.value)
+                
+                return final_response
+
+            except Exception as e:
+                logger.error(f"Error generating final response: {e}", exc_info=True)
+                span.record_exception(e)
+                return "I apologize, but I encountered an error while preparing my response. Please try again."
+
     
     async def _assess_quality(self, reasoning_state: ReasoningState) -> None:
         """
@@ -768,15 +784,15 @@ class ReasoningEngine:
         structure_score = 0.0
         
         # Check if response strategy exists
-        if reasoning_state.response_strategy:
+        if reasoning_state.response_orchestration:
             structure_score += 0.4
         
         # Check if solution is well-structured
-        if reasoning_state.selected_solution:
-            solution = reasoning_state.selected_solution
-            if solution.solution_summary and solution.detailed_approach:
+        if reasoning_state.solution_architecture and reasoning_state.solution_architecture.primary_pathway:
+            solution = reasoning_state.solution_architecture.primary_pathway
+            if solution.solution_summary and solution.detailed_steps:
                 structure_score += 0.3
-            if solution.expected_outcome:
+            if solution.preventive_measures:
                 structure_score += 0.2
         
         # Check if quality assessment was performed
@@ -798,8 +814,8 @@ class ReasoningEngine:
             qa = reasoning_state.query_analysis
             summary_parts.append(f"Analyzed query showing {qa.emotional_state.value} emotion and {qa.problem_category.value} category")
         
-        if reasoning_state.solution_candidates:
-            summary_parts.append(f"Generated {len(reasoning_state.solution_candidates)} solution candidates")
+        if reasoning_state.solution_architecture:
+            summary_parts.append(f"Constructed a solution architecture with {len(reasoning_state.solution_architecture.alternative_routes)} alternatives.")
         
         if reasoning_state.tool_reasoning:
             summary_parts.append(f"Determined {reasoning_state.tool_reasoning.decision_type.value} for optimal response")
@@ -819,28 +835,80 @@ class ReasoningEngine:
         """
         if not self.config.enable_reasoning_transparency:
             return ""
-        
-        explanation_parts = []
-        
-        if reasoning_state.query_analysis:
-            qa = reasoning_state.query_analysis
-            explanation_parts.append(
-                f"I detected that you're feeling {qa.emotional_state.value} about this {qa.problem_category.value.replace('_', ' ')} "
-                f"with an urgency level of {qa.urgency_level}/5."
+
+        # V9 does not use a simple transparency explanation, this is now handled by the detailed reasoning trace.
+        # This function can be deprecated or repurposed.
+        return self._generate_reasoning_summary(reasoning_state)
+
+    async def _perform_self_critique_v9(self, reasoning_state: ReasoningState):
+        """
+        Invokes the V9 self-critique framework to evaluate the drafted response.
+
+        This method constructs a prompt with the drafted response and the critique checklist,
+        calls the LLM, parses the structured critique, and updates the reasoning state
+        with the SelfCritiqueResult.
+        """
+        with tracer.start_as_current_span("reasoning_engine._perform_self_critique_v9") as span:
+            draft_response = reasoning_state.response_orchestration.final_response_preview
+            if not draft_response:
+                reasoning_state.add_reasoning_step(
+                    phase=ReasoningPhase.SELF_CRITIQUE,
+                    summary="Skipping self-critique as no draft response is available.",
+                    confidence=ConfidenceLevel.MEDIUM
+                )
+                return
+
+            reasoning_state.add_reasoning_step(
+                phase=ReasoningPhase.SELF_CRITIQUE,
+                summary="Performing internal self-critique on the drafted response.",
+                confidence=ConfidenceLevel.HIGH
             )
-        
-        if reasoning_state.tool_reasoning:
-            tr = reasoning_state.tool_reasoning
-            if tr.decision_type == ToolDecisionType.WEB_SEARCH_REQUIRED:
-                explanation_parts.append("I'll search for the most current information to give you the best answer.")
-            elif tr.decision_type == ToolDecisionType.INTERNAL_KB_ONLY:
-                explanation_parts.append("I have comprehensive information in my knowledge base to help you.")
-        
-        if reasoning_state.selected_solution:
-            sol = reasoning_state.selected_solution
-            explanation_parts.append(
-                f"I've identified a solution that should take about {sol.estimated_time_minutes} minutes to implement "
-                f"with a {sol.confidence_score:.0%} confidence rate."
+
+            prompt_config = AgentSparrowV9Prompts.PromptV9Config(include_self_critique=True)
+            system_prompt = AgentSparrowV9Prompts.build_system_prompt(config=prompt_config)
+            
+            critique_request_prompt = f"Here is the response I have drafted. Please provide your internal self-critique based on the framework provided in your system instructions:\n\n<draft_response>\n{draft_response}\n</draft_response>"
+
+            messages = [
+                SystemMessage(content=system_prompt),
+                HumanMessage(content=critique_request_prompt)
+            ]
+
+            try:
+                response = await self.model.ainvoke(messages)
+                critique_content = response.content
+                span.set_attribute("critique_raw_response", critique_content)
+
+                score_match = re.search(r"Critique Score \(out of 10.0\):.*?([0-9.]+)", critique_content, re.DOTALL)
+                verdict_match = re.search(r"Verdict \(Pass/Fail\):.*?\b(Pass|Fail)\b", critique_content, re.IGNORECASE)
+                refinements_match = re.search(r"Required Refinements:.*?(\[.*?\]|None)", critique_content, re.DOTALL)
+
+                critique_score = float(score_match.group(1)) if score_match else 0.0
+                passed_critique = verdict_match.group(1).lower() == 'pass' if verdict_match else False
+                
+                improvements = []
+                if refinements_match:
+                    refinement_str = refinements_match.group(1)
+                    if refinement_str.lower() != 'none':
+                        improvements = [item.strip() for item in refinement_str.strip('[]').split(',') if item.strip()]
+
+                critique_result = SelfCritiqueResult(
+                    passed_critique=passed_critique,
+                    critique_score=critique_score,
+                    suggested_improvements=improvements,
+                )
+                reasoning_state.self_critique_result = critique_result
+                summary = f"Self-critique completed. Score: {critique_score}/10.0. Passed: {passed_critique}"
+
+            except Exception as e:
+                logger.error(f"Error during self-critique LLM call: {e}")
+                span.record_exception(e)
+                critique_result = SelfCritiqueResult(passed_critique=False, critique_score=0.0, suggested_improvements=["Critique process failed."])
+                reasoning_state.self_critique_result = critique_result
+                summary = "Self-critique failed due to an exception."
+
+            reasoning_state.add_reasoning_step(
+                phase=ReasoningPhase.SELF_CRITIQUE,
+                summary=summary,
+                confidence=ConfidenceLevel.HIGH
             )
-        
-        return " ".join(explanation_parts)
