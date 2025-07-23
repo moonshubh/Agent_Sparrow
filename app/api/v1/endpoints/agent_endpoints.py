@@ -16,8 +16,8 @@ from app.agents_v2.log_analysis_agent.agent import run_log_analysis_agent
 from app.agents_v2.research_agent.research_agent import get_research_graph, ResearchState
 from app.agents_v2.orchestration.graph import app as agent_graph
 from app.agents_v2.orchestration.state import GraphState
-from app.core.security import get_current_user, TokenPayload
-from app.core.agent_config import user_agent_context, get_user_agent_config
+from app.api.v1.endpoints.auth import get_current_user_id
+from app.core.user_context import user_context_scope, create_user_context_from_user_id
 
 router = APIRouter()
 
@@ -129,11 +129,12 @@ class ChatRequest(BaseModel):
 async def primary_agent_stream_generator(query: str, user_id: str) -> AsyncIterable[str]:
     """Wraps the primary agent's streaming output with user-specific API configuration."""
     try:
-        # Get user API configuration
-        user_config = await get_user_agent_config(user_id)
+        # Create user context
+        user_context = await create_user_context_from_user_id(user_id)
         
         # Check if user has required API keys
-        if not user_config.get("gemini_api_key"):
+        gemini_key = await user_context.get_gemini_api_key()
+        if not gemini_key:
             error_payload = json.dumps({
                 "role": "error", 
                 "content": "🔑 **API Key Required**: To use the AI assistant, please add your Google Gemini API key in Settings.\n\n**How to configure:**\n1. Click the ⚙️ Settings button in the top-right corner\n2. Navigate to the 'API Keys' section\n3. Add your Google Gemini API key (starts with 'AIza')\n4. Get your free API key at: https://makersuite.google.com/app/apikey"
@@ -141,8 +142,8 @@ async def primary_agent_stream_generator(query: str, user_id: str) -> AsyncItera
             yield f"data: {error_payload}\n\n"
             return
         
-        # Use user-specific agent context
-        async with user_agent_context(user_id) as config:
+        # Use user-specific context
+        async with user_context_scope(user_context):
             initial_state = PrimaryAgentState(
                 messages=[HumanMessage(content=query)]
             )
@@ -198,12 +199,12 @@ async def chat_stream_v1_legacy(
 @router.post("/v2/agent/chat/stream")
 async def chat_stream_v2_authenticated(
     request: ChatRequest,
-    current_user: Annotated[TokenPayload, Depends(get_current_user)]
+    user_id: str = Depends(get_current_user_id)
 ):
     """
     Authenticated streaming chat endpoint with the Primary Support Agent.
     
-    This endpoint requires authentication and provides:
+    This endpoint requires Supabase authentication and provides:
     - User-specific API key configuration
     - Personalized agent behavior
     - Enhanced security and rate limiting
@@ -213,7 +214,7 @@ async def chat_stream_v2_authenticated(
         raise HTTPException(status_code=400, detail="Message cannot be empty")
     
     return StreamingResponse(
-        primary_agent_stream_generator(request.message, current_user.sub),
+        primary_agent_stream_generator(request.message, user_id),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
@@ -226,7 +227,7 @@ async def chat_stream_v2_authenticated(
 @router.post("/agent/logs", response_model=LogAnalysisV2Response)
 async def analyze_logs(
     request: LogAnalysisRequest,
-    current_user: Annotated[TokenPayload, Depends(get_current_user)]
+    user_id: str = Depends(get_current_user_id)
 ):
     """Endpoint for analyzing logs with the Log Analysis Agent."""
     # Determine which field contains the log content (new `content` or legacy `log_text`)
@@ -235,16 +236,19 @@ async def analyze_logs(
         raise HTTPException(status_code=400, detail="Log text cannot be empty")
 
     try:
+        # Create user context
+        user_context = await create_user_context_from_user_id(user_id)
+        
         # Check if user has required API keys
-        user_config = await get_user_agent_config(current_user.sub)
-        if not user_config.get("gemini_api_key"):
+        gemini_key = await user_context.get_gemini_api_key()
+        if not gemini_key:
             raise HTTPException(
                 status_code=400, 
                 detail="API Key Required: To use log analysis, please add your Google Gemini API key in Settings. Steps: (1) Click Settings ⚙️ in the top-right (2) Go to 'API Keys' section (3) Add your Gemini API key (starts with 'AIza') (4) Get a free key at: https://makersuite.google.com/app/apikey"
             )
         
-        # Use user-specific agent context
-        async with user_agent_context(current_user.sub) as config:
+        # Use user-specific context
+        async with user_context_scope(user_context):
             initial_state = LogAnalysisAgentState(
                 messages=[HumanMessage(content=log_body)],
                 raw_log_content=log_body,
@@ -309,23 +313,26 @@ async def analyze_logs(
 @router.post("/agent/research", response_model=ResearchResponse)
 async def research_query(
     request: ResearchRequest,
-    current_user: Annotated[TokenPayload, Depends(get_current_user)]
+    user_id: str = Depends(get_current_user_id)
 ):
     """Endpoint for performing research with the Research Agent."""
     if not request.query:
         raise HTTPException(status_code=400, detail="Query cannot be empty")
 
     try:
-        # Check if user has API key for research (Tavily is optional, but needed for research)
-        user_config = await get_user_agent_config(current_user.sub)
-        if not user_config.get("tavily_api_key"):
+        # Create user context
+        user_context = await create_user_context_from_user_id(user_id)
+        
+        # Check if user has API key for research (Tavily is needed for research)
+        tavily_key = await user_context.get_tavily_api_key()
+        if not tavily_key:
             raise HTTPException(
                 status_code=400, 
                 detail="Please configure your Tavily API key in Settings to use web research functionality."
             )
         
-        # Use user-specific agent context
-        async with user_agent_context(current_user.sub) as config:
+        # Use user-specific context
+        async with user_context_scope(user_context):
             research_graph = get_research_graph()
             initial_graph_state: ResearchState = {
                 "query": request.query,

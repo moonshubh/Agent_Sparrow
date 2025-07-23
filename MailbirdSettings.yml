@@ -1,0 +1,138 @@
+MailbirdSettings:
+  General:
+    Application behavior:
+      - Run on Windows startup
+      - Start minimized                        # sub-checkbox
+      - Hide taskbar icon when minimized
+      - Quit Mailbird on close
+      - Use Gmail keyboard shortcuts
+    Notifications:
+      - Show unread count in taskbar & system tray
+      - Show tray notification when receiving a message
+      - Show tray notification when a message with Email Tracking is opened
+      - New message sound:                     # dropdown
+          default: "Default (Chirp)"
+    Language:
+      - Language:                              # dropdown
+          default: English
+
+  Appearance:
+    Layout and theme color:
+      - Layout selector (2 tile options)
+      - Show reading pane
+      - Show folders separately in expanded navigation pane
+      - Theme:
+          - Light theme
+          - Dark theme
+          - Full dark theme
+      - Choose theme color                     # colour picker
+    Background:
+      - Background gallery grid (selectable thumbnails)
+    Interface:
+      - Show welcome message
+      - Show Inbox Zero
+      - Show share buttons
+    Conversations:
+      - Group unread conversations at the top
+      - Show "important mail" indicator
+    Messages:
+      - Group messages into conversations
+      - Show message previews in conversation view
+      - Always show remote images
+      - Mark messages as read (slider)         # Never … Immediately
+
+  Scaling:
+    - Application scaling level (slider)           # e.g. 90 %
+    - Email scaling level (slider)                 # e.g. 110 %
+    - Apps scaling level (slider)                  # e.g. 98 %
+    - Text formatting mode (dropdown)              # Ideal | …
+
+  Composing:
+    Composing font:
+      - Font family selector
+      - Font size selector
+      - Live preview box
+    Compose window:
+      - Show "send & archive" button
+      - Show sender & recipient details only when cursor is on address field
+      - Show Cc and Bcc by default
+      - Collapse message by default when replying
+      - Auto-add recipients when @ tagging
+      - Restore auto-complete suggestions (button)
+    Sending:
+      - Enable Email Tracking by default
+      - Add new recipients to Contacts
+      - Undo send period (slider)                  # 0–30 s
+    In-line reply:
+      - Enable in-line reply
+      - Prefix field                               # text + colour swatch
+    Quick compose shortcut:
+      - Shortcut picker (read-only + info)
+
+  Accounts:
+    - Accounts list table                          # Add | Edit | Remove | Default
+    - Enable unified account
+    - Select on startup
+
+  Identities:
+    - Identities & signatures table                # Add | Edit | Remove
+    - Add signatures to new conversations only
+
+  Folders:
+    - Account selector (dropdown)
+    - Folder tree view (Add | Edit | Remove)
+    - Sync with server (button)
+
+  Filters:
+    - Filters for: { account-dropdown }
+    - Filters list (Add | Edit | Remove)
+    - Blocked senders list (Unblock button)
+
+  Updates:
+    - Check for updates now (button)
+    - View version history (link)
+    - Update settings dropdown:
+        options:
+          - Install updates automatically   # default
+          - Download updates, ask before installing
+          - Never check for updates
+    Join the early adopters:
+      - Become an early adopter (link)
+
+  Network:
+    Proxy server:
+      - Change proxy settings (button)
+      - Proxy requires authentication
+
+  Snoozes:
+    Your weekly schedule:
+      - My day starts at (time dropdown)
+      - My weekend starts at (time dropdown)
+      - My workday ends at (time dropdown)
+      - My week starts on (weekday dropdown)
+      - My weekend starts on (weekday dropdown)
+    Snooze preferences:
+      - Later today (dropdown)                # default: In 3 hours
+      - Someday (dropdown)                    # default: In 1 month
+
+  Advanced:
+    Archiving:
+      - Auto-select next conversation when archiving
+    Sync behavior:
+      - Download messages on demand
+      - Attachment auto-download limit (slider)     # Never download … Always
+    Default email application:
+      - Tell me if Mailbird is not the default email client
+    Performance:
+      - Show animations
+      - Enable hardware rendering
+    Help improve Mailbird:
+      - Share performance and usage data (link “Read more”)
+
+  About Mailbird:
+    Version & branding:
+      - Version display (read-only)
+      - www.getmailbird.com (link)
+    License:
+      - License status text (read-only)
+      - Change license key (link)

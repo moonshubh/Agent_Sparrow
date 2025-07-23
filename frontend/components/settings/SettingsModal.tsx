@@ -32,9 +32,23 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  // Load API keys when modal opens
+  // Load API keys when modal opens (only in production or when auth is ready)
   useEffect(() => {
     if (isOpen) {
+      // Skip API loading during development until auth system is integrated
+      if (process.env.NODE_ENV === 'development') {
+        console.log('Settings modal: API loading disabled during development')
+        setAPIKeyStatus({
+          user_id: 'development',
+          gemini_configured: false,
+          tavily_configured: false,
+          firecrawl_configured: false,
+          all_required_configured: false,
+          last_validation_check: 'Development mode'
+        })
+        return
+      }
+      
       loadAPIKeys()
       loadAPIKeyStatus()
     }
@@ -47,8 +61,22 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
     try {
       const result = await apiKeyService.listAPIKeys()
       setAPIKeys(result.api_keys)
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load API keys')
+    } catch (err: any) {
+      let errorMessage = 'Failed to load API keys'
+      
+      // Handle different error types gracefully
+      if (err?.code === 'NETWORK_ERROR') {
+        errorMessage = 'Cannot connect to server. Please check your connection.'
+      } else if (err?.code === 'TIMEOUT') {
+        errorMessage = 'Request timed out. Please try again.'
+      } else if (err?.status === 401) {
+        errorMessage = 'Authentication required. Please log in.'
+      } else if (err instanceof Error) {
+        errorMessage = err.message
+      }
+      
+      setError(errorMessage)
+      console.error('API Keys loading error:', err)
     } finally {
       setIsLoading(false)
     }
@@ -58,8 +86,18 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
     try {
       const status = await apiKeyService.getAPIKeyStatus()
       setAPIKeyStatus(status)
-    } catch (err) {
-      console.error('Failed to load API key status:', err)
+    } catch (err: any) {
+      console.warn('Failed to load API key status (non-critical):', err)
+      
+      // Set a default status when API is unavailable
+      setAPIKeyStatus({
+        user_id: 'unknown',
+        gemini_configured: false,
+        tavily_configured: false,
+        firecrawl_configured: false,
+        all_required_configured: false,
+        last_validation_check: undefined
+      })
     }
   }
 

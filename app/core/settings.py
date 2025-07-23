@@ -32,6 +32,7 @@ class Settings(BaseSettings):
     router_conf_threshold: float = Field(default=0.6, alias="ROUTER_CONF_THRESHOLD")
     use_enhanced_log_analysis: bool = Field(default=True, alias="USE_ENHANCED_LOG_ANALYSIS")
     enhanced_log_model: str = Field(default="gemini-2.5-pro", alias="ENHANCED_LOG_MODEL")
+    primary_agent_model: str = Field(default="gemini-2.5-flash", alias="PRIMARY_AGENT_MODEL")
     
     # FeedMe Configuration
     feedme_enabled: bool = Field(default=True, alias="FEEDME_ENABLED")
@@ -59,11 +60,6 @@ class Settings(BaseSettings):
     # Quality Control Configuration
     feedme_similarity_threshold: float = Field(default=0.7, alias="FEEDME_SIMILARITY_THRESHOLD")
     feedme_confidence_threshold: float = Field(default=0.7, alias="FEEDME_CONFIDENCE_THRESHOLD")
-    
-    # Supabase Configuration
-    supabase_url: Optional[str] = Field(default=None, alias="SUPABASE_URL")
-    supabase_anon_key: Optional[str] = Field(default=None, alias="SUPABASE_ANON_KEY")
-    supabase_service_key: Optional[str] = Field(default=None, alias="SUPABASE_SERVICE_KEY")
     feedme_async_processing: bool = Field(default=True, alias="FEEDME_ASYNC_PROCESSING")
     feedme_celery_broker: str = Field(default="redis://localhost:6379/1", alias="FEEDME_CELERY_BROKER")
     feedme_result_backend: str = Field(default="redis://localhost:6379/2", alias="FEEDME_RESULT_BACKEND")
@@ -118,6 +114,7 @@ class Settings(BaseSettings):
     supabase_url: Optional[str] = Field(default=None, alias="SUPABASE_URL")
     supabase_anon_key: Optional[str] = Field(default=None, alias="SUPABASE_ANON_KEY")
     supabase_service_key: Optional[str] = Field(default=None, alias="SUPABASE_SERVICE_KEY")
+    supabase_jwt_secret: Optional[str] = Field(default=None, alias="SUPABASE_JWT_SECRET")
     
     # Rate Limiting Configuration
     gemini_flash_rpm_limit: int = Field(default=8, alias="GEMINI_FLASH_RPM_LIMIT")
@@ -134,10 +131,20 @@ class Settings(BaseSettings):
     rate_limit_monitoring_enabled: bool = Field(default=True, alias="RATE_LIMIT_MONITORING_ENABLED")
     circuit_breaker_success_threshold: int = Field(default=3, alias="CIRCUIT_BREAKER_SUCCESS_THRESHOLD")
     
-    # JWT Configuration
-    jwt_secret: str = Field(default="change-this-in-production", alias="JWT_SECRET")
+    # JWT Configuration  
+    jwt_secret_key: str = Field(default="change-this-in-production", alias="JWT_SECRET_KEY")
     jwt_algorithm: str = Field(default="HS256", alias="JWT_ALGORITHM")
-    jwt_token_expire_minutes: int = Field(default=1440, alias="JWT_TOKEN_EXPIRE_MINUTES")  # 24 hours default
+    jwt_access_token_expire_minutes: int = Field(default=30, alias="JWT_ACCESS_TOKEN_EXPIRE_MINUTES")
+    
+    # API Key Encryption
+    api_key_encryption_secret: str = Field(default="change-this-secret-key-exactly32", alias="API_KEY_ENCRYPTION_SECRET")
+    
+    # Authentication
+    skip_auth: bool = Field(default=False, alias="SKIP_AUTH")
+    development_user_id: str = Field(default="dev-user-id", alias="DEVELOPMENT_USER_ID")
+    
+    # Internal API Security
+    internal_api_token: Optional[str] = Field(default=None, alias="INTERNAL_API_TOKEN")
 
     @field_validator('feedme_max_pdf_size_mb')
     @classmethod
@@ -152,6 +159,14 @@ class Settings(BaseSettings):
         if v > MAX_PDF_SIZE_MB:
             raise ValueError(f"feedme_max_pdf_size_mb must not exceed {MAX_PDF_SIZE_MB} MB for server capabilities")
         
+        return v
+
+    @field_validator('api_key_encryption_secret')
+    @classmethod
+    def validate_api_key_encryption_secret(cls, v: str) -> str:
+        """Validate that API key encryption secret is at least 32 bytes when UTF-8 encoded"""
+        if len(v.encode('utf-8')) < 32:
+            raise ValueError("api_key_encryption_secret must be at least 32 bytes long when UTF-8 encoded")
         return v
 
     class Config:
