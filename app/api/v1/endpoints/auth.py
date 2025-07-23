@@ -6,8 +6,10 @@ Production-ready auth endpoints with comprehensive security features.
 from typing import Optional, Dict, Any
 from datetime import datetime, timezone
 import logging
+import re
 
 from fastapi import APIRouter, HTTPException, status, Depends, Request
+from fastapi.responses import JSONResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel, EmailStr, validator
 from slowapi import Limiter, _rate_limit_exceeded_handler
@@ -41,6 +43,23 @@ class SignUpRequest(BaseModel):
     def validate_password(cls, v):
         if len(v) < 8:
             raise ValueError('Password must be at least 8 characters long')
+        
+        # Check for uppercase letter
+        if not re.search(r'[A-Z]', v):
+            raise ValueError('Password must contain at least one uppercase letter')
+        
+        # Check for lowercase letter
+        if not re.search(r'[a-z]', v):
+            raise ValueError('Password must contain at least one lowercase letter')
+        
+        # Check for digit
+        if not re.search(r'\d', v):
+            raise ValueError('Password must contain at least one digit')
+        
+        # Check for special character
+        if not re.search(r'[!@#$%^&*(),.?":{}|<>]', v):
+            raise ValueError('Password must contain at least one special character (!@#$%^&*(),.?":{}|<>)')
+        
         return v
 
 
@@ -69,6 +88,11 @@ class AuthResponse(BaseModel):
     access_token: str
     refresh_token: str
     expires_in: int
+    user: Dict[str, Any]
+
+
+class SignUpResponse(BaseModel):
+    message: str
     user: Dict[str, Any]
 
 
@@ -106,8 +130,8 @@ async def get_current_user_id(
     Used as a dependency for protected endpoints.
     """
     if settings.skip_auth:
-        # Development mode - return a dummy user ID
-        return "dev-user-id"
+        # Development mode - return configurable development user ID
+        return getattr(settings, 'development_user_id', 'dev-user-id')
         
     if not credentials:
         raise HTTPException(
@@ -139,7 +163,7 @@ async def get_current_user_id(
 
 # Auth Endpoints
 
-@router.post("/signup", response_model=AuthResponse)
+@router.post("/signup", response_model=SignUpResponse)
 @limiter.limit("5/minute")
 async def sign_up(
     request: Request,
@@ -353,7 +377,7 @@ async def sign_out(
 @limiter.limit("60/minute")
 async def refresh_token(
     request: Request,
-    refresh_token: str,
+    refresh_token_value: str,
     auth_client: SupabaseAuthClient = Depends(get_auth_client)
 ):
     """
@@ -365,7 +389,7 @@ async def refresh_token(
     
     try:
         session, error = await auth_client.refresh_token(
-            refresh_token=refresh_token,
+            refresh_token=refresh_token_value,
             ip_address=ip_address,
             user_agent=user_agent
         )
@@ -560,8 +584,7 @@ async def update_current_user(
 # Rate limit error handler
 @router.exception_handler(RateLimitExceeded)
 async def rate_limit_handler(request: Request, exc: RateLimitExceeded):
-    response = HTTPException(
+    return JSONResponse(
         status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-        detail=f"Rate limit exceeded: {exc.detail}"
+        content={"detail": f"Rate limit exceeded: {exc.detail}"}
     )
-    return response

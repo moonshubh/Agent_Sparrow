@@ -5,6 +5,7 @@ Production-ready auth integration with comprehensive security features.
 
 import os
 import logging
+import threading
 from typing import Optional, Dict, Any, Tuple
 from datetime import datetime, timedelta, timezone
 import httpx
@@ -34,8 +35,7 @@ class SupabaseAuthClient:
     def __init__(self):
         self.client = get_supabase_client()
         self.jwt_secret = settings.supabase_jwt_secret or settings.jwt_secret_key
-        self.jwt_algorithm = "HS256"
-        self._public_key_cache = {}
+        self.jwt_algorithm = settings.jwt_algorithm
         
     async def sign_up(
         self, 
@@ -192,6 +192,10 @@ class SupabaseAuthClient:
             else:
                 return None, "Failed to generate OAuth URL"
                 
+        except AuthError as e:
+            error_msg = f"OAuth initialization failed: {self._sanitize_auth_error(str(e))}"
+            logger.warning(error_msg)
+            return None, error_msg
         except Exception as e:
             error_msg = f"OAuth initialization failed: {str(e)}"
             logger.error(error_msg)
@@ -554,13 +558,17 @@ class SupabaseAuthClient:
             return "Authentication failed. Please try again"
 
 
-# Singleton instance
+# Singleton instance with thread safety
 _auth_client: Optional[SupabaseAuthClient] = None
+_auth_client_lock = threading.Lock()
 
 
 def get_auth_client() -> SupabaseAuthClient:
-    """Get singleton Supabase auth client instance."""
+    """Get singleton Supabase auth client instance with thread safety."""
     global _auth_client
     if _auth_client is None:
-        _auth_client = SupabaseAuthClient()
+        with _auth_client_lock:
+            # Double-check locking pattern
+            if _auth_client is None:
+                _auth_client = SupabaseAuthClient()
     return _auth_client

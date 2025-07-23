@@ -79,6 +79,7 @@ export interface RealtimeState {
     lastPing: string | null
     lastPong: string | null
     latency: number | null
+    consecutiveFailures: number
   }
   
   // Data State
@@ -136,7 +137,7 @@ const DEFAULT_RECONNECTION_CONFIG: ReconnectionConfig = {
 const DEFAULT_HEARTBEAT_CONFIG: HeartbeatConfig = {
   enabled: true,
   interval: 25000, // Send ping every 25 seconds (less than backend 30s timeout)
-  timeout: 15000   // Wait 15 seconds for pong response
+  timeout: 4000    // Wait 4 seconds for pong response (total: 25s + 4s = 29s < 30s)
 }
 
 // Store Implementation
@@ -161,7 +162,8 @@ export const useRealtimeStore = create<RealtimeStore>()(
         isActive: false,
         lastPing: null,
         lastPong: null,
-        latency: null
+        latency: null,
+        consecutiveFailures: 0
       },
       
       processingUpdates: {},
@@ -181,9 +183,9 @@ export const useRealtimeStore = create<RealtimeStore>()(
         connect: async (url?: string) => {
           const state = get()
           
-          // Skip WebSocket connections entirely during auth system development
-          if (process.env.NODE_ENV === 'development') {
-            console.log('WebSocket connections disabled during auth development')
+          // Skip WebSocket connections if explicitly disabled in development
+          if (process.env.DISABLE_WEBSOCKET_IN_DEV === 'true') {
+            console.log('WebSocket connections disabled via DISABLE_WEBSOCKET_IN_DEV flag')
             set({
               connectionStatus: 'disconnected',
               isConnected: false
@@ -287,9 +289,12 @@ export const useRealtimeStore = create<RealtimeStore>()(
             }
             
             ws.onerror = (error) => {
-              // Only log WebSocket errors in development to reduce console noise
+              // Log errors with different levels based on environment
               if (process.env.NODE_ENV === 'development') {
                 console.warn('WebSocket connection failed (this is expected until authentication is fully integrated)')
+              } else {
+                // In production, log errors but throttle them to avoid noise
+                get().actions.throttledErrorLog('WebSocket connection error', error)
               }
               
               // Set error state silently without showing user notifications
@@ -316,7 +321,8 @@ export const useRealtimeStore = create<RealtimeStore>()(
                   isActive: false,
                   lastPing: null,
                   lastPong: null,
-                  latency: null
+                  latency: null,
+                  consecutiveFailures: 0
                 }
               })
               
@@ -385,7 +391,8 @@ export const useRealtimeStore = create<RealtimeStore>()(
               isActive: false,
               lastPing: null,
               lastPong: null,
-              latency: null
+              latency: null,
+              consecutiveFailures: 0
             }
           })
         },
@@ -548,20 +555,45 @@ export const useRealtimeStore = create<RealtimeStore>()(
                 console.warn('Heartbeat timeout - connection may be lost')
                 const currentState = get()
                 
+                // Increment consecutive failures
+                const newFailureCount = currentState.heartbeat.consecutiveFailures + 1
+                const maxFailures = 3 // Force reconnection after 3 consecutive failures
+                
+                set(state => ({
+                  heartbeat: {
+                    ...state.heartbeat,
+                    consecutiveFailures: newFailureCount
+                  }
+                }))
+                
                 // Clear the timeout timer
                 if (currentState.timers.heartbeatTimeout) {
                   clearTimeout(currentState.timers.heartbeatTimeout)
                 }
                 
-                // Add notification about connection issues
-                currentState.actions.addNotification({
-                  type: 'warning',
-                  title: 'Connection Slow',
-                  message: 'WebSocket connection is experiencing delays',
-                  read: false
-                })
-                
-                // Don't force disconnect, let natural close handle it
+                if (newFailureCount >= maxFailures) {
+                  // Force reconnection after consecutive failures
+                  console.warn(`Forcing reconnection after ${newFailureCount} consecutive heartbeat failures`)
+                  currentState.actions.addNotification({
+                    type: 'warning',
+                    title: 'Connection Lost',
+                    message: 'Attempting to reconnect due to connection timeout',
+                    read: false
+                  })
+                  
+                  // Close current connection to trigger reconnection
+                  if (currentState.websocket) {
+                    currentState.websocket.close(1006, 'Heartbeat timeout')
+                  }
+                } else {
+                  // Add notification about connection issues
+                  currentState.actions.addNotification({
+                    type: 'warning',
+                    title: 'Connection Slow',
+                    message: 'WebSocket connection is experiencing delays',
+                    read: false
+                  })
+                }
               }, DEFAULT_HEARTBEAT_CONFIG.timeout)
               
               set(state => ({
@@ -600,7 +632,8 @@ export const useRealtimeStore = create<RealtimeStore>()(
             },
             heartbeat: {
               ...state.heartbeat,
-              isActive: false
+              isActive: false,
+              consecutiveFailures: 0
             }
           }))
         },
@@ -724,6 +757,22 @@ export const useRealtimeStore = create<RealtimeStore>()(
           }))
         },
         
+        throttledErrorLog: (() => {
+          let lastLogTime = 0
+          const logThrottleMs = 30000 // 30 seconds
+          
+          return (message: string, error?: any) => {
+            const now = Date.now()
+            if (now - lastLogTime > logThrottleMs) {
+              console.error(`[Throttled] ${message}`, error)
+              lastLogTime = now
+              
+              // In production, consider sending to monitoring service
+              // Example: sendToMonitoringService(message, error)
+            }
+          }
+        })(),
+        
         handleMessage: (data: any) => {
           const state = get()
           
@@ -757,7 +806,8 @@ export const useRealtimeStore = create<RealtimeStore>()(
                 heartbeat: {
                   ...state.heartbeat,
                   lastPong: new Date(pongTime).toISOString(),
-                  latency
+                  latency,
+                  consecutiveFailures: 0 // Reset failure counter on successful pong
                 },
                 timers: {
                   ...state.timers,
@@ -812,7 +862,7 @@ const SSR_DEFAULT_STATE = {
   lastUpdate: null,
   processingUpdates: {},
   notifications: [],
-  heartbeat: { isActive: false, lastPing: null, lastPong: null, latency: null },
+  heartbeat: { isActive: false, lastPing: null, lastPong: null, latency: null, consecutiveFailures: 0 },
   reconnection: { attempts: 0, isReconnecting: false, nextRetryIn: 0 }
 }
 

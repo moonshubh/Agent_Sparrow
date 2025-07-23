@@ -4,10 +4,11 @@ Provides user context throughout the agent execution pipeline.
 """
 
 from typing import Optional, Dict, Any
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from contextlib import asynccontextmanager
 from contextvars import ContextVar
 import logging
+import os
 
 from app.api_keys.supabase_service import get_api_key_service
 from app.api_keys.schemas import APIKeyType
@@ -29,11 +30,7 @@ class UserContext:
     metadata: Optional[Dict[str, Any]] = None
     
     # Cached API keys (loaded on demand)
-    _api_keys_cache: Optional[Dict[APIKeyType, str]] = None
-    
-    def __post_init__(self):
-        """Initialize the cache."""
-        self._api_keys_cache = {}
+    _api_keys_cache: Dict[APIKeyType, Optional[str]] = field(default_factory=dict)
     
     async def get_api_key(
         self, 
@@ -72,7 +69,6 @@ class UserContext:
             
             # Try fallback directly if provided
             if fallback_env_var:
-                import os
                 fallback_key = os.getenv(fallback_env_var)
                 self._api_keys_cache[api_key_type] = fallback_key
                 return fallback_key
@@ -84,11 +80,11 @@ class UserContext:
         return await self.get_api_key(APIKeyType.GEMINI, "GEMINI_API_KEY")
     
     async def get_tavily_api_key(self) -> Optional[str]:
-        """Get Tavily API key (no system fallback)."""
+        """Get Tavily API key (with system fallback)."""
         return await self.get_api_key(APIKeyType.TAVILY, "TAVILY_API_KEY")
     
     async def get_firecrawl_api_key(self) -> Optional[str]:
-        """Get Firecrawl API key (no system fallback)."""
+        """Get Firecrawl API key (with system fallback)."""
         return await self.get_api_key(APIKeyType.FIRECRAWL, "FIRECRAWL_API_KEY")
     
     def clear_api_key_cache(self):
@@ -139,7 +135,7 @@ async def user_context_scope(user_context: UserContext):
     try:
         yield user_context
     finally:
-        _user_context.set(None)
+        _user_context.reset(token)
 
 
 def require_user_context() -> UserContext:
@@ -191,7 +187,6 @@ async def get_user_gemini_key() -> Optional[str]:
     user_context = get_current_user_context()
     if not user_context:
         # Fall back to environment variable
-        import os
         return os.getenv("GEMINI_API_KEY")
     
     return await user_context.get_gemini_api_key()

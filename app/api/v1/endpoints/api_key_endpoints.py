@@ -3,7 +3,8 @@ API endpoints for secure API key management with Supabase authentication.
 """
 
 from typing import Optional
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+import ipaddress
+from fastapi import APIRouter, Depends, HTTPException, Request, status, Header
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 
@@ -15,6 +16,7 @@ from app.api_keys.schemas import (
     APIKeyDeleteResponse, APIKeyValidateRequest, APIKeyValidateResponse,
     APIKeyStatus
 )
+from app.core.settings import settings
 
 # Initialize rate limiter
 limiter = Limiter(key_func=get_remote_address)
@@ -28,6 +30,50 @@ def get_client_info(request: Request) -> tuple[Optional[str], Optional[str]]:
     ip_address = request.client.host if request.client else None
     user_agent = request.headers.get("User-Agent")
     return ip_address, user_agent
+
+
+def verify_internal_access(request: Request, x_internal_token: Optional[str] = Header(None)):
+    """Verify that request is from authorized internal service."""
+    client_ip = request.client.host if request.client else None
+    
+    # Check internal API token
+    expected_token = getattr(settings, 'internal_api_token', None)
+    if expected_token and x_internal_token != expected_token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid internal API token"
+        )
+    
+    # Check IP whitelist for internal networks
+    if client_ip:
+        try:
+            ip = ipaddress.ip_address(client_ip)
+            # Allow local/private networks
+            allowed_networks = [
+                ipaddress.ip_network('127.0.0.0/8'),    # Localhost
+                ipaddress.ip_network('10.0.0.0/8'),     # Private Class A
+                ipaddress.ip_network('172.16.0.0/12'),  # Private Class B
+                ipaddress.ip_network('192.168.0.0/16'), # Private Class C
+                ipaddress.ip_network('::1/128'),        # IPv6 localhost
+                ipaddress.ip_network('fc00::/7'),       # IPv6 private
+            ]
+            
+            # Check if IP is in any allowed network
+            if not any(ip in network for network in allowed_networks):
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Access denied: external IP not allowed for internal endpoint"
+                )
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid IP address format"
+            )
+    else:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Unable to determine client IP address"
+        )
 
 
 @router.post("/", response_model=APIKeyCreateResponse)
@@ -92,13 +138,14 @@ async def update_api_key(
     """
     ip_address, user_agent = get_client_info(request)
     
-    # Convert update request to create request
+    # Create request with the API key type from path
     create_request = APIKeyCreateRequest(
         api_key_type=api_key_type,
         api_key=update_request.api_key,
         key_name=update_request.key_name
     )
     
+    # Call service directly and return response
     response = await service.create_or_update_api_key(
         user_id=user_id,
         request=create_request,
@@ -112,6 +159,7 @@ async def update_api_key(
             detail=response.message
         )
     
+    # Return service response directly as APIKeyUpdateResponse (same structure)
     return APIKeyUpdateResponse(
         success=response.success,
         message=response.message,
@@ -163,7 +211,7 @@ async def validate_api_key_format(
     
     Rate limited to 30 requests per minute per IP.
     """
-    return await service.validate_api_key_format(
+    return service.validate_api_key_format(
         api_key_type=validate_request.api_key_type,
         api_key=validate_request.api_key
     )
@@ -184,15 +232,23 @@ async def get_api_key_status(
     return await service.get_api_key_status(user_id)
 
 
-# Internal endpoint for agents to get decrypted keys
+# Secured internal endpoint for agents to get decrypted keys
 @router.get("/internal/{api_key_type}")
 async def get_api_key_internal(
+    request: Request,
     api_key_type: APIKeyType,
     user_id: str,
-    service: SupabaseAPIKeyService = Depends(get_api_key_service)
+    service: SupabaseAPIKeyService = Depends(get_api_key_service),
+    _: None = Depends(verify_internal_access)  # Security check
 ):
     """
     INTERNAL ONLY: Get decrypted API key for agent use.
+    
+    Security Features:
+    - IP whitelist: Only internal/private network IPs allowed
+    - Token authentication: Requires X-Internal-Token header
+    - Network isolation: Should be behind internal firewall
+    
     This endpoint should only be accessible from internal services.
     """
     # Define fallback environment variables

@@ -219,23 +219,26 @@ class SecureTokenManager {
 
 async function apiRequest<T>(
   endpoint: string,
-  options: RequestInit = {}
+  options: RequestInit & { timeout?: number } = {}
 ): Promise<T> {
   const token = SecureTokenManager.getToken()
   
-  // Create AbortController for timeout handling with longer timeout
+  // Extract timeout from options and remove it before passing to fetch
+  const { timeout = 30000, ...fetchOptions } = options
+  
+  // Create AbortController for timeout handling
   const controller = new AbortController()
-  const timeoutId = setTimeout(() => controller.abort(), 30000) // 30 second timeout for authentication endpoints
+  const timeoutId = setTimeout(() => controller.abort(), timeout)
   
   try {
     const response = await fetch(`${API_BASE}${endpoint}`, {
-      ...options,
+      ...fetchOptions,
       signal: controller.signal,
       credentials: 'include', // Include cookies for httpOnly support
       headers: {
         'Content-Type': 'application/json',
         ...(token && { Authorization: `Bearer ${token}` }),
-        ...options.headers,
+        ...fetchOptions.headers,
       },
     })
     
@@ -268,7 +271,7 @@ async function apiRequest<T>(
       const validationErrors = errorData.validation_errors || errorData.errors
       
       throw new APIError(
-        detail,
+        `API request failed with status ${response.status}`,
         response.status,
         detail,
         code,
@@ -292,7 +295,10 @@ async function apiRequest<T>(
     }
     
     // Handle network errors
-    if (error instanceof TypeError && error.message === 'Failed to fetch') {
+    if (error instanceof TypeError && 
+        (error.message === 'Failed to fetch' || 
+         error.message.includes('NetworkError') ||
+         error.message.includes('fetch'))) {
       throw new APIError(
         'Network connection failed',
         0,

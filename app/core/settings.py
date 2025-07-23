@@ -32,6 +32,7 @@ class Settings(BaseSettings):
     router_conf_threshold: float = Field(default=0.6, alias="ROUTER_CONF_THRESHOLD")
     use_enhanced_log_analysis: bool = Field(default=True, alias="USE_ENHANCED_LOG_ANALYSIS")
     enhanced_log_model: str = Field(default="gemini-2.5-pro", alias="ENHANCED_LOG_MODEL")
+    primary_agent_model: str = Field(default="gemini-2.5-flash", alias="PRIMARY_AGENT_MODEL")
     
     # FeedMe Configuration
     feedme_enabled: bool = Field(default=True, alias="FEEDME_ENABLED")
@@ -136,10 +137,14 @@ class Settings(BaseSettings):
     jwt_access_token_expire_minutes: int = Field(default=30, alias="JWT_ACCESS_TOKEN_EXPIRE_MINUTES")
     
     # API Key Encryption
-    api_key_encryption_secret: str = Field(default="change-this-32-byte-secret-in-prod", alias="API_KEY_ENCRYPTION_SECRET")
+    api_key_encryption_secret: str = Field(default="change-this-secret-key-exactly32", alias="API_KEY_ENCRYPTION_SECRET")
     
     # Authentication
     skip_auth: bool = Field(default=False, alias="SKIP_AUTH")
+    development_user_id: str = Field(default="dev-user-id", alias="DEVELOPMENT_USER_ID")
+    
+    # Internal API Security
+    internal_api_token: Optional[str] = Field(default=None, alias="INTERNAL_API_TOKEN")
 
     @field_validator('feedme_max_pdf_size_mb')
     @classmethod
@@ -154,6 +159,14 @@ class Settings(BaseSettings):
         if v > MAX_PDF_SIZE_MB:
             raise ValueError(f"feedme_max_pdf_size_mb must not exceed {MAX_PDF_SIZE_MB} MB for server capabilities")
         
+        return v
+
+    @field_validator('api_key_encryption_secret')
+    @classmethod
+    def validate_api_key_encryption_secret(cls, v: str) -> str:
+        """Validate that API key encryption secret is at least 32 bytes when UTF-8 encoded"""
+        if len(v.encode('utf-8')) < 32:
+            raise ValueError("api_key_encryption_secret must be at least 32 bytes long when UTF-8 encoded")
         return v
 
     class Config:

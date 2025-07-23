@@ -1,8 +1,10 @@
 import logging
 import os
 import anyio
+import re
 from dotenv import load_dotenv
-from typing import AsyncIterator
+from typing import AsyncIterator, Dict, Optional
+from functools import lru_cache
 
 from langchain_core.messages import AIMessageChunk
 from langchain_google_genai import ChatGoogleGenerativeAI, HarmCategory, HarmBlockThreshold
@@ -30,31 +32,87 @@ tracer = trace.get_tracer(__name__)
 # Load environment variables from .env file
 load_dotenv()
 
-# Model will be initialized dynamically with user-specific API keys
-model_with_tools = None
+# Model cache for reusing user-specific models
+_model_cache: Dict[str, ChatGoogleGenerativeAI] = {}
+
+def _validate_api_key(api_key: str) -> bool:
+    """Validate API key format for Google Generative AI."""
+    if not api_key or not isinstance(api_key, str):
+        return False
+    # Google API keys typically start with 'AIza' and are 39 characters long
+    if not api_key.startswith('AIza') or len(api_key) != 39:
+        logger.warning(f"API key format validation failed: expected format 'AIza...' with 39 characters, got {len(api_key)} characters")
+        return False
+    # Additional validation for valid characters (alphanumeric, underscore, hyphen)
+    if not re.match(r'^[A-Za-z0-9_-]+$', api_key):
+        logger.warning("API key contains invalid characters")
+        return False
+    return True
+
+@lru_cache(maxsize=128)
+def _get_model_config() -> str:
+    """Get the configured model name from settings with caching."""
+    from app.core.settings import settings
+    return settings.primary_agent_model
 
 def create_user_specific_model(api_key: str) -> ChatGoogleGenerativeAI:
-    """Create a user-specific Gemini model with their API key."""
+    """Create a user-specific Gemini model with their API key.
+    
+    Features:
+    - API key format validation
+    - Configurable model name from settings
+    - Caching mechanism to reuse models
+    - Comprehensive error handling
+    """
+    if not _validate_api_key(api_key):
+        raise ValueError("Invalid API key format. Expected Google API key starting with 'AIza' and 39 characters long.")
+    
+    # Check cache first (using a hash of the API key for security)
+    cache_key = f"{hash(api_key)}_{_get_model_config()}"
+    if cache_key in _model_cache:
+        logger.debug("Returning cached model for user")
+        return _model_cache[cache_key]
+    
     try:
+        model_name = _get_model_config()
+        logger.info(f"Creating new user-specific model with {model_name}")
+        
         safety_settings = {
             HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
             HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
             HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
             HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
         }
+        
         model_base = ChatGoogleGenerativeAI(
-            model="gemini-2.5-flash",
+            model=model_name,
             temperature=0,
             google_api_key=api_key,
             safety_settings=safety_settings,
             convert_system_message_to_human=True
         )
+        
         # Bind tools and then wrap for rate limiting
         model_with_tools_base = model_base.bind_tools([mailbird_kb_search, tavily_web_search])
-        return wrap_gemini_agent(model_with_tools_base, "gemini-2.5-flash")
+        wrapped_model = wrap_gemini_agent(model_with_tools_base, model_name)
+        
+        # Cache the model (limit cache size to prevent memory issues)
+        if len(_model_cache) >= 100:  # Simple cache eviction
+            # Remove oldest entry (simple FIFO)
+            oldest_key = next(iter(_model_cache))
+            del _model_cache[oldest_key]
+            logger.debug("Evicted oldest model from cache")
+        
+        _model_cache[cache_key] = wrapped_model
+        logger.debug(f"Cached new model for user (cache size: {len(_model_cache)})")
+        
+        return wrapped_model
+        
     except Exception as e:
-        logger.error(f"Error creating user-specific model: {e}")
-        raise
+        logger.error(f"Error creating user-specific model with {_get_model_config()}: {e}")
+        # Clear any partial cache entry
+        _model_cache.pop(cache_key, None)
+        raise ValueError(f"Failed to create AI model: {str(e)}")
 
 async def run_primary_agent(state: PrimaryAgentState) -> AsyncIterator[AIMessageChunk]:
     """
@@ -87,9 +145,20 @@ async def run_primary_agent(state: PrimaryAgentState) -> AsyncIterator[AIMessage
             gemini_api_key = await get_user_gemini_key()
             
             if not gemini_api_key:
-                parent_span.set_attribute("error", "No Gemini API key available")
+                error_msg = "No Gemini API key available for user"
+                logger.warning(f"{error_msg} - user_query: {user_query[:100]}...")
+                parent_span.set_attribute("error", error_msg)
                 parent_span.set_status(Status(StatusCode.ERROR, "No API key"))
-                yield AIMessageChunk(content="Please configure your Gemini API key in Settings to use the AI assistant.", role="error")
+                
+                detailed_guidance = (
+                    "To use Agent Sparrow, please configure your Gemini API key:\n\n"
+                    "1. Go to Settings in the application\n"
+                    "2. Navigate to the API Keys section\n"
+                    "3. Enter your Google Gemini API key (get one at https://makersuite.google.com/app/apikey)\n"
+                    "4. Save your settings and try again\n\n"
+                    "Your API key should start with 'AIza' and be 39 characters long."
+                )
+                yield AIMessageChunk(content=detailed_guidance, role="error")
                 return
             
             # Create user-specific model

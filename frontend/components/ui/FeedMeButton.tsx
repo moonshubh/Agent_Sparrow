@@ -20,8 +20,9 @@ export function FeedMeButton({ onClick, mode = 'navigate' }: FeedMeButtonProps) 
   const [isModalOpen, setIsModalOpen] = useState(false)
   const router = useRouter()
   // Disable WebSocket connection entirely to prevent errors
+  const webSocketEnabled = false // Disabled until auth system is ready
   const { isConnected } = useWebSocketConnection({ 
-    autoConnect: false // Disabled until auth system is ready
+    autoConnect: webSocketEnabled
   })
 
   const handleClick = () => {
@@ -66,8 +67,8 @@ export function FeedMeButton({ onClick, mode = 'navigate' }: FeedMeButtonProps) 
                   }`}
                 />
               </Button>
-              {/* Connection status indicator */}
-              {mode === 'manager' && (
+              {/* Connection status indicator - only show when WebSocket is enabled */}
+              {mode === 'manager' && webSocketEnabled && (
                 <div 
                   className={`absolute -top-1 -right-1 h-2 w-2 rounded-full ${
                     isConnected ? 'bg-green-500' : 'bg-gray-400'
@@ -79,7 +80,7 @@ export function FeedMeButton({ onClick, mode = 'navigate' }: FeedMeButtonProps) 
           </TooltipTrigger>
           <TooltipContent>
             <p>{tooltipText}</p>
-            {mode === 'manager' && (
+            {mode === 'manager' && webSocketEnabled && (
               <p className="text-xs text-muted-foreground">
                 Real-time: {isConnected ? 'Connected' : 'Offline'}
               </p>
