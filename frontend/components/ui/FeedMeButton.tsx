@@ -19,7 +19,10 @@ export function FeedMeButton({ onClick, mode = 'navigate' }: FeedMeButtonProps) 
   const [isHovered, setIsHovered] = useState(false)
   const [isModalOpen, setIsModalOpen] = useState(false)
   const router = useRouter()
-  const { isConnected } = useWebSocketConnection()
+  // Disable WebSocket connection entirely to prevent errors
+  const { isConnected } = useWebSocketConnection({ 
+    autoConnect: false // Disabled until auth system is ready
+  })
 
   const handleClick = () => {
     if (mode === 'navigate') {

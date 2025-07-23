@@ -59,11 +59,6 @@ class Settings(BaseSettings):
     # Quality Control Configuration
     feedme_similarity_threshold: float = Field(default=0.7, alias="FEEDME_SIMILARITY_THRESHOLD")
     feedme_confidence_threshold: float = Field(default=0.7, alias="FEEDME_CONFIDENCE_THRESHOLD")
-    
-    # Supabase Configuration
-    supabase_url: Optional[str] = Field(default=None, alias="SUPABASE_URL")
-    supabase_anon_key: Optional[str] = Field(default=None, alias="SUPABASE_ANON_KEY")
-    supabase_service_key: Optional[str] = Field(default=None, alias="SUPABASE_SERVICE_KEY")
     feedme_async_processing: bool = Field(default=True, alias="FEEDME_ASYNC_PROCESSING")
     feedme_celery_broker: str = Field(default="redis://localhost:6379/1", alias="FEEDME_CELERY_BROKER")
     feedme_result_backend: str = Field(default="redis://localhost:6379/2", alias="FEEDME_RESULT_BACKEND")
@@ -118,6 +113,7 @@ class Settings(BaseSettings):
     supabase_url: Optional[str] = Field(default=None, alias="SUPABASE_URL")
     supabase_anon_key: Optional[str] = Field(default=None, alias="SUPABASE_ANON_KEY")
     supabase_service_key: Optional[str] = Field(default=None, alias="SUPABASE_SERVICE_KEY")
+    supabase_jwt_secret: Optional[str] = Field(default=None, alias="SUPABASE_JWT_SECRET")
     
     # Rate Limiting Configuration
     gemini_flash_rpm_limit: int = Field(default=8, alias="GEMINI_FLASH_RPM_LIMIT")
@@ -134,10 +130,16 @@ class Settings(BaseSettings):
     rate_limit_monitoring_enabled: bool = Field(default=True, alias="RATE_LIMIT_MONITORING_ENABLED")
     circuit_breaker_success_threshold: int = Field(default=3, alias="CIRCUIT_BREAKER_SUCCESS_THRESHOLD")
     
-    # JWT Configuration
-    jwt_secret: str = Field(default="change-this-in-production", alias="JWT_SECRET")
+    # JWT Configuration  
+    jwt_secret_key: str = Field(default="change-this-in-production", alias="JWT_SECRET_KEY")
     jwt_algorithm: str = Field(default="HS256", alias="JWT_ALGORITHM")
-    jwt_token_expire_minutes: int = Field(default=1440, alias="JWT_TOKEN_EXPIRE_MINUTES")  # 24 hours default
+    jwt_access_token_expire_minutes: int = Field(default=30, alias="JWT_ACCESS_TOKEN_EXPIRE_MINUTES")
+    
+    # API Key Encryption
+    api_key_encryption_secret: str = Field(default="change-this-32-byte-secret-in-prod", alias="API_KEY_ENCRYPTION_SECRET")
+    
+    # Authentication
+    skip_auth: bool = Field(default=False, alias="SKIP_AUTH")
 
     @field_validator('feedme_max_pdf_size_mb')
     @classmethod

@@ -223,52 +223,97 @@ async function apiRequest<T>(
 ): Promise<T> {
   const token = SecureTokenManager.getToken()
   
-  const response = await fetch(`${API_BASE}${endpoint}`, {
-    ...options,
-    credentials: 'include', // Include cookies for httpOnly support
-    headers: {
-      'Content-Type': 'application/json',
-      ...(token && { Authorization: `Bearer ${token}` }),
-      ...options.headers,
-    },
-  })
+  // Create AbortController for timeout handling with longer timeout
+  const controller = new AbortController()
+  const timeoutId = setTimeout(() => controller.abort(), 30000) // 30 second timeout for authentication endpoints
+  
+  try {
+    const response = await fetch(`${API_BASE}${endpoint}`, {
+      ...options,
+      signal: controller.signal,
+      credentials: 'include', // Include cookies for httpOnly support
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token && { Authorization: `Bearer ${token}` }),
+        ...options.headers,
+      },
+    })
+    
+    clearTimeout(timeoutId)
 
-  if (!response.ok) {
-    // Handle token expiration
-    if (response.status === 401) {
-      SecureTokenManager.clearToken()
-      // Redirect to login or trigger re-authentication
-      if (typeof window !== 'undefined') {
-        window.location.href = '/login'
+    if (!response.ok) {
+      // Handle token expiration
+      if (response.status === 401) {
+        SecureTokenManager.clearToken()
+        // Redirect to login or trigger re-authentication
+        if (typeof window !== 'undefined') {
+          window.location.href = '/login'
+        }
       }
+      
+      let errorData: any
+      try {
+        errorData = await response.json()
+      } catch {
+        // If response is not JSON, create a basic error structure
+        errorData = {
+          detail: response.status >= 500 ? 'Server error' : 'Network error',
+          message: `HTTP ${response.status}: ${response.statusText}`
+        }
+      }
+
+      // Extract structured error information
+      const detail = errorData.detail || errorData.message || `HTTP ${response.status}: ${response.statusText}`
+      const code = errorData.code || errorData.error_code
+      const validationErrors = errorData.validation_errors || errorData.errors
+      
+      throw new APIError(
+        detail,
+        response.status,
+        detail,
+        code,
+        validationErrors
+      )
+    }
+
+    return response.json()
+    
+  } catch (error) {
+    clearTimeout(timeoutId)
+    
+    // Handle AbortError (timeout)
+    if (error instanceof Error && error.name === 'AbortError') {
+      throw new APIError(
+        'Request timeout - server may be busy',
+        408,
+        'The request took too long to complete. Please try again.',
+        'TIMEOUT'
+      )
     }
     
-    let errorData: any
-    try {
-      errorData = await response.json()
-    } catch {
-      // If response is not JSON, create a basic error structure
-      errorData = {
-        detail: response.status >= 500 ? 'Server error' : 'Network error',
-        message: `HTTP ${response.status}: ${response.statusText}`
-      }
+    // Handle network errors
+    if (error instanceof TypeError && error.message === 'Failed to fetch') {
+      throw new APIError(
+        'Network connection failed',
+        0,
+        'Unable to connect to the server. Please check your internet connection and try again.',
+        'NETWORK_ERROR'
+      )
     }
-
-    // Extract structured error information
-    const detail = errorData.detail || errorData.message || `HTTP ${response.status}: ${response.statusText}`
-    const code = errorData.code || errorData.error_code
-    const validationErrors = errorData.validation_errors || errorData.errors
     
+    // Re-throw APIError instances
+    if (error instanceof APIError) {
+      throw error
+    }
+    
+    // Handle other errors
     throw new APIError(
-      detail,
-      response.status,
-      detail,
-      code,
-      validationErrors
+      'Unexpected error occurred',
+      500,
+      error instanceof Error ? error.message : 'An unexpected error occurred',
+      'UNKNOWN_ERROR'
     )
   }
-
-  return response.json()
 }
 
 export const apiKeyService = {

@@ -135,8 +135,8 @@ const DEFAULT_RECONNECTION_CONFIG: ReconnectionConfig = {
 
 const DEFAULT_HEARTBEAT_CONFIG: HeartbeatConfig = {
   enabled: true,
-  interval: 30000,
-  timeout: 10000
+  interval: 25000, // Send ping every 25 seconds (less than backend 30s timeout)
+  timeout: 15000   // Wait 15 seconds for pong response
 }
 
 // Store Implementation
@@ -181,6 +181,16 @@ export const useRealtimeStore = create<RealtimeStore>()(
         connect: async (url?: string) => {
           const state = get()
           
+          // Skip WebSocket connections entirely during auth system development
+          if (process.env.NODE_ENV === 'development') {
+            console.log('WebSocket connections disabled during auth development')
+            set({
+              connectionStatus: 'disconnected',
+              isConnected: false
+            })
+            return
+          }
+          
           // Clean up existing connection
           if (state.websocket) {
             state.actions.disconnect()
@@ -193,6 +203,12 @@ export const useRealtimeStore = create<RealtimeStore>()(
               ? 'ws://localhost:8000' 
               : window.location.origin.replace('http', 'ws')
             wsUrl = `${baseUrl}/ws/feedme/global`
+          }
+          
+          // Skip connection if page is hidden or document not available
+          if (typeof document !== 'undefined' && document.hidden) {
+            console.log('Skipping WebSocket connection - page is hidden')
+            return
           }
           
           // Ensure authentication is initialized
@@ -213,8 +229,30 @@ export const useRealtimeStore = create<RealtimeStore>()(
           try {
             const ws = new WebSocket(authUrl)
             
+            // Add connection timeout to prevent hanging connections
+            const connectionTimeout = setTimeout(() => {
+              if (ws.readyState === WebSocket.CONNECTING) {
+                console.warn('WebSocket connection timeout')
+                ws.close()
+                
+                set(state => ({
+                  connectionStatus: 'error',
+                  reconnection: {
+                    ...state.reconnection,
+                    lastError: 'Connection timeout - server may be overloaded'
+                  }
+                }))
+                
+                // Schedule reconnection
+                if (DEFAULT_RECONNECTION_CONFIG.enabled) {
+                  get().actions.scheduleReconnection()
+                }
+              }
+            }, 10000) // 10 second connection timeout
+            
             // Configure WebSocket event handlers
             ws.onopen = () => {
+              clearTimeout(connectionTimeout) // Clear the connection timeout
               console.log('✓ WebSocket connected')
               
               set(state => ({
@@ -249,15 +287,22 @@ export const useRealtimeStore = create<RealtimeStore>()(
             }
             
             ws.onerror = (error) => {
-              console.error('WebSocket error:', error)
+              // Only log WebSocket errors in development to reduce console noise
+              if (process.env.NODE_ENV === 'development') {
+                console.warn('WebSocket connection failed (this is expected until authentication is fully integrated)')
+              }
               
+              // Set error state silently without showing user notifications
               set(state => ({
                 connectionStatus: 'error',
                 reconnection: {
                   ...state.reconnection,
-                  lastError: 'Connection error occurred'
+                  lastError: 'WebSocket connection unavailable'
                 }
               }))
+              
+              // Don't attempt aggressive reconnection for auth-related WebSocket failures
+              clearTimeout(connectionTimeout)
             }
             
             ws.onclose = (event) => {
@@ -281,8 +326,19 @@ export const useRealtimeStore = create<RealtimeStore>()(
               // Attempt reconnection if not intentional disconnect
               // Exclude close codes that indicate intentional disconnection: 1000 (normal), 1001 (going away)
               const intentionalCloseCodes = [1000, 1001]
-              if (!intentionalCloseCodes.includes(event.code) && DEFAULT_RECONNECTION_CONFIG.enabled) {
-                get().actions.scheduleReconnection()
+              const shouldReconnect = !intentionalCloseCodes.includes(event.code) && 
+                                     DEFAULT_RECONNECTION_CONFIG.enabled &&
+                                     typeof document !== 'undefined' && 
+                                     !document.hidden // Don't reconnect if page is hidden
+              
+              if (shouldReconnect) {
+                // Add a small delay before starting reconnection to prevent rapid attempts
+                setTimeout(() => {
+                  const currentState = get()
+                  if (currentState.connectionStatus !== 'connected') {
+                    currentState.actions.scheduleReconnection()
+                  }
+                }, 1000)
               }
             }
             
@@ -490,6 +546,21 @@ export const useRealtimeStore = create<RealtimeStore>()(
               // Set timeout for pong response
               const heartbeatTimeout = setTimeout(() => {
                 console.warn('Heartbeat timeout - connection may be lost')
+                const currentState = get()
+                
+                // Clear the timeout timer
+                if (currentState.timers.heartbeatTimeout) {
+                  clearTimeout(currentState.timers.heartbeatTimeout)
+                }
+                
+                // Add notification about connection issues
+                currentState.actions.addNotification({
+                  type: 'warning',
+                  title: 'Connection Slow',
+                  message: 'WebSocket connection is experiencing delays',
+                  read: false
+                })
+                
                 // Don't force disconnect, let natural close handle it
               }, DEFAULT_HEARTBEAT_CONFIG.timeout)
               
@@ -562,8 +633,13 @@ export const useRealtimeStore = create<RealtimeStore>()(
         scheduleReconnection: () => {
           const state = get()
           
+          // Don't attempt reconnection if manually disconnected
+          if (state.connectionStatus === 'disconnected') {
+            return
+          }
+          
           if (state.reconnection.attempts >= DEFAULT_RECONNECTION_CONFIG.maxAttempts) {
-            console.error('Max reconnection attempts reached')
+            console.warn('Max reconnection attempts reached, stopping automatic reconnection')
             
             set(state => ({
               connectionStatus: 'error',
@@ -574,23 +650,37 @@ export const useRealtimeStore = create<RealtimeStore>()(
               }
             }))
             
-            // Add notification for user
-            state.actions.addNotification({
-              type: 'error',
-              title: 'Connection Lost',
-              message: 'Failed to reconnect after multiple attempts. Please refresh the page.',
-              read: false,
-              actions: [
-                {
-                  label: 'Retry',
-                  action: () => get().actions.reconnect()
-                },
-                {
-                  label: 'Refresh Page',
-                  action: () => window.location.reload()
-                }
-              ]
-            })
+            // Add notification for user (only once)
+            const existingNotifications = get().notifications
+            const hasConnectionErrorNotification = existingNotifications.some(
+              n => n.type === 'error' && n.title.includes('Connection Lost')
+            )
+            
+            if (!hasConnectionErrorNotification) {
+              state.actions.addNotification({
+                type: 'error',
+                title: 'Connection Lost',
+                message: 'Failed to reconnect after multiple attempts. Please check your connection.',
+                read: false,
+                actions: [
+                  {
+                    label: 'Retry',
+                    action: () => {
+                      const currentState = get()
+                      set(prevState => ({
+                        reconnection: {
+                          ...prevState.reconnection,
+                          attempts: 0,
+                          isReconnecting: false,
+                          lastError: null
+                        }
+                      }))
+                      currentState.actions.connect()
+                    }
+                  }
+                ]
+              })
+            }
             
             return
           }
@@ -642,10 +732,21 @@ export const useRealtimeStore = create<RealtimeStore>()(
               // Handle heartbeat response
               const pongTime = Date.now()
               // Defensive check for timestamp - ensure it's a valid number
-              const pingTime = (data.timestamp && typeof data.timestamp === 'number' && !isNaN(data.timestamp)) 
-                ? data.timestamp 
-                : pongTime // Use current time as fallback to avoid negative latency
-              const latency = pongTime - pingTime
+              let pingTime = pongTime // Default fallback
+              
+              if (data.timestamp) {
+                if (typeof data.timestamp === 'number' && !isNaN(data.timestamp)) {
+                  pingTime = data.timestamp
+                } else if (typeof data.timestamp === 'string') {
+                  // Handle ISO string timestamps
+                  const parsedTime = new Date(data.timestamp).getTime()
+                  if (!isNaN(parsedTime)) {
+                    pingTime = parsedTime
+                  }
+                }
+              }
+              
+              const latency = Math.max(0, pongTime - pingTime) // Ensure non-negative latency
               
               // Clear heartbeat timeout
               if (state.timers.heartbeatTimeout) {

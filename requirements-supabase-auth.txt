@@ -1,0 +1,13 @@
+# Supabase authentication dependencies
+supabase>=2.0.0
+gotrue>=2.0.0
+slowapi>=0.1.9
+PyJWT>=2.8.0
+cryptography>=41.0.0
+
+# Additional dependencies for enhanced functionality
+httpx>=0.25.0
+python-multipart>=0.0.6
+
+# Optional dependencies for rate limiting and security
+redis>=5.0.0

@@ -80,6 +80,7 @@ kill_process_on_port() {
 kill_process_on_port 8000
 
 echo "Starting Uvicorn server in the background..."
+cd "$ROOT_DIR"
 uvicorn app.main:app --reload --port 8000 > "$BACKEND_LOG_DIR/backend.log" 2>&1 &
 BACKEND_PID=$!
 echo "Backend server started with PID: $BACKEND_PID"

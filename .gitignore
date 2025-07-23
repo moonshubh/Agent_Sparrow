@@ -4,8 +4,7 @@
 !.env.example
 
 # Ignore all .md and .yml files
-*.md
-*.yml
+
 !CLAUDE.md
 !claude.md
 
@@ -694,3 +693,5 @@ dev-debug.log
 !frontend/lib/api.ts
 !frontend/lib/types/logAnalysis.ts
 frontend/tsconfig.tsbuildinfo
+*.md
+*.xml

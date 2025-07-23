@@ -30,33 +30,31 @@ tracer = trace.get_tracer(__name__)
 # Load environment variables from .env file
 load_dotenv()
 
-# Ensure the GEMINI_API_KEY is set, raising an error if not found
-if "GEMINI_API_KEY" not in os.environ:
-    logger.error("GEMINI_API_KEY not found in environment variables.")
-    raise ValueError("GEMINI_API_KEY not found in environment variables.")
+# Model will be initialized dynamically with user-specific API keys
+model_with_tools = None
 
-# Initialize the Gemini model for the primary agent
-try:
-    safety_settings = {
-        HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
-        HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
-        HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
-        HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
-    }
-    model_base = ChatGoogleGenerativeAI(
-        model="gemini-2.5-flash",
-        temperature=0,
-        google_api_key=os.environ.get("GEMINI_API_KEY"),
-        safety_settings=safety_settings,
-        convert_system_message_to_human=True
-    )
-    # Bind tools and then wrap for rate limiting
-    model_with_tools_base = model_base.bind_tools([mailbird_kb_search, tavily_web_search])
-    model_with_tools = wrap_gemini_agent(model_with_tools_base, "gemini-2.5-flash")
-    logger.info("Primary agent model initialized and wrapped successfully.")
-except Exception as e:
-    logger.exception("Fatal error during ChatGoogleGenerativeAI initialization: %s", e)
-    raise
+def create_user_specific_model(api_key: str) -> ChatGoogleGenerativeAI:
+    """Create a user-specific Gemini model with their API key."""
+    try:
+        safety_settings = {
+            HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
+            HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
+            HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
+            HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
+        }
+        model_base = ChatGoogleGenerativeAI(
+            model="gemini-2.5-flash",
+            temperature=0,
+            google_api_key=api_key,
+            safety_settings=safety_settings,
+            convert_system_message_to_human=True
+        )
+        # Bind tools and then wrap for rate limiting
+        model_with_tools_base = model_base.bind_tools([mailbird_kb_search, tavily_web_search])
+        return wrap_gemini_agent(model_with_tools_base, "gemini-2.5-flash")
+    except Exception as e:
+        logger.error(f"Error creating user-specific model: {e}")
+        raise
 
 async def run_primary_agent(state: PrimaryAgentState) -> AsyncIterator[AIMessageChunk]:
     """
@@ -83,6 +81,19 @@ async def run_primary_agent(state: PrimaryAgentState) -> AsyncIterator[AIMessage
                 parent_span.set_status(Status(StatusCode.ERROR, "Query too long"))
                 yield AIMessageChunk(content="Your query is too long. Please shorten it and try again.", role="assistant")
                 return
+
+            # Get user-specific API key
+            from app.core.user_context import get_user_gemini_key
+            gemini_api_key = await get_user_gemini_key()
+            
+            if not gemini_api_key:
+                parent_span.set_attribute("error", "No Gemini API key available")
+                parent_span.set_status(Status(StatusCode.ERROR, "No API key"))
+                yield AIMessageChunk(content="Please configure your Gemini API key in Settings to use the AI assistant.", role="error")
+                return
+            
+            # Create user-specific model
+            model_with_tools = create_user_specific_model(gemini_api_key)
 
             parent_span.set_attribute("input.query", user_query)
             parent_span.set_attribute("state.message_count", len(state.messages))
