@@ -442,7 +442,6 @@ class ProblemSolvingFramework:
                 "Test send/receive functionality"
             ],
             preventive_measures=["Keep credentials secure", "Regular account maintenance"],
-            expected_outcome="Email account will be fully configured and ready for use with proper send/receive functionality.",
             confidence_score=0.9,
             estimated_time_minutes=10,
             required_tools=['account_credentials', 'server_settings']
@@ -483,7 +482,6 @@ class ProblemSolvingFramework:
    - Share power-user techniques
    - Explain related features
    - Provide troubleshooting tips""",
-            expected_outcome="User will be proficient with the feature and able to integrate it effectively into their email workflow.",
             confidence_score=0.95,
             estimated_time_minutes=15,
             required_tools=['feature_documentation', 'tutorials']
@@ -524,7 +522,6 @@ class ProblemSolvingFramework:
    - Set up billing notifications
    - Explain renewal and cancellation policies
    - Provide account management resources""",
-            expected_outcome="Billing questions will be resolved with clear understanding of charges and account status.",
             confidence_score=0.8,
             estimated_time_minutes=12,
             required_tools=['billing_system', 'account_access', 'current_pricing']
@@ -565,7 +562,6 @@ class ProblemSolvingFramework:
    - Set up performance monitoring
    - Establish regular maintenance routine
    - Plan for future scalability""",
-            expected_outcome="Mailbird will operate with improved speed, responsiveness, and efficiency.",
             confidence_score=0.8,
             estimated_time_minutes=20,
             required_tools=['system_diagnostics', 'performance_tools']
@@ -608,7 +604,6 @@ class ProblemSolvingFramework:
    - Confirm issue resolution
    - Document solution for future reference
    - Implement preventive measures""",
-            expected_outcome="Issue will be systematically diagnosed and resolved with documented solution process.",
             confidence_score=0.75,
             estimated_time_minutes=25,
             required_tools=['diagnostic_tools', 'system_access']
@@ -630,26 +625,17 @@ class ProblemSolvingFramework:
         
         return SolutionCandidate(
             solution_summary="Comprehensive Support Assistance",
-            detailed_steps="""1. **Needs Assessment**
-   - Clarify specific requirements
-   - Understand user goals and context
-   - Identify priority areas for assistance
-
-2. **Tailored Guidance**
-   - Provide relevant information and resources
-   - Offer step-by-step assistance
-   - Connect to appropriate documentation
-
-3. **Implementation Support**
-   - Walk through solutions together
-   - Provide troubleshooting assistance
-   - Ensure successful completion
-
-4. **Follow-up and Resources**
-   - Confirm satisfaction with solution
-   - Provide additional resources
-   - Establish ongoing support channels""",
-            expected_outcome="User will receive comprehensive assistance tailored to their specific needs and context.",
+            detailed_steps=[
+                "Clarify specific requirements and understand user goals",
+                "Provide relevant information and step-by-step assistance", 
+                "Walk through solutions with troubleshooting support",
+                "Confirm satisfaction and provide additional resources"
+            ],
+            preventive_measures=[
+                "Establish clear communication channels",
+                "Document solutions for future reference",
+                "Set up proper follow-up procedures"
+            ],
             confidence_score=0.7,
             estimated_time_minutes=18,
             required_tools=['knowledge_base', 'support_resources']

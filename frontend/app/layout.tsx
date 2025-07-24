@@ -4,6 +4,8 @@ import { ThemeProvider } from "next-themes";
 import { cookies } from "next/headers";
 import "./globals.css";
 import { Toaster } from "@/components/ui/sonner";
+import { AuthProvider } from "@/contexts/AuthContext";
+import { DevModeIndicator } from "@/components/dev/DevModeIndicator";
 
 export const metadata: Metadata = {
   title: 'MB-Sparrow Agent',
@@ -42,7 +44,10 @@ export default async function RootLayout({
           enableSystem
           disableTransitionOnChange
         >
-          {children}
+          <AuthProvider>
+            <DevModeIndicator />
+            {children}
+          </AuthProvider>
           <Toaster />
         </ThemeProvider>
       </body>

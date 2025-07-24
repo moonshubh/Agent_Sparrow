@@ -463,4 +463,63 @@
   .feedme-scrollbar::-webkit-scrollbar-corner {
     background: hsl(var(--background));
   }
+
+  /* Login page background patterns and animations */
+  .bg-grid-pattern {
+    background-image: 
+      linear-gradient(rgba(0, 149, 255, 0.1) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(0, 149, 255, 0.1) 1px, transparent 1px);
+    background-size: 32px 32px;
+  }
+
+  .animation-delay-1000 {
+    animation-delay: 1s;
+  }
+
+  .animation-delay-2000 {
+    animation-delay: 2s;
+  }
+
+  /* Enhanced pulse animation for login elements */
+  @keyframes enhanced-pulse {
+    0%, 100% {
+      opacity: 1;
+      transform: scale(1);
+    }
+    50% {
+      opacity: 0.7;
+      transform: scale(1.02);
+    }
+  }
+
+  .animate-enhanced-pulse {
+    animation: enhanced-pulse 3s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+  }
+
+  /* Floating animation for background orbs */
+  @keyframes float {
+    0%, 100% {
+      transform: translateY(0px) rotate(0deg);
+    }
+    33% {
+      transform: translateY(-10px) rotate(1deg);
+    }
+    66% {
+      transform: translateY(5px) rotate(-1deg);
+    }
+  }
+
+  .animate-float {
+    animation: float 6s ease-in-out infinite;
+  }
+
+  .animate-float-delayed {
+    animation: float 8s ease-in-out infinite;
+    animation-delay: 2s;
+  }
+
+  .animate-float-slow {
+    animation: float 10s ease-in-out infinite;
+    animation-delay: 4s;
+  }
 }

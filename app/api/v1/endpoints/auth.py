@@ -29,7 +29,6 @@ limiter = Limiter(key_func=get_remote_address)
 security = HTTPBearer(auto_error=False)
 
 router = APIRouter()
-router.state.limiter = limiter
 
 
 # Request/Response Models
@@ -581,10 +580,11 @@ async def update_current_user(
         )
 
 
-# Rate limit error handler
-@router.exception_handler(RateLimitExceeded)
-async def rate_limit_handler(request: Request, exc: RateLimitExceeded):
-    return JSONResponse(
-        status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-        content={"detail": f"Rate limit exceeded: {exc.detail}"}
-    )
+# Rate limit error handler - commented out as APIRouter doesn't support exception_handler
+# This should be handled at the app level in main.py instead
+# @router.exception_handler(RateLimitExceeded)
+# async def rate_limit_handler(request: Request, exc: RateLimitExceeded):
+#     return JSONResponse(
+#         status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+#         content={"detail": f"Rate limit exceeded: {exc.detail}"}
+#     )
