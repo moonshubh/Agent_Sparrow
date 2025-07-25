@@ -5,16 +5,49 @@ import { useRouter } from 'next/navigation'
 import { ArrowLeft, Key, Shield, CheckCircle, AlertCircle, Info, HelpCircle } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
-import { Badge } from '@/components/ui/badge'
 import { Alert, AlertDescription } from '@/components/ui/alert'
-import { Separator } from '@/components/ui/separator'
-import { APIKeyInput } from '@/components/settings/APIKeyInput'
+import { StatusGrid, StatusItem } from '@/components/api-keys/StatusGrid'
+import { APIKeyConfigSection, APIKeyConfig } from '@/components/api-keys/APIKeyConfigSection'
+import { SecurityFeatureGrid, SecurityFeature } from '@/components/api-keys/SecurityFeatureGrid'
 import { 
   APIKeyType, 
   APIKeyInfo, 
   APIKeyStatus,
   apiKeyService 
 } from '@/lib/api-keys'
+
+// Define specific error types for better type safety
+interface APIError {
+  code?: string
+  status?: number
+  message: string
+}
+
+// Constants to eliminate code duplication
+const ERROR_MESSAGES = {
+  NETWORK_ERROR: 'Cannot connect to server. Please check your connection.',
+  UNAUTHORIZED: 'Authentication required. Please log in.',
+  GENERIC_LOAD_ERROR: 'Failed to load API keys',
+  DEVELOPMENT_MODE: 'API Keys page: API loading disabled during development'
+} as const
+
+const DEFAULT_API_STATUS: APIKeyStatus = {
+  user_id: 'unknown',
+  gemini_configured: false,
+  tavily_configured: false,
+  firecrawl_configured: false,
+  all_required_configured: false,
+  last_validation_check: undefined
+}
+
+const DEVELOPMENT_API_STATUS: APIKeyStatus = {
+  user_id: 'development',
+  gemini_configured: false,
+  tavily_configured: false,
+  firecrawl_configured: false,
+  all_required_configured: false,
+  last_validation_check: 'Development mode'
+}
 
 export default function APIKeysPage() {
   const router = useRouter()
@@ -28,21 +61,41 @@ export default function APIKeysPage() {
     loadData()
   }, [])
 
+  // Helper function to handle and format errors
+  const handleError = (err: unknown): string => {
+    // Type guard for APIError
+    const isAPIError = (error: unknown): error is APIError => {
+      return typeof error === 'object' && error !== null && 'message' in error
+    }
+
+    if (isAPIError(err)) {
+      if (err.code === 'NETWORK_ERROR') {
+        return ERROR_MESSAGES.NETWORK_ERROR
+      }
+      if (err.status === 401) {
+        return ERROR_MESSAGES.UNAUTHORIZED
+      }
+      return err.message
+    }
+    
+    if (err instanceof Error) {
+      return err.message
+    }
+    
+    return ERROR_MESSAGES.GENERIC_LOAD_ERROR
+  }
+
   const loadData = async () => {
     setIsLoading(true)
     setError(null)
 
     // Skip API loading during development until auth system is integrated
-    if (process.env.NODE_ENV === 'development') {
-      console.log('API Keys page: API loading disabled during development')
-      setAPIKeyStatus({
-        user_id: 'development',
-        gemini_configured: false,
-        tavily_configured: false,
-        firecrawl_configured: false,
-        all_required_configured: false,
-        last_validation_check: 'Development mode'
-      })
+    // Use Next.js specific environment detection for reliability
+    if (process.env.NODE_ENV === 'development' || !process.env.NEXT_PUBLIC_SUPABASE_URL) {
+      if (process.env.NODE_ENV === 'development') {
+        console.log(ERROR_MESSAGES.DEVELOPMENT_MODE)
+      }
+      setAPIKeyStatus(DEVELOPMENT_API_STATUS)
       setIsLoading(false)
       return
     }
@@ -55,53 +108,115 @@ export default function APIKeysPage() {
       
       setAPIKeys(keysResult.api_keys)
       setAPIKeyStatus(statusResult)
-    } catch (err: any) {
-      let errorMessage = 'Failed to load API keys'
-      
-      if (err?.code === 'NETWORK_ERROR') {
-        errorMessage = 'Cannot connect to server. Please check your connection.'
-      } else if (err?.status === 401) {
-        errorMessage = 'Authentication required. Please log in.'
-      } else if (err instanceof Error) {
-        errorMessage = err.message
-      }
-      
+    } catch (err: unknown) {
+      const errorMessage = handleError(err)
       setError(errorMessage)
       console.error('API Keys loading error:', err)
 
       // Set default status on error
-      setAPIKeyStatus({
-        user_id: 'unknown',
-        gemini_configured: false,
-        tavily_configured: false,
-        firecrawl_configured: false,
-        all_required_configured: false,
-        last_validation_check: undefined
-      })
+      setAPIKeyStatus(DEFAULT_API_STATUS)
     } finally {
       setIsLoading(false)
     }
   }
 
-  const handleAPIKeySave = (type: APIKeyType, keyName?: string) => {
-    loadData()
+  const handleAPIKeySave = async (_type: APIKeyType, _keyName?: string) => {
+    setIsLoading(true)
+    try {
+      await loadData()
+    } finally {
+      setIsLoading(false)
+    }
   }
 
-  const handleAPIKeyDelete = (type: APIKeyType) => {
-    loadData()
+  const handleAPIKeyDelete = async (_type: APIKeyType) => {
+    setIsLoading(true)
+    try {
+      await loadData()
+    } finally {
+      setIsLoading(false)
+    }
   }
 
   const getExistingKey = (type: APIKeyType): APIKeyInfo | undefined => {
     return apiKeys.find(key => key.api_key_type === type)
   }
 
-  const getStatusIcon = (configured: boolean) => {
-    return configured ? (
-      <CheckCircle className="h-5 w-5 text-green-600" />
-    ) : (
-      <AlertCircle className="h-5 w-5 text-amber-600" />
-    )
-  }
+  // Data-driven configuration for status items
+  const statusItems: StatusItem[] = [
+    {
+      id: 'gemini',
+      name: 'Google Gemini',
+      description: 'AI Models & Chat',
+      configured: apiKeyStatus?.gemini_configured || false,
+      required: true
+    },
+    {
+      id: 'tavily',
+      name: 'Tavily Search',
+      description: 'Web Search',
+      configured: apiKeyStatus?.tavily_configured || false,
+      required: false
+    },
+    {
+      id: 'firecrawl',
+      name: 'Firecrawl',
+      description: 'Web Scraping',
+      configured: apiKeyStatus?.firecrawl_configured || false,
+      required: false
+    }
+  ]
+
+  // Data-driven configuration for API key sections
+  const apiKeyConfigs: APIKeyConfig[] = [
+    {
+      type: APIKeyType.GEMINI,
+      name: 'Google Gemini API',
+      required: true
+    },
+    {
+      type: APIKeyType.TAVILY,
+      name: 'Tavily Search API',
+      required: false
+    },
+    {
+      type: APIKeyType.FIRECRAWL,
+      name: 'Firecrawl API',
+      required: false
+    }
+  ]
+
+  // Data-driven configuration for security features
+  const securityFeatures: SecurityFeature[] = [
+    {
+      id: 'encryption',
+      icon: Shield,
+      iconColor: 'text-green-600',
+      title: 'AES-256 Encryption',
+      description: 'All API keys are encrypted with user-specific keys before storage'
+    },
+    {
+      id: 'isolation',
+      icon: Key,
+      iconColor: 'text-blue-600',
+      title: 'User Isolation',
+      description: 'Your keys are completely isolated from other users'
+    },
+    {
+      id: 'transmission',
+      icon: CheckCircle,
+      iconColor: 'text-green-600',
+      title: 'Secure Transmission',
+      description: 'All operations use HTTPS encryption'
+    },
+    {
+      id: 'storage',
+      icon: HelpCircle,
+      iconColor: 'text-purple-600',
+      title: 'No Client Storage',
+      description: 'Keys are never stored in your browser'
+    }
+  ]
 
   return (
     <div className="min-h-screen bg-background">
@@ -165,49 +280,7 @@ export default function APIKeysPage() {
                 </CardDescription>
               </CardHeader>
               <CardContent>
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                  {/* Gemini Status */}
-                  <div className="flex items-center justify-between p-4 bg-muted/30 rounded-lg border">
-                    <div className="space-y-1">
-                      <p className="font-medium">Google Gemini</p>
-                      <p className="text-sm text-muted-foreground">AI Models & Chat</p>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      {getStatusIcon(apiKeyStatus.gemini_configured)}
-                      <Badge variant={apiKeyStatus.gemini_configured ? "default" : "destructive"}>
-                        {apiKeyStatus.gemini_configured ? "Ready" : "Required"}
-                      </Badge>
-                    </div>
-                  </div>
-
-                  {/* Tavily Status */}
-                  <div className="flex items-center justify-between p-4 bg-muted/30 rounded-lg border">
-                    <div className="space-y-1">
-                      <p className="font-medium">Tavily Search</p>
-                      <p className="text-sm text-muted-foreground">Web Search</p>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      {getStatusIcon(apiKeyStatus.tavily_configured)}
-                      <Badge variant={apiKeyStatus.tavily_configured ? "default" : "outline"}>
-                        {apiKeyStatus.tavily_configured ? "Ready" : "Optional"}
-                      </Badge>
-                    </div>
-                  </div>
-
-                  {/* Firecrawl Status */}
-                  <div className="flex items-center justify-between p-4 bg-muted/30 rounded-lg border">
-                    <div className="space-y-1">
-                      <p className="font-medium">Firecrawl</p>
-                      <p className="text-sm text-muted-foreground">Web Scraping</p>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      {getStatusIcon(apiKeyStatus.firecrawl_configured)}
-                      <Badge variant={apiKeyStatus.firecrawl_configured ? "default" : "outline"}>
-                        {apiKeyStatus.firecrawl_configured ? "Ready" : "Optional"}
-                      </Badge>
-                    </div>
-                  </div>
-                </div>
+                <StatusGrid items={statusItems} />
 
                 {/* Status Alerts */}
                 <div className="mt-6 space-y-3">
@@ -244,52 +317,13 @@ export default function APIKeysPage() {
                   Add or update your API keys for different services. All keys are encrypted and stored securely.
                 </CardDescription>
               </CardHeader>
-              <CardContent className="space-y-6">
-                {/* Google Gemini */}
-                <div>
-                  <h3 className="text-lg font-medium mb-4 flex items-center gap-2">
-                    Google Gemini API
-                    <Badge variant="destructive" className="text-xs">Required</Badge>
-                  </h3>
-                  <APIKeyInput
-                    type={APIKeyType.GEMINI}
-                    existingKey={getExistingKey(APIKeyType.GEMINI)}
-                    onSave={handleAPIKeySave}
-                    onDelete={handleAPIKeyDelete}
-                  />
-                </div>
-
-                <Separator />
-
-                {/* Tavily Search */}
-                <div>
-                  <h3 className="text-lg font-medium mb-4 flex items-center gap-2">
-                    Tavily Search API
-                    <Badge variant="outline" className="text-xs">Optional</Badge>
-                  </h3>
-                  <APIKeyInput
-                    type={APIKeyType.TAVILY}
-                    existingKey={getExistingKey(APIKeyType.TAVILY)}
-                    onSave={handleAPIKeySave}
-                    onDelete={handleAPIKeyDelete}
-                  />
-                </div>
-
-                <Separator />
-
-                {/* Firecrawl */}
-                <div>
-                  <h3 className="text-lg font-medium mb-4 flex items-center gap-2">
-                    Firecrawl API
-                    <Badge variant="outline" className="text-xs">Optional</Badge>
-                  </h3>
-                  <APIKeyInput
-                    type={APIKeyType.FIRECRAWL}
-                    existingKey={getExistingKey(APIKeyType.FIRECRAWL)}
-                    onSave={handleAPIKeySave}
-                    onDelete={handleAPIKeyDelete}
-                  />
-                </div>
+              <CardContent>
+                <APIKeyConfigSection
+                  configs={apiKeyConfigs}
+                  getExistingKey={getExistingKey}
+                  onSave={handleAPIKeySave}
+                  onDelete={handleAPIKeyDelete}
+                />
               </CardContent>
             </Card>
 
@@ -305,47 +339,7 @@ export default function APIKeysPage() {
                 </CardDescription>
               </CardHeader>
               <CardContent>
-                <div className="grid gap-4 md:grid-cols-2">
-                  <div className="space-y-2">
-                    <div className="flex items-center gap-2">
-                      <Shield className="h-4 w-4 text-green-600" />
-                      <span className="font-medium">AES-256 Encryption</span>
-                    </div>
-                    <p className="text-sm text-muted-foreground">
-                      All API keys are encrypted with user-specific keys before storage
-                    </p>
-                  </div>
-
-                  <div className="space-y-2">
-                    <div className="flex items-center gap-2">
-                      <Key className="h-4 w-4 text-blue-600" />
-                      <span className="font-medium">User Isolation</span>
-                    </div>
-                    <p className="text-sm text-muted-foreground">
-                      Your keys are completely isolated from other users
-                    </p>
-                  </div>
-
-                  <div className="space-y-2">
-                    <div className="flex items-center gap-2">
-                      <CheckCircle className="h-4 w-4 text-green-600" />
-                      <span className="font-medium">Secure Transmission</span>
-                    </div>
-                    <p className="text-sm text-muted-foreground">
-                      All operations use HTTPS encryption
-                    </p>
-                  </div>
-
-                  <div className="space-y-2">
-                    <div className="flex items-center gap-2">
-                      <HelpCircle className="h-4 w-4 text-purple-600" />
-                      <span className="font-medium">No Client Storage</span>
-                    </div>
-                    <p className="text-sm text-muted-foreground">
-                      Keys are never stored in your browser
-                    </p>
-                  </div>
-                </div>
+                <SecurityFeatureGrid features={securityFeatures} />
               </CardContent>
             </Card>
           </div>

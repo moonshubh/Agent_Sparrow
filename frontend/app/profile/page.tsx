@@ -7,7 +7,7 @@ import { Header } from '@/components/layout/Header'
 import { UserPanel } from '@/components/layout/UserPanel'
 
 export default function ProfilePage() {
-  const { user, updateProfile, logout } = useAuth()
+  const { user, updateProfile, logout, isLoading } = useAuth()
 
   return (
     <ProtectedRoute>
@@ -23,18 +23,37 @@ export default function ProfilePage() {
               </p>
             </div>
 
-            {user && (
+            {/* Loading state */}
+            {isLoading && (
+              <div className="flex items-center justify-center py-12">
+                <div className="flex items-center gap-3">
+                  <div className="h-6 w-6 animate-spin rounded-full border-2 border-accent border-t-transparent" />
+                  <span className="text-lg">Loading profile...</span>
+                </div>
+              </div>
+            )}
+
+            {/* User profile content */}
+            {!isLoading && user && (
               <UserProfile
                 user={user}
                 onUpdate={updateProfile}
               />
+            )}
+
+            {/* No user state (shouldn't happen in ProtectedRoute, but good fallback) */}
+            {!isLoading && !user && (
+              <div className="text-center py-12">
+                <p className="text-muted-foreground">
+                  Unable to load user profile. Please try refreshing the page.
+                </p>
+              </div>
             )}
           </div>
         </div>
 
         <UserPanel
           user={user}
-          isAuthenticated={!!user}
           onLogout={logout}
         />
       </div>

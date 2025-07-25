@@ -7,7 +7,9 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "test": "vitest"
+    "test": "vitest",
+    "test:security": "node scripts/test-security.js",
+    "test:security:full": "node scripts/test-security.js --enable-rate-limiting"
   },
   "dependencies": {
     "@hello-pangea/dnd": "^18.0.1",

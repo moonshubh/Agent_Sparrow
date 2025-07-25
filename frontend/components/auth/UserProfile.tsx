@@ -15,22 +15,70 @@ interface UserProfileProps {
   onUpdate: (data: { full_name?: string; metadata?: any }) => Promise<void>
 }
 
+// Helper function to format dates consistently
+const formatDate = (dateString: string): string => {
+  const date = new Date(dateString)
+  return date.toLocaleDateString('en-US', {
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit'
+  })
+}
+
+// Helper function to report errors (can be replaced with monitoring service)
+const reportError = (error: unknown, context: string) => {
+  if (process.env.NODE_ENV === 'development') {
+    console.error(`${context}:`, error)
+  } else {
+    // In production, this could send errors to a monitoring service
+    // Example: errorReportingService.captureException(error, { context })
+    console.error(`${context}: An error occurred`)
+  }
+}
+
 export const UserProfile: React.FC<UserProfileProps> = ({ user, onUpdate }) => {
   const [isLoading, setIsLoading] = useState(false)
   const [fullName, setFullName] = useState(
     user?.user_metadata?.full_name || user?.user_metadata?.name || ''
   )
+  
+  // Store initial name for change detection
+  const initialFullName = user?.user_metadata?.full_name || user?.user_metadata?.name || ''
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
+    
+    // Check if fullName has actually changed
+    if (fullName === initialFullName) {
+      toast.info('No changes to save')
+      return
+    }
     
     try {
       setIsLoading(true)
       await onUpdate({ full_name: fullName })
       toast.success('Profile updated successfully')
     } catch (error) {
-      console.error('Profile update error:', error)
-      toast.error('Failed to update profile')
+      // Enhanced error reporting and user feedback
+      reportError(error, 'Profile update error')
+      
+      // Extract specific error details for better user feedback
+      let errorMessage = 'Failed to update profile'
+      if (error instanceof Error) {
+        if (error.message.includes('network')) {
+          errorMessage = 'Network error. Please check your connection and try again.'
+        } else if (error.message.includes('unauthorized')) {
+          errorMessage = 'You are not authorized to update this profile.'
+        } else if (error.message.includes('validation')) {
+          errorMessage = 'Invalid profile data. Please check your input.'
+        } else if (error.message) {
+          errorMessage = `Update failed: ${error.message}`
+        }
+      }
+      
+      toast.error(errorMessage)
     } finally {
       setIsLoading(false)
     }
@@ -38,7 +86,13 @@ export const UserProfile: React.FC<UserProfileProps> = ({ user, onUpdate }) => {
 
   const getProvider = () => {
     const provider = user?.app_metadata?.provider
-    return provider ? provider.charAt(0).toUpperCase() + provider.slice(1) : 'OAuth'
+    
+    // Check if provider is a valid non-empty string
+    if (provider && typeof provider === 'string' && provider.trim().length > 0) {
+      return provider.charAt(0).toUpperCase() + provider.slice(1)
+    }
+    
+    return 'OAuth'
   }
 
   return (
@@ -124,14 +178,14 @@ export const UserProfile: React.FC<UserProfileProps> = ({ user, onUpdate }) => {
             <div className="flex justify-between">
               <span className="text-sm font-medium">Created</span>
               <span className="text-sm text-muted-foreground">
-                {new Date(user.created_at).toLocaleDateString()}
+                {formatDate(user.created_at)}
               </span>
             </div>
             <div className="flex justify-between">
               <span className="text-sm font-medium">Last Sign In</span>
               <span className="text-sm text-muted-foreground">
                 {user.last_sign_in_at 
-                  ? new Date(user.last_sign_in_at).toLocaleDateString()
+                  ? formatDate(user.last_sign_in_at)
                   : 'Never'
                 }
               </span>

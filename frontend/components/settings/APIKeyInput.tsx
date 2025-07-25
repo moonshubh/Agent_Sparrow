@@ -192,38 +192,61 @@ export function APIKeyInput({
         </div>
       </div>
 
-      {/* Current Key Status - Simplified */}
+      {/* Current Key Status - Responsive with proper truncation */}
       {existingKey && (
         <div className="bg-green-50 dark:bg-green-950/30 border border-green-200 dark:border-green-800 rounded-md p-4">
-          <div className="flex items-center justify-between">
-            <div className="space-y-1">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div className="flex-1 min-w-0 space-y-1">
               <p className="text-sm font-medium text-green-800 dark:text-green-200">
                 API Key Configured
               </p>
-              <div className="flex items-center gap-4 text-xs text-green-700 dark:text-green-300">
-                <span className="font-mono">{existingKey.masked_key}</span>
-                {existingKey.key_name && (
-                  <span>• {existingKey.key_name}</span>
-                )}
-                {existingKey.last_used_at && (
-                  <span>• Used {new Date(existingKey.last_used_at).toLocaleDateString()}</span>
-                )}
+              
+              {/* Responsive key info layout */}
+              <div className="space-y-1 sm:space-y-0">
+                {/* Mobile: Stacked layout, Desktop: Horizontal with bullets */}
+                <div className="flex flex-col sm:flex-row sm:items-center gap-1 sm:gap-4 text-xs text-green-700 dark:text-green-300">
+                  <span className="font-mono truncate max-w-[200px] sm:max-w-[150px]" title={existingKey.masked_key}>
+                    {existingKey.masked_key}
+                  </span>
+                  
+                  {existingKey.key_name && (
+                    <div className="flex items-center gap-1">
+                      <span className="hidden sm:inline">•</span>
+                      <span className="truncate max-w-[200px] sm:max-w-[120px]" title={existingKey.key_name}>
+                        {existingKey.key_name}
+                      </span>
+                    </div>
+                  )}
+                  
+                  {existingKey.last_used_at && (
+                    <div className="flex items-center gap-1">
+                      <span className="hidden sm:inline">•</span>
+                      <span className="whitespace-nowrap">
+                        Used {new Date(existingKey.last_used_at).toLocaleDateString()}
+                      </span>
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
+            
             {canDelete && (
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={handleDelete}
-                disabled={isDeleting}
-                className="text-red-600 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-950/30"
-              >
-                {isDeleting ? (
-                  <div className="h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent" />
-                ) : (
-                  <Trash2 className="h-4 w-4" />
-                )}
-              </Button>
+              <div className="flex-shrink-0">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={handleDelete}
+                  disabled={isDeleting}
+                  className="text-red-600 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-950/30"
+                  aria-label="Delete API key"
+                >
+                  {isDeleting ? (
+                    <div className="h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent" />
+                  ) : (
+                    <Trash2 className="h-4 w-4" />
+                  )}
+                </Button>
+              </div>
             )}
           </div>
         </div>

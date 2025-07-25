@@ -12,6 +12,14 @@
     text-wrap: balance;
   }
   
+  /* Background grid pattern utility using CSS variables */
+  .bg-grid-pattern {
+    background-image: 
+      linear-gradient(hsl(var(--accent) / 0.1) 1px, transparent 1px),
+      linear-gradient(90deg, hsl(var(--accent) / 0.1) 1px, transparent 1px);
+    background-size: 32px 32px;
+  }
+  
   /* Typewriter animation for streaming text */
   .typewriter {
     overflow: hidden;
@@ -463,22 +471,8 @@
   .feedme-scrollbar::-webkit-scrollbar-corner {
     background: hsl(var(--background));
   }
-
-  /* Login page background patterns and animations */
-  .bg-grid-pattern {
-    background-image: 
-      linear-gradient(rgba(0, 149, 255, 0.1) 1px, transparent 1px),
-      linear-gradient(90deg, rgba(0, 149, 255, 0.1) 1px, transparent 1px);
-    background-size: 32px 32px;
-  }
-
-  .animation-delay-1000 {
-    animation-delay: 1s;
-  }
-
-  .animation-delay-2000 {
-    animation-delay: 2s;
-  }
+  
+  /* Animation utilities removed - use Tailwind's delay-1000, delay-2000 instead */
 
   /* Enhanced pulse animation for login elements */
   @keyframes enhanced-pulse {
@@ -494,6 +488,7 @@
 
   .animate-enhanced-pulse {
     animation: enhanced-pulse 3s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+    will-change: transform, opacity;
   }
 
   /* Floating animation for background orbs */
@@ -510,16 +505,10 @@
   }
 
   .animate-float {
-    animation: float 6s ease-in-out infinite;
-  }
-
-  .animate-float-delayed {
-    animation: float 8s ease-in-out infinite;
-    animation-delay: 2s;
-  }
-
-  .animate-float-slow {
-    animation: float 10s ease-in-out infinite;
-    animation-delay: 4s;
+    --float-duration: 6s;
+    --float-delay: 0s;
+    animation: float var(--float-duration, 6s) ease-in-out infinite;
+    animation-delay: var(--float-delay, 0s);
+    will-change: transform;
   }
 }

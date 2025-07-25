@@ -45,7 +45,7 @@ export default async function RootLayout({
           disableTransitionOnChange
         >
           <AuthProvider>
-            <DevModeIndicator />
+            {process.env.NODE_ENV === 'development' && <DevModeIndicator />}
             {children}
           </AuthProvider>
           <Toaster />

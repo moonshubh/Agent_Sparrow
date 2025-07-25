@@ -21,10 +21,19 @@ export default function LoginPage() {
     <div className="relative flex min-h-screen items-center justify-center overflow-hidden">
       {/* Animated Background */}
       <div className="absolute inset-0 bg-gradient-to-br from-blue-50 via-white to-blue-100 dark:from-gray-900 dark:via-gray-800 dark:to-blue-950">
-        {/* Floating orbs */}
-        <div className="absolute top-1/4 left-1/4 h-64 w-64 rounded-full bg-accent/20 blur-3xl animate-float" />
-        <div className="absolute top-3/4 right-1/4 h-48 w-48 rounded-full bg-blue-400/20 blur-2xl animate-float-delayed" />
-        <div className="absolute top-1/2 left-3/4 h-32 w-32 rounded-full bg-purple-400/20 blur-xl animate-float-slow" />
+        {/* Floating orbs with performance optimization */}
+        <div 
+          className="absolute top-1/4 left-1/4 h-64 w-64 rounded-full bg-accent/20 blur-3xl animate-float motion-reduce:animate-none" 
+          style={{ willChange: 'transform' }}
+        />
+        <div 
+          className="absolute top-3/4 right-1/4 h-48 w-48 rounded-full bg-blue-400/20 blur-2xl animate-float-delayed motion-reduce:animate-none" 
+          style={{ willChange: 'transform' }}
+        />
+        <div 
+          className="absolute top-1/2 left-3/4 h-32 w-32 rounded-full bg-purple-400/20 blur-xl animate-float-slow motion-reduce:animate-none" 
+          style={{ willChange: 'transform' }}
+        />
         
         {/* Grid pattern */}
         <div className="absolute inset-0 bg-grid-pattern opacity-5 dark:opacity-10" />
@@ -42,7 +51,7 @@ export default function LoginPage() {
             <div className="absolute inset-2 rounded-full bg-white dark:bg-gray-800 shadow-lg">
               <Image
                 src="/agent-sparrow.png"
-                alt="Agent Sparrow"
+                alt="Agent Sparrow - AI-powered Mailbird support assistant logo"
                 width={80}
                 height={80}
                 className="w-full h-full object-cover rounded-full p-2"
@@ -79,7 +88,7 @@ export default function LoginPage() {
             {/* Features showcase */}
             <div className="pt-4 border-t border-border/50">
               <p className="text-xs text-center text-muted-foreground mb-3">
-                What you'll get access to:
+                What you&apos;ll get access to:
               </p>
               <div className="grid grid-cols-1 gap-2 text-xs">
                 <div className="flex items-center space-x-2 text-muted-foreground">
@@ -112,7 +121,7 @@ export default function LoginPage() {
             </a>
           </p>
           <p className="text-xs text-muted-foreground">
-            © 2025 MB-Sparrow. Crafted with ❤️ for Mailbird users.
+            © {new Date().getFullYear()} MB-Sparrow. Crafted with ❤️ for Mailbird users.
           </p>
         </div>
       </div>
