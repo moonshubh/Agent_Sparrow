@@ -25,6 +25,8 @@ import { Header } from '@/components/layout/Header'
 import { Welcome } from '@/components/home/Welcome'
 import { ChatSidebar } from './ChatSidebar'
 import { RateLimitWarning } from '@/components/rate-limiting'
+import { UserPanel } from '@/components/layout/UserPanel'
+import { useAuth } from '@/hooks/useAuth'
 
 interface AgentStatusProps {
   currentAgent: "primary" | "log_analyst" | "researcher" | null
@@ -92,6 +94,7 @@ function LoadingIndicator({ agentType }: { agentType?: "primary" | "log_analyst"
 }
 
 export default function UnifiedChatInterface() {
+  const { user, isAuthenticated, logout } = useAuth()
   const { state, sendMessage, clearConversation, retryLastMessage, loadSessionMessages } = useUnifiedChat()
   const {
     sessions,
@@ -328,168 +331,165 @@ export default function UnifiedChatInterface() {
         />
         
         {/* Chat Area */}
-        <div className="flex-1 flex flex-col overflow-hidden">
-        {/* Welcome Hero (shown when no messages exist) */}
-        {!hasMessages && (
-          <div className="flex-1 flex items-center justify-center">
-            <Welcome hasMessages={hasMessages} />
-          </div>
-        )}
-
-        {/* Messages Area */}
-        {hasMessages && (
-          <div className="flex-1 overflow-hidden">
-            <div className="h-full relative">
-              {/* Agent Status Bar */}
-              {(state.isProcessing || state.currentAgent) && (
-                <div className="flex-shrink-0 border-b border-border/50 bg-background/80 backdrop-blur-sm">
-                  <div className="w-full max-w-none mx-auto px-4 md:px-6 lg:px-8 py-2">
-                    <div className="flex items-center justify-between">
-                      <AgentStatus 
-                        currentAgent={state.currentAgent} 
-                        isProcessing={state.isProcessing}
-                        confidence={state.routingConfidence}
-                      />
-                      
-                      <div className="flex items-center gap-2">
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={clearConversation}
-                          className="text-chat-metadata hover:text-foreground"
-                        >
-                          <Trash2 className="w-4 h-4 mr-2" />
-                          Clear
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          className="text-chat-metadata hover:text-foreground"
-                        >
-                          <Settings className="w-4 h-4" />
-                        </Button>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {/* Rate Limit Warning */}
-              <div className="flex-shrink-0">
-                <div className="w-full max-w-none mx-auto px-4 md:px-6 lg:px-8 py-2">
-                  <RateLimitWarning 
-                    warningThreshold={0.7}
-                    criticalThreshold={0.85}
-                    autoCheck={true}
-                    checkInterval={10000}
-                    dismissible={true}
-                  />
-                </div>
-              </div>
-
-              {/* Use virtualized list for large conversations */}
-              {isClient && state.messages.length > 50 ? (
-                <VirtualizedMessageList
-                  messages={state.messages.slice(1)} // Skip welcome message
-                  onRetry={retryLastMessage}
-                  onRate={handleMessageRate}
-                  containerHeight={windowHeight - 200}
-                />
-              ) : (
-                <ScrollArea ref={scrollAreaRef} className="h-full">
-                  <div className="w-full max-w-none mx-auto px-4 md:px-6 lg:px-8 py-6 space-y-6">
-                    {/* Messages */}
-                    {state.messages.slice(1).map((message) => ( // Skip welcome message
-                      <MessageBubble
-                        key={message.id}
-                        id={message.id}
-                        type={message.type}
-                        content={message.content}
-                        timestamp={message.timestamp}
-                        agentType={message.agentType}
-                        metadata={message.metadata}
-                        streaming={message.streaming}
-                        onRetry={message.type === 'agent' ? retryLastMessage : undefined}
-                        onRate={(rating) => handleMessageRate(message.id, rating)}
-                      />
-                    ))}
-                    
-                    {/* SystemStatusMessage for active log analysis */}
-                    {logAnalysisState.isActive && logAnalysisState.startedAt && (
-                      <SystemStatusMessage
-                        phase="analyzing"
-                        filesize={logAnalysisState.fileName ? `"${logAnalysisState.fileName}" (${logAnalysisState.fileSize})` : logAnalysisState.fileSize}
-                        lines={logAnalysisState.lines}
-                        startedAt={logAnalysisState.startedAt}
-                      />
-                    )}
-                    
-                    <div ref={messagesEndRef} />
-                  </div>
-                </ScrollArea>
-              )}
-              
-              {/* Loading Indicator - Fixed position */}
-              {state.isProcessing && (
-                <div className="absolute bottom-0 left-0 right-0 p-4 bg-gradient-to-t from-chat-background to-transparent">
-                  <div className="w-full max-w-none mx-auto">
-                    <LoadingIndicator agentType={state.currentAgent || undefined} />
-                  </div>
-                </div>
-              )}
-              
-              {/* Error Display - Fixed position */}
-              {state.error && (
-                <div className="absolute bottom-0 left-0 right-0 p-4 bg-gradient-to-t from-chat-background to-transparent">
-                  <div className="w-full max-w-none mx-auto">
-                    <div className="bg-destructive/10 border border-destructive/20 rounded-xl p-4">
-                      <div className="flex items-center gap-2 text-destructive">
-                        <div className="w-4 h-4 rounded-full bg-destructive/20 flex items-center justify-center">
-                          <span className="text-xs">!</span>
-                        </div>
-                        <span className="text-sm font-medium">Error</span>
-                      </div>
-                      <p className="text-sm text-destructive/80 mt-1">{state.error}</p>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={retryLastMessage}
-                        className="mt-3 text-destructive border-destructive/20 hover:bg-destructive/10"
-                      >
-                        Try Again
-                      </Button>
-                    </div>
-                  </div>
-                </div>
-              )}
+        <div className="flex-1 flex flex-col relative">
+          {/* Welcome Hero (shown when no messages exist) */}
+          {!hasMessages && (
+            <div className="flex-1 flex items-center justify-center">
+              <Welcome hasMessages={hasMessages} />
             </div>
-          </div>
-        )}
-        </div>
-        
-        {/* Input Area */}
-        <div className="flex-shrink-0 bg-background/95 backdrop-blur-sm">
-          <div className={cn(
-            "mx-auto px-4 md:px-6 lg:px-8 transition-all duration-500",
-            hasMessages ? "w-full max-w-none py-4 mb-4" : "max-w-2xl py-4"
-          )}>
-            <InputSystem
-              value={inputValue}
-              onChange={setInputValue}
-              onSubmit={handleSendMessage}
-              files={files}
-              onFilesChange={setFiles}
-              isLoading={state.isProcessing}
-              placeholder={
-                files.length > 0 
-                  ? "Describe the issue or ask questions about the uploaded files..."
-                  : hasMessages
-                  ? "Ask a follow-up question..."
-                  : "Search the web..."
-              }
-              disabled={false}
-              isWelcomeMode={!hasMessages}
-            />
+          )}
+
+          {/* Messages Area */}
+          {hasMessages && (
+            <div className="flex-1 overflow-hidden">
+              <div className="h-full relative">
+                {/* Agent Status Bar */}
+                {(state.isProcessing || state.currentAgent) && (
+                  <div className="flex-shrink-0 border-b border-border/50 bg-background/80 backdrop-blur-sm">
+                    <div className="w-full max-w-4xl mx-auto px-4 md:px-6 lg:px-8 py-2">
+                      <div className="flex items-center justify-between">
+                        <AgentStatus 
+                          currentAgent={state.currentAgent} 
+                          isProcessing={state.isProcessing}
+                          confidence={state.routingConfidence}
+                        />
+                        
+                        <div className="flex items-center gap-2">
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={clearConversation}
+                            className="text-chat-metadata hover:text-foreground"
+                          >
+                            <Trash2 className="w-4 h-4 mr-2" />
+                            Clear
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="text-chat-metadata hover:text-foreground"
+                          >
+                            <Settings className="w-4 h-4" />
+                          </Button>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* Rate Limit Warning */}
+                <div className="flex-shrink-0">
+                  <div className="w-full max-w-4xl mx-auto px-4 md:px-6 lg:px-8 py-2">
+                    <RateLimitWarning 
+                      warningThreshold={0.7}
+                      criticalThreshold={0.85}
+                      autoCheck={true}
+                      checkInterval={10000}
+                      dismissible={true}
+                    />
+                  </div>
+                </div>
+
+                {/* Use virtualized list for large conversations */}
+                {isClient && state.messages.length > 50 ? (
+                  <VirtualizedMessageList
+                    messages={state.messages.slice(1)} // Skip welcome message
+                    onRetry={retryLastMessage}
+                    onRate={handleMessageRate}
+                    containerHeight={windowHeight - 280}
+                  />
+                ) : (
+                  <ScrollArea ref={scrollAreaRef} className="h-full">
+                    <div className="w-full max-w-4xl mx-auto px-4 md:px-6 lg:px-8 py-6 space-y-6 pb-24">
+                      {/* Messages */}
+                      {state.messages.slice(1).map((message) => ( // Skip welcome message
+                        <MessageBubble
+                          key={message.id}
+                          id={message.id}
+                          type={message.type}
+                          content={message.content}
+                          timestamp={message.timestamp}
+                          agentType={message.agentType}
+                          metadata={message.metadata}
+                          streaming={message.streaming}
+                          onRetry={message.type === 'agent' ? retryLastMessage : undefined}
+                          onRate={(rating) => handleMessageRate(message.id, rating)}
+                        />
+                      ))}
+                      
+                      {/* SystemStatusMessage for active log analysis */}
+                      {logAnalysisState.isActive && logAnalysisState.startedAt && (
+                        <SystemStatusMessage
+                          phase="analyzing"
+                          filesize={logAnalysisState.fileName ? `"${logAnalysisState.fileName}" (${logAnalysisState.fileSize})` : logAnalysisState.fileSize}
+                          lines={logAnalysisState.lines}
+                          startedAt={logAnalysisState.startedAt}
+                        />
+                      )}
+                      
+                      <div ref={messagesEndRef} />
+                    </div>
+                  </ScrollArea>
+                )}
+                
+                {/* Loading Indicator - Fixed position */}
+                {state.isProcessing && (
+                  <div className="absolute bottom-24 left-0 right-0 p-4 bg-gradient-to-t from-chat-background to-transparent">
+                    <div className="w-full max-w-4xl mx-auto">
+                      <LoadingIndicator agentType={state.currentAgent || undefined} />
+                    </div>
+                  </div>
+                )}
+                
+                {/* Error Display - Fixed position */}
+                {state.error && (
+                  <div className="absolute bottom-24 left-0 right-0 p-4 bg-gradient-to-t from-chat-background to-transparent">
+                    <div className="w-full max-w-4xl mx-auto">
+                      <div className="bg-destructive/10 border border-destructive/20 rounded-xl p-4">
+                        <div className="flex items-center gap-2 text-destructive">
+                          <div className="w-4 h-4 rounded-full bg-destructive/20 flex items-center justify-center">
+                            <span className="text-xs">!</span>
+                          </div>
+                          <span className="text-sm font-medium">Error</span>
+                        </div>
+                        <p className="text-sm text-destructive/80 mt-1">{state.error}</p>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={retryLastMessage}
+                          className="mt-3 text-destructive border-destructive/20 hover:bg-destructive/10"
+                        >
+                          Try Again
+                        </Button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Fixed Input Area at Bottom Center */}
+          <div className="absolute bottom-0 left-0 right-0 bg-background/80 backdrop-blur-sm">
+            <div className="w-full max-w-4xl mx-auto px-4 md:px-6 lg:px-8 py-4">
+              <InputSystem
+                value={inputValue}
+                onChange={setInputValue}
+                onSubmit={handleSendMessage}
+                files={files}
+                onFilesChange={setFiles}
+                isLoading={state.isProcessing}
+                placeholder={
+                  files.length > 0 
+                    ? "Describe the issue or ask questions about the uploaded files..."
+                    : hasMessages
+                    ? "Ask a follow-up question..."
+                    : "Ask anything about Mailbird..."
+                }
+                disabled={false}
+                isWelcomeMode={!hasMessages}
+              />
+            </div>
           </div>
         </div>
       </div>
@@ -504,6 +504,13 @@ export default function UnifiedChatInterface() {
         {state.isProcessing && "Assistant is thinking..."}
         {state.error && `Error: ${state.error}`}
       </div>
+      
+      {/* User Panel */}
+      <UserPanel
+        user={user}
+        isAuthenticated={isAuthenticated}
+        onLogout={logout}
+      />
     </div>
   )
 }

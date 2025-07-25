@@ -299,13 +299,13 @@ export default function InputSystem({
       )}>
         <div 
           className={cn(
-            "relative flex items-end gap-2 transition-all duration-200 shadow",
+            "relative flex items-end gap-2 transition-all duration-200",
             isWelcomeMode 
-              ? "w-full max-w-[600px] bg-background/60 backdrop-blur border border-border/40 rounded-3xl px-6 py-4 focus-within:ring-2 focus-within:ring-accent"
-              : "rounded-2xl border shadow-inner px-4 py-2 focus-within:border-accent",
+              ? "w-full max-w-[600px] bg-background/80 backdrop-blur-sm border border-border/50 rounded-3xl px-6 py-4 shadow-lg focus-within:ring-2 focus-within:ring-accent"
+              : "w-full bg-background/90 backdrop-blur-sm border border-border/60 rounded-2xl px-4 py-3 shadow-md focus-within:border-accent focus-within:shadow-lg",
             isDragOver 
-              ? "border-accent bg-accent/5 border-2" 
-              : isWelcomeMode ? "border-border/40" : "border-accent/20 bg-chat-input-bg",
+              ? "border-accent bg-accent/10 border-2 shadow-lg" 
+              : "",
             disabled && "opacity-50 cursor-not-allowed"
           )}
           onDragOver={handleDragOver}

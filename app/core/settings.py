@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import os
 from functools import lru_cache
 from pathlib import Path
-from typing import Optional
+from typing import Optional, List
 
 from dotenv import load_dotenv
 from pydantic_settings import BaseSettings
@@ -143,6 +144,17 @@ class Settings(BaseSettings):
     skip_auth: bool = Field(default=False, alias="SKIP_AUTH")
     development_user_id: str = Field(default="dev-user-id", alias="DEVELOPMENT_USER_ID")
     
+    # Security Feature Toggles
+    enable_auth_endpoints: bool = Field(default=True, alias="ENABLE_AUTH_ENDPOINTS")
+    enable_api_key_endpoints: bool = Field(default=True, alias="ENABLE_API_KEY_ENDPOINTS")
+    force_production_security: bool = Field(default=True, alias="FORCE_PRODUCTION_SECURITY")
+    
+    # Production Environment Configuration
+    production_domains: List[str] = Field(
+        default=["supabase.co"], 
+        alias="PRODUCTION_DOMAINS"
+    )
+    
     # Internal API Security
     internal_api_token: Optional[str] = Field(default=None, alias="INTERNAL_API_TOKEN")
 
@@ -168,6 +180,62 @@ class Settings(BaseSettings):
         if len(v.encode('utf-8')) < 32:
             raise ValueError("api_key_encryption_secret must be at least 32 bytes long when UTF-8 encoded")
         return v
+
+    def is_production_mode(self) -> bool:
+        """
+        Determine if we're running in production mode.
+        Production mode is detected by:
+        1. FORCE_PRODUCTION_SECURITY=true, or
+        2. Environment indicators like ENVIRONMENT=production, DEPLOY_ENV=prod, etc.
+        """
+        # Check explicit production security flag
+        if self.force_production_security:
+            return True
+            
+        # Check common production environment variables
+        env_indicators = [
+            os.getenv("ENVIRONMENT", "").lower() in ["production", "prod"],
+            os.getenv("DEPLOY_ENV", "").lower() in ["production", "prod"],
+            os.getenv("NODE_ENV", "").lower() == "production",
+            os.getenv("STAGE", "").lower() in ["production", "prod"],
+            # Check if we have production-like database URLs using configurable domains
+            self._is_production_database_url(),
+        ]
+        
+        return any(env_indicators)
+    
+    def _is_production_database_url(self) -> bool:
+        """
+        Check if the database URL indicates a production environment
+        using configurable production domains.
+        """
+        if not self.supabase_url:
+            return False
+            
+        return any(domain in self.supabase_url for domain in self.production_domains)
+    
+    def _should_enable_security_endpoint(self, flag: bool) -> bool:
+        """
+        Helper method to determine if a security endpoint should be enabled.
+        Returns True if in production mode or the flag is True.
+        """
+        if self.is_production_mode():
+            return True  # Always enable in production
+        return flag
+    
+    def should_enable_auth_endpoints(self) -> bool:
+        """
+        Determine if authentication endpoints should be enabled.
+        Auth endpoints are enabled unless explicitly disabled AND not in production.
+        """
+        return self._should_enable_security_endpoint(self.enable_auth_endpoints)
+    
+    def should_enable_api_key_endpoints(self) -> bool:
+        """
+        Determine if API key endpoints should be enabled.
+        API key endpoints are enabled unless explicitly disabled AND not in production.
+        """
+        return self._should_enable_security_endpoint(self.enable_api_key_endpoints)
 
     class Config:
         case_sensitive = False

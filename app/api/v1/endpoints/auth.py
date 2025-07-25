@@ -29,7 +29,6 @@ limiter = Limiter(key_func=get_remote_address)
 security = HTTPBearer(auto_error=False)
 
 router = APIRouter()
-router.state.limiter = limiter
 
 
 # Request/Response Models
@@ -581,10 +580,30 @@ async def update_current_user(
         )
 
 
-# Rate limit error handler
-@router.exception_handler(RateLimitExceeded)
-async def rate_limit_handler(request: Request, exc: RateLimitExceeded):
-    return JSONResponse(
-        status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-        content={"detail": f"Rate limit exceeded: {exc.detail}"}
-    )
+"""
+Rate Limiting Configuration:
+
+This module uses SlowAPI for rate limiting authentication endpoints to prevent abuse.
+Each endpoint has specific rate limits configured via @limiter.limit() decorators.
+
+Exception Handling:
+- APIRouter does not support exception_handler decorators (FastAPI limitation as of 2024)
+- Rate limit exceptions are handled globally in app/main.py using @app.exception_handler()
+- This ensures consistent error responses across all rate-limited endpoints
+
+Global Exception Handlers (in main.py):
+- RateLimitExceeded: Standard SlowAPI rate limit errors (429 status)
+- RateLimitExceededException: Custom Gemini rate limiter errors (429 status)
+- CircuitBreakerOpenException: Service temporarily unavailable (503 status)
+- GeminiServiceUnavailableException: Gemini API downtime (503 status)
+
+Rate Limits Applied:
+- Sign Up: 5/minute - Prevents spam account creation
+- Sign In: 10/minute - Balances security with usability
+- OAuth Sign In: 20/minute - Higher limit for OAuth flows
+- Sign Out: 30/minute - Higher limit as less security sensitive
+- Token Refresh: 60/minute - Allows frequent refresh for active sessions
+- Password Reset: 5/minute - Strict limit to prevent abuse
+- Get Current User: 100/minute - High limit for frequent profile access
+- Update User: 20/minute - Moderate limit for profile updates
+"""

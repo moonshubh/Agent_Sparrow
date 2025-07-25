@@ -16,7 +16,16 @@ from app.agents_v2.log_analysis_agent.agent import run_log_analysis_agent
 from app.agents_v2.research_agent.research_agent import get_research_graph, ResearchState
 from app.agents_v2.orchestration.graph import app as agent_graph
 from app.agents_v2.orchestration.state import GraphState
-from app.api.v1.endpoints.auth import get_current_user_id
+# Conditional import for authentication
+try:
+    from app.api.v1.endpoints.auth import get_current_user_id
+    AUTH_AVAILABLE = True
+except ImportError:
+    AUTH_AVAILABLE = False
+    # Fallback function when auth is not available
+    async def get_current_user_id() -> str:
+        from app.core.settings import settings
+        return getattr(settings, 'development_user_id', 'dev-user-12345')
 from app.core.user_context import user_context_scope, create_user_context_from_user_id
 
 router = APIRouter()

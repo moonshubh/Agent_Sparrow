@@ -1,4 +1,5 @@
 import logging
+from datetime import datetime
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -7,16 +8,48 @@ from typing import Any, List
 import os
 from langchain_core.messages import HumanMessage
 
+# Rate limiting imports
+from slowapi import Limiter
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
+
+# Custom rate limiting exceptions
+from app.core.rate_limiting.exceptions import (
+    RateLimitExceededException,
+    CircuitBreakerOpenException,
+    GeminiServiceUnavailableException
+)
+
 from app.agents_v2.orchestration.graph import app as agent_graph
 from app.agents_v2.orchestration.state import GraphState # Corrected import location
-from app.api.v1.endpoints import auth as auth_endpoints # Added for JWT auth
 from app.api.v1.endpoints import search_tools_endpoints # Added for search tools endpoints
 from app.api.v1.endpoints import agent_endpoints  # Agent interaction endpoints
 from app.api.v1.endpoints import feedme_endpoints  # FeedMe transcript ingestion
 from app.api.v1.endpoints import chat_session_endpoints  # Chat session persistence
 from app.api.v1.endpoints import rate_limit_endpoints  # Rate limiting monitoring
-from app.api.v1.endpoints import api_key_endpoints  # API key management
 from app.api.v1.websocket import feedme_websocket  # FeedMe WebSocket endpoints
+from app.core.settings import settings
+
+# Conditional imports based on security configuration
+auth_endpoints = None
+api_key_endpoints = None
+
+if settings.should_enable_auth_endpoints():
+    try:
+        from app.api.v1.endpoints import auth as auth_endpoints
+        logging.info("Authentication endpoints enabled")
+    except ImportError as e:
+        logging.warning(f"Failed to import auth endpoints: {e}")
+        auth_endpoints = None
+
+if settings.should_enable_api_key_endpoints():
+    try:
+        from app.api.v1.endpoints import api_key_endpoints
+        logging.info("API key endpoints enabled")
+    except ImportError as e:
+        logging.warning(f"Failed to import API key endpoints: {e}")
+        api_key_endpoints = None
 
 # OpenTelemetry Setup
 from opentelemetry import trace
@@ -54,12 +87,19 @@ if ENABLE_OTEL:
 # Get a tracer instance
 tracer = trace.get_tracer(__name__)
 
+# Initialize global rate limiter
+limiter = Limiter(key_func=get_remote_address)
+
 # FastAPI instance
 app = FastAPI(
     title="MB-Sparrow Agent Server",
     version="1.0",
     description="API server for the MB-Sparrow multi-agent system."
 )
+
+# Add SlowAPI middleware for rate limiting
+app.state.limiter = limiter
+app.add_middleware(SlowAPIMiddleware)
 
 # Add CORS middleware
 app.add_middleware(
@@ -70,8 +110,14 @@ app.add_middleware(
     allow_headers=["*"],  # Allows all headers
 )
 
-# Include the authentication router
-app.include_router(auth_endpoints.router, prefix="/api/v1/auth", tags=["Authentication"])
+# Conditionally include authentication router
+if auth_endpoints and settings.should_enable_auth_endpoints():
+    app.include_router(auth_endpoints.router, prefix="/api/v1/auth", tags=["Authentication"])
+    logging.info("Authentication router registered")
+else:
+    logging.warning("Authentication router not registered - endpoints disabled or import failed")
+
+# Always include core application routers
 app.include_router(search_tools_endpoints.router, prefix="/api/v1/tools", tags=["Search Tools"])
 app.include_router(agent_endpoints.router, prefix="/api/v1", tags=["Agent Interaction"])
 # Register FeedMe routes
@@ -80,10 +126,136 @@ app.include_router(feedme_endpoints.router, prefix="/api/v1/feedme", tags=["Feed
 app.include_router(chat_session_endpoints.router, prefix="/api/v1", tags=["Chat Sessions"])
 # Register Rate Limiting routes
 app.include_router(rate_limit_endpoints.router, prefix="/api/v1", tags=["Rate Limiting"])
-# Register API Key Management routes
-app.include_router(api_key_endpoints.router, prefix="/api/v1", tags=["API Key Management"])
+
+# Conditionally include API Key Management router
+if api_key_endpoints and settings.should_enable_api_key_endpoints():
+    app.include_router(api_key_endpoints.router, prefix="/api/v1", tags=["API Key Management"])
+    logging.info("API Key Management router registered")
+else:
+    logging.warning("API Key Management router not registered - endpoints disabled or import failed")
+
 # Register FeedMe WebSocket routes
 app.include_router(feedme_websocket.router, prefix="/ws", tags=["FeedMe WebSocket"])
+
+@app.on_event("startup")
+async def startup_event():
+    """Log security configuration on application startup."""
+    is_production = settings.is_production_mode()
+    auth_enabled = settings.should_enable_auth_endpoints()
+    api_key_enabled = settings.should_enable_api_key_endpoints()
+    
+    logging.info("=== MB-Sparrow Security Configuration ===")
+    logging.info(f"Production Mode: {is_production}")
+    logging.info(f"Authentication Endpoints: {'ENABLED' if auth_enabled else 'DISABLED'}")
+    logging.info(f"API Key Endpoints: {'ENABLED' if api_key_enabled else 'DISABLED'}")
+    logging.info(f"Skip Auth: {settings.skip_auth}")
+    
+    if not is_production:
+        logging.warning("Running in development mode - some security features may be disabled")
+    
+    if not auth_enabled or not api_key_enabled:
+        logging.warning("Some security endpoints are disabled - ensure this is intentional")
+    
+    logging.info("==========================================")
+
+# Global exception handlers for rate limiting
+
+@app.exception_handler(RateLimitExceeded)
+async def rate_limit_handler(request: Request, exc: RateLimitExceeded):
+    """
+    Global handler for SlowAPI rate limit exceeded errors.
+    Provides user-friendly feedback with proper HTTP status.
+    """
+    logging.warning(f"Rate limit exceeded for {request.client.host}: {exc.detail}")
+    
+    response = JSONResponse(
+        status_code=429,
+        content={
+            "error": "rate_limit_exceeded",
+            "message": "Too many requests. Please try again later.",
+            "detail": str(exc.detail),
+            "type": "rate_limit"
+        },
+    )
+    response.headers["Retry-After"] = "60"  # Suggest retry after 60 seconds
+    return response
+
+
+@app.exception_handler(RateLimitExceededException)
+async def custom_rate_limit_handler(request: Request, exc: RateLimitExceededException):
+    """
+    Global handler for custom rate limiting exceptions from Gemini rate limiter.
+    Provides detailed rate limiting information and retry guidance.
+    """
+    logging.warning(
+        f"Custom rate limit exceeded for {request.client.host if request.client else 'unknown'}: "
+        f"{exc.message} (model: {exc.model})"
+    )
+    
+    response = JSONResponse(
+        status_code=429,
+        content=exc.to_dict(),
+    )
+    
+    # Add retry-after header if available
+    if exc.retry_after:
+        response.headers["Retry-After"] = str(exc.retry_after)
+    else:
+        response.headers["Retry-After"] = "60"  # Default to 60 seconds
+    
+    return response
+
+
+@app.exception_handler(CircuitBreakerOpenException)
+async def circuit_breaker_handler(request: Request, exc: CircuitBreakerOpenException):
+    """
+    Global handler for circuit breaker open exceptions.
+    Indicates service is temporarily unavailable due to repeated failures.
+    """
+    logging.error(
+        f"Circuit breaker open for {request.client.host if request.client else 'unknown'}: "
+        f"{exc.message} (failures: {exc.failure_count})"
+    )
+    
+    response = JSONResponse(
+        status_code=503,
+        content=exc.to_dict(),
+    )
+    
+    # Add retry-after header based on estimated recovery time
+    if exc.estimated_recovery:
+        retry_seconds = max(60, int((exc.estimated_recovery - datetime.now()).total_seconds()))
+        response.headers["Retry-After"] = str(retry_seconds)
+    else:
+        response.headers["Retry-After"] = "300"  # Default to 5 minutes
+        
+    return response
+
+
+@app.exception_handler(GeminiServiceUnavailableException)
+async def gemini_service_unavailable_handler(request: Request, exc: GeminiServiceUnavailableException):
+    """
+    Global handler for Gemini service unavailable exceptions.
+    Indicates the Gemini API is temporarily down or unreachable.
+    """
+    logging.error(
+        f"Gemini service unavailable for {request.client.host if request.client else 'unknown'}: "
+        f"{exc.message} (status: {exc.service_status})"
+    )
+    
+    response = JSONResponse(
+        status_code=503,
+        content=exc.to_dict(),
+    )
+    
+    # Add retry-after header
+    if exc.retry_after:
+        response.headers["Retry-After"] = str(exc.retry_after)
+    else:
+        response.headers["Retry-After"] = "120"  # Default to 2 minutes
+        
+    return response
+
 
 # Global exception handler for sanitizing error messages
 @app.exception_handler(Exception)
@@ -138,6 +310,39 @@ async def health_check():
                 "error": "Service unavailable"
             }
         )
+
+
+# Rate limiting test endpoint removed - functionality verified
+# The global exception handlers are working properly for all rate-limited endpoints
+
+@app.get("/security-status", tags=["General"])
+async def security_status():
+    """
+    Security configuration status endpoint for debugging and validation.
+    Shows current security feature states.
+    """
+    return {
+        "production_mode": settings.is_production_mode(),
+        "authentication_endpoints": {
+            "should_enable": settings.should_enable_auth_endpoints(),
+            "actually_enabled": auth_endpoints is not None,
+            "config_value": settings.enable_auth_endpoints
+        },
+        "api_key_endpoints": {
+            "should_enable": settings.should_enable_api_key_endpoints(),
+            "actually_enabled": api_key_endpoints is not None,
+            "config_value": settings.enable_api_key_endpoints
+        },
+        "auth_configuration": {
+            "skip_auth": settings.skip_auth,
+            "development_user_id": settings.development_user_id,
+            "force_production_security": settings.force_production_security
+        },
+        "environment_indicators": {
+            "supabase_configured": bool(settings.supabase_url),
+            "internal_api_token_configured": bool(settings.internal_api_token)
+        }
+    }
 
 @app.post("/agent", response_model=AgentResponse, tags=["Agent"])
 async def agent_invoke_endpoint(request: AgentQueryRequest):

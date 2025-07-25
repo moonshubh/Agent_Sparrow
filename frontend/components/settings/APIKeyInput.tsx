@@ -175,19 +175,16 @@ export function APIKeyInput({
   const canDelete = existingKey && !isRequired
 
   return (
-    <div className={`space-y-4 p-4 border border-border rounded-lg ${className}`}>
+    <div className={`space-y-4 p-6 border border-border rounded-lg bg-card/30 ${className}`}>
       {/* Header */}
       <div className="flex items-center justify-between">
         <div className="space-y-1">
           <div className="flex items-center gap-2">
-            <Label className="text-base font-medium">{displayName}</Label>
-            {isRequired && (
-              <Badge variant="destructive" className="text-xs">Required</Badge>
-            )}
+            <Label className="text-lg font-medium">{displayName}</Label>
             {existingKey && (
-              <Badge variant="secondary" className="text-xs">
+              <Badge variant="default" className="text-xs bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200">
                 <CheckCircle className="w-3 h-3 mr-1" />
-                Configured
+                Active
               </Badge>
             )}
           </div>
@@ -195,40 +192,61 @@ export function APIKeyInput({
         </div>
       </div>
 
-      {/* Current Key Status */}
+      {/* Current Key Status - Responsive with proper truncation */}
       {existingKey && (
-        <div className="bg-accent/5 border border-accent/20 rounded-md p-3">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-sm font-medium">Current API Key</p>
-              <p className="text-sm text-muted-foreground font-mono">
-                {existingKey.masked_key}
+        <div className="bg-green-50 dark:bg-green-950/30 border border-green-200 dark:border-green-800 rounded-md p-4">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div className="flex-1 min-w-0 space-y-1">
+              <p className="text-sm font-medium text-green-800 dark:text-green-200">
+                API Key Configured
               </p>
-              {existingKey.key_name && (
-                <p className="text-xs text-muted-foreground mt-1">
-                  Name: {existingKey.key_name}
-                </p>
-              )}
-              {existingKey.last_used_at && (
-                <p className="text-xs text-muted-foreground">
-                  Last used: {new Date(existingKey.last_used_at).toLocaleDateString()}
-                </p>
-              )}
+              
+              {/* Responsive key info layout */}
+              <div className="space-y-1 sm:space-y-0">
+                {/* Mobile: Stacked layout, Desktop: Horizontal with bullets */}
+                <div className="flex flex-col sm:flex-row sm:items-center gap-1 sm:gap-4 text-xs text-green-700 dark:text-green-300">
+                  <span className="font-mono truncate max-w-[200px] sm:max-w-[150px]" title={existingKey.masked_key}>
+                    {existingKey.masked_key}
+                  </span>
+                  
+                  {existingKey.key_name && (
+                    <div className="flex items-center gap-1">
+                      <span className="hidden sm:inline">•</span>
+                      <span className="truncate max-w-[200px] sm:max-w-[120px]" title={existingKey.key_name}>
+                        {existingKey.key_name}
+                      </span>
+                    </div>
+                  )}
+                  
+                  {existingKey.last_used_at && (
+                    <div className="flex items-center gap-1">
+                      <span className="hidden sm:inline">•</span>
+                      <span className="whitespace-nowrap">
+                        Used {new Date(existingKey.last_used_at).toLocaleDateString()}
+                      </span>
+                    </div>
+                  )}
+                </div>
+              </div>
             </div>
+            
             {canDelete && (
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={handleDelete}
-                disabled={isDeleting}
-                className="text-destructive hover:text-destructive"
-              >
-                {isDeleting ? (
-                  <div className="h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent" />
-                ) : (
-                  <Trash2 className="h-4 w-4" />
-                )}
-              </Button>
+              <div className="flex-shrink-0">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={handleDelete}
+                  disabled={isDeleting}
+                  className="text-red-600 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-950/30"
+                  aria-label="Delete API key"
+                >
+                  {isDeleting ? (
+                    <div className="h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent" />
+                  ) : (
+                    <Trash2 className="h-4 w-4" />
+                  )}
+                </Button>
+              </div>
             )}
           </div>
         </div>
@@ -336,13 +354,14 @@ export function APIKeyInput({
         </Alert>
       )}
 
-      {/* Format Requirements */}
-      <Alert>
-        <Info className="h-4 w-4" />
-        <AlertDescription>
-          <strong>Format Requirements:</strong> {formatRequirements}
-        </AlertDescription>
-      </Alert>
+      {/* Format Requirements - More subtle */}
+      <div className="text-xs text-muted-foreground p-3 bg-muted/20 rounded-md border-l-2 border-accent/30">
+        <div className="flex items-center gap-2">
+          <Info className="h-3 w-3" />
+          <span className="font-medium">Format:</span>
+          <span>{formatRequirements}</span>
+        </div>
+      </div>
     </div>
   )
 }
