@@ -37,16 +37,30 @@ const nextConfig = {
             key: 'Permissions-Policy',
             value: 'camera=(), microphone=(), geolocation=(), payment=(), usb=()'
           },
-          {
+          // Only add CSP in production - disable for development
+          ...(isProduction ? [{
             key: 'Content-Security-Policy',
             value: "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; connect-src 'self' wss: ws: https:; font-src 'self' data:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; upgrade-insecure-requests;"
-          },
+          }] : []),
           // Only add HSTS in production
           ...(isProduction ? [{
             key: 'Strict-Transport-Security',
             value: 'max-age=31536000; includeSubDomains; preload'
           }] : []),
         ],
+      },
+    ]
+  },
+  // API rewrites to proxy backend requests
+  async rewrites() {
+    return [
+      {
+        source: '/api/v1/:path*',
+        destination: 'http://localhost:8000/api/v1/:path*',
+      },
+      {
+        source: '/health',
+        destination: 'http://localhost:8000/health',
       },
     ]
   },

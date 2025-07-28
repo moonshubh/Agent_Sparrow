@@ -16,7 +16,7 @@ import psycopg2
 
 from app.core.settings import settings
 from app.core.security import get_current_user, TokenPayload
-# Local DB connection manager removed - use Supabase instead
+from app.db.supabase_client import get_supabase_client
 from app.schemas.chat_schemas import (
     ChatSession,
     ChatMessage,
@@ -45,166 +45,186 @@ router = APIRouter()
 
 async def get_chat_session_by_id(session_id: int, user_id: str) -> Optional[Dict[str, Any]]:
     """Get a chat session by ID for a specific user"""
-    with conn.cursor() as cur:
-        cur.execute("""
-            SELECT * FROM chat_sessions 
-            WHERE id = %s AND user_id = %s
-        """, (session_id, user_id))
-        row = cur.fetchone()
-        return dict(row) if row else None
-
-
-# @with_db_connection removed - using Supabase
-def create_chat_session_in_db(conn, session_data: ChatSessionCreate, user_id: str) -> Dict[str, Any]:
-    """Create a new chat session in the database"""
-    with conn.cursor() as cur:
-        # Check if user has too many active sessions for this agent type
-        cur.execute("""
-            SELECT COUNT(*) as active_count
-            FROM chat_sessions 
-            WHERE user_id = %s AND agent_type = %s AND is_active = TRUE
-        """, (user_id, session_data.agent_type.value))
+    try:
+        client = get_supabase_client()
+        response = client.client.table('chat_sessions')\
+            .select('*')\
+            .eq('id', session_id)\
+            .eq('user_id', user_id)\
+            .maybe_single()\
+            .execute()
         
-        active_count = cur.fetchone()['active_count']
-        if active_count >= settings.max_sessions_per_agent:
+        return response.data if response.data else None
+    except Exception as e:
+        logger.error(f"Error fetching chat session {session_id}: {e}")
+        return None
+
+
+async def create_chat_session_in_db(session_data: ChatSessionCreate, user_id: str) -> Dict[str, Any]:
+    """Create a new chat session in the database"""
+    try:
+        client = get_supabase_client()
+        
+        # Check if user has too many active sessions for this agent type
+        count_response = client.client.table('chat_sessions')\
+            .select('id', count='exact')\
+            .eq('user_id', user_id)\
+            .eq('agent_type', session_data.agent_type.value)\
+            .eq('is_active', True)\
+            .execute()
+        
+        active_count = count_response.count or 0
+        
+        if active_count >= getattr(settings, 'max_sessions_per_agent', 10):
             # Deactivate the oldest active session
-            cur.execute("""
-                UPDATE chat_sessions 
-                SET is_active = FALSE 
-                WHERE user_id = %s AND agent_type = %s AND is_active = TRUE
-                AND id = (
-                    SELECT id FROM chat_sessions 
-                    WHERE user_id = %s AND agent_type = %s AND is_active = TRUE
-                    ORDER BY last_message_at ASC 
-                    LIMIT 1
-                )
-            """, (user_id, session_data.agent_type.value, user_id, session_data.agent_type.value))
+            oldest_response = client.client.table('chat_sessions')\
+                .select('id')\
+                .eq('user_id', user_id)\
+                .eq('agent_type', session_data.agent_type.value)\
+                .eq('is_active', True)\
+                .order('last_message_at', asc=True)\
+                .limit(1)\
+                .execute()
+            
+            if oldest_response.data:
+                client.client.table('chat_sessions')\
+                    .update({'is_active': False})\
+                    .eq('id', oldest_response.data[0]['id'])\
+                    .execute()
         
         # Create the new session
-        cur.execute("""
-            INSERT INTO chat_sessions (user_id, title, agent_type, metadata, is_active)
-            VALUES (%s, %s, %s, %s, %s)
-            RETURNING *
-        """, (
-            user_id,
-            session_data.title,
-            session_data.agent_type.value,
-            session_data.metadata,
-            session_data.is_active
-        ))
+        new_session_data = {
+            'user_id': user_id,
+            'title': session_data.title,
+            'agent_type': session_data.agent_type.value,
+            'metadata': session_data.metadata or {},
+            'is_active': session_data.is_active
+        }
         
-        conn.commit()
-        return dict(cur.fetchone())
+        response = client.client.table('chat_sessions').insert(new_session_data).execute()
+        
+        if response.data:
+            return response.data[0]
+        else:
+            raise Exception("Failed to create session")
+            
+    except Exception as e:
+        logger.error(f"Error creating chat session: {e}")
+        raise
 
 
-# @with_db_connection removed - using Supabase
-def update_chat_session_in_db(conn, session_id: int, user_id: str, updates: ChatSessionUpdate) -> Optional[Dict[str, Any]]:
+async def update_chat_session_in_db(session_id: int, user_id: str, updates: ChatSessionUpdate) -> Optional[Dict[str, Any]]:
     """Update a chat session in the database"""
-    with conn.cursor() as cur:
-        # Build dynamic update query
-        update_fields = []
-        update_values = []
+    try:
+        client = get_supabase_client()
+        
+        # Build update data
+        update_data = {}
         
         if updates.title is not None:
-            update_fields.append("title = %s")
-            update_values.append(updates.title)
+            update_data['title'] = updates.title
         
         if updates.is_active is not None:
-            update_fields.append("is_active = %s")
-            update_values.append(updates.is_active)
+            update_data['is_active'] = updates.is_active
         
         if updates.metadata is not None:
-            update_fields.append("metadata = %s")
-            update_values.append(updates.metadata)
+            update_data['metadata'] = updates.metadata
         
-        if not update_fields:
+        if not update_data:
             return None
         
-        # Add WHERE clause values
-        update_values.extend([session_id, user_id])
+        # Add updated timestamp
+        update_data['updated_at'] = datetime.now().isoformat()
         
-        cur.execute(f"""
-            UPDATE chat_sessions 
-            SET {', '.join(update_fields)}
-            WHERE id = %s AND user_id = %s
-            RETURNING *
-        """, update_values)
+        response = client.client.table('chat_sessions')\
+            .update(update_data)\
+            .eq('id', session_id)\
+            .eq('user_id', user_id)\
+            .execute()
         
-        conn.commit()
-        row = cur.fetchone()
-        return dict(row) if row else None
+        return response.data[0] if response.data else None
+        
+    except Exception as e:
+        logger.error(f"Error updating chat session {session_id}: {e}")
+        return None
 
 
-# @with_db_connection removed - using Supabase
-def create_chat_message_in_db(conn, message_data: ChatMessageCreate, user_id: str) -> Dict[str, Any]:
+async def create_chat_message_in_db(message_data: ChatMessageCreate, user_id: str) -> Dict[str, Any]:
     """Create a new chat message in the database"""
-    with conn.cursor() as cur:
-        # Verify session ownership
-        cur.execute("""
-            SELECT id FROM chat_sessions 
-            WHERE id = %s AND user_id = %s
-        """, (message_data.session_id, user_id))
+    try:
+        client = get_supabase_client()
         
-        if not cur.fetchone():
+        # Verify session ownership
+        session_check = client.client.table('chat_sessions')\
+            .select('id')\
+            .eq('id', message_data.session_id)\
+            .eq('user_id', user_id)\
+            .maybe_single()\
+            .execute()
+        
+        if not session_check.data:
             raise HTTPException(status_code=404, detail="Chat session not found")
         
         # Create the message
-        cur.execute("""
-            INSERT INTO chat_messages (session_id, content, message_type, agent_type, metadata)
-            VALUES (%s, %s, %s, %s, %s)
-            RETURNING *
-        """, (
-            message_data.session_id,
-            message_data.content,
-            message_data.message_type.value,
-            message_data.agent_type.value if message_data.agent_type else None,
-            message_data.metadata
-        ))
+        message_data_dict = {
+            'session_id': message_data.session_id,
+            'content': message_data.content,
+            'message_type': message_data.message_type.value,
+            'agent_type': message_data.agent_type.value if message_data.agent_type else None,
+            'metadata': message_data.metadata or {}
+        }
         
-        conn.commit()
-        return dict(cur.fetchone())
+        response = client.client.table('chat_messages').insert(message_data_dict).execute()
+        
+        # Update session last_message_at
+        client.client.table('chat_sessions')\
+            .update({'last_message_at': datetime.now().isoformat()})\
+            .eq('id', message_data.session_id)\
+            .execute()
+        
+        if response.data:
+            return response.data[0]
+        else:
+            raise Exception("Failed to create message")
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error creating chat message: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
-# @with_db_connection removed - using Supabase
-def get_chat_sessions_for_user(conn, user_id: str, request: ChatSessionListRequest) -> Dict[str, Any]:
+async def get_chat_sessions_for_user(user_id: str, request: ChatSessionListRequest) -> Dict[str, Any]:
     """Get chat sessions for a user with filtering and pagination"""
-    with conn.cursor() as cur:
-        # Build WHERE clause
-        where_conditions = ["user_id = %s"]
-        where_values = [user_id]
+    try:
+        client = get_supabase_client()
+        
+        # Build query with filters
+        query = client.client.table('chat_sessions').select('*').eq('user_id', user_id)
+        count_query = client.client.table('chat_sessions').select('id', count='exact').eq('user_id', user_id)
         
         if request.agent_type:
-            where_conditions.append("agent_type = %s")
-            where_values.append(request.agent_type.value)
+            query = query.eq('agent_type', request.agent_type.value)
+            count_query = count_query.eq('agent_type', request.agent_type.value)
         
         if request.is_active is not None:
-            where_conditions.append("is_active = %s")
-            where_values.append(request.is_active)
+            query = query.eq('is_active', request.is_active)
+            count_query = count_query.eq('is_active', request.is_active)
         
         if request.search:
-            where_conditions.append("title ILIKE %s")
-            where_values.append(f"%{request.search}%")
-        
-        where_clause = " AND ".join(where_conditions)
+            query = query.ilike('title', f'%{request.search}%')
+            count_query = count_query.ilike('title', f'%{request.search}%')
         
         # Get total count
-        cur.execute(f"""
-            SELECT COUNT(*) as total_count
-            FROM chat_sessions
-            WHERE {where_clause}
-        """, where_values)
-        total_count = cur.fetchone()['total_count']
+        count_response = count_query.execute()
+        total_count = count_response.count or 0
         
         # Get paginated results
         offset = (request.page - 1) * request.page_size
-        cur.execute(f"""
-            SELECT * FROM chat_sessions
-            WHERE {where_clause}
-            ORDER BY last_message_at DESC
-            LIMIT %s OFFSET %s
-        """, where_values + [request.page_size, offset])
+        query = query.order('last_message_at', desc=True).range(offset, offset + request.page_size - 1)
         
-        sessions = [dict(row) for row in cur.fetchall()]
+        response = query.execute()
+        sessions = response.data or []
         
         return {
             "sessions": sessions,
@@ -214,49 +234,53 @@ def get_chat_sessions_for_user(conn, user_id: str, request: ChatSessionListReque
             "has_next": offset + request.page_size < total_count,
             "has_previous": request.page > 1
         }
-
-
-# @with_db_connection removed - using Supabase
-def get_chat_messages_for_session(conn, session_id: int, user_id: str, request: ChatMessageListRequest) -> Dict[str, Any]:
-    """Get chat messages for a session with pagination"""
-    with conn.cursor() as cur:
-        # Verify session ownership
-        cur.execute("""
-            SELECT id FROM chat_sessions 
-            WHERE id = %s AND user_id = %s
-        """, (session_id, user_id))
         
-        if not cur.fetchone():
+    except Exception as e:
+        logger.error(f"Error listing chat sessions: {e}")
+        return {
+            "sessions": [],
+            "total_count": 0,
+            "page": request.page,
+            "page_size": request.page_size,
+            "has_next": False,
+            "has_previous": False
+        }
+
+
+async def get_chat_messages_for_session(session_id: int, user_id: str, request: ChatMessageListRequest) -> Dict[str, Any]:
+    """Get chat messages for a session with pagination and strict session filtering"""
+    try:
+        client = get_supabase_client()
+        
+        # Verify session ownership - CRITICAL for preventing cross-session contamination
+        session_check = client.client.table('chat_sessions')\
+            .select('id')\
+            .eq('id', session_id)\
+            .eq('user_id', user_id)\
+            .maybe_single()\
+            .execute()
+        
+        if not session_check.data:
             raise HTTPException(status_code=404, detail="Chat session not found")
         
-        # Build WHERE clause
-        where_conditions = ["session_id = %s"]
-        where_values = [session_id]
+        # Build query with strict session filter
+        query = client.client.table('chat_messages').select('*').eq('session_id', session_id)
+        count_query = client.client.table('chat_messages').select('id', count='exact').eq('session_id', session_id)
         
         if request.message_type:
-            where_conditions.append("message_type = %s")
-            where_values.append(request.message_type.value)
-        
-        where_clause = " AND ".join(where_conditions)
+            query = query.eq('message_type', request.message_type.value)
+            count_query = count_query.eq('message_type', request.message_type.value)
         
         # Get total count
-        cur.execute(f"""
-            SELECT COUNT(*) as total_count
-            FROM chat_messages
-            WHERE {where_clause}
-        """, where_values)
-        total_count = cur.fetchone()['total_count']
+        count_response = count_query.execute()
+        total_count = count_response.count or 0
         
         # Get paginated results
         offset = (request.page - 1) * request.page_size
-        cur.execute(f"""
-            SELECT * FROM chat_messages
-            WHERE {where_clause}
-            ORDER BY created_at ASC
-            LIMIT %s OFFSET %s
-        """, where_values + [request.page_size, offset])
+        query = query.order('created_at', asc=True).range(offset, offset + request.page_size - 1)
         
-        messages = [dict(row) for row in cur.fetchall()]
+        response = query.execute()
+        messages = response.data or []
         
         return {
             "messages": messages,
@@ -266,6 +290,12 @@ def get_chat_messages_for_session(conn, session_id: int, user_id: str, request: 
             "has_next": offset + request.page_size < total_count,
             "has_previous": request.page > 1
         }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error listing chat messages: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 # API Endpoints
@@ -277,11 +307,10 @@ async def create_chat_session(
 ):
     """Create a new chat session"""
     try:
-        session_dict = create_chat_session_in_db(session_data, current_user.sub)
+        session_dict = await create_chat_session_in_db(session_data, current_user.sub)
         return ChatSession(**session_dict)
-    except psycopg2.Error as e:
-        logger.error(f"Database error creating chat session: {e}")
-        raise HTTPException(status_code=500, detail="Error creating chat session")
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error creating chat session: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")
@@ -306,7 +335,7 @@ async def list_chat_sessions(
             search=search
         )
         
-        result = get_chat_sessions_for_user(current_user.sub, request)
+        result = await get_chat_sessions_for_user(current_user.sub, request)
         sessions = [ChatSession(**session) for session in result["sessions"]]
         
         return ChatSessionListResponse(
@@ -338,7 +367,7 @@ async def get_chat_session(
         
         if include_messages:
             message_request = ChatMessageListRequest(page=1, page_size=200)
-            messages_result = get_chat_messages_for_session(session_id, current_user.sub, message_request)
+            messages_result = await get_chat_messages_for_session(session_id, current_user.sub, message_request)
             messages = [ChatMessage(**msg) for msg in messages_result["messages"]]
             return ChatSessionWithMessages(**session.model_dump(), messages=messages)
         else:
@@ -359,7 +388,7 @@ async def update_chat_session(
 ):
     """Update a chat session"""
     try:
-        updated_session = update_chat_session_in_db(session_id, current_user.sub, updates)
+        updated_session = await update_chat_session_in_db(session_id, current_user.sub, updates)
         if not updated_session:
             raise HTTPException(status_code=404, detail="Chat session not found")
         
@@ -379,7 +408,7 @@ async def delete_chat_session(
     """Soft delete a chat session (mark as inactive)"""
     try:
         updates = ChatSessionUpdate(is_active=False)
-        updated_session = update_chat_session_in_db(session_id, current_user.sub, updates)
+        updated_session = await update_chat_session_in_db(session_id, current_user.sub, updates)
         if not updated_session:
             raise HTTPException(status_code=404, detail="Chat session not found")
         
@@ -402,7 +431,7 @@ async def create_chat_message(
         # Ensure session_id matches
         message_data.session_id = session_id
         
-        message_dict = create_chat_message_in_db(message_data, current_user.sub)
+        message_dict = await create_chat_message_in_db(message_data, current_user.sub)
         return ChatMessage(**message_dict)
     except HTTPException:
         raise
@@ -427,7 +456,7 @@ async def list_chat_messages(
             message_type=message_type
         )
         
-        result = get_chat_messages_for_session(session_id, current_user.sub, request)
+        result = await get_chat_messages_for_session(session_id, current_user.sub, request)
         messages = [ChatMessage(**msg) for msg in result["messages"]]
         
         return ChatMessageListResponse(
@@ -451,52 +480,54 @@ async def get_user_chat_stats(
 ):
     """Get chat statistics for the current user"""
     try:
-        # @with_db_connection removed - using Supabase
-        def get_user_stats(conn, user_id: str) -> Dict[str, Any]:
-            with conn.cursor() as cur:
-                # Get session stats
-                cur.execute("""
-                    SELECT 
-                        COUNT(*) as total_sessions,
-                        COUNT(*) FILTER (WHERE is_active = TRUE) as active_sessions,
-                        agent_type,
-                        MAX(created_at) as most_recent_session,
-                        MIN(created_at) as oldest_session
-                    FROM chat_sessions 
-                    WHERE user_id = %s
-                    GROUP BY agent_type
-                """, (user_id,))
-                
-                agent_stats = cur.fetchall()
-                
-                # Get total message count
-                cur.execute("""
-                    SELECT COUNT(*) as total_messages
-                    FROM chat_messages cm
-                    JOIN chat_sessions cs ON cm.session_id = cs.id
-                    WHERE cs.user_id = %s
-                """, (user_id,))
-                
-                total_messages = cur.fetchone()['total_messages']
-                
-                # Calculate aggregated stats
-                total_sessions = sum(stat['total_sessions'] for stat in agent_stats)
-                active_sessions = sum(stat['active_sessions'] for stat in agent_stats)
-                sessions_by_agent_type = {stat['agent_type']: stat['total_sessions'] for stat in agent_stats}
-                most_recent = max((stat['most_recent_session'] for stat in agent_stats), default=None)
-                oldest = min((stat['oldest_session'] for stat in agent_stats), default=None)
-                
-                return {
-                    "user_id": user_id,
-                    "total_sessions": total_sessions,
-                    "active_sessions": active_sessions,
-                    "total_messages": total_messages,
-                    "sessions_by_agent_type": sessions_by_agent_type,
-                    "most_recent_session": most_recent,
-                    "oldest_session": oldest
-                }
+        client = get_supabase_client()
         
-        stats = get_user_stats(current_user.sub)
+        # Get session stats
+        sessions_response = client.client.table('chat_sessions')\
+            .select('*')\
+            .eq('user_id', current_user.sub)\
+            .execute()
+        
+        sessions = sessions_response.data or []
+        
+        # Calculate session stats
+        total_sessions = len(sessions)
+        active_sessions = sum(1 for s in sessions if s.get('is_active', False))
+        
+        # Group by agent type
+        sessions_by_agent_type = {}
+        for session in sessions:
+            agent_type = session.get('agent_type', 'unknown')
+            sessions_by_agent_type[agent_type] = sessions_by_agent_type.get(agent_type, 0) + 1
+        
+        # Get date ranges
+        if sessions:
+            created_dates = [s.get('created_at') for s in sessions if s.get('created_at')]
+            most_recent = max(created_dates) if created_dates else None
+            oldest = min(created_dates) if created_dates else None
+        else:
+            most_recent = None
+            oldest = None
+        
+        # Get total message count
+        total_messages = 0
+        for session in sessions:
+            messages_response = client.client.table('chat_messages')\
+                .select('id', count='exact')\
+                .eq('session_id', session['id'])\
+                .execute()
+            total_messages += messages_response.count or 0
+        
+        stats = {
+            "user_id": current_user.sub,
+            "total_sessions": total_sessions,
+            "active_sessions": active_sessions,
+            "total_messages": total_messages,
+            "sessions_by_agent_type": sessions_by_agent_type,
+            "most_recent_session": most_recent,
+            "oldest_session": oldest
+        }
+        
         return UserChatStats(**stats)
     
     except Exception as e:

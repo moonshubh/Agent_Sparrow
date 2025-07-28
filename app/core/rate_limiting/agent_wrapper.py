@@ -233,10 +233,13 @@ class RateLimitedAgent:
             self.logger.info(f"✅ Rate limit check passed, proceeding with stream")
             print(f"✅ Rate limit check passed, proceeding with stream")
             
+        except RateLimitExceededException:
+            # Re-raise rate limit exceptions - these should bubble up
+            raise
         except Exception as e:
-            self.logger.error(f"Rate limiting error in stream: {e}")
-            print(f"❌ Rate limiting error in stream: {e}")
-            # Continue without rate limiting on error to maintain functionality
+            self.logger.error(f"Unexpected error in rate limiting wrapper: {e}")
+            # For critical errors, fail fast rather than bypass protection
+            raise RuntimeError(f"Rate limiting protection failed: {e}") from e
         
         # Stream with circuit breaker protection
         if hasattr(self.agent, 'stream'):

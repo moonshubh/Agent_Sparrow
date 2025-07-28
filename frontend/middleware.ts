@@ -52,8 +52,10 @@ const SECURITY_CONFIG = {
     'Referrer-Policy': 'strict-origin-when-cross-origin',
     'Permissions-Policy': 'camera=(), microphone=(), geolocation=()',
     'Strict-Transport-Security': 'max-age=31536000; includeSubDomains',
-    // Strengthened CSP - removed unsafe-inline and unsafe-eval
-    'Content-Security-Policy': "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' wss: ws:; font-src 'self'; object-src 'none'; base-uri 'self';"
+    // Development-friendly CSP - allow inline scripts and eval for dev tools
+    'Content-Security-Policy': process.env.NODE_ENV === 'development' 
+      ? "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: blob: https:; connect-src 'self' wss: ws: https: http://localhost:*; font-src 'self' data: https://fonts.gstatic.com; object-src 'none'; base-uri 'self';"
+      : "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' wss: ws:; font-src 'self'; object-src 'none'; base-uri 'self';"
   },
   
   // Cache control headers for error responses

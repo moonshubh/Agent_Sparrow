@@ -3,7 +3,8 @@ import os
 import anyio
 import re
 from dotenv import load_dotenv
-from typing import AsyncIterator, Dict, Optional
+from typing import AsyncIterator, Dict, Optional, Any
+import asyncio
 from functools import lru_cache
 
 from langchain_core.messages import AIMessageChunk
@@ -16,6 +17,15 @@ from app.agents_v2.primary_agent.schemas import PrimaryAgentState
 from app.agents_v2.primary_agent.tools import mailbird_kb_search, tavily_web_search
 from app.agents_v2.primary_agent.reasoning import ReasoningEngine, ReasoningConfig
 from app.agents_v2.primary_agent.prompts import AgentSparrowV9Prompts
+from app.agents_v2.primary_agent.exceptions import (
+    RateLimitException,
+    InvalidAPIKeyException,
+    TimeoutException,
+    NetworkException,
+    ConfigurationException,
+    ReasoningException,
+    create_exception_from_error
+)
 
 # Standard logger setup
 logger = logging.getLogger(__name__)
@@ -33,21 +43,17 @@ tracer = trace.get_tracer(__name__)
 load_dotenv()
 
 # Model cache for reusing user-specific models
-_model_cache: Dict[str, ChatGoogleGenerativeAI] = {}
+from collections import OrderedDict
+_model_cache: OrderedDict[str, ChatGoogleGenerativeAI] = OrderedDict()
+MAX_CACHE_SIZE = 100
 
 def _validate_api_key(api_key: str) -> bool:
-    """Validate API key format for Google Generative AI."""
-    if not api_key or not isinstance(api_key, str):
-        return False
-    # Google API keys typically start with 'AIza' and are 39 characters long
-    if not api_key.startswith('AIza') or len(api_key) != 39:
-        logger.warning(f"API key format validation failed: expected format 'AIza...' with 39 characters, got {len(api_key)} characters")
-        return False
-    # Additional validation for valid characters (alphanumeric, underscore, hyphen)
-    if not re.match(r'^[A-Za-z0-9_-]+$', api_key):
-        logger.warning("API key contains invalid characters")
-        return False
-    return True
+    """Basic API key validation - just check it's not empty.
+    
+    Let the actual API tell us if the key is invalid rather than
+    hardcoding format assumptions that may change.
+    """
+    return bool(api_key and isinstance(api_key, str) and api_key.strip())
 
 @lru_cache(maxsize=128)
 def _get_model_config() -> str:
@@ -59,13 +65,16 @@ def create_user_specific_model(api_key: str) -> ChatGoogleGenerativeAI:
     """Create a user-specific Gemini model with their API key.
     
     Features:
-    - API key format validation
+    - Basic API key validation
     - Configurable model name from settings
     - Caching mechanism to reuse models
     - Comprehensive error handling
     """
     if not _validate_api_key(api_key):
-        raise ValueError("Invalid API key format. Expected Google API key starting with 'AIza' and 39 characters long.")
+        raise InvalidAPIKeyException(
+            "API key is missing or empty",
+            technical_details="API key validation failed: empty or None"
+        )
     
     # Check cache first (using a hash of the API key for security)
     cache_key = f"{hash(api_key)}_{_get_model_config()}"
@@ -97,10 +106,9 @@ def create_user_specific_model(api_key: str) -> ChatGoogleGenerativeAI:
         wrapped_model = wrap_gemini_agent(model_with_tools_base, model_name)
         
         # Cache the model (limit cache size to prevent memory issues)
-        if len(_model_cache) >= 100:  # Simple cache eviction
-            # Remove oldest entry (simple FIFO)
-            oldest_key = next(iter(_model_cache))
-            del _model_cache[oldest_key]
+        if len(_model_cache) >= MAX_CACHE_SIZE:
+            # Remove oldest entry (FIFO with OrderedDict)
+            _model_cache.popitem(last=False)  # Remove first (oldest) item
             logger.debug("Evicted oldest model from cache")
         
         _model_cache[cache_key] = wrapped_model
@@ -114,7 +122,7 @@ def create_user_specific_model(api_key: str) -> ChatGoogleGenerativeAI:
         _model_cache.pop(cache_key, None)
         raise ValueError(f"Failed to create AI model: {str(e)}")
 
-async def run_primary_agent(state: PrimaryAgentState) -> AsyncIterator[AIMessageChunk]:
+async def run_primary_agent(state: PrimaryAgentState) -> Dict[str, Any]:
     """
     Asynchronously processes a user query using the primary agent system, yielding AI message chunks as a streaming response.
 
@@ -137,8 +145,8 @@ async def run_primary_agent(state: PrimaryAgentState) -> AsyncIterator[AIMessage
             if len(user_query) > MAX_QUERY_LENGTH:
                 parent_span.set_attribute("input.query.error", "Query too long")
                 parent_span.set_status(Status(StatusCode.ERROR, "Query too long"))
-                yield AIMessageChunk(content="Your query is too long. Please shorten it and try again.", role="assistant")
-                return
+                from langchain_core.messages import AIMessage
+                return {"messages": [AIMessage(content="Your query is too long. Please shorten it and try again.")], "qa_retry_count": 0}
 
             # Get user-specific API key
             from app.core.user_context import get_user_gemini_key
@@ -158,8 +166,8 @@ async def run_primary_agent(state: PrimaryAgentState) -> AsyncIterator[AIMessage
                     "4. Save your settings and try again\n\n"
                     "Your API key should start with 'AIza' and be 39 characters long."
                 )
-                yield AIMessageChunk(content=detailed_guidance, role="error")
-                return
+                from langchain_core.messages import AIMessage
+                return {"messages": [AIMessage(content=detailed_guidance)], "qa_retry_count": 0}
             
             # Create user-specific model
             model_with_tools = create_user_specific_model(gemini_api_key)
@@ -201,21 +209,109 @@ async def run_primary_agent(state: PrimaryAgentState) -> AsyncIterator[AIMessage
 
             if not final_response:
                 logger.warning("Reasoning completed but no final response was generated.")
-                yield AIMessageChunk(content="I'm sorry, I was unable to generate a response. Please try again.", role="assistant")
-                return
+                from langchain_core.messages import AIMessage
+                return {"messages": [AIMessage(content="I'm sorry, I was unable to generate a response. Please try again.")], "qa_retry_count": 0}
 
-            # Stream the final, cleaned response chunk by chunk to the client.
-            chunk_size = 200  # Increased for better performance
-            for i in range(0, len(final_response), chunk_size):
-                chunk_content = final_response[i:i+chunk_size]
-                yield AIMessageChunk(content=chunk_content, role="assistant")
-                await anyio.sleep(0.005)  # Reduced delay for smoother streaming
+            # Create assistant message and return state diff
+            from langchain_core.messages import AIMessage
+            assistant_msg = AIMessage(content=final_response)
+            
+            # Extract thought steps for frontend display
+            thought_steps = []
+            if reasoning_state.reasoning_steps:
+                for step in reasoning_state.reasoning_steps:
+                    thought_steps.append({
+                        "step": step.phase.value.replace("_", " ").title(),
+                        "content": step.reasoning,
+                        "confidence": step.confidence
+                    })
+            
+            parent_span.set_status(Status(StatusCode.OK))
+            return {
+                "messages": [assistant_msg],
+                "qa_retry_count": 0,
+                "thought_steps": thought_steps
+            }
+
+            # Save the interaction to memory for context retention
+            session_id = getattr(state, 'session_id', None)
+            if session_id:
+                try:
+                    from app.services.qdrant_memory import QdrantMemory
+                    memory = QdrantMemory()
+                    memory.add_interaction(
+                        session_id=str(session_id),
+                        user_query=user_query,
+                        agent_response=final_response
+                    )
+                    logger.debug(f"Saved interaction to memory for session {session_id}")
+                except Exception as e:
+                    logger.warning(f"Failed to save interaction to memory: {e}")
 
             parent_span.set_status(Status(StatusCode.OK))
 
-        except Exception as e:
-            logger.exception("Error in run_primary_agent: %s", e)
+
+
+        except RateLimitException as e:
+            logger.warning(f"Rate limit hit: {e}")
+            if 'parent_span' in locals() and parent_span.is_recording():
+                parent_span.record_exception(e)
+                parent_span.set_status(Status(StatusCode.ERROR, "Rate limit exceeded"))
+            from langchain_core.messages import AIMessage
+            assistant_msg = AIMessage(content=e.user_message())
+            return {
+                "messages": [assistant_msg],
+                "qa_retry_count": 0
+            }
+            
+        except InvalidAPIKeyException as e:
+            logger.error(f"Invalid API key: {e}")
+            if 'parent_span' in locals() and parent_span.is_recording():
+                parent_span.record_exception(e)
+                parent_span.set_status(Status(StatusCode.ERROR, "Invalid API key"))
+            from langchain_core.messages import AIMessage
+            assistant_msg = AIMessage(content=e.user_message())
+            return {
+                "messages": [assistant_msg],
+                "qa_retry_count": 0
+            }
+            
+        except TimeoutException as e:
+            logger.warning(f"Request timeout: {e}")
+            if 'parent_span' in locals() and parent_span.is_recording():
+                parent_span.record_exception(e)
+                parent_span.set_status(Status(StatusCode.ERROR, "Request timeout"))
+            from langchain_core.messages import AIMessage
+            assistant_msg = AIMessage(content=e.user_message())
+            return {
+                "messages": [assistant_msg],
+                "qa_retry_count": 0
+            }
+            
+        except (NetworkException, ConfigurationException, ReasoningException) as e:
+            logger.error(f"{type(e).__name__}: {e}")
             if 'parent_span' in locals() and parent_span.is_recording():
                 parent_span.record_exception(e)
                 parent_span.set_status(Status(StatusCode.ERROR, str(e)))
-            yield AIMessageChunk(content=f"I'm sorry, an unexpected error occurred. Please try again later.", role="assistant") 
+            from langchain_core.messages import AIMessage
+            assistant_msg = AIMessage(content=e.user_message())
+            return {
+                "messages": [assistant_msg],
+                "qa_retry_count": 0
+            }
+            
+        except Exception as e:
+            # Convert unknown exceptions using factory
+            agent_exception = create_exception_from_error(e)
+            logger.exception(f"Unexpected error in primary agent: {agent_exception}")
+            
+            if 'parent_span' in locals() and parent_span.is_recording():
+                parent_span.record_exception(e)
+                parent_span.set_status(Status(StatusCode.ERROR, str(e)))
+                
+            from langchain_core.messages import AIMessage
+            assistant_msg = AIMessage(content=agent_exception.user_message())
+            return {
+                "messages": [assistant_msg],
+                "qa_retry_count": 0
+            } 

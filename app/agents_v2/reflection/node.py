@@ -50,7 +50,8 @@ def reflection_node(state: Dict[str, Any]) -> Dict[str, Any]:
         assistant_answer = state["messages"][-1].content
     except Exception as e:  # pragma: no cover
         logger.error("reflection_node: failed to extract messages: {}", e)
-        return {}
+        # Return a no-op diff that still touches an allowed key to satisfy LangGraph
+        return {"reflection_feedback": None}
 
     model = _get_model()
 
@@ -63,7 +64,8 @@ def reflection_node(state: Dict[str, Any]) -> Dict[str, Any]:
         )
     except Exception as e:  # pragma: no cover
         logger.error("reflection_node: model or parse error: {}", e)
-        return {}
+        # Return a no-op diff that still touches an allowed key to satisfy LangGraph
+        return {"reflection_feedback": None}
 
     new_retry_count = state.get("qa_retry_count", 0) + 1
     logger.debug("reflection_node feedback: {}, retry {}", parsed, new_retry_count)

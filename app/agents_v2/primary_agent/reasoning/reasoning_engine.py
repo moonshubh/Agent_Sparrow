@@ -61,7 +61,7 @@ class ReasoningEngine:
         self, 
         query: str, 
         context: Optional[Dict[str, Any]] = None,
-        session_id: str = "default"
+        session_id: Optional[str] = "default"
     ) -> ReasoningState:
         """
         Executes the full multi-phase reasoning pipeline to analyze a customer query and generate a comprehensive reasoning state.
@@ -80,8 +80,9 @@ class ReasoningEngine:
             start_time = time.time()
             
             # Initialize reasoning state
-            reasoning_state = ReasoningState(session_id=session_id, start_time=datetime.now())
-            span.set_attribute("session_id", session_id)
+            effective_session_id = session_id or "default"
+            reasoning_state = ReasoningState(session_id=effective_session_id, start_time=datetime.now())
+            span.set_attribute("session_id", effective_session_id)
             span.set_attribute("query_length", len(query))
             
             try:
@@ -107,9 +108,9 @@ class ReasoningEngine:
                 if self.config.enable_chain_of_thought:
                     await self._develop_response_strategy_v9(reasoning_state)
                 
-                # Phase 5: Self-Critique
+                # Phase 5: Enhanced Self-Critique with Multiple Passes
                 if self.config.enable_self_critique:
-                    await self._perform_self_critique_v9(reasoning_state)
+                    await self._perform_multi_pass_critique(reasoning_state)
 
                 # Phase 6: Quality Assessment
                 if self.config.enable_quality_assessment:
@@ -141,6 +142,10 @@ class ReasoningEngine:
         """
         with tracer.start_as_current_span("reasoning_engine.analyze_query"):
             
+            # Extract conversation history for context
+            messages = context.get('messages', []) if context else []
+            historical_context = self._build_historical_context(messages)
+            
             # Detect emotional state
             emotion_result = EmotionTemplates.detect_emotion(query)
             
@@ -162,7 +167,7 @@ class ReasoningEngine:
                 surface_meaning=query, 
                 latent_intent=inferred_intent,
                 emotional_subtext=f"Detected primary emotion: {emotion_result.primary_emotion.value}", 
-                historical_context="No historical context available in this session.", 
+                historical_context=historical_context, 
                 emotional_state=emotion_result.primary_emotion,
                 emotion_confidence=emotion_result.confidence_score,
                 problem_category=problem_category,
@@ -377,8 +382,26 @@ class ReasoningEngine:
 
 Please generate a well-structured response that follows these guidelines and addresses the customer's needs directly."""
 
+                # Import the full Agent Sparrow v9 prompt system
+                from app.agents_v2.primary_agent.prompts.agent_sparrow_v9_prompts import AgentSparrowV9Prompts
+                
+                # Use the full v9 prompt but without self-critique (it's done separately)
+                from app.agents_v2.primary_agent.prompts.agent_sparrow_v9_prompts import PromptV9Config
+                prompt_config = PromptV9Config(
+                    include_reasoning=True,
+                    include_emotional_resonance=True,
+                    include_technical_excellence=True,
+                    include_conversational_excellence=True,
+                    include_solution_delivery=True,
+                    include_knowledge_integration=True,
+                    include_premium_elements=True,
+                    include_success_directives=True,
+                    include_self_critique=False  # Disable here as critique happens separately
+                )
+                system_prompt = AgentSparrowV9Prompts.build_system_prompt(config=prompt_config)
+                
                 messages = [
-                    SystemMessage(content="You are Agent Sparrow, an expert customer support assistant for Mailbird. Generate helpful, professional responses."),
+                    SystemMessage(content=system_prompt),
                     HumanMessage(content=response_prompt)
                 ]
 
@@ -387,10 +410,45 @@ Please generate a well-structured response that follows these guidelines and add
                 
                 # Ensure we have a valid response
                 if not final_response or len(final_response.strip()) == 0:
-                    logger.warning("Empty response generated, using fallback")
-                    # Generate a contextual fallback based on the query analysis
-                    problem_type = qa.problem_category.value if qa.problem_category else "general"
-                    final_response = f"I understand you're experiencing {problem_type} issues with Mailbird. Let me help you with that. Could you provide more details about what specific issue you're facing?"
+                    logger.warning("Empty response generated, constructing fallback from analysis")
+                    
+                    # Build a response from the existing analysis
+                    fallback_parts = []
+                    
+                    # Acknowledge the issue based on problem category
+                    if qa.problem_category:
+                        problem_desc = qa.problem_category.value.replace('_', ' ').lower()
+                        if qa.problem_category.value == "ACCOUNT_SETUP":
+                            fallback_parts.append("I understand you need help with your Mailbird account setup, specifically regarding license installation.")
+                        elif qa.problem_category.value == "LICENSE":
+                            fallback_parts.append("I see you're having license-related concerns with Mailbird.")
+                        else:
+                            fallback_parts.append(f"I understand you're experiencing {problem_desc} issues with Mailbird.")
+                    else:
+                        fallback_parts.append("I understand you need help with Mailbird.")
+                    
+                    # Use the solution that was already generated
+                    if solution and solution.solution_summary:
+                        fallback_parts.append(f"\n\n{solution.solution_summary}")
+                    
+                    # Add the detailed steps
+                    if solution and solution.detailed_steps:
+                        fallback_parts.append("\n\nHere's what you need to do:")
+                        for i, step in enumerate(solution.detailed_steps, 1):
+                            fallback_parts.append(f"\n{i}. {step}")
+                    
+                    # Add preventive measures if available
+                    if solution and solution.preventive_measures:
+                        fallback_parts.append("\n\nTo prevent this in the future:")
+                        for measure in solution.preventive_measures:
+                            fallback_parts.append(f"\n• {measure}")
+                    
+                    final_response = "\n".join(fallback_parts)
+                    
+                    # Only ask for clarification if we truly have no solution
+                    if not solution or not solution.detailed_steps:
+                        logger.error(f"No solution generated for query: {qa.query_text[:100]}...")
+                        final_response = f"I understand you're experiencing issues with Mailbird. Based on your query about {qa.query_text[:100]}..., let me help you resolve this. Could you confirm which specific aspect you need help with first?"
                 
                 span.set_attribute("response_length", len(final_response))
                 span.set_attribute("emotional_state", qa.emotional_state.value)
@@ -427,19 +485,19 @@ Please generate a well-structured response that follows these guidelines and add
             overall_quality = sum(score * weight for score, weight in zip(quality_scores, quality_weights))
             
             # Generate improvement suggestions
-            improvement_suggestions = []
+            suggested_improvements = []
             quality_issues = []
             
             if reasoning_clarity < 0.7:
-                improvement_suggestions.append("Enhance reasoning transparency and explanation")
+                suggested_improvements.append("Enhance reasoning transparency and explanation")
                 quality_issues.append("Reasoning clarity below threshold")
             
             if solution_completeness < 0.7:
-                improvement_suggestions.append("Provide more comprehensive solution details")
+                suggested_improvements.append("Provide more comprehensive solution details")
                 quality_issues.append("Solution completeness insufficient")
             
             if emotional_appropriateness < 0.7:
-                improvement_suggestions.append("Better align response tone with customer emotion")
+                suggested_improvements.append("Better align response tone with customer emotion")
                 quality_issues.append("Emotional alignment could be improved")
             
             # Create quality assessment
@@ -450,7 +508,7 @@ Please generate a well-structured response that follows these guidelines and add
                 emotional_appropriateness=emotional_appropriateness,
                 technical_accuracy=technical_accuracy,
                 response_structure=response_structure,
-                improvement_suggestions=improvement_suggestions,
+                improvement_suggestions=suggested_improvements,
                 quality_issues=quality_issues,
                 confidence_in_assessment=0.8
             )
@@ -631,6 +689,30 @@ Please generate a well-structured response that follows these guidelines and add
         else:
             return "Customer seeks general support and assistance"
     
+    def _build_historical_context(self, messages: List) -> str:
+        """Build historical context from conversation messages for memory retention."""
+        if not messages or len(messages) <= 1:
+            return "No historical context available in this session."
+        
+        # Limit context to last 5 messages to avoid token overload
+        recent_messages = messages[-6:-1] if len(messages) > 1 else []
+        
+        if not recent_messages:
+            return "No historical context available in this session."
+        
+        context_parts = []
+        for i, msg in enumerate(recent_messages):
+            if hasattr(msg, 'content') and msg.content:
+                # Truncate very long messages
+                content = msg.content[:200] + "..." if len(msg.content) > 200 else msg.content
+                role = "User" if hasattr(msg, 'type') and msg.type == "human" else "Assistant"
+                context_parts.append(f"{role}: {content}")
+        
+        if context_parts:
+            return "Recent conversation history:\\n" + "\\n".join(context_parts)
+        else:
+            return "No historical context available in this session."
+
     def _extract_context_clues(self, query: str, context: Optional[Dict[str, Any]]) -> List[str]:
         """
         Extracts contextual clues from the query text and optional context metadata.
@@ -703,14 +785,14 @@ Please generate a well-structured response that follows these guidelines and add
         Returns:
             float: A score between 0.0 and 1.0 indicating the thoroughness of the proposed solution.
         """
-        if not reasoning_state.selected_solution:
+        if not reasoning_state.solution_architecture or not reasoning_state.solution_architecture.primary_pathway:
             return 0.2
         
-        solution = reasoning_state.selected_solution
+        solution = reasoning_state.solution_architecture.primary_pathway
         completeness_score = 0.0
         
         # Check solution detail
-        if len(solution.detailed_approach) > 50:
+        if solution.detailed_steps and len(' '.join(solution.detailed_steps)) > 50:
             completeness_score += 0.3
         
         # Check if fallback options provided
@@ -767,7 +849,7 @@ Please generate a well-structured response that follows these guidelines and add
         # For now, return high confidence if technical reasoning is present
         
         if reasoning_state.query_analysis and reasoning_state.query_analysis.problem_category == ProblemCategory.TECHNICAL_ISSUE:
-            if reasoning_state.selected_solution and len(reasoning_state.selected_solution.detailed_approach) > 100:
+            if reasoning_state.solution_architecture and reasoning_state.solution_architecture.primary_pathway and len(reasoning_state.solution_architecture.primary_pathway.detailed_steps) > 2:
                 return 0.8
             else:
                 return 0.6
@@ -840,11 +922,148 @@ Please generate a well-structured response that follows these guidelines and add
         # This function can be deprecated or repurposed.
         return self._generate_reasoning_summary(reasoning_state)
 
+    async def _perform_multi_pass_critique(self, reasoning_state: ReasoningState):
+        """
+        Enhanced multi-pass self-critiquing system for continuous improvement.
+        
+        Performs multiple rounds of self-critique with iterative refinement:
+        1. Initial critique of reasoning and solution quality
+        2. Emotional appropriateness validation
+        3. Final coherence and completeness check
+        """
+        with tracer.start_as_current_span("reasoning_engine.multi_pass_critique") as span:
+            max_passes = 3
+            critique_passes = []
+            
+            for pass_num in range(max_passes):
+                # Perform critique for this pass
+                critique_result = await self._single_critique_pass(reasoning_state, pass_num)
+                critique_passes.append(critique_result)
+                
+                # Break early if critique passes with high confidence
+                if critique_result.passed_critique and critique_result.critique_score > 0.85:
+                    logger.debug(f"High-quality response achieved in pass {pass_num + 1}")
+                    break
+                
+                # Apply improvements if critique failed
+                if not critique_result.passed_critique and pass_num < max_passes - 1:
+                    await self._apply_critique_improvements(reasoning_state, critique_result)
+            
+            # Store the final critique result
+            reasoning_state.self_critique_result = critique_passes[-1]
+            
+            # Add reasoning step for transparency
+            step = ReasoningStep(
+                phase=ReasoningPhase.SELF_CRITIQUE,
+                description=f"Multi-pass self-critique completed in {len(critique_passes)} passes",
+                reasoning=f"Final critique score: {critique_passes[-1].critique_score:.2f}, "
+                         f"passed: {critique_passes[-1].passed_critique}",
+                confidence=critique_passes[-1].critique_score,
+                evidence=[
+                    f"Pass {i+1}: Score {c.critique_score:.2f}" 
+                    for i, c in enumerate(critique_passes)
+                ]
+            )
+            reasoning_state.add_reasoning_step(step)
+            
+            span.set_attribute("critique_passes", len(critique_passes))
+            span.set_attribute("final_score", critique_passes[-1].critique_score)
+
+    async def _single_critique_pass(self, reasoning_state: ReasoningState, pass_num: int) -> SelfCritiqueResult:
+        """Perform a single pass of self-critique with focus area based on pass number."""
+        try:
+            # Get the current response for critique
+            current_response = reasoning_state.response_orchestration.final_response_preview
+            query = reasoning_state.query_analysis.query_text
+            
+            # Define focus areas for each pass
+            focus_areas = [
+                "factual accuracy and technical correctness",
+                "emotional appropriateness and tone",
+                "completeness and coherence"
+            ]
+            focus_area = focus_areas[min(pass_num, len(focus_areas) - 1)]
+            
+            # Create critique prompt
+            critique_prompt = f"""
+            You are performing a self-critique of an AI response. Focus on: {focus_area}
+            
+            Original Query: {query}
+            Current Response: {current_response}
+            
+            Evaluate the response on a scale of 0.0-1.0 considering:
+            1. Does it answer the query accurately?
+            2. Is the tone appropriate for customer support?
+            3. Are there any factual errors or omissions?
+            4. Is the response complete and helpful?
+            
+            Provide a critique score and specific improvement suggestions.
+            """
+            
+            # Use the model to perform critique
+            response = await self.model.ainvoke([{"role": "user", "content": critique_prompt}])
+            critique_content = response.content if hasattr(response, 'content') else str(response)
+            
+            # Parse critique score (simplified parsing)
+            import re
+            score_match = re.search(r'(\d+\.?\d*)', critique_content)
+            critique_score = float(score_match.group(1)) if score_match else 0.7
+            
+            # Normalize score to 0-1 range if needed
+            if critique_score > 1.0:
+                critique_score = critique_score / 10.0 if critique_score <= 10 else critique_score / 100.0
+            
+            # Determine if critique passed
+            passed_critique = critique_score >= 0.7
+            
+            return SelfCritiqueResult(
+                critique_score=critique_score,
+                passed_critique=passed_critique,
+                suggested_improvements=[f"Pass {pass_num + 1} focus: {focus_area}"]
+            )
+            
+        except Exception as e:
+            logger.error(f"Error in critique pass {pass_num}: {e}")
+            return SelfCritiqueResult(
+                critique_score=0.5,
+                passed_critique=False,
+                suggested_improvements=["Critique failed due to error", f"Error: {str(e)}"]
+            )
+
+    async def _apply_critique_improvements(self, reasoning_state: ReasoningState, critique_result: SelfCritiqueResult):
+        """Apply improvements based on critique feedback."""
+        if not critique_result.suggested_improvements:
+            return
+        
+        try:
+            # Get current response
+            current_response = reasoning_state.response_orchestration.final_response_preview
+            suggestions = " ".join(critique_result.suggested_improvements)
+            
+            # Create improvement prompt  
+            improvement_prompt = f"""
+            Improve this response based on the critique feedback:
+            
+            Original Response: {current_response}
+            Improvement Suggestions: {suggestions}
+            
+            Provide an improved version that addresses the feedback while maintaining helpfulness.
+            """
+            
+            # Generate improved response
+            response = await self.model.ainvoke([{"role": "user", "content": improvement_prompt}])
+            improved_content = response.content if hasattr(response, 'content') else str(response)
+            
+            # Update the response in reasoning state
+            reasoning_state.response_orchestration.final_response_preview = improved_content
+            
+            logger.debug("Applied critique improvements to response")
+            
+        except Exception as e:
+            logger.error(f"Error applying critique improvements: {e}")
+
     async def _perform_self_critique_v9(self, reasoning_state: ReasoningState):
         """
-        Invokes the V9 self-critique framework to evaluate the drafted response.
-
-        This method constructs a prompt with the drafted response and the critique checklist,
         calls the LLM, parses the structured critique, and updates the reasoning state
         with the SelfCritiqueResult.
         """

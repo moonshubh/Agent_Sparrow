@@ -27,7 +27,9 @@ import {
   XCircle,
   Globe,
   BookOpen,
-  FileText
+  FileText,
+  Brain,
+  Eye
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { toast } from 'sonner'
@@ -50,6 +52,12 @@ interface MessageMetadata {
   routingReason?: string
 }
 
+interface ThoughtStep {
+  step: string
+  content: string
+  confidence?: number
+}
+
 interface MessageBubbleProps {
   id: string
   type: "user" | "agent" | "system"
@@ -57,6 +65,7 @@ interface MessageBubbleProps {
   timestamp: Date | string // Support both Date objects and string timestamps (from JSON)
   agentType?: "primary" | "log_analyst" | "researcher"
   metadata?: MessageMetadata
+  thoughtSteps?: ThoughtStep[] // AI reasoning transparency
   streaming?: boolean
   onRetry?: () => void
   onRate?: (rating: 'up' | 'down') => void
@@ -129,6 +138,57 @@ function CitationDisplay({ sources }: { sources: Source[] }) {
                 >
                   <ExternalLink className="w-3 h-3" />
                 </Button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function ThoughtStepsDisplay({ thoughtSteps }: { thoughtSteps: ThoughtStep[] }) {
+  const [isExpanded, setIsExpanded] = useState(false)
+  
+  if (!thoughtSteps || thoughtSteps.length === 0) return null
+  
+  return (
+    <div className="mt-4 pt-3 border-t border-border/50">
+      <Button
+        variant="ghost"
+        size="sm"
+        onClick={() => setIsExpanded(!isExpanded)}
+        className="h-auto p-0 font-medium text-xs text-chat-metadata hover:text-foreground mb-2"
+      >
+        <Brain className="w-3 h-3 mr-1" />
+        <span className="mr-1">Thought Process ({thoughtSteps.length} steps)</span>
+        {isExpanded ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+      </Button>
+      
+      {isExpanded && (
+        <div className="space-y-3">
+          {thoughtSteps.map((step, idx) => (
+            <div key={idx} className="reasoning-step rounded-lg border border-border/50 p-3 bg-muted/20">
+              <div className="flex items-start gap-3">
+                <span className="inline-flex items-center justify-center w-6 h-6 rounded-full bg-primary/10 text-primary text-xs font-semibold flex-shrink-0">
+                  {idx + 1}
+                </span>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center justify-between mb-2">
+                    <h4 className="text-sm font-medium text-foreground">
+                      {step.step}
+                    </h4>
+                    {step.confidence && (
+                      <Badge variant="secondary" className="text-xs">
+                        {Math.round(step.confidence * 100)}% confident
+                      </Badge>
+                    )}
+                  </div>
+                  <div className="text-sm text-chat-metadata whitespace-pre-wrap">
+                    {step.content}
+                  </div>
+                </div>
+                <Eye className="w-4 h-4 text-chat-metadata mt-1 flex-shrink-0" />
               </div>
             </div>
           ))}
@@ -454,6 +514,7 @@ export default function MessageBubble({
   timestamp, 
   agentType, 
   metadata, 
+  thoughtSteps,
   streaming = false,
   onRetry,
   onRate 
@@ -600,6 +661,11 @@ export default function MessageBubble({
           {/* Citations */}
           {metadata?.sources && metadata.sources.length > 0 && (
             <CitationDisplay sources={metadata.sources} />
+          )}
+          
+          {/* Thought Process Display - Only for primary agent */}
+          {agentType === 'primary' && thoughtSteps && (
+            <ThoughtStepsDisplay thoughtSteps={thoughtSteps} />
           )}
           
           {/* Message Footer */}

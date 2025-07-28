@@ -1,6 +1,7 @@
 print("--- [graph.py] Top of file ---")
 from langgraph.graph import StateGraph, END
 from langgraph.prebuilt import ToolNode
+from langgraph.checkpoint.memory import MemorySaver
 
 print("--- [graph.py] Importing GraphState ---")
 from .state import GraphState
@@ -136,7 +137,8 @@ workflow.add_edge("researcher", "post_process")
 workflow.add_edge("log_analyst", "post_process")
 workflow.add_edge("post_process", END)
 
-# Compile the graph
-print("--- [graph.py] Compiling workflow ---")
-app = workflow.compile()
-print("--- [graph.py] Compiled workflow. Graph setup complete. ---") 
+# Compile the graph with memory checkpointer for state persistence
+print("--- [graph.py] Compiling workflow with memory checkpointer ---")
+checkpointer = MemorySaver()
+app = workflow.compile(checkpointer=checkpointer)
+print("--- [graph.py] Compiled workflow with memory support. Graph setup complete. ---") 

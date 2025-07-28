@@ -1,4 +1,4 @@
-from typing import List, Literal, Optional, Any
+from typing import List, Literal, Optional, Any, Dict
 from langchain_core.documents import Document
 from langchain_core.messages import BaseMessage
 from pydantic import BaseModel, Field, model_serializer
@@ -12,7 +12,7 @@ class GraphState(BaseModel):
     """
     Represents the overall state of the agentic system.
     """
-    session_id: str = "default"
+    session_id: Optional[str] = "default"
     messages: List[BaseMessage] = Field(default_factory=list)
     destination: Optional[Literal["primary_agent", "log_analyst", "researcher", "__end__"]] = None
     raw_log_content: Optional[str] = None
@@ -28,6 +28,8 @@ class GraphState(BaseModel):
     reflection_feedback: Optional[ReflectionFeedback] = None
     # Count of refinement attempts already performed in current session
     qa_retry_count: int = 0
+    # Thought steps from reasoning engine for frontend display
+    thought_steps: Optional[List[Dict[str, Any]]] = None
 
     # ------------------------------------------------------------------
     # Dict-like access helpers (compatibility with legacy nodes)

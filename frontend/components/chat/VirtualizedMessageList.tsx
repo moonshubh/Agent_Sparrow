@@ -79,6 +79,7 @@ export default function VirtualizedMessageList({
               timestamp={message.timestamp}
               agentType={message.agentType}
               metadata={message.metadata}
+              thoughtSteps={message.thoughtSteps}
               streaming={message.streaming}
               onRetry={message.type === 'agent' ? onRetry : undefined}
               onRate={onRate ? (rating) => onRate(message.id, rating) : undefined}
@@ -117,6 +118,7 @@ export default function VirtualizedMessageList({
               timestamp={message.timestamp}
               agentType={message.agentType}
               metadata={message.metadata}
+              thoughtSteps={message.thoughtSteps}
               streaming={message.streaming}
               onRetry={message.type === 'agent' ? onRetry : undefined}
               onRate={onRate ? (rating) => onRate(message.id, rating) : undefined}

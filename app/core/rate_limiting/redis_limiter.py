@@ -84,7 +84,7 @@ class RedisRateLimiter:
         
         if not rpm_result["allowed"]:
             blocked_by = "rpm"
-            retry_after = 60 - (now % 60)  # Seconds until next minute
+            retry_after = int(60 - (now % 60))  # Seconds until next minute (as integer)
         elif not rpd_result["allowed"]:
             blocked_by = "rpd"
             # Calculate seconds until next day

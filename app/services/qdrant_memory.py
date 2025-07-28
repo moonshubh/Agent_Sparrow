@@ -6,9 +6,11 @@ from __future__ import annotations
 import os
 import uuid
 from typing import List
+from datetime import datetime
+import numpy as np
 
 from qdrant_client import QdrantClient
-from qdrant_client.http.models import PointStruct, Distance, VectorParams, SearchParams
+from qdrant_client.http.models import PointStruct, Distance, VectorParams, SearchParams, Filter, FieldCondition, MatchValue
 from qdrant_client.http.exceptions import UnexpectedResponse
 import requests
 import structlog
@@ -29,11 +31,14 @@ class QdrantMemory:
 
     def __init__(self) -> None:
         self.client = QdrantClient(url=QDRANT_URL, api_key=QDRANT_API_KEY)
-        # Gemini embedding model; 768-dimensional
+        # Upgraded to Gemini embedding-001 model (GA 2025)
+        # Using 768 dimensions for balanced performance/accuracy
         self.embedder = GoogleGenerativeAIEmbeddings(
-            model="models/embedding-001",
+            model="models/gemini-embedding-001",
             google_api_key=settings.gemini_api_key,
+            task_type="SEMANTIC_SIMILARITY",  # Optimized for chat memory
         )
+        self.embedding_dimensions = 768  # Configurable dimension size
 
     # ---------------------------------------------------------------------
     # Internal helpers
@@ -42,9 +47,11 @@ class QdrantMemory:
     def _collection_name(self, session_id: str) -> str:
         return f"{_COLLECTION_PREFIX}{session_id}"
 
-    def _ensure_collection(self, name: str, dim: int = 768) -> None:
+    def _ensure_collection(self, name: str, dim: int = None) -> None:
         """Create collection if it does not exist.
         Falls back silently if Qdrant is unreachable."""
+        if dim is None:
+            dim = self.embedding_dimensions
         try:
             if name in (c.name for c in self.client.get_collections().collections):
                 return
@@ -56,7 +63,12 @@ class QdrantMemory:
             logger.warning("qdrant_unavailable", error=str(e))
 
     def _embed(self, text: str) -> List[float]:
-        return self.embedder.embed_query(text)
+        """Embed text using Gemini with normalization for cosine similarity."""
+        embedding = self.embedder.embed_query(text)
+        # Normalize embedding for cosine similarity (best practice)
+        embedding_array = np.array(embedding)
+        normalized = embedding_array / np.linalg.norm(embedding_array)
+        return normalized.tolist()
 
     # ---------------------------------------------------------------------
     # Public API
@@ -73,7 +85,13 @@ class QdrantMemory:
         point = PointStruct(
             id=str(uuid.uuid4()),
             vector=vector,
-            payload={"text": combined},
+            payload={
+                "text": combined,
+                "session_id": session_id,  # Add for filtering
+                "user_query": user_query,
+                "agent_response": agent_response,
+                "timestamp": datetime.now().isoformat()
+            },
         )
         try:
             self.client.upsert(collection, points=[point])
@@ -83,16 +101,29 @@ class QdrantMemory:
     def retrieve_context(
         self, session_id: str, query_embedding: List[float], top_k: int = 3
     ) -> List[str]:
-        """Return top_k similar past interactions' texts."""
+        """Return top_k similar past interactions' texts with strict session filtering."""
         collection = self._collection_name(session_id)
         try:
             if not any(c.name == collection for c in self.client.get_collections().collections):
                 return []
 
+            # Normalize query embedding for consistency
+            query_array = np.array(query_embedding)
+            normalized_query = query_array / np.linalg.norm(query_array)
+
+            # Add session filter to prevent cross-session contamination
             res = self.client.search(
                 collection_name=collection,
-                query_vector=query_embedding,
+                query_vector=normalized_query.tolist(),
                 limit=top_k,
+                query_filter=Filter(
+                    must=[
+                        FieldCondition(
+                            key="session_id",
+                            match=MatchValue(value=session_id)
+                        )
+                    ]
+                ),
                 search_params=SearchParams(hnsw_ef=64),
             )
             return [point.payload.get("text", "") for point in res]

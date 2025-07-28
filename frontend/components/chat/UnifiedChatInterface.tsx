@@ -210,6 +210,10 @@ export default function UnifiedChatInterface() {
       
       await sendMessage(content, messageFiles)
       
+      // Clear the input value and files after successful send
+      setInputValue('')
+      setFiles([])
+      
       // Session message syncing is handled by the useEffect below
       // Update session title if this is the first user message
       if (sessionId) {
@@ -411,6 +415,7 @@ export default function UnifiedChatInterface() {
                           timestamp={message.timestamp}
                           agentType={message.agentType}
                           metadata={message.metadata}
+                          thoughtSteps={message.thoughtSteps}
                           streaming={message.streaming}
                           onRetry={message.type === 'agent' ? retryLastMessage : undefined}
                           onRate={(rating) => handleMessageRate(message.id, rating)}
