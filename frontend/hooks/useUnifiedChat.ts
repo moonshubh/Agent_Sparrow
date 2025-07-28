@@ -41,6 +41,12 @@ export interface UnifiedChatState {
 
 export interface UseUnifiedChatReturn {
   state: UnifiedChatState
+  /**
+   * Send a message to the chat with optional file attachments and session ID.
+   * @param content - The message content
+   * @param files - Optional file attachments (for log analysis)
+   * @param sessionId - Optional session ID. Expected format: numeric string (e.g., "123") or null/undefined
+   */
   sendMessage: (content: string, files?: File[], sessionId?: string) => Promise<void>
   clearConversation: () => void
   retryLastMessage: () => Promise<void>
@@ -166,6 +172,12 @@ export function useUnifiedChat(): UseUnifiedChatReturn {
     return "primary"
   }
 
+  /**
+   * Sends a message to the unified chat system with optional file attachments and session ID.
+   * @param content - The message content to send
+   * @param files - Optional file attachments (primarily for log analysis)
+   * @param sessionId - Optional session ID. Expected format: numeric string (e.g., "123") or null/undefined
+   */
   const sendMessage = useCallback(async (content: string, files?: File[], sessionId?: string) => {
     if (!content.trim() && (!files || files.length === 0)) return
 
@@ -234,10 +246,19 @@ export function useUnifiedChat(): UseUnifiedChatReturn {
   const handleUnifiedChat = async (content: string, suggestedAgent: string, abortController: AbortController, sessionId?: string) => {
     try {
       console.log('🚀 Making API call to:', `${apiBaseUrl}/agent`)
+      // Validate sessionId is numeric before parsing
+      let parsedSessionId: number | null = null
+      if (sessionId) {
+        const numericSessionId = parseInt(sessionId)
+        if (!isNaN(numericSessionId)) {
+          parsedSessionId = numericSessionId
+        }
+      }
+      
       const payload = { 
         query: content,
         log_content: null,
-        session_id: sessionId ? parseInt(sessionId) : null
+        session_id: parsedSessionId
       }
       console.log('📤 Request payload:', payload)
       
@@ -364,13 +385,22 @@ export function useUnifiedChat(): UseUnifiedChatReturn {
       }, 600000) // 10 minutes
       
       try {
+        // Validate sessionId is numeric before parsing
+        let parsedSessionId: number | null = null
+        if (sessionId) {
+          const numericSessionId = parseInt(sessionId)
+          if (!isNaN(numericSessionId)) {
+            parsedSessionId = numericSessionId
+          }
+        }
+        
         const response = await fetch(`${apiBaseUrl}/agent`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ 
             query: content,
             log_content: fileContent,
-            session_id: sessionId ? parseInt(sessionId) : null
+            session_id: parsedSessionId
           }),
           signal: abortController.signal
         })
@@ -470,13 +500,22 @@ const handleResearchQuery = async (content: string, abortController: AbortContro
     const steps: any[] = [];
 
     try {
+      // Validate sessionId is numeric before parsing
+      let parsedSessionId: number | null = null
+      if (sessionId) {
+        const numericSessionId = parseInt(sessionId)
+        if (!isNaN(numericSessionId)) {
+          parsedSessionId = numericSessionId
+        }
+      }
+      
       const response = await fetch(`${apiBaseUrl}/agent`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ 
           query: content,
           log_content: null,
-          session_id: sessionId ? parseInt(sessionId) : null
+          session_id: parsedSessionId
         }),
         signal: abortController.signal
       });

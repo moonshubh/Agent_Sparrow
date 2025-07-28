@@ -25,8 +25,9 @@ from .schemas import (
 )
 from .problem_solver import ProblemSolvingFramework
 from .tool_intelligence import ToolIntelligence
-from app.agents_v2.primary_agent.prompts import EmotionTemplates, AgentSparrowV9Prompts
+from app.agents_v2.primary_agent.prompts import EmotionTemplates
 from app.agents_v2.primary_agent.prompts.emotion_templates import EmotionalState
+from app.agents_v2.primary_agent.prompts.agent_sparrow_v9_prompts import AgentSparrowV9Prompts, PromptV9Config
 
 logger = logging.getLogger(__name__)
 tracer = trace.get_tracer(__name__)
@@ -382,11 +383,7 @@ class ReasoningEngine:
 
 Please generate a well-structured response that follows these guidelines and addresses the customer's needs directly."""
 
-                # Import the full Agent Sparrow v9 prompt system
-                from app.agents_v2.primary_agent.prompts.agent_sparrow_v9_prompts import AgentSparrowV9Prompts
-                
                 # Use the full v9 prompt but without self-critique (it's done separately)
-                from app.agents_v2.primary_agent.prompts.agent_sparrow_v9_prompts import PromptV9Config
                 prompt_config = PromptV9Config(
                     include_reasoning=True,
                     include_emotional_resonance=True,
@@ -709,7 +706,7 @@ Please generate a well-structured response that follows these guidelines and add
                 context_parts.append(f"{role}: {content}")
         
         if context_parts:
-            return "Recent conversation history:\\n" + "\\n".join(context_parts)
+            return "Recent conversation history:\n" + "\n".join(context_parts)
         else:
             return "No historical context available in this session."
 
@@ -934,23 +931,62 @@ Please generate a well-structured response that follows these guidelines and add
         with tracer.start_as_current_span("reasoning_engine.multi_pass_critique") as span:
             max_passes = 3
             critique_passes = []
+            timeout_seconds = 30  # Timeout for each critique pass
             
             for pass_num in range(max_passes):
-                # Perform critique for this pass
-                critique_result = await self._single_critique_pass(reasoning_state, pass_num)
-                critique_passes.append(critique_result)
-                
-                # Break early if critique passes with high confidence
-                if critique_result.passed_critique and critique_result.critique_score > 0.85:
-                    logger.debug(f"High-quality response achieved in pass {pass_num + 1}")
+                try:
+                    # Perform critique for this pass with timeout
+                    critique_result = await asyncio.wait_for(
+                        self._single_critique_pass(reasoning_state, pass_num),
+                        timeout=timeout_seconds
+                    )
+                    critique_passes.append(critique_result)
+                    
+                    # Break early if critique passes with high confidence
+                    if critique_result.passed_critique and critique_result.critique_score > 0.85:
+                        logger.debug(f"High-quality response achieved in pass {pass_num + 1}")
+                        break
+                    
+                    # Apply improvements if critique failed
+                    if not critique_result.passed_critique and pass_num < max_passes - 1:
+                        try:
+                            await asyncio.wait_for(
+                                self._apply_critique_improvements(reasoning_state, critique_result),
+                                timeout=timeout_seconds
+                            )
+                        except asyncio.TimeoutError:
+                            logger.warning(f"Critique improvement timeout in pass {pass_num + 1}")
+                            break
+                        
+                except asyncio.TimeoutError:
+                    logger.warning(f"Critique timeout in pass {pass_num + 1}")
+                    # Create a fallback critique result
+                    fallback_critique = SelfCritiqueResult(
+                        critique_score=0.6,
+                        passed_critique=False,
+                        suggested_improvements=[f"Critique pass {pass_num + 1} timed out after {timeout_seconds}s"]
+                    )
+                    critique_passes.append(fallback_critique)
                     break
-                
-                # Apply improvements if critique failed
-                if not critique_result.passed_critique and pass_num < max_passes - 1:
-                    await self._apply_critique_improvements(reasoning_state, critique_result)
+            
+            # Ensure we have at least one critique result
+            if not critique_passes:
+                fallback_critique = SelfCritiqueResult(
+                    critique_score=0.5,
+                    passed_critique=False,
+                    suggested_improvements=["All critique passes failed or timed out"]
+                )
+                critique_passes.append(fallback_critique)
             
             # Store the final critique result
             reasoning_state.self_critique_result = critique_passes[-1]
+            
+            # Build evidence with improvement details
+            evidence = []
+            for i, c in enumerate(critique_passes):
+                evidence.append(f"Pass {i+1}: Score {c.critique_score:.2f}")
+                if c.suggested_improvements:
+                    evidence.extend([f"  - {improvement}" for improvement in c.suggested_improvements[:2]])
             
             # Add reasoning step for transparency
             step = ReasoningStep(
@@ -959,10 +995,7 @@ Please generate a well-structured response that follows these guidelines and add
                 reasoning=f"Final critique score: {critique_passes[-1].critique_score:.2f}, "
                          f"passed: {critique_passes[-1].passed_critique}",
                 confidence=critique_passes[-1].critique_score,
-                evidence=[
-                    f"Pass {i+1}: Score {c.critique_score:.2f}" 
-                    for i, c in enumerate(critique_passes)
-                ]
+                evidence=evidence
             )
             reasoning_state.add_reasoning_step(step)
             
@@ -1004,14 +1037,24 @@ Please generate a well-structured response that follows these guidelines and add
             response = await self.model.ainvoke([{"role": "user", "content": critique_prompt}])
             critique_content = response.content if hasattr(response, 'content') else str(response)
             
-            # Parse critique score (simplified parsing)
+            # Parse critique score with robust handling of different formats
             import re
-            score_match = re.search(r'(\d+\.?\d*)', critique_content)
-            critique_score = float(score_match.group(1)) if score_match else 0.7
+            critique_score = 0.7  # Default fallback
             
-            # Normalize score to 0-1 range if needed
-            if critique_score > 1.0:
-                critique_score = critique_score / 10.0 if critique_score <= 10 else critique_score / 100.0
+            # Try different score patterns: "8/10", "85/100", "8.5", "0.85"
+            fraction_match = re.search(r'(\d+\.?\d*)/(\d+\.?\d*)', critique_content)
+            if fraction_match:
+                numerator = float(fraction_match.group(1))
+                denominator = float(fraction_match.group(2))
+                critique_score = numerator / denominator if denominator > 0 else 0.7
+            else:
+                # Try simple decimal number
+                decimal_match = re.search(r'(\d+\.?\d*)', critique_content)
+                if decimal_match:
+                    critique_score = float(decimal_match.group(1))
+                    # Normalize score to 0-1 range if needed
+                    if critique_score > 1.0:
+                        critique_score = critique_score / 10.0 if critique_score <= 10 else critique_score / 100.0
             
             # Determine if critique passed
             passed_critique = critique_score >= 0.7

@@ -3,6 +3,16 @@ from langchain_core.documents import Document
 from langchain_core.messages import BaseMessage
 from pydantic import BaseModel, Field, model_serializer
 
+
+class ThoughtStep(BaseModel):
+    """Represents a structured thought step from the reasoning engine."""
+    step: str = Field(description="The name/title of the reasoning step")
+    content: str = Field(description="The detailed content/reasoning for this step")
+    confidence: float = Field(description="Confidence score for this step (0.0 to 1.0)")
+    
+    class Config:
+        frozen = True
+
 from app.agents_v2.log_analysis_agent.schemas import StructuredLogAnalysisOutput
 from app.agents_v2.reflection.schema import ReflectionFeedback  # noqa: E402, isort:skip
 
@@ -29,7 +39,7 @@ class GraphState(BaseModel):
     # Count of refinement attempts already performed in current session
     qa_retry_count: int = 0
     # Thought steps from reasoning engine for frontend display
-    thought_steps: Optional[List[Dict[str, Any]]] = None
+    thought_steps: Optional[List[ThoughtStep]] = None
 
     # ------------------------------------------------------------------
     # Dict-like access helpers (compatibility with legacy nodes)

@@ -37,11 +37,13 @@ const nextConfig = {
             key: 'Permissions-Policy',
             value: 'camera=(), microphone=(), geolocation=(), payment=(), usb=()'
           },
-          // Only add CSP in production - disable for development
-          ...(isProduction ? [{
+          // Relaxed CSP for development, stricter for production
+          {
             key: 'Content-Security-Policy',
-            value: "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; connect-src 'self' wss: ws: https:; font-src 'self' data:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; upgrade-insecure-requests;"
-          }] : []),
+            value: isProduction 
+              ? "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; connect-src 'self' wss: ws: https:; font-src 'self' data:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; upgrade-insecure-requests;"
+              : "default-src 'self' 'unsafe-eval'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https: http:; connect-src 'self' ws: wss: http: https:; font-src 'self' data:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'self';"
+          },
           // Only add HSTS in production
           ...(isProduction ? [{
             key: 'Strict-Transport-Security',
@@ -53,14 +55,15 @@ const nextConfig = {
   },
   // API rewrites to proxy backend requests
   async rewrites() {
+    const backendUrl = process.env.BACKEND_URL || 'http://localhost:8000'
     return [
       {
         source: '/api/v1/:path*',
-        destination: 'http://localhost:8000/api/v1/:path*',
+        destination: `${backendUrl}/api/v1/:path*`,
       },
       {
         source: '/health',
-        destination: 'http://localhost:8000/health',
+        destination: `${backendUrl}/health`,
       },
     ]
   },

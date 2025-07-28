@@ -219,20 +219,14 @@ async def run_primary_agent(state: PrimaryAgentState) -> Dict[str, Any]:
             # Extract thought steps for frontend display
             thought_steps = []
             if reasoning_state.reasoning_steps:
+                from app.agents_v2.orchestration.state import ThoughtStep
                 for step in reasoning_state.reasoning_steps:
-                    thought_steps.append({
-                        "step": step.phase.value.replace("_", " ").title(),
-                        "content": step.reasoning,
-                        "confidence": step.confidence
-                    })
+                    thought_steps.append(ThoughtStep(
+                        step=step.phase.value.replace("_", " ").title(),
+                        content=step.reasoning,
+                        confidence=step.confidence
+                    ))
             
-            parent_span.set_status(Status(StatusCode.OK))
-            return {
-                "messages": [assistant_msg],
-                "qa_retry_count": 0,
-                "thought_steps": thought_steps
-            }
-
             # Save the interaction to memory for context retention
             session_id = getattr(state, 'session_id', None)
             if session_id:
@@ -249,6 +243,11 @@ async def run_primary_agent(state: PrimaryAgentState) -> Dict[str, Any]:
                     logger.warning(f"Failed to save interaction to memory: {e}")
 
             parent_span.set_status(Status(StatusCode.OK))
+            return {
+                "messages": [assistant_msg],
+                "qa_retry_count": 0,
+                "thought_steps": thought_steps
+            }
 
 
 

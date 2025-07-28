@@ -31,8 +31,8 @@ class QdrantMemory:
 
     def __init__(self) -> None:
         self.client = QdrantClient(url=QDRANT_URL, api_key=QDRANT_API_KEY)
-        # Upgraded to Gemini embedding-001 model (GA 2025)
-        # Using 768 dimensions for balanced performance/accuracy
+        # Using Gemini embedding-001 model (GA since July 2025)
+        # Supports Matryoshka Representation Learning with 768 dimensions for balanced performance/accuracy
         self.embedder = GoogleGenerativeAIEmbeddings(
             model="models/gemini-embedding-001",
             google_api_key=settings.gemini_api_key,
@@ -111,19 +111,11 @@ class QdrantMemory:
             query_array = np.array(query_embedding)
             normalized_query = query_array / np.linalg.norm(query_array)
 
-            # Add session filter to prevent cross-session contamination
+            # Search within session-specific collection (no additional filtering needed)
             res = self.client.search(
                 collection_name=collection,
                 query_vector=normalized_query.tolist(),
                 limit=top_k,
-                query_filter=Filter(
-                    must=[
-                        FieldCondition(
-                            key="session_id",
-                            match=MatchValue(value=session_id)
-                        )
-                    ]
-                ),
                 search_params=SearchParams(hnsw_ef=64),
             )
             return [point.payload.get("text", "") for point in res]

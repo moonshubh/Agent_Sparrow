@@ -48,14 +48,34 @@ export function useChatHistory() {
           const sessionsWithMessages = await Promise.all(
             sessions.map(async (session) => {
               try {
-                const sessionWithMessages = await chatAPI.getSession(parseInt(session.id))
-                // Ensure messages are properly filtered by session
-                const filteredMessages = sessionWithMessages.messages
-                  .filter(msg => msg.session_id === parseInt(session.id))
-                  .map(ChatAPI.messageToFrontend)
-                return {
-                  ...session,
-                  messages: filteredMessages
+                // Handle both numeric and UUID string session IDs
+                let sessionIdForAPI: number | null = null
+                if (typeof session.id === 'string') {
+                  const numericId = parseInt(session.id)
+                  if (!isNaN(numericId)) {
+                    sessionIdForAPI = numericId
+                  }
+                } else if (typeof session.id === 'number') {
+                  sessionIdForAPI = session.id
+                }
+                
+                // Only attempt to load messages if we have a valid numeric ID
+                if (sessionIdForAPI !== null) {
+                  const sessionWithMessages = await chatAPI.getSession(sessionIdForAPI)
+                  // Ensure messages are properly filtered by session
+                  const filteredMessages = sessionWithMessages.messages
+                    .filter(msg => msg.session_id === sessionIdForAPI)
+                    .map(ChatAPI.messageToFrontend)
+                  return {
+                    ...session,
+                    messages: filteredMessages
+                  }
+                } else {
+                  // For UUID sessions, just return with empty messages
+                  return {
+                    ...session,
+                    messages: []
+                  }
                 }
               } catch (error) {
                 console.warn('Failed to load messages for session', session.id, error)

@@ -359,7 +359,12 @@ async def agent_invoke_endpoint(request: AgentQueryRequest):
     # Load session history if session_id is provided
     messages = []
     
-    if hasattr(request, 'session_id') and request.session_id:
+    # Use direct attribute access with validation
+    if request.session_id:
+        # Validate session_id is a positive integer
+        if not isinstance(request.session_id, int) or request.session_id <= 0:
+            raise HTTPException(status_code=400, detail="Invalid session_id")
+        
         try:
             # Import the chat session client
             from app.db.supabase_client import get_supabase_client
@@ -373,16 +378,23 @@ async def agent_invoke_endpoint(request: AgentQueryRequest):
                 .execute()
             
             if messages_response.data:
-                # Convert to LangChain message format
+                # Convert to LangChain message format with error handling
                 for msg in messages_response.data:
-                    if msg['message_type'] == 'user':
-                        messages.append(HumanMessage(content=msg['content']))
-                    elif msg['message_type'] == 'assistant':
-                        messages.append(AIMessage(content=msg['content']))
+                    try:
+                        if msg.get('message_type') == 'user':
+                            messages.append(HumanMessage(content=msg.get('content', '')))
+                        elif msg.get('message_type') == 'assistant':
+                            messages.append(AIMessage(content=msg.get('content', '')))
+                    except Exception as msg_error:
+                        logging.warning(f"Failed to convert message {msg.get('id')}: {msg_error}")
+                        continue
             
             logging.info(f"Loaded {len(messages)} historical messages for session {request.session_id}")
+        except HTTPException:
+            raise
         except Exception as e:
             logging.warning(f"Failed to load session history: {e}")
+            # Continue without history rather than failing the request
     
     # Add current query to messages
     messages.append(HumanMessage(content=request.query))
@@ -391,7 +403,7 @@ async def agent_invoke_endpoint(request: AgentQueryRequest):
     initial_input = {
         "messages": messages,
         "raw_log_content": request.log_content,
-        "session_id": getattr(request, 'session_id', None)
+        "session_id": request.session_id  # Direct attribute access
     }
 
     try:

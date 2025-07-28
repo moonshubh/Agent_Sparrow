@@ -6,26 +6,20 @@ reasoning capabilities, structured troubleshooting, and comprehensive
 error handling.
 """
 
-from .agent import run_primary_agent
-from .schemas import PrimaryAgentState
+def __getattr__(name: str):
+    """Lazy imports for better startup performance."""
+    if name == "run_primary_agent":
+        from .agent import run_primary_agent
+        return run_primary_agent
+    elif name == "PrimaryAgentState":
+        from .schemas import PrimaryAgentState
+        return PrimaryAgentState
+    raise AttributeError(f"module '{__name__}' has no attribute '{name}'")
 
-# Exception hierarchy
-from .exceptions import (
-    AgentException,
-    RateLimitException,
-    InvalidAPIKeyException,
-    TimeoutException,
-    NetworkException,
-    ConfigurationException,
-    KnowledgeBaseException,
-    ToolExecutionException,
-    ReasoningException,
-    ModelOverloadException,
-    ErrorSeverity,
-    create_exception_from_error
-)
+# Exception hierarchy - import all from exceptions module
+from .exceptions import *
 
-__all__ = [
+__all__ = (
     # Core functionality
     'run_primary_agent',
     'PrimaryAgentState',
@@ -43,4 +37,4 @@ __all__ = [
     'ModelOverloadException',
     'ErrorSeverity',
     'create_exception_from_error'
-]
+)

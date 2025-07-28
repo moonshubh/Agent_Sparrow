@@ -7,6 +7,7 @@ using Redis as the shared storage for request counters.
 
 import asyncio
 import json
+import math
 import time
 from datetime import datetime, timedelta
 from typing import Dict, Any, Optional, Tuple
@@ -84,14 +85,14 @@ class RedisRateLimiter:
         
         if not rpm_result["allowed"]:
             blocked_by = "rpm"
-            retry_after = int(60 - (now % 60))  # Seconds until next minute (as integer)
+            retry_after = math.ceil(60 - (now % 60))  # Seconds until next minute (rounded up)
         elif not rpd_result["allowed"]:
             blocked_by = "rpd"
             # Calculate seconds until next day
             next_day = datetime.utcnow().replace(
                 hour=0, minute=0, second=0, microsecond=0
             ) + timedelta(days=1)
-            retry_after = int((next_day - datetime.utcnow()).total_seconds())
+            retry_after = math.ceil((next_day - datetime.utcnow()).total_seconds())
         
         # Build metadata
         metadata = RateLimitMetadata(

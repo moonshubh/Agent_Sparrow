@@ -7,6 +7,7 @@ into the existing agent code for better error handling and user experience.
 Note: This is an example file showing best practices for exception usage.
 """
 
+import asyncio
 import logging
 from typing import Dict, Any, Optional
 import google.generativeai as genai
@@ -27,6 +28,9 @@ from app.agents_v2.primary_agent.exceptions import (
 
 logger = logging.getLogger(__name__)
 
+# Configuration constants
+VALID_GEMINI_MODELS = ["gemini-2.5-flash", "gemini-2.5-pro", "gemini-pro"]
+
 
 # Example 1: Enhanced API key validation
 def create_user_model_with_enhanced_errors(api_key: str):
@@ -44,7 +48,7 @@ def create_user_model_with_enhanced_errors(api_key: str):
     
     try:
         # Attempt to create the model
-        model = create_model_logic(api_key)
+        model = await create_model_logic(api_key) if asyncio.iscoroutinefunction(create_model_logic) else create_model_logic(api_key)
         return model
         
     except genai.errors.InvalidApiKeyError as e:
@@ -158,13 +162,12 @@ async def generate_agent_response_with_recovery(state: Dict[str, Any], api_key: 
         # Handle rate limits with user-friendly message
         logger.warning(f"Rate limit hit: {e}")
         
+        suggestions = [f"• {suggestion}" for suggestion in e.recovery_suggestions]
         fallback_message = (
             f"I apologize, but {e.user_message()} "
             f"Here's what you can do:\n"
+            + "\n".join(suggestions) + "\n"
         )
-        
-        for suggestion in e.recovery_suggestions:
-            fallback_message += f"• {suggestion}\n"
         
         return {
             "messages": [AIMessage(content=fallback_message)],
@@ -266,12 +269,11 @@ def validate_agent_configuration(config: Dict[str, Any]):
         )
     
     model_name = config.get("GEMINI_MODEL", "")
-    valid_models = ["gemini-2.5-flash", "gemini-2.5-pro", "gemini-pro"]
-    if model_name not in valid_models:
+    if model_name not in VALID_GEMINI_MODELS:
         raise ConfigurationException(
             message=f"Invalid model name: {model_name}",
             config_key="GEMINI_MODEL",
-            expected_value=f"One of: {', '.join(valid_models)}",
+            expected_value=f"One of: {', '.join(VALID_GEMINI_MODELS)}",
             actual_value=model_name
         )
 

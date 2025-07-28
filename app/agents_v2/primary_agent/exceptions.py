@@ -15,9 +15,11 @@ Author: MB-Sparrow Team
 Version: 1.0.0
 """
 
-from datetime import datetime
+import re
+from datetime import datetime, timezone
 from typing import Dict, Any, Optional, List
 from enum import Enum
+from urllib.parse import urlparse
 
 
 class ErrorSeverity(Enum):
@@ -71,7 +73,7 @@ class AgentException(Exception):
         self.severity = severity
         self.error_code = error_code or self.__class__.__name__
         self.metadata = metadata or {}
-        self.timestamp = datetime.utcnow()
+        self.timestamp = datetime.now(timezone.utc)
         
     def user_message(self) -> str:
         """
@@ -244,7 +246,7 @@ class TimeoutException(AgentException):
         self.timeout_seconds = timeout_seconds
         
         user_message = (
-            f"The {operation} is taking longer than expected. "
+            f"The {self.operation} is taking longer than expected. "
             "This might be due to high system load."
         )
         
@@ -300,7 +302,7 @@ class NetworkException(AgentException):
         self.status_code = status_code
         
         user_message = (
-            f"I'm having trouble connecting to {service}. "
+            f"I'm having trouble connecting to {self.service}. "
             "This is usually temporary."
         )
         
@@ -315,9 +317,18 @@ class NetworkException(AgentException):
             "status_code": status_code
         }
         
-        # Don't include URL in metadata for security
-        if url and not any(sensitive in url.lower() for sensitive in ['key', 'token', 'secret']):
-            metadata["url"] = url
+        # Don't include URL in metadata for security - use urllib.parse for safer handling
+        if url:
+            try:
+                parsed_url = urlparse(url)
+                # Only include URL if it doesn't contain sensitive parameters
+                if not any(sensitive in parsed_url.query.lower() for sensitive in ['key', 'token', 'secret', 'password']):
+                    # Sanitize URL by removing query parameters
+                    sanitized_url = f"{parsed_url.scheme}://{parsed_url.netloc}{parsed_url.path}"
+                    metadata["url"] = sanitized_url
+            except Exception:
+                # If URL parsing fails, don't include it
+                pass
         
         super().__init__(
             message=message,
@@ -418,7 +429,7 @@ class KnowledgeBaseException(AgentException):
         self.query = query
         
         user_message = (
-            f"I'm having trouble accessing my knowledge base to {operation} information. "
+            f"I'm having trouble accessing my knowledge base to {self.operation} information. "
             "I'll try to help with what I know."
         )
         
@@ -471,7 +482,7 @@ class ToolExecutionException(AgentException):
         self.tool_error = tool_error
         
         user_message = (
-            f"I encountered an issue while using the {tool_name}. "
+            f"I encountered an issue while using the {self.tool_name}. "
             "Let me try a different approach."
         )
         
@@ -580,7 +591,7 @@ class ModelOverloadException(AgentException):
         self.estimated_wait = estimated_wait
         
         user_message = (
-            f"The {model_name} is currently experiencing high demand. "
+            f"The {self.model_name} is currently experiencing high demand. "
         )
         
         if fallback_available:
@@ -633,12 +644,12 @@ def create_exception_from_error(
     error_str = str(error).lower()
     error_type = type(error).__name__
     
-    # Check for rate limit patterns
-    if any(pattern in error_str for pattern in ['rate limit', 'quota', 'too many requests']):
+    # Check for rate limit patterns (combine string check with type check)
+    if (any(pattern in error_str for pattern in ['rate limit', 'quota', 'too many requests']) or
+        error_type in ['RateLimitError', 'QuotaExceeded', 'TooManyRequestsError']):
         retry_after = None
         if 'retry after' in error_str:
             # Try to extract retry time
-            import re
             match = re.search(r'retry after (\d+)', error_str)
             if match:
                 retry_after = int(match.group(1))
@@ -647,20 +658,24 @@ def create_exception_from_error(
             retry_after=retry_after
         )
     
-    # Check for API key issues
-    if any(pattern in error_str for pattern in ['api key', 'api_key', 'unauthorized', 'authentication']):
+    # Check for API key issues (combine string check with type check)
+    if (any(pattern in error_str for pattern in ['api key', 'api_key', 'unauthorized', 'authentication']) or
+        error_type in ['AuthenticationError', 'UnauthorizedError', 'InvalidAPIKeyError']):
         return InvalidAPIKeyException(message=str(error))
     
-    # Check for timeout issues
-    if any(pattern in error_str for pattern in ['timeout', 'timed out', 'deadline exceeded']):
+    # Check for timeout issues (combine string check with type check)
+    if (any(pattern in error_str for pattern in ['timeout', 'timed out', 'deadline exceeded']) or
+        error_type in ['TimeoutError', 'DeadlineExceeded', 'RequestTimeout']):
         return TimeoutException(message=str(error))
     
-    # Check for network issues
-    if any(pattern in error_str for pattern in ['connection', 'network', 'dns', 'unreachable']):
+    # Check for network issues (combine string check with type check)
+    if (any(pattern in error_str for pattern in ['connection', 'network', 'dns', 'unreachable']) or
+        error_type in ['ConnectionError', 'NetworkError', 'DNSError', 'UnreachableError']):
         return NetworkException(message=str(error))
     
-    # Check for configuration issues
-    if any(pattern in error_str for pattern in ['config', 'missing required', 'not found']):
+    # Check for configuration issues (combine string check with type check)
+    if (any(pattern in error_str for pattern in ['config', 'missing required', 'not found']) or
+        error_type in ['ConfigurationError', 'MissingRequiredField', 'NotFoundError']):
         return ConfigurationException(message=str(error))
     
     # Default to generic AgentException
