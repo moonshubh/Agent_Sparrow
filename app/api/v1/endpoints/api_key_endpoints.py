@@ -22,7 +22,6 @@ from app.core.settings import settings
 limiter = Limiter(key_func=get_remote_address)
 
 router = APIRouter(prefix="/api-keys", tags=["api-keys"])
-router.state.limiter = limiter
 
 
 def get_client_info(request: Request) -> tuple[Optional[str], Optional[str]]:

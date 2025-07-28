@@ -11,6 +11,11 @@ export interface UnifiedMessage {
   timestamp: Date | string // Support both Date objects and string timestamps (from JSON deserialization)
   agentType?: "primary" | "log_analyst" | "researcher"
   streaming?: boolean
+  thoughtSteps?: Array<{
+    step: string
+    content: string
+    confidence?: number
+  }>
   metadata?: {
     confidence?: number
     sources?: any[]
@@ -26,6 +31,7 @@ export interface UnifiedChatState {
   currentAgent: "primary" | "log_analyst" | "researcher" | null
   routingConfidence: number
   error: string | null
+  currentSessionId: string | null
   context: {
     hasFiles: boolean
     isAnalyzing: boolean
@@ -35,10 +41,11 @@ export interface UnifiedChatState {
 
 export interface UseUnifiedChatReturn {
   state: UnifiedChatState
-  sendMessage: (content: string, files?: File[]) => Promise<void>
+  sendMessage: (content: string, files?: File[], sessionId?: string) => Promise<void>
   clearConversation: () => void
   retryLastMessage: () => Promise<void>
   loadSessionMessages: (messages: UnifiedMessage[], agentType?: 'primary' | 'log_analysis' | 'research') => void
+  setCurrentSessionId: (sessionId: string | null) => void
 }
 
 // Unique ID generator to prevent duplicate keys
@@ -106,6 +113,7 @@ export function useUnifiedChat(): UseUnifiedChatReturn {
     currentAgent: null,
     routingConfidence: 0,
     error: null,
+    currentSessionId: null,
     context: {
       hasFiles: false,
       isAnalyzing: false,
@@ -158,7 +166,7 @@ export function useUnifiedChat(): UseUnifiedChatReturn {
     return "primary"
   }
 
-  const sendMessage = useCallback(async (content: string, files?: File[]) => {
+  const sendMessage = useCallback(async (content: string, files?: File[], sessionId?: string) => {
     if (!content.trim() && (!files || files.length === 0)) return
 
     if (abortControllerRef.current) {
@@ -169,6 +177,11 @@ export function useUnifiedChat(): UseUnifiedChatReturn {
     abortControllerRef.current = abortController
 
     const suggestedAgent = detectQueryType(content, files)
+    
+    // Update current session ID if provided
+    if (sessionId) {
+      setState(prev => ({ ...prev, currentSessionId: sessionId }))
+    }
 
     const userMessage: UnifiedMessage = {
       id: generateUniqueId('user'),
@@ -192,11 +205,11 @@ export function useUnifiedChat(): UseUnifiedChatReturn {
 
     try {
       if (suggestedAgent === 'log_analyst' && files && files.length > 0) {
-        await handleLogAnalysis(content, files[0], abortController)
+        await handleLogAnalysis(content, files[0], abortController, sessionId)
       } else if (suggestedAgent === 'researcher') {
-        await handleResearchQuery(content, abortController)
+        await handleResearchQuery(content, abortController, sessionId)
       } else {
-        await handleUnifiedChat(content, suggestedAgent, abortController)
+        await handleUnifiedChat(content, suggestedAgent, abortController, sessionId)
       }
     } catch (error: any) {
       if (error.name !== 'AbortError') {
@@ -218,21 +231,20 @@ export function useUnifiedChat(): UseUnifiedChatReturn {
     }
   }, [apiBaseUrl])
   
-  const handleUnifiedChat = async (content: string, suggestedAgent: string, abortController: AbortController) => {
+  const handleUnifiedChat = async (content: string, suggestedAgent: string, abortController: AbortController, sessionId?: string) => {
     try {
-      console.log('🚀 Making API call to:', `${apiBaseUrl}/api/v1/agent/unified/stream`)
-      console.log('📤 Request payload:', { 
-        message: content,
-        agent_type: suggestedAgent === "primary" ? null : suggestedAgent
-      })
+      console.log('🚀 Making API call to:', `${apiBaseUrl}/agent`)
+      const payload = { 
+        query: content,
+        log_content: null,
+        session_id: sessionId ? parseInt(sessionId) : null
+      }
+      console.log('📤 Request payload:', payload)
       
-      const response = await fetch(`${apiBaseUrl}/api/v1/agent/unified/stream`, {
+      const response = await fetch(`${apiBaseUrl}/agent`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          message: content,
-          agent_type: suggestedAgent === "primary" ? null : suggestedAgent
-        }),
+        body: JSON.stringify(payload),
         signal: abortController.signal
       })
       
@@ -245,111 +257,63 @@ export function useUnifiedChat(): UseUnifiedChatReturn {
         throw new Error(`HTTP ${response.status}: ${errorText}`)
       }
       
-      const reader = response.body?.getReader()
-      if (!reader) throw new Error('No response body')
+      const result = await response.json()
+      console.log('📡 Response data:', result)
       
-      const decoder = new TextDecoder()
-      let accumulatedContent = ""
-      let messageId = generateUniqueId('agent')
+      // Extract the response data from final_state
+      const finalState = result.final_state
+      let agentResponse = ""
+      let thoughtSteps: Array<{step: string, content: string, confidence?: number}> = []
+      let agentType = "primary"
       
-      while (true) {
-        const { done, value } = await reader.read()
-        if (done) break
-        
-        const chunk = decoder.decode(value, { stream: true })
-        const lines = chunk.split('\n').filter(line => line.startsWith('data:'))
-        
-        for (const line of lines) {
-          const jsonStr = line.replace('data:', '').trim()
-          if (jsonStr === '[DONE]') {
-            setState(prev => ({
-              ...prev, 
-              isProcessing: false,
-              messages: prev.messages.map(msg => 
-                msg.id === messageId ? { ...msg, streaming: false } : msg
-              )
-            }))
-            return
-          }
-          
-          try {
-            const event = JSON.parse(jsonStr)
-            
-            if (event.role === 'system' && event.content) {
-              // Filter out [DONE] tokens that come as system messages
-              if (event.content === '[DONE]') {
-                setState(prev => ({
-                  ...prev, 
-                  isProcessing: false,
-                  messages: prev.messages.map(msg => 
-                    msg.id === messageId ? { ...msg, streaming: false } : msg
-                  )
-                }))
-                return
-              }
-              
-              // Handle system messages (routing notifications)
-              const systemMessage: UnifiedMessage = {
-                id: generateUniqueId('system'),
-                type: "system",
-                content: event.content,
-                timestamp: new Date(),
-                agentType: event.agent_type
-              }
-              
-              setState(prev => ({ 
-                ...prev, 
-                messages: [...prev.messages, systemMessage],
-                currentAgent: event.agent_type || prev.currentAgent
-              }))
-            } else if (event.role === 'error' && event.content) {
-              // Handle error messages (e.g., API key missing)
-              const errorMessage: UnifiedMessage = {
-                id: generateUniqueId('error'),
-                type: "agent",
-                content: event.content,
-                timestamp: new Date(),
-                agentType: "primary",
-                metadata: { isError: true }
-              }
-              
-              setState(prev => ({ 
-                ...prev, 
-                messages: [...prev.messages, errorMessage],
-                isProcessing: false
-              }))
-            } else if (event.role === 'assistant' && event.content) {
-              accumulatedContent += event.content
-
-              // Always de-duplicate by messageId before pushing the updated chunk. This
-              // guarantees that even if React StrictMode or rapid successive chunks
-              // invoke this updater before the previous state has been applied, the
-              // final state will only contain ONE message with this `messageId`.
-              setState(prev => {
-                const newMessage: UnifiedMessage = {
-                  id: messageId,
-                  type: "agent",
-                  content: accumulatedContent,
-                  timestamp: new Date(),
-                  agentType: event.agent_type || "primary",
-                  streaming: true,
-                  metadata: event.sources ? { sources: event.sources } : undefined
-                }
-
-                const newMessages = [
-                  // filter out any stale duplicates for this id
-                  ...prev.messages.filter(m => m.id !== messageId),
-                  newMessage,
-                ]
-
-                return { ...prev, messages: newMessages }
-              })
-            }
-          } catch (e) {
-            console.warn('⚠️ Failed to parse JSON chunk:', jsonStr, e)
-          }
+      // Handle different response formats
+      if (finalState.messages && finalState.messages.length > 0) {
+        // Get the last AI message
+        const lastMessage = finalState.messages[finalState.messages.length - 1]
+        if (lastMessage.type === 'ai' || lastMessage.type === 'assistant') {
+          agentResponse = lastMessage.content
         }
       }
+      
+      // Extract thought steps if available
+      if (finalState.thought_steps && Array.isArray(finalState.thought_steps)) {
+        thoughtSteps = finalState.thought_steps
+      }
+      
+      // Determine agent type from response
+      if (finalState.destination) {
+        switch (finalState.destination) {
+          case 'log_analysis':
+            agentType = 'log_analyst'
+            break
+          case 'research':
+            agentType = 'researcher'
+            break
+          default:
+            agentType = 'primary'
+        }
+      }
+      
+      // Create the response message
+      const agentMessage: UnifiedMessage = {
+        id: generateUniqueId('agent'),
+        type: "agent",
+        content: agentResponse || "I apologize, but I couldn't generate a proper response. Please try again.",
+        timestamp: new Date(),
+        agentType: agentType as "primary" | "log_analyst" | "researcher",
+        thoughtSteps: thoughtSteps.length > 0 ? thoughtSteps : undefined,
+        metadata: {
+          sources: finalState.sources || [],
+          routingReason: finalState.routing_reason || `Processed by ${agentType} agent`
+        }
+      }
+      
+      setState(prev => ({
+        ...prev,
+        messages: [...prev.messages, agentMessage],
+        isProcessing: false,
+        currentAgent: agentType as "primary" | "log_analyst" | "researcher"
+      }))
     } finally {
       setState(prev => ({
         ...prev, 
@@ -361,7 +325,7 @@ export function useUnifiedChat(): UseUnifiedChatReturn {
     }
   }
   
-  const handleLogAnalysis = async (content: string, file: File, abortController: AbortController) => {
+  const handleLogAnalysis = async (content: string, file: File, abortController: AbortController, sessionId?: string) => {
     try {
       // Add progress message
       const progressMessage: UnifiedMessage = {
@@ -400,10 +364,14 @@ export function useUnifiedChat(): UseUnifiedChatReturn {
       }, 600000) // 10 minutes
       
       try {
-        const response = await fetch(`${apiBaseUrl}/api/v1/agent/logs`, {
+        const response = await fetch(`${apiBaseUrl}/agent`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ content: fileContent }),
+          body: JSON.stringify({ 
+            query: content,
+            log_content: fileContent,
+            session_id: sessionId ? parseInt(sessionId) : null
+          }),
           signal: abortController.signal
         })
         
@@ -415,20 +383,43 @@ export function useUnifiedChat(): UseUnifiedChatReturn {
         }
         
         const result = await response.json()
+        const finalState = result.final_state
         
         // Debug: Log the analysis results
         console.log('Log Analysis Results:', result)
-        console.log('Issues found:', result.identified_issues?.length || 0)
-        console.log('Solutions found:', result.proposed_solutions?.length || 0)
+        
+        // Extract response content and analysis data
+        let analysisContent = ""
+        let analysisResults = null
+        let thoughtSteps: Array<{step: string, content: string, confidence?: number}> = []
+        
+        if (finalState.messages && finalState.messages.length > 0) {
+          const lastMessage = finalState.messages[finalState.messages.length - 1]
+          if (lastMessage.type === 'ai' || lastMessage.type === 'assistant') {
+            analysisContent = lastMessage.content
+          }
+        }
+        
+        // Extract analysis results from metadata or state
+        if (finalState.analysis_results) {
+          analysisResults = finalState.analysis_results
+        }
+        
+        // Extract thought steps if available
+        if (finalState.thought_steps && Array.isArray(finalState.thought_steps)) {
+          thoughtSteps = finalState.thought_steps
+        }
         
         const analysisMessage: UnifiedMessage = {
           id: generateUniqueId('analysis'),
           type: "agent",
-          content: `✅ Log analysis complete! ${result.overall_summary}`,
+          content: analysisContent || `✅ Log analysis complete!`,
           timestamp: new Date(),
           agentType: "log_analyst",
+          thoughtSteps: thoughtSteps.length > 0 ? thoughtSteps : undefined,
           metadata: {
-            analysisResults: result
+            analysisResults: analysisResults,
+            sources: finalState.sources || []
           }
         }
         
@@ -472,17 +463,21 @@ export function useUnifiedChat(): UseUnifiedChatReturn {
     }
   }
 
-const handleResearchQuery = async (content: string, abortController: AbortController) => {
+const handleResearchQuery = async (content: string, abortController: AbortController, sessionId?: string) => {
     // Generate a single, stable ID for the entire research stream
     const messageId = generateUniqueId('agent');
     let accumulatedContent = '';
     const steps: any[] = [];
 
     try {
-      const response = await fetch(`${apiBaseUrl}/api/v1/agent/research/stream`, {
+      const response = await fetch(`${apiBaseUrl}/agent`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ query: content }),
+        body: JSON.stringify({ 
+          query: content,
+          log_content: null,
+          session_id: sessionId ? parseInt(sessionId) : null
+        }),
         signal: abortController.signal
       });
 
@@ -490,87 +485,46 @@ const handleResearchQuery = async (content: string, abortController: AbortContro
         throw new Error(`HTTP ${response.status}`);
       }
 
-      const reader = response.body?.getReader();
-      if (!reader) throw new Error('No response body');
-
-      const decoder = new TextDecoder();
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        const chunk = decoder.decode(value, { stream: true });
-        const jsonStrs = chunk.split('\n\n').filter(s => s.startsWith('data: ')).map(s => s.slice(6));
-
-        for (const jsonStr of jsonStrs) {
-          if (jsonStr === '[DONE]') {
-            setState(prev => ({
-              ...prev,
-              isProcessing: false,
-              messages: prev.messages.map(msg =>
-                msg.id === messageId ? { ...msg, streaming: false } : msg
-              )
-            }));
-            return;
-          }
-
-          try {
-            const event = JSON.parse(jsonStr);
-
-            if (event.type === 'step') {
-              steps.push(event.data);
-              // Update the streaming message with the latest step
-              accumulatedContent = `*Researching: ${event.data.description}*`;
-
-              setState(prev => {
-                const newMessage: UnifiedMessage = {
-                  id: messageId,
-                  type: "agent",
-                  content: accumulatedContent,
-                  timestamp: new Date(),
-                  agentType: "researcher",
-                  streaming: true,
-                   metadata: {
-                    researchSteps: steps
-                  }
-                };
-                // Replace or add the message
-                const newMessages = [
-                  ...prev.messages.filter(m => m.id !== messageId),
-                  newMessage
-                ];
-                return { ...prev, messages: newMessages };
-              });
-            } else if (event.type === 'final_answer') {
-              const finalMessage: UnifiedMessage = {
-                id: messageId,
-                type: "agent",
-                content: event.data.final_answer,
-                timestamp: new Date(),
-                agentType: "researcher",
-                streaming: false, // Stream is complete
-                metadata: {
-                  sources: event.data.citations || [],
-                  researchSteps: steps
-                }
-              };
-
-              // Replace the streaming message with the final version
-              setState(prev => ({
-                ...prev,
-                messages: [
-                  ...prev.messages.filter(m => m.id !== messageId),
-                  finalMessage
-                ],
-                isProcessing: false
-              }));
-              return;
-            }
-          } catch (e) {
-            console.warn('⚠️ Failed to parse JSON chunk:', jsonStr, e);
-          }
+      const result = await response.json()
+      const finalState = result.final_state
+      
+      // Extract response content and research data
+      let researchContent = ""
+      let thoughtSteps: Array<{step: string, content: string, confidence?: number}> = []
+      
+      if (finalState.messages && finalState.messages.length > 0) {
+        const lastMessage = finalState.messages[finalState.messages.length - 1]
+        if (lastMessage.type === 'ai' || lastMessage.type === 'assistant') {
+          researchContent = lastMessage.content
         }
       }
+      
+      // Extract thought steps if available
+      if (finalState.thought_steps && Array.isArray(finalState.thought_steps)) {
+        thoughtSteps = finalState.thought_steps
+      }
+      
+      const finalMessage: UnifiedMessage = {
+        id: messageId,
+        type: "agent",
+        content: researchContent || "Research completed, but no results found.",
+        timestamp: new Date(),
+        agentType: "researcher",
+        thoughtSteps: thoughtSteps.length > 0 ? thoughtSteps : undefined,
+        metadata: {
+          sources: finalState.sources || [],
+          researchSteps: finalState.research_steps || []
+        }
+      };
+
+      setState(prev => ({
+        ...prev,
+        messages: [
+          ...prev.messages.filter(m => m.id !== messageId),
+          finalMessage
+        ],
+        isProcessing: false
+      }));
     } finally {
       setState(prev => ({
         ...prev,
@@ -597,6 +551,7 @@ const handleResearchQuery = async (content: string, abortController: AbortContro
       currentAgent: null,
       routingConfidence: 0,
       error: null,
+      currentSessionId: null,
       context: {
         hasFiles: false,
         isAnalyzing: false,
@@ -657,6 +612,7 @@ const handleResearchQuery = async (content: string, abortController: AbortContro
       currentAgent,
       routingConfidence: 0,
       error: null,
+      currentSessionId: null,
       context: {
         hasFiles: uniqueMessages.some(msg => msg.metadata?.analysisResults || msg.type === 'user'),
         isAnalyzing: false,
@@ -665,11 +621,16 @@ const handleResearchQuery = async (content: string, abortController: AbortContro
     })
   }, [])
   
+  const setCurrentSessionId = useCallback((sessionId: string | null) => {
+    setState(prev => ({ ...prev, currentSessionId: sessionId }))
+  }, [])
+  
   return {
     state,
     sendMessage,
     clearConversation,
     retryLastMessage,
-    loadSessionMessages
+    loadSessionMessages,
+    setCurrentSessionId
   }
 }

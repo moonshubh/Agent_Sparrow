@@ -232,7 +232,7 @@ class QualityAssessment:
 class ReasoningState:
     """Complete state of the reasoning process"""
     reasoning_id: str = field(default_factory=lambda: str(uuid.uuid4()))
-    session_id: str = "default"
+    session_id: Optional[str] = "default"
     start_time: datetime = field(default_factory=datetime.now)
     
     # Input analysis
@@ -315,7 +315,7 @@ class ReasoningState:
         """
         trace_lines = []
         trace_lines.append(f"# Reasoning Trace for Query Analysis")
-        trace_lines.append(f"**Session ID**: {self.session_id}")
+        trace_lines.append(f"**Session ID**: {self.session_id or 'default'}")
         trace_lines.append(f"**Processing Time**: {self.total_processing_time:.2f}s")
         trace_lines.append(f"**Overall Confidence**: {self.overall_confidence:.2f}")
         trace_lines.append("")

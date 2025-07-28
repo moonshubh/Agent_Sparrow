@@ -20,7 +20,7 @@ def pre_process(state: GraphState):
     """Check Redis cache and fetch contextual docs from Qdrant."""
 
     if not state.messages:
-        return {}
+        return {"context": []}
 
     user_query = state.messages[-1].content
 
@@ -32,8 +32,9 @@ def pre_process(state: GraphState):
 
     # 2. Vector context retrieval
     query_embedding = vector_memory.embed_query(user_query)
+    session_id = state.session_id or "default"
     context_snippets = vector_memory.retrieve_context(
-        state.session_id, query_embedding, top_k=3
+        session_id, query_embedding, top_k=3
     )
     logger.info("cache_miss", session_id=state.session_id, context_docs=len(context_snippets))
     return {"context": context_snippets}
@@ -47,16 +48,17 @@ def post_process(state: GraphState):
 
     # Skip if we returned cached response (no new content)
     if state.cached_response is not None:
-        return {}
+        return {"qa_retry_count": 0}
 
     if len(state.messages) < 2:
-        return {}
+        return {"qa_retry_count": 0}
 
     user_query = state.messages[-2].content
     agent_response = state.messages[-1].content
 
     # Qdrant store
-    vector_memory.add_interaction(state.session_id, user_query, agent_response)
+    session_id = state.session_id or "default"
+    vector_memory.add_interaction(session_id, user_query, agent_response)
 
     # Cache store
     cache_layer.set(user_query, agent_response)
@@ -82,6 +84,7 @@ def should_continue(state: GraphState):
     Determines whether to continue with tool execution or end the flow.
     """
     last_message = state.messages[-1]
-    if not last_message.tool_calls:
-        return "end"
-    return "continue"
+    # Safely check for presence of tool calls; HumanMessage objects do not have this attr
+    if getattr(last_message, "tool_calls", None):
+        return "continue"
+    return "end"

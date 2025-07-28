@@ -44,17 +44,25 @@ export function useChatHistory() {
           const sessions = response.sessions.map(ChatAPI.sessionToFrontend)
           
           // Load messages for each session
+          // Load messages for each session with session-specific filtering
           const sessionsWithMessages = await Promise.all(
             sessions.map(async (session) => {
               try {
                 const sessionWithMessages = await chatAPI.getSession(parseInt(session.id))
+                // Ensure messages are properly filtered by session
+                const filteredMessages = sessionWithMessages.messages
+                  .filter(msg => msg.session_id === parseInt(session.id))
+                  .map(ChatAPI.messageToFrontend)
                 return {
                   ...session,
-                  messages: sessionWithMessages.messages.map(ChatAPI.messageToFrontend)
+                  messages: filteredMessages
                 }
               } catch (error) {
                 console.warn('Failed to load messages for session', session.id, error)
-                return session
+                return {
+                  ...session,
+                  messages: []  // Empty messages on error to prevent contamination
+                }
               }
             })
           )
@@ -204,9 +212,12 @@ export function useChatHistory() {
   }, [state.isPersistenceAvailable])
 
   const selectSession = useCallback((sessionId: string) => {
+    // Clear state to prevent bleed between sessions
     setState(prev => ({
-      ...prev,
-      currentSessionId: sessionId
+      sessions: prev.sessions,  // Keep sessions list
+      currentSessionId: sessionId,
+      isPersistenceAvailable: prev.isPersistenceAvailable,
+      isLoading: false  // Ensure loading is false
     }))
   }, [])
 

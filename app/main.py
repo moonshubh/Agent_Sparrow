@@ -6,7 +6,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Any, List
 import os
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import HumanMessage, AIMessage
+from langchain_core.runnables import RunnableConfig
 
 # Rate limiting imports
 from slowapi import Limiter
@@ -279,6 +280,7 @@ async def global_exception_handler(request: Request, exc: Exception):
 class AgentQueryRequest(BaseModel):
     query: str
     log_content: str | None = None
+    session_id: int | None = None  # Optional session ID for memory retention
 
 class AgentResponse(BaseModel):
     # Define what a typical response should look like
@@ -349,29 +351,66 @@ async def agent_invoke_endpoint(request: AgentQueryRequest):
     """
     Main endpoint to interact with the MB-Sparrow agent.
     It takes a user query and returns the agent's response.
+    Integrates session history for memory retention.
     """
     if not request.query:
         raise HTTPException(status_code=400, detail="Query cannot be empty")
+    
+    # Load session history if session_id is provided
+    messages = []
+    
+    if hasattr(request, 'session_id') and request.session_id:
+        try:
+            # Import the chat session client
+            from app.db.supabase_client import get_supabase_client
+            client = get_supabase_client()
+            
+            # Get messages for this session ordered by creation time
+            messages_response = client.client.table('chat_messages')\
+                .select('*')\
+                .eq('session_id', request.session_id)\
+                .order('created_at', asc=True)\
+                .execute()
+            
+            if messages_response.data:
+                # Convert to LangChain message format
+                for msg in messages_response.data:
+                    if msg['message_type'] == 'user':
+                        messages.append(HumanMessage(content=msg['content']))
+                    elif msg['message_type'] == 'assistant':
+                        messages.append(AIMessage(content=msg['content']))
+            
+            logging.info(f"Loaded {len(messages)} historical messages for session {request.session_id}")
+        except Exception as e:
+            logging.warning(f"Failed to load session history: {e}")
+    
+    # Add current query to messages
+    messages.append(HumanMessage(content=request.query))
 
-    # Initial state for the graph
-    # The graph expects messages in a specific format, often List[BaseMessage]
-    # For simplicity, we'll wrap the query. Adjust if your graph expects richer messages.
+    # Initial state for the graph with history
     initial_input = {
-        "messages": [HumanMessage(content=request.query)],
-        "raw_log_content": request.log_content
+        "messages": messages,
+        "raw_log_content": request.log_content,
+        "session_id": getattr(request, 'session_id', None)
     }
 
     try:
+        # Create the configuration for the checkpointer
+        # Use session_id as thread_id for memory persistence, fallback to a default if not provided
+        thread_id = str(request.session_id) if request.session_id else "default_session"
+        config = RunnableConfig(configurable={"thread_id": thread_id})
+        
         # Invoke the LangGraph agent
         # Note: stream() or astream() would be used for streaming responses.
         # For a single response after full execution, invoke() or ainvoke() is used.
         # Wrap the agent graph invocation in a span
         with tracer.start_as_current_span("agent_graph_invocation") as span:
             span.set_attribute("input.query", request.query)
+            span.set_attribute("input.thread_id", thread_id)
             if request.log_content:
                 span.set_attribute("input.log_content_length", len(request.log_content))
             
-            final_state = await agent_graph.ainvoke(initial_input)
+            final_state = await agent_graph.ainvoke(initial_input, config=config)
             
             # You could add attributes from final_state to the span if useful
             # For example, if final_state contains a 'destination'
@@ -381,7 +420,7 @@ async def agent_invoke_endpoint(request: AgentQueryRequest):
         return {"final_state": final_state}
     except Exception as e:
         # Log the exception details for debugging
-        print(f"Error invoking agent graph: {e}")
+        logging.error(f"Error invoking agent graph: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Error processing agent request: {str(e)}")
 
 # To run this app (from the project root directory):
