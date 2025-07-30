@@ -8,6 +8,7 @@ export interface ApiError {
 // --- Primary Support Agent (Chat Stream) ---
 export interface PrimaryAgentChatRequestBody {
   message: string;
+  model?: string;  // Optional model selection (e.g., 'google/gemini-2.5-flash', 'google/gemini-2.5-pro', 'moonshotai/kimi-k2')
   trace_id?: string;
 }
 

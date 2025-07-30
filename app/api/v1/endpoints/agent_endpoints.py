@@ -1,13 +1,20 @@
 from fastapi import APIRouter, HTTPException, Depends
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from typing import AsyncIterable, List, Annotated
+from typing import AsyncIterable, List, Annotated, Optional, Dict, Any
 from datetime import datetime
+import asyncio
 
 from app.agents_v2.primary_agent.agent import run_primary_agent
 from app.agents_v2.primary_agent.schemas import PrimaryAgentState # Import PrimaryAgentState
+from app.agents_v2.primary_agent.reasoning.unified_deep_reasoning_engine import (
+    UnifiedDeepReasoningEngine, UnifiedReasoningConfig, UnifiedReasoningOutput
+)
+from app.agents_v2.primary_agent.reasoning.safety_redactor import redact_reasoning_ui
+from app.agents_v2.primary_agent.llm_registry import SupportedModel, validate_model_id, DEFAULT_MODEL
 from app.agents_v2.log_analysis_agent.schemas import LogAnalysisAgentState, StructuredLogAnalysisOutput
 from app.agents_v2.log_analysis_agent.enhanced_schemas import ComprehensiveLogAnalysisOutput
+from app.core.rate_limiting.budget_manager import BudgetManager
 from langchain_core.messages import HumanMessage
 import json
 import re
@@ -133,38 +140,73 @@ class ResearchResponse(BaseModel):
 
 class ChatRequest(BaseModel):
     message: str
+    model: str | None = None  # Optional model selection for primary agent
     # trace_id: str | None = None # Optional, if you plan to propagate trace IDs
 
-async def primary_agent_stream_generator(query: str, user_id: str) -> AsyncIterable[str]:
+async def primary_agent_stream_generator(query: str, user_id: str, model: str | None = None) -> AsyncIterable[str]:
     """Wraps the primary agent's streaming output with user-specific API configuration."""
     try:
         # Create user context
         user_context = await create_user_context_from_user_id(user_id)
         
-        # Check if user has required API keys
-        gemini_key = await user_context.get_gemini_api_key()
-        if not gemini_key:
-            error_payload = json.dumps({
-                "role": "error", 
-                "content": "🔑 **API Key Required**: To use the AI assistant, please add your Google Gemini API key in Settings.\n\n**How to configure:**\n1. Click the ⚙️ Settings button in the top-right corner\n2. Navigate to the 'API Keys' section\n3. Add your Google Gemini API key (starts with 'AIza')\n4. Get your free API key at: https://makersuite.google.com/app/apikey"
-            }, ensure_ascii=False)
-            yield f"data: {error_payload}\n\n"
-            return
+        # Check if user has required API keys based on selected model
+        from app.agents_v2.primary_agent.llm_registry import SupportedModel, validate_model_id, DEFAULT_MODEL
+        
+        # Determine which model is being used
+        try:
+            selected_model = validate_model_id(model) if model else DEFAULT_MODEL
+        except ValueError:
+            selected_model = DEFAULT_MODEL
+        
+        # Check appropriate API key based on model
+        if selected_model == SupportedModel.KIMI_K2:
+            # For Kimi K2, check for OpenRouter key (or use Gemini key as fallback)
+            import os
+            openrouter_key = os.getenv("OPENROUTER_API_KEY")
+            gemini_key = await user_context.get_gemini_api_key()
+            
+            if not openrouter_key and not gemini_key:
+                error_payload = json.dumps({
+                    "role": "error", 
+                    "content": "🔑 **API Key Required**: To use Kimi K2, please configure an API key.\n\n**Options:**\n1. Set OPENROUTER_API_KEY environment variable\n2. Or add your Google Gemini API key in Settings (will be used for OpenRouter)\n\n**Get API keys:**\n- OpenRouter: https://openrouter.ai/keys\n- Google Gemini: https://makersuite.google.com/app/apikey"
+                }, ensure_ascii=False)
+                yield f"data: {error_payload}\n\n"
+                return
+        else:
+            # For Gemini models, check Gemini key
+            gemini_key = await user_context.get_gemini_api_key()
+            if not gemini_key:
+                error_payload = json.dumps({
+                    "role": "error", 
+                    "content": "🔑 **API Key Required**: To use the AI assistant, please add your Google Gemini API key in Settings.\n\n**How to configure:**\n1. Click the ⚙️ Settings button in the top-right corner\n2. Navigate to the 'API Keys' section\n3. Add your Google Gemini API key (starts with 'AIza')\n4. Get your free API key at: https://makersuite.google.com/app/apikey"
+                }, ensure_ascii=False)
+                yield f"data: {error_payload}\n\n"
+                return
         
         # Use user-specific context
         async with user_context_scope(user_context):
             initial_state = PrimaryAgentState(
-                messages=[HumanMessage(content=query)]
+                messages=[HumanMessage(content=query)],
+                model=model  # Pass the selected model to the agent
             )
             
-            async for chunk in run_primary_agent(initial_state):
-                json_payload = ""
-                if hasattr(chunk, 'content') and chunk.content is not None:
-                    role = getattr(chunk, 'role', 'assistant') or 'assistant'
-                    json_payload = json.dumps({"role": role, "content": chunk.content}, ensure_ascii=False)
-                
-                if json_payload:
-                    yield f"data: {json_payload}\n\n"
+            # Call the primary agent (returns a dict, not async generator)
+            result = await run_primary_agent(initial_state)
+            
+            # Extract messages from result
+            if result and 'messages' in result:
+                for message in result['messages']:
+                    if hasattr(message, 'content') and message.content:
+                        # Stream the message content word by word for natural feel
+                        words = message.content.split()
+                        for i in range(0, len(words), 3):  # Send 3 words at a time
+                            batch = words[i:i+3]
+                            json_payload = json.dumps({
+                                "role": "assistant", 
+                                "content": " ".join(batch) + " "
+                            }, ensure_ascii=False)
+                            yield f"data: {json_payload}\n\n"
+                            await asyncio.sleep(0.05)  # Small delay for streaming effect
                     
     except Exception as e:
         # Use logger for consistency if available, otherwise print
@@ -194,7 +236,7 @@ async def chat_stream_v1_legacy(
     
     # Use default configuration for unauthenticated requests
     return StreamingResponse(
-        primary_agent_stream_generator(request.message, user_id="anonymous"),
+        primary_agent_stream_generator(request.message, user_id="anonymous", model=request.model),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
@@ -223,7 +265,7 @@ async def chat_stream_v2_authenticated(
         raise HTTPException(status_code=400, detail="Message cannot be empty")
     
     return StreamingResponse(
-        primary_agent_stream_generator(request.message, user_id),
+        primary_agent_stream_generator(request.message, user_id, request.model),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
@@ -590,6 +632,193 @@ async def unified_agent_stream_generator(request: UnifiedAgentRequest) -> AsyncI
             "trace_id": request.trace_id
         }, ensure_ascii=False)
         yield f"data: {error_payload}\n\n"
+
+
+@router.post("/agent/stream")
+async def agent_stream_with_reasoning(
+    request: ChatRequest,
+    user_id: Annotated[str, Depends(get_current_user_id)]
+):
+    """
+    Stream agent responses with deep reasoning UI metadata.
+    
+    This endpoint implements Server-Sent Events (SSE) streaming with:
+    - Token-by-token streaming for real-time response
+    - Final event with reasoning_ui metadata
+    - Budget-aware model selection
+    - Safety redaction of reasoning content
+    """
+    async def stream_generator() -> AsyncIterable[str]:
+        try:
+            # Send debug message
+            debug_msg = json.dumps({
+                "event": "debug",
+                "data": {"message": "Starting stream generator"}
+            })
+            yield f"data: {debug_msg}\n\n"
+            
+            # Initialize budget manager
+            budget_manager = BudgetManager()
+            await budget_manager.initialize()
+            
+            debug_msg = json.dumps({
+                "event": "debug", 
+                "data": {"message": "Budget manager initialized"}
+            })
+            yield f"data: {debug_msg}\n\n"
+            
+            # Validate and select model
+            requested_model = validate_model_id(request.model) if request.model else DEFAULT_MODEL
+            
+            debug_msg = json.dumps({
+                "event": "debug",
+                "data": {"message": f"Requested model: {requested_model.value}"}
+            })
+            yield f"data: {debug_msg}\n\n"
+            
+            # Check budget and potentially downgrade
+            allowed_model_str = await budget_manager.pick_allowed(requested_model.value)
+            
+            debug_msg = json.dumps({
+                "event": "debug",
+                "data": {"message": f"Budget manager returned: {allowed_model_str}"}
+            })
+            yield f"data: {debug_msg}\n\n"
+            
+            # Fix: Map budget manager model names back to SupportedModel enum values
+            if allowed_model_str == "gemini-2.5-flash":
+                effective_model = SupportedModel.GEMINI_FLASH
+            elif allowed_model_str == "gemini-2.5-pro":
+                effective_model = SupportedModel.GEMINI_PRO
+            elif allowed_model_str == "kimi-k2":
+                effective_model = SupportedModel.KIMI_K2
+            else:
+                # Fallback to the original requested model
+                effective_model = requested_model
+            
+            # Get user API key
+            user_context = await create_user_context_from_user_id(user_id)
+            if "gemini" in effective_model.value:
+                api_key = await user_context.get_gemini_api_key()
+            else:
+                api_key = await user_context.get_openrouter_api_key()
+            
+            if not api_key:
+                error_msg = json.dumps({
+                    "event": "error",
+                    "data": {
+                        "error": f"No API key configured for {effective_model.value}"
+                    }
+                })
+                yield f"data: {error_msg}\n\n"
+                return
+            
+            # Initialize reasoning engine
+            reasoning_config = UnifiedReasoningConfig(
+                enable_caching=True,
+                enable_polish_pass=True,
+                polish_threshold=0.75
+            )
+            reasoning_engine = UnifiedDeepReasoningEngine(
+                effective_model,
+                reasoning_config
+            )
+            await reasoning_engine.initialize()
+            
+            # Stream initial thinking message
+            thinking_msg = json.dumps({
+                "event": "thinking",
+                "data": {
+                    "content": "Analyzing your request...",
+                    "model": effective_model.value
+                }
+            })
+            yield f"data: {thinking_msg}\n\n"
+            
+            # Extract context from request
+            context_messages = []
+            if hasattr(request, 'messages'):
+                for msg in request.messages[-5:]:  # Last 5 messages
+                    context_messages.append({
+                        "role": "user" if msg.get("role") == "user" else "assistant",
+                        "content": msg.get("content", "")
+                    })
+            
+            # Get router metadata if available (from state)
+            router_metadata = {
+                "query_complexity": 0.5,  # Default, would come from router
+                "routing_confidence": 0.8
+            }
+            
+            # Perform reasoning
+            reasoning_output = await reasoning_engine.reason_about_query(
+                query=request.message,
+                context_messages=context_messages,
+                api_key=api_key,
+                router_metadata=router_metadata
+            )
+            
+            # Stream the response tokens
+            response_text = reasoning_output.final_response_markdown
+            words = response_text.split()
+            
+            # Stream words in small batches for natural feel
+            batch_size = 3
+            for i in range(0, len(words), batch_size):
+                batch = words[i:i+batch_size]
+                token_msg = json.dumps({
+                    "event": "token",
+                    "data": {
+                        "content": " ".join(batch) + " "
+                    }
+                })
+                yield f"data: {token_msg}\n\n"
+                await asyncio.sleep(0.05)  # Small delay for natural streaming
+            
+            # Redact reasoning UI for safety
+            safe_reasoning_ui = redact_reasoning_ui(reasoning_output.reasoning_ui.dict())
+            
+            # Get budget headroom
+            headroom = await budget_manager.headroom(effective_model.value)
+            
+            # Send final event with reasoning UI
+            final_msg = json.dumps({
+                "event": "completion.final",
+                "data": {
+                    "final_response_markdown": reasoning_output.final_response_markdown,
+                    "reasoning_ui": safe_reasoning_ui,
+                    "model_effective": effective_model.value,
+                    "budget": {
+                        "rpd_used": headroom.get("rpd_used", 0),
+                        "headroom": headroom.get("status", "OK")
+                    }
+                }
+            })
+            yield f"data: {final_msg}\n\n"
+            
+            # Record usage
+            await budget_manager.record(effective_model.value)
+            
+        except Exception as e:
+            logger.error(f"Streaming error: {e}")
+            error_msg = json.dumps({
+                "event": "error",
+                "data": {
+                    "error": str(e)
+                }
+            })
+            yield f"data: {error_msg}\n\n"
+    
+    return StreamingResponse(
+        stream_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no"  # Disable nginx buffering
+        }
+    )
+
 
 @router.post("/agent/unified/stream")
 async def unified_agent_stream(request: UnifiedAgentRequest):

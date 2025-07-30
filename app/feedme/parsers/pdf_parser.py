@@ -15,6 +15,7 @@ from abc import ABC, abstractmethod
 import pdfplumber
 from pypdf import PdfReader
 import io
+import hashlib
 
 logger = logging.getLogger(__name__)
 
@@ -226,7 +227,7 @@ class EnhancedPDFParser(PDFParser):
                 content=content.strip(),
                 timestamp=timestamp,
                 page_number=page_num,
-                thread_id=f"email_{hash(from_email)}_{timestamp}",
+                thread_id=f"email_{hashlib.sha256(from_email.encode()).hexdigest()[:8]}_{timestamp}",
                 confidence=0.9
             )
             threads.append(thread)
@@ -255,7 +256,7 @@ class EnhancedPDFParser(PDFParser):
                 content=content.strip(),
                 timestamp=timestamp,
                 page_number=page_num,
-                thread_id=f"zendesk_{hash(name)}_{timestamp}",
+                thread_id=f"zendesk_{hashlib.sha256(name.encode()).hexdigest()[:8]}_{timestamp}",
                 confidence=0.85
             )
             threads.append(thread)
@@ -291,7 +292,7 @@ class EnhancedPDFParser(PDFParser):
                             content=content,
                             timestamp=None,
                             page_number=page_num,
-                            thread_id=f"qa_{hash(current_speaker)}_{page_num}",
+                            thread_id=f"qa_{hashlib.sha256(current_speaker.encode()).hexdigest()[:8]}_{page_num}",
                             confidence=0.6
                         )
                         threads.append(thread)
@@ -315,7 +316,7 @@ class EnhancedPDFParser(PDFParser):
                     content=content,
                     timestamp=None,
                     page_number=page_num,
-                    thread_id=f"qa_{hash(current_speaker)}_{page_num}",
+                    thread_id=f"qa_{hashlib.sha256(current_speaker.encode()).hexdigest()[:8]}_{page_num}",
                     confidence=0.6
                 )
                 threads.append(thread)

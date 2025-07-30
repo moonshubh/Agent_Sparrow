@@ -1,6 +1,6 @@
 "use client"
 
-import React, { useState, useRef, useCallback, useEffect } from 'react'
+import React, { useState, useRef, useCallback, useEffect, useImperativeHandle, forwardRef } from 'react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import {
@@ -17,6 +17,7 @@ import {
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { toast } from 'sonner'
+import { useDebouncedCallback, usePerformanceMonitor } from '@/hooks/usePerformance'
 
 interface InputSystemProps {
   value: string
@@ -30,6 +31,12 @@ interface InputSystemProps {
   acceptedFileTypes?: string[]
   disabled?: boolean
   isWelcomeMode?: boolean
+}
+
+export interface InputSystemRef {
+  clearInput: () => void
+  focusInput: () => void
+  getInputValue: () => string
 }
 
 interface FileUploadProps {
@@ -158,7 +165,7 @@ function FileUploadZone({
 
 // QuickSuggestions component removed for cleaner zen design
 
-export default function InputSystem({
+const InputSystem = forwardRef<InputSystemRef, InputSystemProps>(function InputSystem({
   value,
   onChange,
   onSubmit,
@@ -170,13 +177,52 @@ export default function InputSystem({
   acceptedFileTypes = ['.log', '.txt', '.json', '.csv'],
   disabled = false,
   isWelcomeMode = false
-}: InputSystemProps) {
+}: InputSystemProps, ref) {
   const [isRecording, setIsRecording] = useState(false)
   const [isDragOver, setIsDragOver] = useState(false)
+  const [isSubmitting, setIsSubmitting] = useState(false)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const submitTimeoutRef = useRef<NodeJS.Timeout | null>(null)
   
-  // Auto-resize textarea
+  // Expose methods to parent components
+  useImperativeHandle(ref, () => ({
+    clearInput: () => {
+      clearInputSafely()
+    },
+    focusInput: () => {
+      textareaRef.current?.focus()
+    },
+    getInputValue: () => value
+  }), [value])
+  
+  // Safe input clearing with proper state management
+  const clearInputSafely = useCallback(() => {
+    // Clear the timeout if it exists
+    if (submitTimeoutRef.current) {
+      clearTimeout(submitTimeoutRef.current)
+      submitTimeoutRef.current = null
+    }
+    
+    // Reset all states
+    onChange('')
+    onFilesChange([])
+    setIsSubmitting(false)
+    
+    // Reset textarea height
+    if (textareaRef.current) {
+      textareaRef.current.style.height = isWelcomeMode ? '32px' : '48px'
+      // Focus with a small delay to ensure proper clearing
+      setTimeout(() => {
+        textareaRef.current?.focus()
+      }, 0)
+    }
+  }, [onChange, onFilesChange, isWelcomeMode])
+  
+  // Performance monitoring in development
+  usePerformanceMonitor('InputSystem', 16)
+  
+  // Auto-resize textarea with debouncing for better performance
   const adjustTextareaHeight = useCallback(() => {
     const textarea = textareaRef.current
     if (textarea) {
@@ -186,9 +232,31 @@ export default function InputSystem({
     }
   }, [])
   
+  // Debounced version of textarea height adjustment
+  const debouncedAdjustHeight = useDebouncedCallback(
+    adjustTextareaHeight,
+    50, // 50ms delay
+    [adjustTextareaHeight]
+  )
+  
+  // Cleanup on unmount
   useEffect(() => {
-    adjustTextareaHeight()
-  }, [value, adjustTextareaHeight])
+    return () => {
+      if (submitTimeoutRef.current) {
+        clearTimeout(submitTimeoutRef.current)
+      }
+    }
+  }, [])
+  
+  useEffect(() => {
+    // Use debounced version for better performance during rapid typing
+    if (value.length > 0) {
+      debouncedAdjustHeight()
+    } else {
+      // Immediately adjust when input is cleared
+      adjustTextareaHeight()
+    }
+  }, [value, adjustTextareaHeight, debouncedAdjustHeight])
 
   // File handling functions
   const handleFileSelect = (selectedFiles: FileList | null) => {
@@ -237,28 +305,51 @@ export default function InputSystem({
   }
   
   const handleSubmit = async () => {
-    if ((!value.trim() && files.length === 0) || isLoading || disabled) return
+    if ((!value.trim() && files.length === 0) || isLoading || disabled || isSubmitting) return
     
     const messageText = value.trim() || (files.length > 0 ? 'Please analyze the uploaded files' : '')
     
+    // Prevent double submission
+    setIsSubmitting(true)
+    
     try {
-      await onSubmit(messageText, files.length > 0 ? files : undefined)
-      onChange('')
-      onFilesChange([])
+      // Clear input immediately for better UX
+      const currentValue = value
+      const currentFiles = [...files]
+      clearInputSafely()
+      
+      await onSubmit(messageText, currentFiles.length > 0 ? currentFiles : undefined)
+      
+      // Additional safety timeout to ensure state is cleared
+      submitTimeoutRef.current = setTimeout(() => {
+        setIsSubmitting(false)
+        submitTimeoutRef.current = null
+      }, 500)
+      
     } catch (error) {
+      // Restore input values on error
+      onChange(messageText)
+      onFilesChange(files)
+      setIsSubmitting(false)
       console.error('Failed to send message:', error)
       toast.error('Failed to send message')
     }
   }
   
   const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter' && !e.shiftKey && !isLoading && !disabled) {
+    if (e.key === 'Enter' && !e.shiftKey && !isLoading && !disabled && !isSubmitting) {
       e.preventDefault()
       handleSubmit()
     }
+    
+    // ESC key to clear input
+    if (e.key === 'Escape' && !isLoading) {
+      e.preventDefault()
+      clearInputSafely()
+    }
   }
   
-  const canSubmit = (value.trim() || files.length > 0) && !isLoading && !disabled
+  const canSubmit = (value.trim() || files.length > 0) && !isLoading && !disabled && !isSubmitting
   
   return (
     <div className="space-y-3">
@@ -334,7 +425,13 @@ export default function InputSystem({
             <textarea
               ref={textareaRef}
               value={value}
-              onChange={(e) => onChange(e.target.value)}
+              onChange={(e) => {
+                onChange(e.target.value)
+                // Immediate height adjustment for better UX
+                if (e.target.value.length < 50) {
+                  adjustTextareaHeight()
+                }
+              }}
               onKeyDown={handleKeyDown}
               placeholder={files.length > 0 ? "Describe the issue or ask questions about the uploaded files..." : placeholder}
               disabled={disabled || isLoading}
@@ -345,7 +442,7 @@ export default function InputSystem({
               className={cn(
                 "w-full resize-none border-0 bg-transparent px-0 py-1",
                 "text-chat-input-text placeholder:text-chat-metadata",
-                "focus:outline-none focus:ring-0",
+                "focus:outline-none focus:ring-0 transition-all duration-150",
                 isWelcomeMode 
                   ? "text-lg min-h-[32px] max-h-[120px]" 
                   : "text-sm min-h-[40px] max-h-[120px]"
@@ -402,8 +499,9 @@ export default function InputSystem({
                   ? "bg-primary hover:bg-mb-blue-300/90 text-primary-foreground" 
                   : "bg-muted text-muted-foreground cursor-not-allowed"
               )}
+              aria-label="Send message"
             >
-              {isLoading ? (
+              {(isLoading || isSubmitting) ? (
                 <Loader2 className="w-4 h-4 animate-spin" />
               ) : (
                 <Send className="w-4 h-4" />
@@ -413,6 +511,15 @@ export default function InputSystem({
         </div>
         
       </div>
+      
+      {/* Accessibility helper text */}
+      <div id="input-help-text" className="sr-only">
+        Type your message and press Enter to send, or Shift+Enter for new line. Press Escape to clear input.
+      </div>
     </div>
   )
-}
+})
+
+InputSystem.displayName = 'InputSystem'
+
+export default InputSystem

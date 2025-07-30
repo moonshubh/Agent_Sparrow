@@ -29,6 +29,7 @@ from app.api.v1.endpoints import agent_endpoints  # Agent interaction endpoints
 from app.api.v1.endpoints import feedme_endpoints  # FeedMe transcript ingestion
 from app.api.v1.endpoints import chat_session_endpoints  # Chat session persistence
 from app.api.v1.endpoints import rate_limit_endpoints  # Rate limiting monitoring
+from app.api.v1.endpoints import models_endpoints  # Model discovery endpoints
 from app.api.v1.websocket import feedme_websocket  # FeedMe WebSocket endpoints
 from app.core.settings import settings
 
@@ -127,6 +128,8 @@ app.include_router(feedme_endpoints.router, prefix="/api/v1/feedme", tags=["Feed
 app.include_router(chat_session_endpoints.router, prefix="/api/v1", tags=["Chat Sessions"])
 # Register Rate Limiting routes
 app.include_router(rate_limit_endpoints.router, prefix="/api/v1", tags=["Rate Limiting"])
+# Register Model Discovery routes
+app.include_router(models_endpoints.router, prefix="/api/v1", tags=["Models"])
 
 # Conditionally include API Key Management router
 if api_key_endpoints and settings.should_enable_api_key_endpoints():
@@ -281,6 +284,7 @@ class AgentQueryRequest(BaseModel):
     query: str
     log_content: str | None = None
     session_id: int | None = None  # Optional session ID for memory retention
+    model: str | None = None  # Optional model selection (e.g., 'google/gemini-2.5-flash')
 
 class AgentResponse(BaseModel):
     # Define what a typical response should look like
@@ -403,7 +407,8 @@ async def agent_invoke_endpoint(request: AgentQueryRequest):
     initial_input = {
         "messages": messages,
         "raw_log_content": request.log_content,
-        "session_id": request.session_id  # Direct attribute access
+        "session_id": str(request.session_id) if request.session_id else "default",  # Convert to string to match GraphState schema
+        "selected_model": request.model  # Pass the selected model to the graph
     }
 
     try:

@@ -20,7 +20,7 @@ def _get_model() -> ChatGoogleGenerativeAI:
     global _reflection_model
     if _reflection_model is None:
         _reflection_model = ChatGoogleGenerativeAI(
-            model="google/gemini-2.5-flash-preview-05-20",
+            model="gemini-2.5-flash",
             temperature=0,
             top_p=0.95,
             google_api_key=os.environ.get("GEMINI_API_KEY"),

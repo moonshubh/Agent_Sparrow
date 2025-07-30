@@ -167,7 +167,7 @@ export const RateLimitWarning: React.FC<RateLimitWarningProps> = ({
                   <div className="flex items-center space-x-2 text-xs text-gray-500">
                     <Clock className="h-3 w-3" />
                     <span>
-                      {detail.remaining} remaining • Resets in {formatTimeRemaining(getTimeToReset(detail.resetTime))}
+                      {detail.type === 'rpd' ? `${detail.remaining} requests left today` : `${detail.remaining} remaining`} • Resets in {formatTimeRemaining(getTimeToReset(detail.resetTime))}
                     </span>
                   </div>
                 </div>

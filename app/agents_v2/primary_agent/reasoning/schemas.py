@@ -251,6 +251,7 @@ class ReasoningState:
     response_orchestration: Optional[ResponseOrchestration] = None
     self_critique_result: Optional[SelfCritiqueResult] = None
     quality_assessment: Optional[QualityAssessment] = None
+    troubleshooting_state: Optional[Any] = None  # Stores TroubleshootingState when workflows are used
     
     # Final outputs
     response_strategy: str = ""
@@ -363,6 +364,7 @@ class ReasoningConfig:
     enable_quality_assessment: bool = True
     enable_reasoning_transparency: bool = True
     enable_self_critique: bool = True
+    enable_troubleshooting_workflows: bool = True  # Enable 7-phase troubleshooting
     
     # Confidence thresholds
     minimum_confidence_threshold: float = 0.6

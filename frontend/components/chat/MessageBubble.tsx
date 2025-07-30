@@ -9,6 +9,8 @@ import { Separator } from '@/components/ui/separator'
 import { Avatar, AvatarImage, AvatarFallback } from '@/components/ui/avatar'
 import { AgentAvatar } from '@/components/ui/AgentAvatar'
 import { MarkdownMessage } from '@/components/markdown/MarkdownMessage'
+import { BrainSpinner } from '@/components/ui/BrainSpinner'
+import { ReasoningDisclosure, type UIReasoning } from '@/components/chat/ReasoningDisclosure'
 import {
   MessageCircle,
   FileSearch,
@@ -29,7 +31,9 @@ import {
   BookOpen,
   FileText,
   Brain,
-  Eye
+  Eye,
+  Clock,
+  Zap
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { toast } from 'sonner'
@@ -50,6 +54,10 @@ interface MessageMetadata {
   sources?: Source[]
   analysisResults?: any
   routingReason?: string
+  messageType?: 'thinking' | 'final'
+  reasoningSummary?: string
+  overallConfidence?: number
+  reasoningUI?: UIReasoning
 }
 
 interface ThoughtStep {
@@ -147,10 +155,63 @@ function CitationDisplay({ sources }: { sources: Source[] }) {
   )
 }
 
-function ThoughtStepsDisplay({ thoughtSteps }: { thoughtSteps: ThoughtStep[] }) {
-  const [isExpanded, setIsExpanded] = useState(false)
+function ThoughtStepsDisplay({ thoughtSteps, defaultExpanded = false }: { thoughtSteps: ThoughtStep[], defaultExpanded?: boolean }) {
+  const [isExpanded, setIsExpanded] = useState(defaultExpanded)
+  const [visibleSteps, setVisibleSteps] = useState<number>(0)
+  const [isAnimating, setIsAnimating] = useState(false)
   
   if (!thoughtSteps || thoughtSteps.length === 0) return null
+  
+  // Animate steps appearing when expanded
+  useEffect(() => {
+    if (isExpanded) {
+      setIsAnimating(true)
+      setVisibleSteps(0)
+      
+      const animateSteps = () => {
+        let currentStep = 0
+        const timer = setInterval(() => {
+          if (currentStep < thoughtSteps.length) {
+            setVisibleSteps(currentStep + 1)
+            currentStep++
+          } else {
+            clearInterval(timer)
+            setIsAnimating(false)
+          }
+        }, 200) // 200ms delay between each step
+        
+        return timer
+      }
+      
+      const timer = animateSteps()
+      return () => clearInterval(timer)
+    } else {
+      setVisibleSteps(0)
+      setIsAnimating(false)
+    }
+  }, [isExpanded, thoughtSteps.length])
+  
+  const getStepIcon = (idx: number) => {
+    if (!isExpanded) return null
+    if (isAnimating && idx >= visibleSteps) {
+      return (
+        <div className="inline-flex items-center justify-center w-6 h-6 rounded-full bg-muted animate-pulse flex-shrink-0">
+          <div className="w-2 h-2 bg-muted-foreground rounded-full animate-bounce" />
+        </div>
+      )
+    }
+    return (
+      <span className="inline-flex items-center justify-center w-6 h-6 rounded-full bg-gradient-to-br from-primary to-accent text-primary-foreground text-xs font-semibold flex-shrink-0 shadow-sm animate-in fade-in zoom-in duration-300">
+        {idx + 1}
+      </span>
+    )
+  }
+  
+  const getConfidenceColor = (confidence: number) => {
+    if (confidence >= 0.8) return 'bg-green-100 text-green-800 border-green-200'
+    if (confidence >= 0.6) return 'bg-yellow-100 text-yellow-800 border-yellow-200'
+    return 'bg-red-100 text-red-800 border-red-200'
+  }
   
   return (
     <div className="mt-4 pt-3 border-t border-border/50">
@@ -158,42 +219,61 @@ function ThoughtStepsDisplay({ thoughtSteps }: { thoughtSteps: ThoughtStep[] }) 
         variant="ghost"
         size="sm"
         onClick={() => setIsExpanded(!isExpanded)}
-        className="h-auto p-0 font-medium text-xs text-chat-metadata hover:text-foreground mb-2"
+        className="h-auto p-0 font-medium text-xs text-chat-metadata hover:text-foreground mb-2 transition-colors group"
+        aria-expanded={isExpanded}
+        aria-controls="thought-steps-content"
       >
-        <Brain className="w-3 h-3 mr-1" />
-        <span className="mr-1">Thought Process ({thoughtSteps.length} steps)</span>
-        {isExpanded ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+        <div className="flex items-center gap-2">
+          <Brain className={cn(
+            "w-4 h-4 transition-all duration-300",
+            isExpanded ? "text-accent rotate-12" : "group-hover:text-accent"
+          )} />
+          <div className={cn(
+            "transition-transform duration-200",
+            isExpanded ? "rotate-180" : ""
+          )}>
+            <ChevronDown className="w-3 h-3" />
+          </div>
+        </div>
       </Button>
       
-      {isExpanded && (
-        <div className="space-y-3">
-          {thoughtSteps.map((step, idx) => (
-            <div key={idx} className="reasoning-step rounded-lg border border-border/50 p-3 bg-muted/20">
-              <div className="flex items-start gap-3">
-                <span className="inline-flex items-center justify-center w-6 h-6 rounded-full bg-primary/10 text-primary text-xs font-semibold flex-shrink-0">
-                  {idx + 1}
-                </span>
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center justify-between mb-2">
-                    <h4 className="text-sm font-medium text-foreground">
+      <div
+        id="thought-steps-content"
+        className={cn(
+          "overflow-hidden transition-all duration-300 ease-in-out",
+          isExpanded ? "max-h-[2000px] opacity-100" : "max-h-0 opacity-0"
+        )}
+      >
+        <div className="space-y-3 pt-2">
+          
+          {thoughtSteps.map((step, idx) => {
+            const isVisible = !isAnimating || idx < visibleSteps
+            const isCurrentStep = isAnimating && idx === visibleSteps - 1
+            
+            return (
+              <div 
+                key={idx} 
+                className="reasoning-step rounded-md border border-border/40 bg-muted/10 p-3 mb-2"
+              >
+                <div className="flex items-start gap-2">
+                  <span className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-accent/10 text-accent text-xs font-medium flex-shrink-0 mt-0.5">
+                    {idx + 1}
+                  </span>
+                  <div className="flex-1 min-w-0">
+                    <h4 className="text-sm font-medium text-foreground mb-1">
                       {step.step}
                     </h4>
-                    {step.confidence && (
-                      <Badge variant="secondary" className="text-xs">
-                        {Math.round(step.confidence * 100)}% confident
-                      </Badge>
-                    )}
-                  </div>
-                  <div className="text-sm text-chat-metadata whitespace-pre-wrap">
-                    {step.content}
+                    <div className="text-sm text-chat-metadata leading-relaxed">
+                      {step.content}
+                    </div>
                   </div>
                 </div>
-                <Eye className="w-4 h-4 text-chat-metadata mt-1 flex-shrink-0" />
               </div>
-            </div>
-          ))}
+            )
+          })}
+          
         </div>
-      )}
+      </div>
     </div>
   )
 }
@@ -520,11 +600,13 @@ export default function MessageBubble({
   onRate 
 }: MessageBubbleProps) {
   const [isHovered, setIsHovered] = useState(false)
+  const [collapsed, setCollapsed] = useState(true)
   const messageRef = useRef<HTMLDivElement>(null)
   
   const isUser = type === "user"
   const isSystem = type === "system"
   const isAgent = type === "agent"
+  const isThinking = metadata?.messageType === 'thinking'
   
   // Filter out routing system messages and log analysis status messages - these are handled by status components now
   if (isSystem && (
@@ -610,13 +692,32 @@ export default function MessageBubble({
         
         {/* Message Content Container */}
         <div className={cn(
-          "rounded-xl px-4 py-3 shadow-sm border text-sm leading-relaxed",
+          "rounded-xl px-4 py-3 shadow-sm border text-sm leading-relaxed relative",
           isUser
             ? "bg-accent/10 border-accent/30 text-foreground max-w-[85%] sm:max-w-[80%] md:max-w-[75%] lg:max-w-[70%] w-fit ml-auto"
             : isSystem
             ? "bg-muted/50 text-muted-foreground border-border/50 flex-1"
+            : isThinking
+            ? "bg-gradient-to-r from-blue-50/50 to-indigo-50/50 dark:from-blue-950/20 dark:to-indigo-950/20 border-blue-200 dark:border-blue-800 text-foreground flex-1"
             : "bg-muted/70 dark:bg-zinc-800 border-border/40 text-foreground flex-1"
         )}>
+          
+          {/* Expand/Collapse Button for User Messages - Fix positioning to avoid overlap */}
+          {isUser && content.length > 150 && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setCollapsed(!collapsed)}
+              className="absolute top-1 right-1 h-6 w-6 p-0 hover:bg-accent/20 focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 z-10 opacity-70 hover:opacity-100 transition-opacity"
+              aria-label={collapsed ? "Expand message" : "Collapse message"}
+            >
+              {collapsed ? (
+                <ChevronDown className="h-3 w-3" />
+              ) : (
+                <ChevronUp className="h-3 w-3" />
+              )}
+            </Button>
+          )}
           
           {/* Message Text */}
           {streaming ? (
@@ -628,7 +729,20 @@ export default function MessageBubble({
               !isUser ? (
                 <MarkdownMessage content={content} />
               ) : (
-                <div className="text-sm leading-relaxed whitespace-pre-wrap">
+                <div className={cn(
+                  "text-sm leading-relaxed whitespace-pre-wrap",
+                  // Apply collapsible styles for user messages with proper padding for button
+                  isUser && content.length > 150 && "pr-8", // Add padding-right to prevent overlap with collapse button
+                  content.length > 150 && collapsed && "line-clamp-3 overflow-hidden"
+                )}
+                style={{
+                  // Ensure consistent line height and prevent text cutoff
+                  lineHeight: '1.5',
+                  maxHeight: collapsed && content.length > 150 ? '4.5rem' : 'none',
+                  display: collapsed && content.length > 150 ? '-webkit-box' : 'block',
+                  WebkitLineClamp: collapsed && content.length > 150 ? 3 : 'unset',
+                  WebkitBoxOrient: collapsed && content.length > 150 ? 'vertical' : 'unset'
+                }}>
                   {content}
                 </div>
               )
@@ -665,7 +779,15 @@ export default function MessageBubble({
           
           {/* Thought Process Display - Only for primary agent */}
           {agentType === 'primary' && thoughtSteps && (
-            <ThoughtStepsDisplay thoughtSteps={thoughtSteps} />
+            <ThoughtStepsDisplay 
+              thoughtSteps={thoughtSteps} 
+              defaultExpanded={false} 
+            />
+          )}
+          
+          {/* Reasoning UI - New decision trace display */}
+          {agentType === 'primary' && metadata?.reasoningUI && !isUser && !streaming && (
+            <ReasoningDisclosure reasoning={metadata.reasoningUI} className="mt-3" />
           )}
           
           {/* Message Footer */}
@@ -730,3 +852,5 @@ export default function MessageBubble({
     </div>
   )
 }
+
+MessageBubble.displayName = 'MessageBubble'

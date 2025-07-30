@@ -6,6 +6,8 @@ from dotenv import load_dotenv
 from typing import AsyncIterator, Dict, Optional, Any
 import asyncio
 from functools import lru_cache
+import hashlib
+from datetime import datetime
 
 from langchain_core.messages import AIMessageChunk
 from langchain_google_genai import ChatGoogleGenerativeAI, HarmCategory, HarmBlockThreshold
@@ -15,8 +17,14 @@ from opentelemetry.trace import Status, StatusCode
 from app.core.rate_limiting.agent_wrapper import wrap_gemini_agent
 from app.agents_v2.primary_agent.schemas import PrimaryAgentState
 from app.agents_v2.primary_agent.tools import mailbird_kb_search, tavily_web_search
-from app.agents_v2.primary_agent.reasoning import ReasoningEngine, ReasoningConfig
-from app.agents_v2.primary_agent.prompts import AgentSparrowV9Prompts
+from app.agents_v2.primary_agent.reasoning.unified_deep_reasoning_engine import (
+    UnifiedDeepReasoningEngine, UnifiedReasoningConfig
+)
+from app.agents_v2.primary_agent.reasoning.schemas import ReasoningConfig
+# AgentSparrowV9Prompts now integrated via model-specific factory
+from app.agents_v2.primary_agent.llm_registry import SupportedModel, DEFAULT_MODEL, validate_model_id
+from app.agents_v2.primary_agent.llm_factory import build_llm
+from app.agents_v2.primary_agent.model_adapter import ModelAdapter
 from app.agents_v2.primary_agent.exceptions import (
     RateLimitException,
     InvalidAPIKeyException,
@@ -25,6 +33,9 @@ from app.agents_v2.primary_agent.exceptions import (
     ConfigurationException,
     ReasoningException,
     create_exception_from_error
+)
+from app.agents_v2.primary_agent.prompts.model_specific_factory import (
+    ModelSpecificPromptFactory, PromptOptimizationLevel
 )
 
 # Standard logger setup
@@ -44,8 +55,14 @@ load_dotenv()
 
 # Model cache for reusing user-specific models
 from collections import OrderedDict
-_model_cache: OrderedDict[str, ChatGoogleGenerativeAI] = OrderedDict()
+_model_cache: OrderedDict[str, Any] = OrderedDict()  # Changed to Any to support different model types
 MAX_CACHE_SIZE = 100
+
+def clear_model_cache():
+    """Clear the model cache. Useful for testing or when cache becomes stale."""
+    global _model_cache
+    _model_cache.clear()
+    logger.info("Model cache cleared")
 
 def _validate_api_key(api_key: str) -> bool:
     """Basic API key validation - just check it's not empty.
@@ -61,14 +78,32 @@ def _get_model_config() -> str:
     from app.core.settings import settings
     return settings.primary_agent_model
 
-def create_user_specific_model(api_key: str) -> ChatGoogleGenerativeAI:
-    """Create a user-specific Gemini model with their API key.
+def _generate_secure_cache_key(api_key: str, model_value: str) -> str:
+    """Generate a secure cache key using SHA256 hash.
+    
+    Args:
+        api_key: The API key to hash
+        model_value: The model identifier
+        
+    Returns:
+        A secure cache key truncated to reasonable length
+    """
+    # Create a SHA256 hash of the API key for security
+    hash_object = hashlib.sha256(api_key.encode('utf-8'))
+    hash_hex = hash_object.hexdigest()
+    # Truncate to first 16 characters for reasonable cache key length
+    return f"{hash_hex[:16]}_{model_value}"
+
+def create_user_specific_model(api_key: str, model_id: Optional[str] = None) -> Any:
+    """Create a user-specific model with their API key.
     
     Features:
     - Basic API key validation
-    - Configurable model name from settings
+    - Support for multiple models (Gemini Flash, Pro, Kimi K2)
     - Caching mechanism to reuse models
     - Comprehensive error handling
+    - Model adapter for consistent behavior
+    - Thread-safe API key handling
     """
     if not _validate_api_key(api_key):
         raise InvalidAPIKeyException(
@@ -76,34 +111,69 @@ def create_user_specific_model(api_key: str) -> ChatGoogleGenerativeAI:
             technical_details="API key validation failed: empty or None"
         )
     
-    # Check cache first (using a hash of the API key for security)
-    cache_key = f"{hash(api_key)}_{_get_model_config()}"
+    # Validate and get model
+    try:
+        model_enum = validate_model_id(model_id) if model_id else DEFAULT_MODEL
+    except ValueError as e:
+        logger.warning(f"Invalid model ID '{model_id}', using default: {e}")
+        model_enum = DEFAULT_MODEL
+    
+    # Check cache first using secure hash
+    cache_key = _generate_secure_cache_key(api_key, model_enum.value)
     if cache_key in _model_cache:
-        logger.debug("Returning cached model for user")
+        logger.debug(f"Returning cached {model_enum.value} model for user")
         return _model_cache[cache_key]
     
     try:
-        model_name = _get_model_config()
-        logger.info(f"Creating new user-specific model with {model_name}")
+        logger.info(f"Creating new user-specific model: {model_enum.value} (requested: {model_id})")
         
-        safety_settings = {
-            HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
-            HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
-            HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
-            HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
-        }
+        # Get model-specific configuration from the prompt factory
+        prompt_factory = ModelSpecificPromptFactory()
+        optimization_level = PromptOptimizationLevel.BALANCED  # Default optimization
+        model_config = prompt_factory.get_model_configuration(model_enum, 
+            prompt_factory.get_recommended_config(model_enum, optimization_level))
         
-        model_base = ChatGoogleGenerativeAI(
-            model=model_name,
-            temperature=0,
-            google_api_key=api_key,
-            safety_settings=safety_settings,
-            convert_system_message_to_human=True
-        )
+        logger.info(f"Using model-specific config for {model_enum.value}: temperature={model_config.get('temperature', 0.3)}")
         
-        # Bind tools and then wrap for rate limiting
-        model_with_tools_base = model_base.bind_tools([mailbird_kb_search, tavily_web_search])
-        wrapped_model = wrap_gemini_agent(model_with_tools_base, model_name)
+        # Build the base model using the factory with model-specific configuration
+        # This ensures thread-safety by not modifying os.environ
+        api_key_param = api_key
+        if model_enum == SupportedModel.KIMI_K2:
+            # For Kimi K2, we pass the API key directly to the model
+            # instead of setting it in the environment
+            base_llm = build_llm(
+                model_enum, 
+                temperature=model_config.get('temperature', 0.6),  # Kimi K2 optimal
+                max_tokens=model_config.get('max_tokens', 2048),
+                api_key=api_key_param,
+                **{k: v for k, v in model_config.items() if k not in ['temperature', 'max_tokens']}
+            )
+        else:
+            # For Gemini models, pass the API key directly with model-optimized config
+            base_llm = build_llm(
+                model_enum, 
+                temperature=model_config.get('temperature', 0.3),
+                max_tokens=model_config.get('max_tokens', 2048),
+                api_key=api_key_param,
+                **{k: v for k, v in model_config.items() if k not in ['temperature', 'max_tokens']}
+            )
+        
+        # Create model adapter for consistent behavior
+        model_adapter = ModelAdapter(base_llm, model_enum)
+        
+        # Bind tools to the model
+        model_with_tools = model_adapter.bind_tools([mailbird_kb_search, tavily_web_search])
+        
+        # Wrap for rate limiting
+        if model_enum in (SupportedModel.GEMINI_FLASH, SupportedModel.GEMINI_PRO):
+            model_name = model_enum.value.split("/")[-1]  # Extract just the model name
+            wrapped_model = wrap_gemini_agent(model_with_tools, model_name)
+        elif model_enum == SupportedModel.KIMI_K2:
+            # Create a generic rate limiter for Kimi K2
+            from app.core.rate_limiting.generic_limiter import create_rate_limited_model
+            wrapped_model = create_rate_limited_model(model_with_tools, "kimi-k2")
+        else:
+            wrapped_model = model_with_tools
         
         # Cache the model (limit cache size to prevent memory issues)
         if len(_model_cache) >= MAX_CACHE_SIZE:
@@ -117,7 +187,7 @@ def create_user_specific_model(api_key: str) -> ChatGoogleGenerativeAI:
         return wrapped_model
         
     except Exception as e:
-        logger.error(f"Error creating user-specific model with {_get_model_config()}: {e}")
+        logger.error(f"Error creating user-specific model {model_enum.value}: {e}")
         # Clear any partial cache entry
         _model_cache.pop(cache_key, None)
         raise ValueError(f"Failed to create AI model: {str(e)}")
@@ -148,84 +218,171 @@ async def run_primary_agent(state: PrimaryAgentState) -> Dict[str, Any]:
                 from langchain_core.messages import AIMessage
                 return {"messages": [AIMessage(content="Your query is too long. Please shorten it and try again.")], "qa_retry_count": 0}
 
-            # Get user-specific API key
-            from app.core.user_context import get_user_gemini_key
-            gemini_api_key = await get_user_gemini_key()
+            # Create user-specific model with optional model selection
+            selected_model = state.model  # Use the correct field name from PrimaryAgentState
+            logger.info(f"Primary agent received selected_model: {selected_model}")
             
-            if not gemini_api_key:
-                error_msg = "No Gemini API key available for user"
-                logger.warning(f"{error_msg} - user_query: {user_query[:100]}...")
-                parent_span.set_attribute("error", error_msg)
-                parent_span.set_status(Status(StatusCode.ERROR, "No API key"))
+            # Determine model type to get appropriate API key
+            try:
+                model_enum = validate_model_id(selected_model) if selected_model else DEFAULT_MODEL
+            except ValueError as e:
+                logger.warning(f"Invalid model ID '{selected_model}', using default: {e}")
+                model_enum = DEFAULT_MODEL
+            
+            # Get the appropriate API key based on model type
+            if model_enum == SupportedModel.KIMI_K2:
+                # For Kimi K2, try OpenRouter API key first, fall back to Gemini
+                from app.core.user_context import get_user_openrouter_key, get_user_gemini_key
+                api_key = await get_user_openrouter_key()
+                if not api_key:
+                    api_key = await get_user_gemini_key()  # Fallback to Gemini key
+                    logger.info("Using Gemini API key for Kimi K2 model (OpenRouter key not available)")
                 
-                detailed_guidance = (
-                    "To use Agent Sparrow, please configure your Gemini API key:\n\n"
-                    "1. Go to Settings in the application\n"
-                    "2. Navigate to the API Keys section\n"
-                    "3. Enter your Google Gemini API key (get one at https://makersuite.google.com/app/apikey)\n"
-                    "4. Save your settings and try again\n\n"
-                    "Your API key should start with 'AIza' and be 39 characters long."
-                )
-                from langchain_core.messages import AIMessage
-                return {"messages": [AIMessage(content=detailed_guidance)], "qa_retry_count": 0}
+                if not api_key:
+                    error_msg = "No API key available for Kimi K2 model"
+                    logger.warning(f"{error_msg} - user_query: {user_query[:100]}...")
+                    parent_span.set_attribute("error", error_msg)
+                    parent_span.set_status(Status(StatusCode.ERROR, "No API key"))
+                    
+                    detailed_guidance = (
+                        "To use Kimi K2, please configure an API key:\n\n"
+                        "**Option 1 - OpenRouter (Recommended):**\n"
+                        "1. Go to Settings in the application\n"
+                        "2. Navigate to the API Keys section\n"
+                        "3. Enter your OpenRouter API key (get one at https://openrouter.ai/keys)\n\n"
+                        "**Option 2 - Use Gemini API key:**\n"
+                        "1. Enter your Google Gemini API key (get one at https://makersuite.google.com/app/apikey)\n"
+                        "2. It will be used to access Kimi K2 via OpenRouter\n\n"
+                        "4. Save your settings and try again"
+                    )
+                    from langchain_core.messages import AIMessage
+                    return {"messages": [AIMessage(content=detailed_guidance)], "qa_retry_count": 0}
+            else:
+                # For Gemini models, use Gemini API key
+                from app.core.user_context import get_user_gemini_key
+                api_key = await get_user_gemini_key()
+                
+                if not api_key:
+                    error_msg = "No Gemini API key available for user"
+                    logger.warning(f"{error_msg} - user_query: {user_query[:100]}...")
+                    parent_span.set_attribute("error", error_msg)
+                    parent_span.set_status(Status(StatusCode.ERROR, "No API key"))
+                    
+                    detailed_guidance = (
+                        "To use Agent Sparrow, please configure your Gemini API key:\n\n"
+                        "1. Go to Settings in the application\n"
+                        "2. Navigate to the API Keys section\n"
+                        "3. Enter your Google Gemini API key (get one at https://makersuite.google.com/app/apikey)\n"
+                        "4. Save your settings and try again\n\n"
+                        "Your API key should start with 'AIza' and be 39 characters long."
+                    )
+                    from langchain_core.messages import AIMessage
+                    return {"messages": [AIMessage(content=detailed_guidance)], "qa_retry_count": 0}
             
-            # Create user-specific model
-            model_with_tools = create_user_specific_model(gemini_api_key)
+            model_with_tools = create_user_specific_model(api_key, selected_model)
 
             parent_span.set_attribute("input.query", user_query)
             parent_span.set_attribute("state.message_count", len(state.messages))
 
-            # Initialize reasoning engine with self-critique enabled
+            # Initialize unified deep reasoning engine for single-pass reasoning
             from app.core.settings import settings
-            reasoning_config = ReasoningConfig(
-                enable_self_critique=True,
-                enable_chain_of_thought=settings.reasoning_enable_chain_of_thought,
-                enable_problem_solving_framework=settings.reasoning_enable_problem_solving,
-                enable_tool_intelligence=settings.reasoning_enable_tool_intelligence,
-                enable_quality_assessment=settings.reasoning_enable_quality_assessment,
-                enable_reasoning_transparency=settings.reasoning_enable_reasoning_transparency,
-                debug_mode=settings.reasoning_debug_mode
+            from app.core.user_context import get_user_gemini_key
+            
+            # Get API key for the reasoning engine
+            reasoning_api_key = await get_user_gemini_key()
+            if not reasoning_api_key:
+                logger.error("No API key available for reasoning engine")
+                from langchain_core.messages import AIMessage
+                return {"messages": [AIMessage(content="API key required for reasoning engine")], "qa_retry_count": 0}
+            
+            # Use unified deep reasoning engine for single-pass reasoning with safety
+            reasoning_config = UnifiedReasoningConfig(
+                enable_caching=True,
+                enable_polish_pass=True,
+                polish_threshold=0.75
             )
-            reasoning_engine = ReasoningEngine(model=model_with_tools, config=reasoning_config)
+            
+            # Convert selected_model string to SupportedModel enum
+            try:
+                model_enum = validate_model_id(selected_model) if selected_model else DEFAULT_MODEL
+            except ValueError:
+                model_enum = DEFAULT_MODEL
+                
+            reasoning_engine = UnifiedDeepReasoningEngine(
+                model_enum,  # Pass the validated model enum
+                reasoning_config
+            )
+            await reasoning_engine.initialize()
+            logger.info(f"Using UnifiedDeepReasoningEngine for single-pass reasoning with query: {user_query[:50]}...")
 
-            # Perform comprehensive reasoning. This is a single, blocking call that includes self-critique.
-            reasoning_state = await reasoning_engine.reason_about_query(
+            # Create progress callback for Pro model progress updates
+            progress_updates = []
+            def progress_callback(message: str, current: int, total: int):
+                """Capture progress updates for Pro model reasoning."""
+                progress_updates.append({
+                    "message": message,
+                    "current": current,
+                    "total": total,
+                    "timestamp": datetime.now().isoformat()
+                })
+                logger.info(f"Reasoning Progress ({current}/{total}): {message}")
+            
+            # Perform single-pass deep reasoning with routing metadata
+            context_messages = [{"role": "user" if m.type == "human" else "assistant", "content": m.content} 
+                               for m in state.messages]
+            
+            reasoning_result = await reasoning_engine.reason_about_query(
                 query=user_query,
-                context={"messages": state.messages},
-                session_id=getattr(state, 'session_id', 'default')
+                context_messages=context_messages,
+                api_key=reasoning_api_key,
+                router_metadata=state.routing_metadata  # Pass routing metadata from router
             )
 
             # Log key reasoning results for observability
-            parent_span.set_attribute("reasoning.confidence", reasoning_state.overall_confidence)
-            if reasoning_state.query_analysis:
-                parent_span.set_attribute("reasoning.emotion", reasoning_state.query_analysis.emotional_state.value)
-                parent_span.set_attribute("reasoning.category", reasoning_state.query_analysis.problem_category.value)
-            if reasoning_state.self_critique_result:
-                parent_span.set_attribute("reasoning.critique_score", reasoning_state.self_critique_result.critique_score)
-                parent_span.set_attribute("reasoning.critique_passed", reasoning_state.self_critique_result.passed_critique)
+            parent_span.set_attribute("reasoning.confidence", reasoning_result.quality.confidence)
+            parent_span.set_attribute("reasoning.emotion", reasoning_result.analysis.emotion)
+            parent_span.set_attribute("reasoning.complexity", reasoning_result.analysis.complexity)
+            parent_span.set_attribute("reasoning.clarity", reasoning_result.quality.clarity)
+            parent_span.set_attribute("reasoning.completeness", reasoning_result.quality.completeness)
+            # Note: emotional_alignment might not be present in quality metrics
 
-            # The final, critiqued response is now ready to be streamed.
-            final_response = reasoning_state.response_orchestration.final_response_preview
-
-            if not final_response:
-                logger.warning("Reasoning completed but no final response was generated.")
-                from langchain_core.messages import AIMessage
-                return {"messages": [AIMessage(content="I'm sorry, I was unable to generate a response. Please try again.")], "qa_retry_count": 0}
-
-            # Create assistant message and return state diff
-            from langchain_core.messages import AIMessage
-            assistant_msg = AIMessage(content=final_response)
+            # Extract the final response
+            final_response = reasoning_result.final_response_markdown
             
-            # Extract thought steps for frontend display
-            thought_steps = []
-            if reasoning_state.reasoning_steps:
-                from app.agents_v2.orchestration.state import ThoughtStep
-                for step in reasoning_state.reasoning_steps:
-                    thought_steps.append(ThoughtStep(
-                        step=step.phase.value.replace("_", " ").title(),
-                        content=step.reasoning,
-                        confidence=step.confidence
-                    ))
+            if not final_response:
+                logger.warning("Reasoning completed but no final response was generated")
+                
+                # Generate fallback response based on available analysis
+                fallback_response = "I apologize, but I encountered an issue generating a response. Please try rephrasing your question."
+                
+                if reasoning_result.analysis:
+                    fallback_response = f"I understand you're asking about {reasoning_result.analysis.intent}. Let me help you with this issue. Please provide any additional details about what specific problem you're experiencing."
+                
+                from langchain_core.messages import AIMessage
+                return {"messages": [AIMessage(content=fallback_response)], "qa_retry_count": 0}
+
+            # Create messages with reasoning UI
+            from langchain_core.messages import AIMessage
+            messages = []
+            
+            # Add final response message with reasoning UI metadata
+            additional_kwargs = {
+                "message_type": "final",
+                "reasoning_ui": reasoning_result.reasoning_ui.model_dump(),  # Include reasoning UI for frontend
+                "confidence": reasoning_result.quality.confidence,
+            }
+            
+            # Add optional fields if they exist
+            if hasattr(reasoning_result.reasoning_ui, 'model_effective'):
+                additional_kwargs["model_effective"] = reasoning_result.reasoning_ui.model_effective
+            if hasattr(reasoning_result.reasoning_ui, 'budget'):
+                additional_kwargs["budget"] = reasoning_result.reasoning_ui.budget.model_dump()
+                
+            final_msg = AIMessage(
+                content=final_response,
+                additional_kwargs=additional_kwargs
+            )
+            messages.append(final_msg)
             
             # Save the interaction to memory for context retention
             session_id = getattr(state, 'session_id', None)
@@ -244,9 +401,8 @@ async def run_primary_agent(state: PrimaryAgentState) -> Dict[str, Any]:
 
             parent_span.set_status(Status(StatusCode.OK))
             return {
-                "messages": [assistant_msg],
-                "qa_retry_count": 0,
-                "thought_steps": thought_steps
+                "messages": messages,
+                "qa_retry_count": 0
             }
 
 

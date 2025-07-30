@@ -233,12 +233,21 @@ export function useChatHistory() {
 
   const selectSession = useCallback((sessionId: string) => {
     // Clear state to prevent bleed between sessions
-    setState(prev => ({
-      sessions: prev.sessions,  // Keep sessions list
-      currentSessionId: sessionId,
-      isPersistenceAvailable: prev.isPersistenceAvailable,
-      isLoading: false  // Ensure loading is false
-    }))
+    setState(prev => {
+      // Find the selected session to validate it exists
+      const selectedSession = prev.sessions.find(s => s.id === sessionId)
+      if (!selectedSession) {
+        console.warn(`Session ${sessionId} not found, ignoring selection`)
+        return prev
+      }
+      
+      return {
+        sessions: prev.sessions,  // Keep sessions list
+        currentSessionId: sessionId,
+        isPersistenceAvailable: prev.isPersistenceAvailable,
+        isLoading: false  // Ensure loading is false
+      }
+    })
   }, [])
 
   const updateSession = useCallback((sessionId: string, updates: Partial<ChatSession>) => {
@@ -252,7 +261,8 @@ export function useChatHistory() {
     }))
   }, [])
 
-  const deleteSession = useCallback((sessionId: string) => {
+  const deleteSession = useCallback(async (sessionId: string) => {
+    // Optimistic delete for better UX
     setState(prev => {
       const newSessions = prev.sessions.filter(s => s.id !== sessionId)
       const newCurrentId = prev.currentSessionId === sessionId
@@ -260,13 +270,28 @@ export function useChatHistory() {
         : prev.currentSessionId
 
       return {
+        ...prev,
         sessions: newSessions,
         currentSessionId: newCurrentId
       }
     })
-  }, [])
+    
+    // Try to delete from API if available
+    if (state.isPersistenceAvailable) {
+      try {
+        const sessionIdNumber = parseInt(sessionId)
+        if (!isNaN(sessionIdNumber)) {
+          await chatAPI.deleteSession(sessionIdNumber)
+        }
+      } catch (error) {
+        console.warn('Failed to delete session from API:', error)
+        // Session is already removed from local state, so we can continue
+      }
+    }
+  }, [state.isPersistenceAvailable])
 
-  const renameSession = useCallback((sessionId: string, newTitle: string) => {
+  const renameSession = useCallback(async (sessionId: string, newTitle: string) => {
+    // Optimistic update for better UX
     setState(prev => ({
       ...prev,
       sessions: prev.sessions.map(session =>
@@ -275,7 +300,20 @@ export function useChatHistory() {
           : session
       )
     }))
-  }, [])
+    
+    // Try to update via API if available
+    if (state.isPersistenceAvailable) {
+      try {
+        const sessionIdNumber = parseInt(sessionId)
+        if (!isNaN(sessionIdNumber)) {
+          await chatAPI.updateSession(sessionIdNumber, { title: newTitle })
+        }
+      } catch (error) {
+        console.warn('Failed to update session title via API:', error)
+        // Title is already updated locally, so we can continue
+      }
+    }
+  }, [state.isPersistenceAvailable])
 
   const addMessageToSession = useCallback(async (sessionId: string, message: UnifiedMessage) => {
     // Update local state immediately for responsive UI
@@ -312,6 +350,27 @@ export function useChatHistory() {
     return state.sessions.find(s => s.id === state.currentSessionId)
   }, [state.sessions, state.currentSessionId])
 
+  // Reset session state - useful when switching between sessions
+  const resetSessionState = useCallback(() => {
+    setState(prev => ({
+      ...prev,
+      currentSessionId: null
+    }))
+  }, [])
+  
+  // Clear all session data and reset to initial state
+  const clearAllSessions = useCallback(() => {
+    setState({
+      sessions: [],
+      currentSessionId: null,
+      isPersistenceAvailable: state.isPersistenceAvailable,
+      isLoading: false
+    })
+    
+    // Clear localStorage as well
+    localStorage.removeItem(STORAGE_KEY)
+  }, [state.isPersistenceAvailable])
+  
   return {
     sessions: state.sessions,
     currentSessionId: state.currentSessionId,
@@ -323,7 +382,9 @@ export function useChatHistory() {
     updateSession,
     deleteSession,
     renameSession,
-    addMessageToSession
+    addMessageToSession,
+    resetSessionState,
+    clearAllSessions
   }
 }
 

@@ -16,6 +16,7 @@ from app.core.rate_limiting import (
     CircuitBreakerOpenException,
     GeminiServiceUnavailableException
 )
+from app.core.rate_limiting.budget_manager import BudgetManager
 from app.core.logging_config import get_logger
 
 logger = get_logger("rate_limit_endpoints")
@@ -24,6 +25,7 @@ router = APIRouter(prefix="/rate-limits", tags=["rate-limiting"])
 
 # Global rate limiter instance
 _rate_limiter: Optional[GeminiRateLimiter] = None
+_budget_manager: Optional[BudgetManager] = None
 
 
 def get_rate_limiter() -> GeminiRateLimiter:
@@ -33,6 +35,16 @@ def get_rate_limiter() -> GeminiRateLimiter:
         config = RateLimitConfig.from_environment()
         _rate_limiter = GeminiRateLimiter(config)
     return _rate_limiter
+
+
+async def get_budget_manager() -> BudgetManager:
+    """Get or create budget manager instance."""
+    global _budget_manager
+    if _budget_manager is None:
+        config = RateLimitConfig.from_environment()
+        _budget_manager = BudgetManager(config)
+        await _budget_manager.initialize()
+    return _budget_manager
 
 
 class RateLimitStatus(BaseModel):
@@ -47,6 +59,53 @@ class ResetRequest(BaseModel):
     """Request model for resetting rate limits."""
     model: Optional[str] = None
     confirm: bool = False
+
+
+@router.get("/budget/status")
+async def get_budget_status():
+    """
+    Get budget status for all models with headroom information.
+    
+    Returns per-model usage, limits, and headroom for UI display.
+    Includes downgrade recommendations when approaching limits.
+    """
+    try:
+        budget_manager = await get_budget_manager()
+        all_headroom = await budget_manager.get_all_headroom()
+        
+        # Determine overall system status
+        statuses = [h["status"] for h in all_headroom.values()]
+        if all(s == "Exhausted" for s in statuses):
+            overall_status = "critical"
+            overall_message = "All models at capacity"
+        elif any(s == "Exhausted" for s in statuses):
+            overall_status = "warning" 
+            overall_message = "Some models approaching limits"
+        elif any(s == "Low" for s in statuses):
+            overall_status = "caution"
+            overall_message = "Budget headroom is low"
+        else:
+            overall_status = "healthy"
+            overall_message = "All models have good headroom"
+            
+        return {
+            "timestamp": datetime.utcnow(),
+            "status": overall_status,
+            "message": overall_message,
+            "models": all_headroom,
+            "recommendations": {
+                "gemini-2.5-pro": "Use for complex queries only" if all_headroom.get("gemini-2.5-pro", {}).get("status") != "OK" else None,
+                "gemini-2.5-flash": "Primary model for most queries",
+                "gemini-2.5-flash-lite": "Fallback for high volume"
+            }
+        }
+        
+    except Exception as e:
+        logger.error(f"Failed to get budget status: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to retrieve budget status: {str(e)}"
+        )
 
 
 @router.get("/status", response_model=RateLimitStatus)
