@@ -45,21 +45,31 @@ class EmotionTemplates:
         EmotionalState.FRUSTRATED: {
             "keywords": [
                 "stupid", "broken", "useless", "terrible", "awful", "horrible",
-                "worst", "hate", "frustrated", "annoying", "ridiculous", "pathetic"
+                "worst", "hate", "frustrated", "annoying", "ridiculous", "pathetic",
+                "fed up", "sick of", "tired of", "angry", "pissed", "mad",
+                "garbage", "trash", "crap", "sucks", "fail", "failing",
+                "never works", "always breaks", "constantly", "keeps happening"
             ],
             "patterns": [
-                r"(?i)this is (so |really )?stupid",
-                r"(?i)(completely|totally) broken",
-                r"(?i)doesn't work at all",
+                r"(?i)this is (so |really )?(stupid|ridiculous|broken)",
+                r"(?i)(completely|totally|absolutely) (broken|useless)",
+                r"(?i)doesn't work( at all)?",
                 r"(?i)waste of (time|money)",
+                r"(?i)nothing works",
+                r"(?i)why (doesn't|won't) (this|it)",
+                r"(?i)(sick|tired) of (this|dealing with)",
+                r"(?i)every (damn |single )?time",
                 r"!!{2,}",  # Multiple exclamation marks
                 r"[A-Z]{10,}",  # Long caps sequences
+                r"\?{3,}",  # Multiple question marks (frustration)
             ],
             "intensity_multipliers": {
                 "!!": 1.2,
-                "!!!": 1.5, 
+                "!!!": 1.5,
+                "!!!!+": 2.0, 
                 "CAPS": 1.3,
-                "profanity": 1.8
+                "profanity": 1.8,
+                "multiple_issues": 1.4  # "nothing works AND this is broken AND..."
             }
         },
         
@@ -81,16 +91,27 @@ class EmotionTemplates:
         EmotionalState.ANXIOUS: {
             "keywords": [
                 "urgent", "important", "worried", "concerned", "deadline", "asap",
-                "emergency", "critical", "losing", "lost", "missing", "scared"
+                "emergency", "critical", "losing", "lost", "missing", "scared",
+                "panicking", "freaking out", "help", "desperate", "immediately",
+                "right now", "can't lose", "backup", "recover", "afraid"
             ],
             "patterns": [
                 r"(?i)(urgent|emergency|critical|important)",
-                r"(?i)need (this|it) (today|now|asap)",
-                r"(?i)(worried|concerned) about",
-                r"(?i)(losing|lost) (emails|data)",
+                r"(?i)need (this|it) (today|now|asap|immediately)",
+                r"(?i)(worried|concerned|scared|afraid) (about|that)",
+                r"(?i)(losing|lost|missing) (emails|data|messages|files)",
                 r"(?i)deadline",
-                r"(?i)can't afford to"
-            ]
+                r"(?i)can't afford to",
+                r"(?i)please help",
+                r"(?i)(freaking|stressing) out",
+                r"(?i)what if (I|i've) lost",
+                r"(?i)need (to|this) work(ing)? (now|today)"
+            ],
+            "intensity_multipliers": {
+                "all_caps_help": 1.5,  # "HELP" or "URGENT"
+                "multiple_urgent": 1.3,  # Multiple urgency indicators
+                "time_pressure": 1.4  # "in 5 minutes", "by noon", etc.
+            }
         },
         
         EmotionalState.PROFESSIONAL: {
@@ -151,54 +172,54 @@ class EmotionTemplates:
         }
     }
     
-    # Empathy response templates by emotion
+    # Empathy response templates by emotion - Hemingway clarity + Oprah warmth
     EMPATHY_TEMPLATES = {
         EmotionalState.FRUSTRATED: [
-            "I completely understand how frustrating it must be when {issue}. This definitely isn't the experience we want you to have with Mailbird, and I sincerely apologize for the inconvenience. Let me help you resolve this right away...",
-            "I can really hear your frustration about {issue}, and I don't blame you one bit. Email is such an essential part of your workflow, and when it's not working properly, it affects everything. Let's get this sorted out for you immediately...",
-            "Your frustration is completely valid - {issue} should absolutely work better than this. I'm genuinely sorry this is causing you stress. I'm here to make this right and get you back to productive email management..."
+            "Oh, {issue} is maddening! I get it. Let's fix this right now.",
+            "That's infuriating when {issue} happens. You shouldn't have to deal with this. Here's the fix.",
+            "I hear you - {issue} is the worst. Let me make this right, fast."
         ],
         
         EmotionalState.CONFUSED: [
-            "No worries at all - {topic} can be tricky! I'm here to guide you through this step by step. Let's start with...",
-            "I totally understand the confusion around {topic}. Email client setup can involve a lot of moving parts, and it's completely normal to need guidance. Let me walk you through this clearly...",
-            "Don't worry about not understanding {topic} immediately - these systems can be complex! I'll explain everything in simple terms and make sure you're comfortable with each step..."
+            "Hey, {topic} trips everyone up! Let me break it down super simply.",
+            "{topic} is confusing - you're not alone! Here's the easy way.",
+            "No worries - {topic} makes zero sense until someone explains it properly. That's what I'm here for!"
         ],
         
         EmotionalState.ANXIOUS: [
-            "I want to reassure you right away that {concern}. Your emails and data are safe, and we can definitely resolve this situation. Here's exactly what we'll do...",
-            "I understand how concerning {issue} must be, especially when you're dealing with important emails. Let me put your mind at ease - we have reliable solutions for this, and I'll guide you through everything...",
-            "I can sense your urgency about {concern}, and I want to address that worry immediately. Mailbird is designed with data safety in mind, and we'll get this resolved quickly..."
+            "First, breathe - your emails are safe. {concern} is fixable. Here's how.",
+            "I know {issue} feels scary. Your data is secure. Let's solve this together.",
+            "Don't panic about {concern}. Everything's backed up. Here's what we'll do."
         ],
         
         EmotionalState.PROFESSIONAL: [
-            "Thank you for reaching out about {issue}. I'll provide you with comprehensive assistance to resolve this efficiently...",
-            "I appreciate you taking the time to contact us regarding {topic}. Let me provide you with the detailed information you need...",
-            "Thank you for your professional inquiry about {issue}. I'm happy to provide thorough guidance on this matter..."
+            "Thanks for reaching out about {issue}. Here's your solution.",
+            "I'll handle {topic} efficiently for you. Let's dive in.",
+            "Regarding {issue} - here's exactly what you need."
         ],
         
         EmotionalState.EXCITED: [
-            "I love your enthusiasm about {topic}! Mailbird really shines when it comes to {feature}, and I'm excited to help you get the most out of it...",
-            "It's wonderful to hear your positive experience with {feature}! Let me share some additional insights that will make your Mailbird experience even better...",
-            "Your excitement about {topic} is contagious! There are some fantastic features I think you'll love even more. Let me show you..."
+            "Your enthusiasm about {topic} is awesome! Wait till you see this...",
+            "Love the energy! {feature} gets even better. Check this out.",
+            "You're excited about {topic}? Oh, you're going to LOVE what's next!"
         ],
         
         EmotionalState.URGENT: [
-            "I understand this is time-sensitive for you. Let me provide you with the fastest path to resolution for {issue}...",
-            "Given the urgency of {issue}, I'll give you both a quick workaround and the complete solution. Here's what you can do right now...",
-            "I recognize you need this resolved quickly. Let me prioritize the most effective solution for {issue} that will get you back up and running immediately..."
+            "Time's critical. Here's the fastest fix for {issue}.",
+            "I see the urgency. Quick solution for {issue} coming up.",
+            "No time to waste. {issue} fixed in 3 steps. Go!"
         ],
         
         EmotionalState.DISAPPOINTED: [
-            "I'm genuinely sorry that {issue} hasn't met your expectations. That's not the Mailbird experience we want you to have, and I'd like to make this right...",
-            "I understand your disappointment about {issue}. We clearly haven't delivered the experience you were hoping for, and I want to address that directly...",
-            "Your disappointment is completely understandable given {issue}. Let me work to restore your confidence in Mailbird by getting this properly resolved..."
+            "I'm sorry {issue} let you down. That's on us. Let me fix it.",
+            "{issue} should work better. You're right. Here's how we'll make it right.",
+            "You expected better from {issue}, and you should have gotten it. Let's turn this around."
         ],
         
         EmotionalState.NEUTRAL: [
-            "I'm happy to help you with {issue}. Let me provide you with a clear solution...",
-            "Thanks for reaching out about {topic}. Here's how we can address this...",
-            "I'll help you resolve {issue} efficiently. Here's what we need to do..."
+            "Happy to help with {issue}. Here's what you need.",
+            "{topic}? I've got you covered.",
+            "Let's solve {issue} quickly and easily."
         ]
     }
     
@@ -242,6 +263,30 @@ class EmotionTemplates:
             "structure": "enthusiasm match → feature education → advanced tips → exploration encouragement",
             "language": "positive, feature-rich",
             "extras": ["advanced features", "pro tips", "hidden gems"]
+        },
+        
+        EmotionalState.URGENT: {
+            "tone": "immediate and action-focused",
+            "pace": "fast and direct",
+            "structure": "immediate action → quick solution → verification → follow-up",
+            "language": "concise, time-conscious",
+            "extras": ["priority handling", "escalation options"]
+        },
+        
+        EmotionalState.DISAPPOINTED: {
+            "tone": "understanding and recovery-focused",
+            "pace": "acknowledge disappointment then rebuild confidence",
+            "structure": "acknowledgment → apology → enhanced solution → relationship repair",
+            "language": "empathetic, solution-oriented",
+            "extras": ["exceed expectations", "prevent recurrence"]
+        },
+        
+        EmotionalState.NEUTRAL: {
+            "tone": "professional and helpful",
+            "pace": "steady and thorough",
+            "structure": "greeting → clear solution → verification → assistance offer",
+            "language": "clear, professional, informative",
+            "extras": ["efficiency tips", "additional resources"]
         }
     }
     
@@ -280,15 +325,38 @@ class EmotionTemplates:
                     score += 2.0  # Patterns are stronger indicators
                     emotion_indicators.append(f"pattern: {pattern}")
             
-            # Apply intensity multipliers
+            # Apply intensity multipliers with capping to prevent excessive inflation
             multipliers = patterns.get("intensity_multipliers", {})
+            total_multiplier = 1.0
+            exclamation_applied = False
+            
             for trigger, multiplier in multipliers.items():
-                if trigger == "!!!" and "!!!" in message:
-                    score *= multiplier
-                elif trigger == "!!" and "!!" in message:
-                    score *= multiplier
+                # Handle exclamation marks with priority (only apply one)
+                if trigger == "!!!!+" and "!!!!" in message and not exclamation_applied:
+                    total_multiplier *= multiplier
+                    exclamation_applied = True
+                elif trigger == "!!!" and "!!!" in message and not exclamation_applied:
+                    total_multiplier *= multiplier
+                    exclamation_applied = True
+                elif trigger == "!!" and "!!" in message and not exclamation_applied:
+                    total_multiplier *= multiplier
+                    exclamation_applied = True
+                
+                # Handle other multipliers independently
                 elif trigger == "CAPS" and has_caps:
-                    score *= multiplier
+                    total_multiplier *= min(multiplier, 1.5)  # Cap CAPS multiplier
+                elif trigger == "all_caps_help" and any(word in message for word in ["HELP", "URGENT", "ASAP"]):
+                    total_multiplier *= min(multiplier, 1.4)  # Cap help multiplier
+                elif trigger == "multiple_urgent" and sum(1 for word in ["urgent", "asap", "now", "immediately"] if word in message_lower) >= 2:
+                    total_multiplier *= min(multiplier, 1.3)  # Cap urgent multiplier
+                elif trigger == "time_pressure" and re.search(r"(?i)(in \d+ (minutes?|hours?)|by \d+|before \d+)", message):
+                    total_multiplier *= min(multiplier, 1.4)  # Cap time pressure multiplier
+                elif trigger == "multiple_issues" and cls._detect_multiple_issues(message_lower):
+                    total_multiplier *= min(multiplier, 1.4)  # Cap multiple issues multiplier
+            
+            # Cap the total multiplier to prevent score inflation
+            total_multiplier = min(total_multiplier, 3.0)
+            score *= total_multiplier
             
             if score > 0:
                 scores[emotion] = score
@@ -322,6 +390,38 @@ class EmotionTemplates:
             detected_indicators=detected_indicators,
             secondary_emotions=secondary_emotions
         )
+    
+    @classmethod
+    def _detect_multiple_issues(cls, message_lower: str) -> bool:
+        """
+        Improved detection for multiple issues to reduce false positives.
+        
+        Args:
+            message_lower: Lowercase message content
+            
+        Returns:
+            True if multiple distinct issues are detected
+        """
+        # Look for issue patterns rather than just counting "and"
+        issue_indicators = [
+            "can't", "cannot", "doesn't", "won't", "not working", "broken",
+            "error", "problem", "issue", "trouble", "fail", "crash",
+            "stuck", "help", "missing", "lost", "slow", "freeze",
+            # Expanded issue indicators
+            "stopped working", "not responding", "won't load", "keeps crashing",
+            "timeout", "connection failed", "sync error", "login failed",
+            "can't connect", "authentication", "blocked", "denied",
+            "corrupted", "damaged", "invalid", "expired", "outdated"
+        ]
+        
+        # Count distinct issue indicators
+        issue_count = sum(1 for indicator in issue_indicators if indicator in message_lower)
+        
+        # Multiple issues if we have 2+ issue indicators AND connector words
+        connectors = ["and", "also", "plus", "additionally", "furthermore", "moreover"]
+        has_connectors = any(connector in message_lower for connector in connectors)
+        
+        return issue_count >= 2 and has_connectors
     
     @classmethod
     def get_empathy_template(cls, emotion: EmotionalState, issue: str = "") -> str:

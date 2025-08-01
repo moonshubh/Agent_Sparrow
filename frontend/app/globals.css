@@ -189,6 +189,23 @@
     max-width: none;
   }
   
+  /* Model Selector Repositioned Styling */
+  .model-selector-repositioned [data-radix-select-trigger] {
+    border: 1px solid hsl(var(--border));
+    transition: all 0.2s ease;
+  }
+  
+  .model-selector-repositioned [data-radix-select-trigger]:hover {
+    border-color: hsl(var(--accent) / 0.3);
+  }
+  
+  .model-selector-repositioned [data-radix-select-trigger]:is(:focus, :focus-visible) {
+    border-color: hsl(var(--accent) / 0.5);
+    box-shadow: 0 0 0 0.5px hsl(var(--accent) / 0.5);
+    outline: 2px solid hsl(var(--accent));
+    outline-offset: 2px;
+  }
+  
   /* Content-aware message containers */
   .message-container-primary {
     width: 100%;

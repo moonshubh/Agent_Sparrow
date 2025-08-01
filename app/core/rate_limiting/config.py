@@ -56,10 +56,28 @@ class RateLimitConfig:
     max_retry_attempts: int = 3
     retry_backoff_factor: float = 0.5
     
+    # Smart pacing configuration for multi-phase reasoning
+    enable_smart_pacing: bool = True
+    pro_reasoning_delay_seconds: float = 12.0  # 12 seconds between Pro model calls
+    flash_reasoning_delay_seconds: float = 0.0  # No delay for Flash model
+    max_reasoning_time_minutes: int = 5  # Maximum time for full reasoning pipeline
+    
     def __post_init__(self):
         """Validate configuration after initialization."""
         if self.safety_margin < 0 or self.safety_margin > 0.5:
             raise ValueError("Safety margin must be between 0 and 0.5")
+        
+        if self.pro_reasoning_delay_seconds < 0:
+            raise ValueError("Pro reasoning delay must be non-negative")
+        
+        if self.flash_reasoning_delay_seconds < 0:
+            raise ValueError("Flash reasoning delay must be non-negative")
+        
+        if self.max_reasoning_time_minutes <= 0:
+            raise ValueError("Max reasoning time must be positive")
+        
+        if self.retry_backoff_factor < 0:
+            raise ValueError("Retry backoff factor must be non-negative")
         
         if self.flash_rpm_limit <= 0 or self.flash_rpd_limit <= 0:
             raise ValueError("Flash rate limits must be positive")
@@ -88,6 +106,11 @@ class RateLimitConfig:
             circuit_breaker_timeout_seconds=int(os.getenv("CIRCUIT_BREAKER_TIMEOUT", "60")),
             safety_margin=float(os.getenv("RATE_LIMIT_SAFETY_MARGIN", "0.2")),
             monitoring_enabled=parse_boolean_env(os.getenv("RATE_LIMIT_MONITORING_ENABLED", "true")),
+            # Smart pacing configuration
+            enable_smart_pacing=parse_boolean_env(os.getenv("ENABLE_SMART_PACING", "true")),
+            pro_reasoning_delay_seconds=float(os.getenv("PRO_REASONING_DELAY_SECONDS", "12.0")),
+            flash_reasoning_delay_seconds=float(os.getenv("FLASH_REASONING_DELAY_SECONDS", "0.0")),
+            max_reasoning_time_minutes=int(os.getenv("MAX_REASONING_TIME_MINUTES", "5"))
         )
     
     def get_effective_limits(self, model: str) -> tuple[int, int]:

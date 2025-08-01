@@ -1,12 +1,11 @@
 """
-Agent Sparrow - Advanced Reasoning Framework
+Agent Sparrow - Unified Deep Reasoning Framework
 
-This module provides sophisticated reasoning capabilities for Agent Sparrow,
-implementing chain-of-thought processing, multi-step problem solving, and
-enhanced tool decision logic with reasoning transparency.
+This module provides the unified deep reasoning capabilities for Agent Sparrow,
+implementing single-pass reasoning with model-specific prompting and safety features.
 """
 
-from .reasoning_engine import ReasoningEngine, ReasoningConfig
+from .schemas import ReasoningConfig
 from .schemas import (
     ReasoningState,
     ReasoningStep,
@@ -14,17 +13,16 @@ from .schemas import (
     ToolDecisionReasoning,
     QualityAssessment
 )
-from .problem_solver import ProblemSolvingFramework
-from .tool_intelligence import ToolIntelligence
+from .unified_deep_reasoning_engine import UnifiedDeepReasoningEngine
+from .safety_redactor import SafetyRedactor
 
 __all__ = [
-    "ReasoningEngine",
-    "ReasoningConfig", 
+    "ReasoningConfig",
     "ReasoningState",
     "ReasoningStep",
     "ProblemSolvingPhase",
     "ToolDecisionReasoning",
     "QualityAssessment",
-    "ProblemSolvingFramework",
-    "ToolIntelligence"
+    "UnifiedDeepReasoningEngine",
+    "SafetyRedactor"
 ]

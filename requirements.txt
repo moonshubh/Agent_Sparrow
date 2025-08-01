@@ -7,11 +7,13 @@ pydantic==2.11.5
 pydantic-settings
 python-dotenv
 
-# Langchain Stack
+# Langchain Stack - Aligned versions for compatibility
 langchain==0.3.25
-langchain-core==0.3.65
+langchain-core==0.3.25  # Aligned with base langchain version
 langchain-community==0.3.25
 langchain-google-genai==2.1.5
+langchain-openai==0.3.25  # Aligned with base langchain version
+langchain-huggingface==0.1.2  # Different versioning scheme - latest compatible
 langgraph
 
 
@@ -29,8 +31,9 @@ psycopg2-binary>=2.9.0  # For PostgreSQL database access
 sqlalchemy>=2.0.0  # For ORM functionality
 
 # External Tools
-tavily-python==0.3.0
+tavily-python>=0.3.0,<1.0.0  # Version upper bound to prevent incompatible future versions
 firecrawl-py # For data_importer.py
+numpy<2.0.0  # For compatibility with langchain-chroma
 
 # HTML Parsing (for Zendesk ticket support)
 beautifulsoup4==4.12.3

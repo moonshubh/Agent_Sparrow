@@ -6,12 +6,12 @@ You are an expert query routing assistant. Your task is to classify the user's q
 
 User Query:
 """
-{{query}}
+{query}
 """
 
 Your goal is to route the user's query to the correct agent. The agents are: `primary_agent`, `log_analyst`, and `researcher`. Based on the query, specify the single most appropriate agent for the task in the `destination` field.
 
-Query: {{query}} 
+Query: {query} 
 
 Return the result **strictly** as a single-line JSON object with exactly these two keys:
 

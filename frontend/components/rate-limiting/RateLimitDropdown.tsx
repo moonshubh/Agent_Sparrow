@@ -207,14 +207,14 @@ export const RateLimitDropdown: React.FC<RateLimitDropdownProps> = ({
                 <Tooltip>
                   <TooltipTrigger>
                     <Badge variant="outline" className="text-xs">
-                      {flash_stats.rpm_used}/{flash_stats.rpm_limit} RPM
+                      {flash_stats.rpd_used}/{flash_stats.rpd_limit} RPD
                     </Badge>
                   </TooltipTrigger>
                   <TooltipContent>
                     <div className="text-xs">
-                      <div>Requests per minute: {flash_stats.rpm_used}/{flash_stats.rpm_limit}</div>
                       <div>Daily usage: {flash_stats.rpd_used}/{flash_stats.rpd_limit}</div>
-                      <div>RPM resets in: {formatTimeRemaining(getTimeToReset(flash_stats.reset_time_rpm))}</div>
+                      <div>Per minute: {flash_stats.rpm_used}/{flash_stats.rpm_limit}</div>
+                      <div>Daily resets in: {formatTimeRemaining(getTimeToReset(flash_stats.reset_time_rpd))}</div>
                     </div>
                   </TooltipContent>
                 </Tooltip>
@@ -222,13 +222,13 @@ export const RateLimitDropdown: React.FC<RateLimitDropdownProps> = ({
             </div>
             <div className="space-y-1">
               <Progress 
-                value={utilization.flash_rpm * 100} 
+                value={utilization.flash_rpd * 100} 
                 className="h-2"
-                indicatorClassName={getUtilizationColor(getUtilizationLevel(utilization.flash_rpm))}
+                indicatorClassName={getUtilizationColor(getUtilizationLevel(utilization.flash_rpd))}
               />
               <div className="flex justify-between text-xs text-gray-500">
-                <span>RPM: {Math.round(utilization.flash_rpm * 100)}%</span>
                 <span>Daily: {Math.round(utilization.flash_rpd * 100)}%</span>
+                <span>RPM: {Math.round(utilization.flash_rpm * 100)}%</span>
               </div>
             </div>
           </div>
@@ -244,14 +244,14 @@ export const RateLimitDropdown: React.FC<RateLimitDropdownProps> = ({
                 <Tooltip>
                   <TooltipTrigger>
                     <Badge variant="outline" className="text-xs">
-                      {pro_stats.rpm_used}/{pro_stats.rpm_limit} RPM
+                      {pro_stats.rpd_used}/{pro_stats.rpd_limit} RPD
                     </Badge>
                   </TooltipTrigger>
                   <TooltipContent>
                     <div className="text-xs">
-                      <div>Requests per minute: {pro_stats.rpm_used}/{pro_stats.rpm_limit}</div>
                       <div>Daily usage: {pro_stats.rpd_used}/{pro_stats.rpd_limit}</div>
-                      <div>RPM resets in: {formatTimeRemaining(getTimeToReset(pro_stats.reset_time_rpm))}</div>
+                      <div>Per minute: {pro_stats.rpm_used}/{pro_stats.rpm_limit}</div>
+                      <div>Daily resets in: {formatTimeRemaining(getTimeToReset(pro_stats.reset_time_rpd))}</div>
                     </div>
                   </TooltipContent>
                 </Tooltip>
@@ -259,13 +259,13 @@ export const RateLimitDropdown: React.FC<RateLimitDropdownProps> = ({
             </div>
             <div className="space-y-1">
               <Progress 
-                value={utilization.pro_rpm * 100} 
+                value={utilization.pro_rpd * 100} 
                 className="h-2"
-                indicatorClassName={getUtilizationColor(getUtilizationLevel(utilization.pro_rpm))}
+                indicatorClassName={getUtilizationColor(getUtilizationLevel(utilization.pro_rpd))}
               />
               <div className="flex justify-between text-xs text-gray-500">
-                <span>RPM: {Math.round(utilization.pro_rpm * 100)}%</span>
                 <span>Daily: {Math.round(utilization.pro_rpd * 100)}%</span>
+                <span>RPM: {Math.round(utilization.pro_rpm * 100)}%</span>
               </div>
             </div>
           </div>

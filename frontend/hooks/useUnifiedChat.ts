@@ -2,6 +2,7 @@
 
 import { useState, useCallback, useRef, useEffect } from "react"
 import { toast } from "sonner"
+import { streamChat } from "@/lib/sse"
 
 // Types for unified chat system
 export interface UnifiedMessage {
@@ -41,7 +42,14 @@ export interface UnifiedChatState {
 
 export interface UseUnifiedChatReturn {
   state: UnifiedChatState
-  sendMessage: (content: string, files?: File[], sessionId?: string) => Promise<void>
+  /**
+   * Send a message to the chat with optional file attachments, session ID, and model selection.
+   * @param content - The message content
+   * @param files - Optional file attachments (for log analysis)
+   * @param sessionId - Optional session ID. Expected format: numeric string (e.g., "123") or null/undefined
+   * @param model - Optional model selection for primary agent (e.g., 'google/gemini-2.5-flash')
+   */
+  sendMessage: (content: string, files?: File[], sessionId?: string, model?: string) => Promise<void>
   clearConversation: () => void
   retryLastMessage: () => Promise<void>
   loadSessionMessages: (messages: UnifiedMessage[], agentType?: 'primary' | 'log_analysis' | 'research') => void
@@ -54,6 +62,13 @@ const generateUniqueId = (prefix: string = ''): string => {
   const timestamp = Date.now()
   const counter = ++messageIdCounter
   return prefix ? `${prefix}-${timestamp}-${counter}` : `${timestamp}-${counter}`
+}
+
+// Helper function to parse session ID with validation
+const parseSessionId = (sessionId?: string): number | null => {
+  if (!sessionId) return null
+  const numericSessionId = parseInt(sessionId, 10)
+  return !isNaN(numericSessionId) ? numericSessionId : null
 }
 
 /**
@@ -166,7 +181,14 @@ export function useUnifiedChat(): UseUnifiedChatReturn {
     return "primary"
   }
 
-  const sendMessage = useCallback(async (content: string, files?: File[], sessionId?: string) => {
+  /**
+   * Sends a message to the unified chat system with optional file attachments, session ID, and model selection.
+   * @param content - The message content to send
+   * @param files - Optional file attachments (primarily for log analysis)
+   * @param sessionId - Optional session ID. Expected format: numeric string (e.g., "123") or null/undefined
+   * @param model - Optional model selection for primary agent
+   */
+  const sendMessage = useCallback(async (content: string, files?: File[], sessionId?: string, model?: string) => {
     if (!content.trim() && (!files || files.length === 0)) return
 
     if (abortControllerRef.current) {
@@ -205,11 +227,12 @@ export function useUnifiedChat(): UseUnifiedChatReturn {
 
     try {
       if (suggestedAgent === 'log_analyst' && files && files.length > 0) {
-        await handleLogAnalysis(content, files[0], abortController, sessionId)
+        await handleLogAnalysis(content, files[0], abortController, sessionId, model)
       } else if (suggestedAgent === 'researcher') {
-        await handleResearchQuery(content, abortController, sessionId)
+        await handleResearchQuery(content, abortController, sessionId, model)
       } else {
-        await handleUnifiedChat(content, suggestedAgent, abortController, sessionId)
+        // Use streaming for primary agent
+        await handleStreamingChat(content, abortController, sessionId, model)
       }
     } catch (error: any) {
       if (error.name !== 'AbortError') {
@@ -231,13 +254,138 @@ export function useUnifiedChat(): UseUnifiedChatReturn {
     }
   }, [apiBaseUrl])
   
-  const handleUnifiedChat = async (content: string, suggestedAgent: string, abortController: AbortController, sessionId?: string) => {
+  const handleStreamingChat = async (content: string, abortController: AbortController, sessionId?: string, model?: string) => {
+    try {
+      console.log('🚀 Starting SSE streaming to:', `/api/v1/agent/chat/stream`)
+      
+      // Add thinking message
+      const thinkingMessage: UnifiedMessage = {
+        id: generateUniqueId('thinking'),
+        type: 'agent',
+        content: 'Analyzing your request...',
+        timestamp: new Date(),
+        agentType: 'primary',
+        metadata: {
+          messageType: 'thinking'
+        }
+      }
+      
+      setState(prev => ({
+        ...prev,
+        messages: [...prev.messages, thinkingMessage]
+      }))
+      
+      let assistantContent = ''
+      let reasoningUI = null
+      const DEFAULT_MODEL = 'gemini-2.5-flash'
+      let modelEffective = model || DEFAULT_MODEL
+      let budget = null
+      
+      const cleanup = await streamChat(
+        `/api/v1/agent/chat/stream`,
+        {
+          message: content,
+          model: model
+        },
+        {
+          onThinking: (data) => {
+            console.log('💭 Thinking:', data)
+          },
+          onToken: (token) => {
+            assistantContent += token
+            
+            // Update the thinking message with streaming content
+            setState(prev => ({
+              ...prev,
+              messages: prev.messages.map(msg => 
+                msg.id === thinkingMessage.id 
+                  ? { ...msg, content: assistantContent, streaming: true }
+                  : msg
+              )
+            }))
+          },
+          onFinal: (data) => {
+            console.log('✅ Final data:', data)
+            
+            // Extract data from final event
+            reasoningUI = data.reasoning_ui
+            modelEffective = data.model_effective
+            budget = data.budget
+            
+            // Replace thinking message with final message
+            const finalMessage: UnifiedMessage = {
+              id: generateUniqueId('assistant'),
+              type: 'agent',
+              content: data.final_response_markdown || assistantContent,
+              timestamp: new Date(),
+              agentType: 'primary',
+              streaming: false,
+              metadata: {
+                messageType: 'final',
+                reasoningUI,
+                confidence: reasoningUI?.confidence
+              }
+            }
+            
+            setState(prev => ({
+              ...prev,
+              messages: prev.messages.map(msg => 
+                msg.id === thinkingMessage.id ? finalMessage : msg
+              ),
+              isProcessing: false,
+              currentAgent: null
+            }))
+            
+            // Show budget warning if needed
+            if (budget?.headroom === 'Low' || budget?.headroom === 'Exhausted') {
+              toast.warning(`Model budget is ${budget.headroom.toLowerCase()}`)
+            }
+          },
+          onError: (error) => {
+            console.error('❌ Streaming error:', error)
+            setState(prev => ({
+              ...prev,
+              messages: prev.messages.filter(msg => msg.id !== thinkingMessage.id),
+              isProcessing: false,
+              error: error.message
+            }))
+            toast.error('Failed to get response')
+          }
+        }
+      )
+      
+      // Store cleanup function with proper AbortController interface
+      const customAbortController: AbortController = {
+        signal: abortController.signal,
+        abort: () => {
+          cleanup()
+          abortController.abort()
+        }
+      }
+      abortControllerRef.current = customAbortController
+      
+    } catch (error: any) {
+      console.error('💥 Streaming error:', error)
+      setState(prev => ({
+        ...prev,
+        isProcessing: false,
+        error: error.message
+      }))
+      toast.error('Failed to connect to streaming endpoint')
+    }
+  }
+  
+  const handleUnifiedChat = async (content: string, suggestedAgent: string, abortController: AbortController, sessionId?: string, model?: string) => {
     try {
       console.log('🚀 Making API call to:', `${apiBaseUrl}/agent`)
+      // Parse and validate session ID
+      const parsedSessionId = parseSessionId(sessionId)
+      
       const payload = { 
         query: content,
         log_content: null,
-        session_id: sessionId ? parseInt(sessionId) : null
+        session_id: parsedSessionId,
+        model: model
       }
       console.log('📤 Request payload:', payload)
       
@@ -266,51 +414,92 @@ export function useUnifiedChat(): UseUnifiedChatReturn {
       let thoughtSteps: Array<{step: string, content: string, confidence?: number}> = []
       let agentType = "primary"
       
-      // Handle different response formats
+      // Handle multiple messages from backend (thinking + final response)
+      const responseMessages: UnifiedMessage[] = []
+      
       if (finalState.messages && finalState.messages.length > 0) {
-        // Get the last AI message
-        const lastMessage = finalState.messages[finalState.messages.length - 1]
-        if (lastMessage.type === 'ai' || lastMessage.type === 'assistant') {
-          agentResponse = lastMessage.content
-        }
+        finalState.messages.forEach((message: any, index: number) => {
+          if (message.type === 'ai' || message.type === 'assistant') {
+            // Check if this is a thinking message
+            const isThinking = message.additional_kwargs?.message_type === 'thinking'
+            
+            if (isThinking) {
+              // Create thinking message
+              const thinkingMessage: UnifiedMessage = {
+                id: generateUniqueId('thinking'),
+                type: "agent",
+                content: message.content,
+                timestamp: new Date(),
+                agentType: "primary",
+                thoughtSteps: message.additional_kwargs?.thought_steps?.map((step: any) => ({
+                  step: step.step,
+                  content: step.content,
+                  confidence: step.confidence
+                })) || [],
+                metadata: {
+                  messageType: 'thinking',
+                  reasoningSummary: message.additional_kwargs?.reasoning_summary,
+                  overallConfidence: message.additional_kwargs?.overall_confidence,
+                  routingReason: "Agent thinking process"
+                }
+              }
+              responseMessages.push(thinkingMessage)
+            } else {
+              // This is the final response message
+              agentResponse = message.content
+              
+              // Determine agent type from response
+              if (finalState.destination) {
+                switch (finalState.destination) {
+                  case 'log_analysis':
+                    agentType = 'log_analyst'
+                    break
+                  case 'research':
+                    agentType = 'researcher'
+                    break
+                  default:
+                    agentType = 'primary'
+                }
+              }
+              
+              // Create the final response message
+              const finalMessage: UnifiedMessage = {
+                id: generateUniqueId('agent'),
+                type: "agent",
+                content: agentResponse || "I apologize, but I couldn't generate a proper response. Please try again.",
+                timestamp: new Date(),
+                agentType: agentType as "primary" | "log_analyst" | "researcher",
+                metadata: {
+                  messageType: 'final',
+                  sources: finalState.sources || [],
+                  routingReason: finalState.routing_reason || `Processed by ${agentType} agent`
+                }
+              }
+              responseMessages.push(finalMessage)
+            }
+          }
+        })
       }
       
-      // Extract thought steps if available
-      if (finalState.thought_steps && Array.isArray(finalState.thought_steps)) {
-        thoughtSteps = finalState.thought_steps
-      }
-      
-      // Determine agent type from response
-      if (finalState.destination) {
-        switch (finalState.destination) {
-          case 'log_analysis':
-            agentType = 'log_analyst'
-            break
-          case 'research':
-            agentType = 'researcher'
-            break
-          default:
-            agentType = 'primary'
+      // If no messages were processed, create a fallback message
+      if (responseMessages.length === 0) {
+        const fallbackMessage: UnifiedMessage = {
+          id: generateUniqueId('agent'),
+          type: "agent",
+          content: "I apologize, but I couldn't generate a proper response. Please try again.",
+          timestamp: new Date(),
+          agentType: "primary",
+          metadata: {
+            messageType: 'final',
+            routingReason: "Fallback response"
+          }
         }
-      }
-      
-      // Create the response message
-      const agentMessage: UnifiedMessage = {
-        id: generateUniqueId('agent'),
-        type: "agent",
-        content: agentResponse || "I apologize, but I couldn't generate a proper response. Please try again.",
-        timestamp: new Date(),
-        agentType: agentType as "primary" | "log_analyst" | "researcher",
-        thoughtSteps: thoughtSteps.length > 0 ? thoughtSteps : undefined,
-        metadata: {
-          sources: finalState.sources || [],
-          routingReason: finalState.routing_reason || `Processed by ${agentType} agent`
-        }
+        responseMessages.push(fallbackMessage)
       }
       
       setState(prev => ({
         ...prev,
-        messages: [...prev.messages, agentMessage],
+        messages: [...prev.messages, ...responseMessages],
         isProcessing: false,
         currentAgent: agentType as "primary" | "log_analyst" | "researcher"
       }))
@@ -325,7 +514,7 @@ export function useUnifiedChat(): UseUnifiedChatReturn {
     }
   }
   
-  const handleLogAnalysis = async (content: string, file: File, abortController: AbortController, sessionId?: string) => {
+  const handleLogAnalysis = async (content: string, file: File, abortController: AbortController, sessionId?: string, model?: string) => {
     try {
       // Add progress message
       const progressMessage: UnifiedMessage = {
@@ -364,13 +553,17 @@ export function useUnifiedChat(): UseUnifiedChatReturn {
       }, 600000) // 10 minutes
       
       try {
+        // Parse and validate session ID
+        const parsedSessionId = parseSessionId(sessionId)
+        
         const response = await fetch(`${apiBaseUrl}/agent`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ 
             query: content,
             log_content: fileContent,
-            session_id: sessionId ? parseInt(sessionId) : null
+            session_id: parsedSessionId,
+            model: model
           }),
           signal: abortController.signal
         })
@@ -463,20 +656,24 @@ export function useUnifiedChat(): UseUnifiedChatReturn {
     }
   }
 
-const handleResearchQuery = async (content: string, abortController: AbortController, sessionId?: string) => {
+const handleResearchQuery = async (content: string, abortController: AbortController, sessionId?: string, model?: string) => {
     // Generate a single, stable ID for the entire research stream
     const messageId = generateUniqueId('agent');
     let accumulatedContent = '';
     const steps: any[] = [];
 
     try {
+      // Parse and validate session ID
+      const parsedSessionId = parseSessionId(sessionId)
+      
       const response = await fetch(`${apiBaseUrl}/agent`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ 
           query: content,
           log_content: null,
-          session_id: sessionId ? parseInt(sessionId) : null
+          session_id: parsedSessionId,
+          model: model
         }),
         signal: abortController.signal
       });

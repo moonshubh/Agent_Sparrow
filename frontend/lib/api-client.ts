@@ -424,12 +424,13 @@ export const apiKeyAPI = {
 
 export const agentAPI = {
   chat: (
-    message: string, 
-    onMessage: (data: any) => void,
+    message: string,
+    model?: string,
+    onMessage?: (data: any) => void,
     onError?: (error: Error) => void,
     onClose?: () => void
   ): Promise<EnhancedEventSource> =>
-    apiClient.stream('/api/v1/v2/agent/chat/stream', { message }, onMessage, { onError, onClose }),
+    apiClient.stream('/api/v1/v2/agent/chat/stream', { message, model }, onMessage, { onError, onClose }),
 
   analyzeLogs: (content: string): Promise<any> =>
     apiClient.post('/api/v1/agent/logs', { content }),

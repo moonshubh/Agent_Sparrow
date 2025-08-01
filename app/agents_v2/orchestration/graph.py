@@ -8,11 +8,23 @@ from .state import GraphState
 print("--- [graph.py] Imported GraphState ---")
 print("--- [graph.py] Importing run_primary_agent ---")
 from app.agents_v2.primary_agent.agent import run_primary_agent
+from app.agents_v2.primary_agent.schemas import PrimaryAgentState
 print("--- [graph.py] Imported run_primary_agent ---")
 print("--- [graph.py] Importing mailbird_kb_search ---")
 from app.agents_v2.primary_agent.tools import mailbird_kb_search
 from app.agents_v2.primary_agent.tools import tavily_web_search
 print("--- [graph.py] Imported mailbird_kb_search ---")
+
+# Create wrapper for primary agent that converts GraphState to PrimaryAgentState
+async def primary_agent_wrapper(state: GraphState):
+    """Wrapper that converts GraphState to PrimaryAgentState and passes selected model."""
+    primary_state = PrimaryAgentState(
+        messages=state.messages,
+        model=state.selected_model,
+        routing_metadata=state.routing_metadata
+    )
+    return await run_primary_agent(primary_state)
+
 print("--- [graph.py] Importing query_router ---")
 from app.agents_v2.router.router import query_router
 print("--- [graph.py] Imported query_router ---")
@@ -34,7 +46,7 @@ print("--- [graph.py] Added node: router ---")
 
 # Add the agent nodes
 print("--- [graph.py] Adding node: primary_agent ---")
-workflow.add_node("primary_agent", run_primary_agent)
+workflow.add_node("primary_agent", primary_agent_wrapper)
 print("--- [graph.py] Added node: primary_agent ---")
 print("--- [graph.py] Adding node: log_analyst ---")
 workflow.add_node("log_analyst", run_log_analysis_agent)

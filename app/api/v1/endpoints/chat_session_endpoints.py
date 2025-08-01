@@ -8,7 +8,7 @@ Following the established MB-Sparrow patterns from FeedMe endpoints.
 
 import logging
 from typing import List, Optional, Dict, Any
-from datetime import datetime
+from datetime import datetime, timezone
 from fastapi import APIRouter, HTTPException, Depends, Query
 from fastapi.responses import JSONResponse
 from psycopg2.extras import RealDictCursor
@@ -62,6 +62,8 @@ async def get_chat_session_by_id(session_id: int, user_id: str) -> Optional[Dict
 
 async def create_chat_session_in_db(session_data: ChatSessionCreate, user_id: str) -> Dict[str, Any]:
     """Create a new chat session in the database"""
+    # NOTE: Supabase doesn't support traditional transactions, but we can minimize
+    # race conditions by combining operations where possible
     try:
         client = get_supabase_client()
         
@@ -77,6 +79,7 @@ async def create_chat_session_in_db(session_data: ChatSessionCreate, user_id: st
         
         if active_count >= getattr(settings, 'max_sessions_per_agent', 10):
             # Deactivate the oldest active session
+            # This is best-effort - in rare cases concurrent requests might exceed limit temporarily
             oldest_response = client.client.table('chat_sessions')\
                 .select('id')\
                 .eq('user_id', user_id)\
@@ -133,8 +136,7 @@ async def update_chat_session_in_db(session_id: int, user_id: str, updates: Chat
         if not update_data:
             return None
         
-        # Add updated timestamp
-        update_data['updated_at'] = datetime.now().isoformat()
+        # Don't manually set updated_at - let the database handle it
         
         response = client.client.table('chat_sessions')\
             .update(update_data)\
@@ -174,18 +176,25 @@ async def create_chat_message_in_db(message_data: ChatMessageCreate, user_id: st
             'metadata': message_data.metadata or {}
         }
         
+        # Insert message first
         response = client.client.table('chat_messages').insert(message_data_dict).execute()
         
-        # Update session last_message_at
-        client.client.table('chat_sessions')\
-            .update({'last_message_at': datetime.now().isoformat()})\
-            .eq('id', message_data.session_id)\
-            .execute()
-        
-        if response.data:
-            return response.data[0]
-        else:
+        if not response.data:
             raise Exception("Failed to create message")
+        
+        # Update session last_message_at after successful message creation
+        # NOTE: This is best-effort - if it fails, the message is still created
+        # which is preferable to losing the message
+        try:
+            client.client.table('chat_sessions')\
+                .update({'last_message_at': datetime.now(timezone.utc).isoformat()})\
+                .eq('id', message_data.session_id)\
+                .execute()
+        except Exception as update_error:
+            # Log but don't fail the request - message was created successfully
+            logger.warning(f"Failed to update session last_message_at: {update_error}")
+        
+        return response.data[0]
             
     except HTTPException:
         raise
@@ -237,14 +246,8 @@ async def get_chat_sessions_for_user(user_id: str, request: ChatSessionListReque
         
     except Exception as e:
         logger.error(f"Error listing chat sessions: {e}")
-        return {
-            "sessions": [],
-            "total_count": 0,
-            "page": request.page,
-            "page_size": request.page_size,
-            "has_next": False,
-            "has_previous": False
-        }
+        # Re-raise the exception instead of returning empty results
+        raise
 
 
 async def get_chat_messages_for_session(session_id: int, user_id: str, request: ChatMessageListRequest) -> Dict[str, Any]:
@@ -509,14 +512,16 @@ async def get_user_chat_stats(
             most_recent = None
             oldest = None
         
-        # Get total message count
-        total_messages = 0
-        for session in sessions:
+        # Get total message count with a single aggregated query
+        if sessions:
+            session_ids = [session['id'] for session in sessions]
             messages_response = client.client.table('chat_messages')\
                 .select('id', count='exact')\
-                .eq('session_id', session['id'])\
+                .in_('session_id', session_ids)\
                 .execute()
-            total_messages += messages_response.count or 0
+            total_messages = messages_response.count or 0
+        else:
+            total_messages = 0
         
         stats = {
             "user_id": current_user.sub,

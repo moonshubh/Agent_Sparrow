@@ -18,7 +18,7 @@ import { useUnifiedChat, UnifiedMessage } from '@/hooks/useUnifiedChat'
 import { useChatHistory } from '@/hooks/useChatHistory'
 import { toast } from 'sonner'
 import MessageBubble from './MessageBubble'
-import InputSystem from './InputSystem'
+import InputSystem, { InputSystemRef } from './InputSystem'
 import VirtualizedMessageList from './VirtualizedMessageList'
 import SystemStatusMessage from './SystemStatusMessage'
 import { Header } from '@/components/layout/Header'
@@ -27,6 +27,11 @@ import { ChatSidebar } from './ChatSidebar'
 import { RateLimitWarning } from '@/components/rate-limiting'
 import { UserPanel } from '@/components/layout/UserPanel'
 import { useAuth } from '@/hooks/useAuth'
+import { ErrorBoundary } from '@/components/error/ErrorBoundary'
+import { LoadingState, SkeletonCard } from '@/components/ui/LoadingState'
+import { BrainSpinner } from '@/components/ui/BrainSpinner'
+import { AgentAvatar } from '@/components/ui/AgentAvatar'
+import { ModelSelector } from './ModelSelector'
 
 interface AgentStatusProps {
   currentAgent: "primary" | "log_analyst" | "researcher" | null
@@ -71,28 +76,6 @@ function AgentStatus({ currentAgent, isProcessing, confidence }: AgentStatusProp
   )
 }
 
-function LoadingIndicator({ agentType }: { agentType?: "primary" | "log_analyst" | "researcher" }) {
-  const getLoadingMessage = () => {
-    switch (agentType) {
-      case 'log_analyst':
-        return 'Analyzing log files...'
-      case 'researcher':
-        return 'Researching your query...'
-      default:
-        return 'Thinking...'
-    }
-  }
-  
-  return (
-    <div className="flex justify-center mb-4">
-      <div className="flex items-center gap-2 text-xs text-chat-metadata bg-background/50 backdrop-blur-sm rounded-full px-3 py-1.5 border border-border/30">
-        <Loader2 className="w-3 h-3 animate-spin text-primary" />
-        <span>{getLoadingMessage()}</span>
-      </div>
-    </div>
-  )
-}
-
 export default function UnifiedChatInterface() {
   const { user, isAuthenticated, logout } = useAuth()
   const { state, sendMessage, clearConversation, retryLastMessage, loadSessionMessages } = useUnifiedChat()
@@ -112,6 +95,7 @@ export default function UnifiedChatInterface() {
   
   const [inputValue, setInputValue] = useState('')
   const [files, setFiles] = useState<File[]>([])
+  const [selectedModel, setSelectedModel] = useState<string | undefined>(undefined)
   const [isClient, setIsClient] = useState(false)
   const [windowHeight, setWindowHeight] = useState(600) // Default height for SSR
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false)
@@ -124,7 +108,20 @@ export default function UnifiedChatInterface() {
   }>({ isActive: false })
   const scrollAreaRef = useRef<HTMLDivElement>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
+  const inputSystemRef = useRef<InputSystemRef>(null)
   const lastProcessedMessageId = useRef<string | null>(null)
+  
+  // Helper function to get loading message
+  const getLoadingMessage = () => {
+    switch (state.currentAgent) {
+      case 'log_analyst':
+        return 'Analyzing log files...'
+      case 'researcher':
+        return 'Researching your query...'
+      default:
+        return 'Thinking...'
+    }
+  }
   
   // Handle client-side rendering and window dimensions
   useEffect(() => {
@@ -208,9 +205,10 @@ export default function UnifiedChatInterface() {
         sessionId = await createSession(agentType, content)
       }
       
-      await sendMessage(content, messageFiles)
+      await sendMessage(content, messageFiles, sessionId, selectedModel)
       
-      // Clear the input value and files after successful send
+      // Clear input using ref for better reliability
+      inputSystemRef.current?.clearInput()
       setInputValue('')
       setFiles([])
       
@@ -321,21 +319,40 @@ export default function UnifiedChatInterface() {
       
       {/* Main Content Area with Sidebar */}
       <div className="flex-1 flex overflow-hidden">
-        {/* Chat Sidebar */}
-        <ChatSidebar
-          sessions={sessions}
-          currentSessionId={currentSessionId || undefined}
-          isCollapsed={isSidebarCollapsed}
-          isLoading={isSessionsLoading}
-          onToggleCollapse={() => setIsSidebarCollapsed(!isSidebarCollapsed)}
-          onNewChat={handleNewChat}
-          onSelectSession={handleSelectSession}
-          onDeleteSession={handleDeleteSession}
-          onRenameSession={renameSession}
-        />
+        {/* Chat Sidebar with Error Boundary */}
+        <ErrorBoundary
+          className="h-full"
+          showDetails={process.env.NODE_ENV === 'development'}
+          onError={(error) => console.error('Sidebar error:', error)}
+        >
+          <ChatSidebar
+            sessions={sessions}
+            currentSessionId={currentSessionId || undefined}
+            isCollapsed={isSidebarCollapsed}
+            isLoading={isSessionsLoading}
+            onToggleCollapse={() => setIsSidebarCollapsed(!isSidebarCollapsed)}
+            onNewChat={handleNewChat}
+            onSelectSession={handleSelectSession}
+            onDeleteSession={handleDeleteSession}
+            onRenameSession={renameSession}
+          />
+        </ErrorBoundary>
         
         {/* Chat Area */}
         <div className="flex-1 flex flex-col relative">
+          {/* Model Selector Bar - positioned below header, next to sidebar */}
+          {(!state.currentAgent || state.currentAgent === 'primary') && !files.length && (
+            <div className="flex-shrink-0 bg-background">
+              <div className="flex items-center px-4 py-2.5">
+                <span className="text-sm font-medium text-muted-foreground mr-3">Model:</span>
+                <ModelSelector
+                  value={selectedModel}
+                  onChange={setSelectedModel}
+                  disabled={state.isProcessing}
+                />
+              </div>
+            </div>
+          )}
           {/* Welcome Hero (shown when no messages exist) */}
           {!hasMessages && (
             <div className="flex-1 flex items-center justify-center">
@@ -395,56 +412,70 @@ export default function UnifiedChatInterface() {
                 </div>
 
                 {/* Use virtualized list for large conversations */}
-                {isClient && state.messages.length > 50 ? (
-                  <VirtualizedMessageList
-                    messages={state.messages.slice(1)} // Skip welcome message
-                    onRetry={retryLastMessage}
-                    onRate={handleMessageRate}
-                    containerHeight={windowHeight - 280}
-                  />
-                ) : (
-                  <ScrollArea ref={scrollAreaRef} className="h-full">
-                    <div className="w-full max-w-4xl mx-auto px-4 md:px-6 lg:px-8 py-6 space-y-6 pb-24">
-                      {/* Messages */}
-                      {state.messages.slice(1).map((message) => ( // Skip welcome message
-                        <MessageBubble
-                          key={message.id}
-                          id={message.id}
-                          type={message.type}
-                          content={message.content}
-                          timestamp={message.timestamp}
-                          agentType={message.agentType}
-                          metadata={message.metadata}
-                          thoughtSteps={message.thoughtSteps}
-                          streaming={message.streaming}
-                          onRetry={message.type === 'agent' ? retryLastMessage : undefined}
-                          onRate={(rating) => handleMessageRate(message.id, rating)}
-                        />
-                      ))}
-                      
-                      {/* SystemStatusMessage for active log analysis */}
-                      {logAnalysisState.isActive && logAnalysisState.startedAt && (
-                        <SystemStatusMessage
-                          phase="analyzing"
-                          filesize={logAnalysisState.fileName ? `"${logAnalysisState.fileName}" (${logAnalysisState.fileSize})` : logAnalysisState.fileSize}
-                          lines={logAnalysisState.lines}
-                          startedAt={logAnalysisState.startedAt}
-                        />
-                      )}
-                      
-                      <div ref={messagesEndRef} />
-                    </div>
-                  </ScrollArea>
-                )}
+                <ErrorBoundary
+                  showDetails={process.env.NODE_ENV === 'development'}
+                  onError={(error) => console.error('Messages error:', error)}
+                >
+                  {isClient && state.messages.length > 50 ? (
+                    <VirtualizedMessageList
+                      messages={state.messages.slice(1)} // Skip welcome message
+                      onRetry={retryLastMessage}
+                      onRate={handleMessageRate}
+                      containerHeight={windowHeight - 280}
+                    />
+                  ) : (
+                    <ScrollArea ref={scrollAreaRef} className="h-full">
+                      <div className="w-full max-w-4xl mx-auto px-4 md:px-6 lg:px-8 py-6 space-y-6 pb-24">
+                        {/* Messages */}
+                        {state.messages.slice(1).map((message) => ( // Skip welcome message
+                          <ErrorBoundary
+                            key={message.id}
+                            showDetails={process.env.NODE_ENV === 'development'}
+                          >
+                            <MessageBubble
+                              key={message.id}
+                              id={message.id}
+                              type={message.type}
+                              content={message.content}
+                              timestamp={message.timestamp}
+                              agentType={message.agentType}
+                              metadata={message.metadata}
+                              thoughtSteps={message.thoughtSteps}
+                              streaming={message.streaming}
+                              onRetry={message.type === 'agent' ? retryLastMessage : undefined}
+                              onRate={(rating) => handleMessageRate(message.id, rating)}
+                            />
+                          </ErrorBoundary>
+                        ))}
+                        
+                        {/* SystemStatusMessage for active log analysis */}
+                        {logAnalysisState.isActive && logAnalysisState.startedAt && (
+                          <SystemStatusMessage
+                            phase="analyzing"
+                            filesize={logAnalysisState.fileName ? `"${logAnalysisState.fileName}" (${logAnalysisState.fileSize})` : logAnalysisState.fileSize}
+                            lines={logAnalysisState.lines}
+                            startedAt={logAnalysisState.startedAt}
+                          />
+                        )}
+                        
+                        {/* Thinking indicator positioned directly after messages */}
+                        {state.isProcessing && (
+                          <div className="flex items-start gap-3 mb-6">
+                            <AgentAvatar className="w-8 h-8" />
+                            <BrainSpinner 
+                              text={getLoadingMessage()}
+                              size="sm"
+                              className="mt-2"
+                            />
+                          </div>
+                        )}
+                        
+                        <div ref={messagesEndRef} />
+                      </div>
+                    </ScrollArea>
+                  )}
+                </ErrorBoundary>
                 
-                {/* Loading Indicator - Fixed position */}
-                {state.isProcessing && (
-                  <div className="absolute bottom-24 left-0 right-0 p-4 bg-gradient-to-t from-chat-background to-transparent">
-                    <div className="w-full max-w-4xl mx-auto">
-                      <LoadingIndicator agentType={state.currentAgent || undefined} />
-                    </div>
-                  </div>
-                )}
                 
                 {/* Error Display - Fixed position */}
                 {state.error && (
@@ -477,23 +508,31 @@ export default function UnifiedChatInterface() {
           {/* Fixed Input Area at Bottom Center */}
           <div className="absolute bottom-0 left-0 right-0 bg-background/80 backdrop-blur-sm">
             <div className="w-full max-w-4xl mx-auto px-4 md:px-6 lg:px-8 py-4">
-              <InputSystem
-                value={inputValue}
-                onChange={setInputValue}
-                onSubmit={handleSendMessage}
-                files={files}
-                onFilesChange={setFiles}
-                isLoading={state.isProcessing}
-                placeholder={
-                  files.length > 0 
-                    ? "Describe the issue or ask questions about the uploaded files..."
-                    : hasMessages
-                    ? "Ask a follow-up question..."
-                    : "Ask anything about Mailbird..."
-                }
-                disabled={false}
-                isWelcomeMode={!hasMessages}
-              />
+              <ErrorBoundary
+                showDetails={process.env.NODE_ENV === 'development'}
+                onError={(error) => console.error('Input system error:', error)}
+              >
+                <div className="space-y-2">
+                  <InputSystem
+                    ref={inputSystemRef}
+                    value={inputValue}
+                    onChange={setInputValue}
+                    onSubmit={handleSendMessage}
+                    files={files}
+                    onFilesChange={setFiles}
+                    isLoading={state.isProcessing}
+                    placeholder={
+                      files.length > 0 
+                        ? "Describe the issue or ask questions about the uploaded files..."
+                        : hasMessages
+                        ? "Ask a follow-up question..."
+                        : "Ask anything about Mailbird..."
+                    }
+                    disabled={false}
+                    isWelcomeMode={!hasMessages}
+                  />
+                </div>
+              </ErrorBoundary>
             </div>
           </div>
         </div>

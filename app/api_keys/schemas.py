@@ -12,6 +12,7 @@ class APIKeyType(str, Enum):
     GEMINI = "gemini"
     TAVILY = "tavily"
     FIRECRAWL = "firecrawl"
+    OPENROUTER = "openrouter"
 
 class APIKeyOperation(str, Enum):
     """Audit log operations."""

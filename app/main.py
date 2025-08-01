@@ -29,6 +29,7 @@ from app.api.v1.endpoints import agent_endpoints  # Agent interaction endpoints
 from app.api.v1.endpoints import feedme_endpoints  # FeedMe transcript ingestion
 from app.api.v1.endpoints import chat_session_endpoints  # Chat session persistence
 from app.api.v1.endpoints import rate_limit_endpoints  # Rate limiting monitoring
+from app.api.v1.endpoints import models_endpoints  # Model discovery endpoints
 from app.api.v1.websocket import feedme_websocket  # FeedMe WebSocket endpoints
 from app.core.settings import settings
 
@@ -127,6 +128,8 @@ app.include_router(feedme_endpoints.router, prefix="/api/v1/feedme", tags=["Feed
 app.include_router(chat_session_endpoints.router, prefix="/api/v1", tags=["Chat Sessions"])
 # Register Rate Limiting routes
 app.include_router(rate_limit_endpoints.router, prefix="/api/v1", tags=["Rate Limiting"])
+# Register Model Discovery routes
+app.include_router(models_endpoints.router, prefix="/api/v1", tags=["Models"])
 
 # Conditionally include API Key Management router
 if api_key_endpoints and settings.should_enable_api_key_endpoints():
@@ -141,6 +144,14 @@ app.include_router(feedme_websocket.router, prefix="/ws", tags=["FeedMe WebSocke
 @app.on_event("startup")
 async def startup_event():
     """Log security configuration on application startup."""
+    # First, validate critical configuration
+    try:
+        from app.core.settings import validate_startup_configuration
+        validate_startup_configuration()
+    except Exception as e:
+        logging.error(f"Configuration validation failed: {e}")
+        raise  # Prevent startup with invalid configuration
+    
     is_production = settings.is_production_mode()
     auth_enabled = settings.should_enable_auth_endpoints()
     api_key_enabled = settings.should_enable_api_key_endpoints()
@@ -281,6 +292,7 @@ class AgentQueryRequest(BaseModel):
     query: str
     log_content: str | None = None
     session_id: int | None = None  # Optional session ID for memory retention
+    model: str | None = None  # Optional model selection (e.g., 'google/gemini-2.5-flash')
 
 class AgentResponse(BaseModel):
     # Define what a typical response should look like
@@ -359,7 +371,9 @@ async def agent_invoke_endpoint(request: AgentQueryRequest):
     # Load session history if session_id is provided
     messages = []
     
-    if hasattr(request, 'session_id') and request.session_id:
+    # Use direct attribute access - Pydantic handles type validation
+    if request.session_id:
+        
         try:
             # Import the chat session client
             from app.db.supabase_client import get_supabase_client
@@ -373,16 +387,23 @@ async def agent_invoke_endpoint(request: AgentQueryRequest):
                 .execute()
             
             if messages_response.data:
-                # Convert to LangChain message format
+                # Convert to LangChain message format with error handling
                 for msg in messages_response.data:
-                    if msg['message_type'] == 'user':
-                        messages.append(HumanMessage(content=msg['content']))
-                    elif msg['message_type'] == 'assistant':
-                        messages.append(AIMessage(content=msg['content']))
+                    try:
+                        if msg.get('message_type') == 'user':
+                            messages.append(HumanMessage(content=msg.get('content', '')))
+                        elif msg.get('message_type') == 'assistant':
+                            messages.append(AIMessage(content=msg.get('content', '')))
+                    except Exception as msg_error:
+                        logging.warning(f"Failed to convert message {msg.get('id')}: {msg_error}")
+                        continue
             
             logging.info(f"Loaded {len(messages)} historical messages for session {request.session_id}")
+        except HTTPException:
+            raise
         except Exception as e:
             logging.warning(f"Failed to load session history: {e}")
+            # Continue without history rather than failing the request
     
     # Add current query to messages
     messages.append(HumanMessage(content=request.query))
@@ -391,7 +412,8 @@ async def agent_invoke_endpoint(request: AgentQueryRequest):
     initial_input = {
         "messages": messages,
         "raw_log_content": request.log_content,
-        "session_id": getattr(request, 'session_id', None)
+        "session_id": str(request.session_id) if request.session_id else "default",  # Convert to string to match GraphState schema
+        "selected_model": request.model  # Pass the selected model to the graph
     }
 
     try:

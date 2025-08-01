@@ -6,15 +6,17 @@ from PDF documents, particularly Zendesk ticket PDFs.
 """
 
 import asyncio
+import hashlib
+import io
 import logging
 import re
+from abc import ABC, abstractmethod
+from dataclasses import dataclass
 from datetime import datetime
 from typing import List, Dict, Optional, Any, Tuple
-from dataclasses import dataclass
-from abc import ABC, abstractmethod
+
 import pdfplumber
 from pypdf import PdfReader
-import io
 
 logger = logging.getLogger(__name__)
 
@@ -226,7 +228,7 @@ class EnhancedPDFParser(PDFParser):
                 content=content.strip(),
                 timestamp=timestamp,
                 page_number=page_num,
-                thread_id=f"email_{hash(from_email)}_{timestamp}",
+                thread_id=self._generate_thread_id("email", from_email, timestamp),
                 confidence=0.9
             )
             threads.append(thread)
@@ -255,7 +257,7 @@ class EnhancedPDFParser(PDFParser):
                 content=content.strip(),
                 timestamp=timestamp,
                 page_number=page_num,
-                thread_id=f"zendesk_{hash(name)}_{timestamp}",
+                thread_id=self._generate_thread_id("zendesk", name, timestamp),
                 confidence=0.85
             )
             threads.append(thread)
@@ -291,7 +293,7 @@ class EnhancedPDFParser(PDFParser):
                             content=content,
                             timestamp=None,
                             page_number=page_num,
-                            thread_id=f"qa_{hash(current_speaker)}_{page_num}",
+                            thread_id=self._generate_thread_id("qa", current_speaker, None, page_num),
                             confidence=0.6
                         )
                         threads.append(thread)
@@ -315,12 +317,41 @@ class EnhancedPDFParser(PDFParser):
                     content=content,
                     timestamp=None,
                     page_number=page_num,
-                    thread_id=f"qa_{hash(current_speaker)}_{page_num}",
+                    thread_id=self._generate_thread_id("qa", current_speaker, None, page_num),
                     confidence=0.6
                 )
                 threads.append(thread)
         
         return threads
+    
+    def _generate_thread_id(self, prefix: str, identifier: str, timestamp: Optional[str] = None, page_num: Optional[int] = None) -> str:
+        """
+        Generate a consistent thread ID with hashing.
+        
+        Args:
+            prefix: Type prefix (email, zendesk, qa, etc.)
+            identifier: Unique identifier to hash (email, name, etc.)
+            timestamp: Optional timestamp string
+            page_num: Optional page number
+            
+        Returns:
+            Generated thread ID
+        """
+        # Create hash of identifier
+        hash_part = hashlib.sha256(identifier.encode()).hexdigest()[:8]
+        
+        # Build thread ID parts
+        parts = [prefix, hash_part]
+        
+        if timestamp:
+            parts.append(str(timestamp))
+        else:
+            parts.append("no_timestamp")
+            
+        if page_num is not None:
+            parts.append(str(page_num))
+            
+        return "_".join(parts)
     
     def _determine_role_from_email(self, email: str) -> str:
         """Determine role based on email address"""

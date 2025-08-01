@@ -7,8 +7,9 @@ using Redis as the shared storage for request counters.
 
 import asyncio
 import json
+import math
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Dict, Any, Optional, Tuple
 
 import redis.asyncio as redis
@@ -84,14 +85,10 @@ class RedisRateLimiter:
         
         if not rpm_result["allowed"]:
             blocked_by = "rpm"
-            retry_after = int(60 - (now % 60))  # Seconds until next minute (as integer)
+            retry_after = self._calculate_retry_after("rpm")
         elif not rpd_result["allowed"]:
             blocked_by = "rpd"
-            # Calculate seconds until next day
-            next_day = datetime.utcnow().replace(
-                hour=0, minute=0, second=0, microsecond=0
-            ) + timedelta(days=1)
-            retry_after = int((next_day - datetime.utcnow()).total_seconds())
+            retry_after = self._calculate_retry_after("rpd")
         
         # Build metadata
         metadata = RateLimitMetadata(
@@ -115,6 +112,30 @@ class RedisRateLimiter:
             retry_after=retry_after,
             blocked_by=blocked_by
         )
+    
+    def _calculate_retry_after(self, blocked_by: str) -> int:
+        """
+        Calculate retry delay for rate limit types.
+        
+        Args:
+            blocked_by: The limit type that was exceeded ("rpm" or "rpd")
+            
+        Returns:
+            Seconds until the limit resets
+        """
+        now_utc = datetime.now(timezone.utc)
+        
+        if blocked_by == "rpm":
+            # Seconds until next minute (rounded up)
+            return math.ceil(60 - (time.time() % 60))
+        elif blocked_by == "rpd":
+            # Calculate seconds until next day
+            next_day = now_utc.replace(
+                hour=0, minute=0, second=0, microsecond=0
+            ) + timedelta(days=1)
+            return math.ceil((next_day - now_utc).total_seconds())
+        
+        return 60  # Default fallback
     
     async def _check_sliding_window(
         self,

@@ -87,6 +87,10 @@ class UserContext:
         """Get Firecrawl API key (with system fallback)."""
         return await self.get_api_key(APIKeyType.FIRECRAWL, "FIRECRAWL_API_KEY")
     
+    async def get_openrouter_api_key(self) -> Optional[str]:
+        """Get OpenRouter API key (with system fallback)."""
+        return await self.get_api_key(APIKeyType.OPENROUTER, "OPENROUTER_API_KEY")
+    
     def clear_api_key_cache(self):
         """Clear the API key cache (useful after key updates)."""
         self._api_keys_cache = {}
@@ -196,7 +200,8 @@ async def get_user_tavily_key() -> Optional[str]:
     """Get Tavily API key for current user."""
     user_context = get_current_user_context()
     if not user_context:
-        return None
+        # Fall back to environment variable
+        return os.getenv("TAVILY_API_KEY")
     
     return await user_context.get_tavily_api_key()
 
@@ -205,9 +210,20 @@ async def get_user_firecrawl_key() -> Optional[str]:
     """Get Firecrawl API key for current user."""
     user_context = get_current_user_context()
     if not user_context:
-        return None
+        # Fall back to environment variable
+        return os.getenv("FIRECRAWL_API_KEY") 
     
     return await user_context.get_firecrawl_api_key()
+
+
+async def get_user_openrouter_key() -> Optional[str]:
+    """Get OpenRouter API key for current user."""
+    user_context = get_current_user_context()
+    if not user_context:
+        # Fall back to environment variable
+        return os.getenv("OPENROUTER_API_KEY")
+    
+    return await user_context.get_openrouter_api_key()
 
 
 def get_current_user_id() -> Optional[str]:
