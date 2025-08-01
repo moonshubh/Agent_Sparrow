@@ -2,7 +2,7 @@
 API endpoints for rate limiting monitoring and management.
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, Any, Optional
 
 from fastapi import APIRouter, HTTPException, Depends
@@ -38,12 +38,34 @@ def get_rate_limiter() -> GeminiRateLimiter:
 
 
 async def get_budget_manager() -> BudgetManager:
-    """Get or create budget manager instance."""
+    """Get or create budget manager instance with error handling."""
     global _budget_manager
     if _budget_manager is None:
-        config = RateLimitConfig.from_environment()
-        _budget_manager = BudgetManager(config)
-        await _budget_manager.initialize()
+        try:
+            config = RateLimitConfig.from_environment()
+            _budget_manager = BudgetManager(config)
+            await _budget_manager.initialize()
+            logger.info("Budget manager initialized successfully")
+        except Exception as e:
+            logger.error(f"Failed to initialize budget manager: {e}")
+            # Create a fallback budget manager with safe defaults
+            from app.core.rate_limiting.config import RateLimitConfig
+            fallback_config = RateLimitConfig(
+                requests_per_minute=30,
+                tokens_per_minute=50000,
+                concurrent_requests=5,
+                daily_budget_usd=10.0
+            )
+            _budget_manager = BudgetManager(fallback_config)
+            try:
+                await _budget_manager.initialize()
+                logger.warning("Using fallback budget manager configuration")
+            except Exception as fallback_error:
+                logger.error(f"Failed to initialize fallback budget manager: {fallback_error}")
+                raise HTTPException(
+                    status_code=503,
+                    detail="Rate limiting service temporarily unavailable"
+                )
     return _budget_manager
 
 
@@ -89,7 +111,7 @@ async def get_budget_status():
             overall_message = "All models have good headroom"
             
         return {
-            "timestamp": datetime.utcnow(),
+            "timestamp": datetime.now(timezone.utc),
             "status": overall_status,
             "message": overall_message,
             "models": all_headroom,

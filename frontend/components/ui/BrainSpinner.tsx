@@ -33,7 +33,7 @@ export function BrainSpinner({
 
   return (
     <div className={cn(
-      "flex items-center space-x-1 text-muted-foreground ml-2",
+      "flex items-center space-x-1 text-muted-foreground",
       className
     )}>
       <BrainCog 

@@ -200,7 +200,8 @@ async def get_user_tavily_key() -> Optional[str]:
     """Get Tavily API key for current user."""
     user_context = get_current_user_context()
     if not user_context:
-        return None
+        # Fall back to environment variable
+        return os.getenv("TAVILY_API_KEY")
     
     return await user_context.get_tavily_api_key()
 
@@ -209,7 +210,8 @@ async def get_user_firecrawl_key() -> Optional[str]:
     """Get Firecrawl API key for current user."""
     user_context = get_current_user_context()
     if not user_context:
-        return None
+        # Fall back to environment variable
+        return os.getenv("FIRECRAWL_API_KEY") 
     
     return await user_context.get_firecrawl_api_key()
 

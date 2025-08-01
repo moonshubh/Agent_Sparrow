@@ -15,6 +15,7 @@ from opentelemetry import trace
 from opentelemetry.trace import Status, StatusCode
 
 from app.core.rate_limiting.agent_wrapper import wrap_gemini_agent
+from app.core.rate_limiting.generic_limiter import create_rate_limited_model
 from app.agents_v2.primary_agent.schemas import PrimaryAgentState
 from app.agents_v2.primary_agent.tools import mailbird_kb_search, tavily_web_search
 from app.agents_v2.primary_agent.reasoning.unified_deep_reasoning_engine import (
@@ -91,8 +92,8 @@ def _generate_secure_cache_key(api_key: str, model_value: str) -> str:
     # Create a SHA256 hash of the API key for security
     hash_object = hashlib.sha256(api_key.encode('utf-8'))
     hash_hex = hash_object.hexdigest()
-    # Truncate to first 16 characters for reasonable cache key length
-    return f"{hash_hex[:16]}_{model_value}"
+    # Truncate to first 32 characters to reduce collision probability
+    return f"{hash_hex[:32]}_{model_value}"
 
 def create_user_specific_model(api_key: str, model_id: Optional[str] = None) -> Any:
     """Create a user-specific model with their API key.
@@ -137,24 +138,23 @@ def create_user_specific_model(api_key: str, model_id: Optional[str] = None) -> 
         
         # Build the base model using the factory with model-specific configuration
         # This ensures thread-safety by not modifying os.environ
-        api_key_param = api_key
         if model_enum == SupportedModel.KIMI_K2:
             # For Kimi K2, we pass the API key directly to the model
             # instead of setting it in the environment
             base_llm = build_llm(
                 model_enum, 
-                temperature=model_config.get('temperature', 0.6),  # Kimi K2 optimal
+                temperature=model_config.get('temperature'),
                 max_tokens=model_config.get('max_tokens', 2048),
-                api_key=api_key_param,
+                api_key=api_key,
                 **{k: v for k, v in model_config.items() if k not in ['temperature', 'max_tokens']}
             )
         else:
             # For Gemini models, pass the API key directly with model-optimized config
             base_llm = build_llm(
                 model_enum, 
-                temperature=model_config.get('temperature', 0.3),
+                temperature=model_config.get('temperature'),
                 max_tokens=model_config.get('max_tokens', 2048),
-                api_key=api_key_param,
+                api_key=api_key,
                 **{k: v for k, v in model_config.items() if k not in ['temperature', 'max_tokens']}
             )
         
@@ -170,7 +170,6 @@ def create_user_specific_model(api_key: str, model_id: Optional[str] = None) -> 
             wrapped_model = wrap_gemini_agent(model_with_tools, model_name)
         elif model_enum == SupportedModel.KIMI_K2:
             # Create a generic rate limiter for Kimi K2
-            from app.core.rate_limiting.generic_limiter import create_rate_limited_model
             wrapped_model = create_rate_limited_model(model_with_tools, "kimi-k2")
         else:
             wrapped_model = model_with_tools
@@ -229,55 +228,17 @@ async def run_primary_agent(state: PrimaryAgentState) -> Dict[str, Any]:
                 logger.warning(f"Invalid model ID '{selected_model}', using default: {e}")
                 model_enum = DEFAULT_MODEL
             
-            # Get the appropriate API key based on model type
-            if model_enum == SupportedModel.KIMI_K2:
-                # For Kimi K2, try OpenRouter API key first, fall back to Gemini
-                from app.core.user_context import get_user_openrouter_key, get_user_gemini_key
-                api_key = await get_user_openrouter_key()
-                if not api_key:
-                    api_key = await get_user_gemini_key()  # Fallback to Gemini key
-                    logger.info("Using Gemini API key for Kimi K2 model (OpenRouter key not available)")
-                
-                if not api_key:
-                    error_msg = "No API key available for Kimi K2 model"
-                    logger.warning(f"{error_msg} - user_query: {user_query[:100]}...")
-                    parent_span.set_attribute("error", error_msg)
-                    parent_span.set_status(Status(StatusCode.ERROR, "No API key"))
-                    
-                    detailed_guidance = (
-                        "To use Kimi K2, please configure an API key:\n\n"
-                        "**Option 1 - OpenRouter (Recommended):**\n"
-                        "1. Go to Settings in the application\n"
-                        "2. Navigate to the API Keys section\n"
-                        "3. Enter your OpenRouter API key (get one at https://openrouter.ai/keys)\n\n"
-                        "**Option 2 - Use Gemini API key:**\n"
-                        "1. Enter your Google Gemini API key (get one at https://makersuite.google.com/app/apikey)\n"
-                        "2. It will be used to access Kimi K2 via OpenRouter\n\n"
-                        "4. Save your settings and try again"
-                    )
-                    from langchain_core.messages import AIMessage
-                    return {"messages": [AIMessage(content=detailed_guidance)], "qa_retry_count": 0}
-            else:
-                # For Gemini models, use Gemini API key
-                from app.core.user_context import get_user_gemini_key
-                api_key = await get_user_gemini_key()
-                
-                if not api_key:
-                    error_msg = "No Gemini API key available for user"
-                    logger.warning(f"{error_msg} - user_query: {user_query[:100]}...")
-                    parent_span.set_attribute("error", error_msg)
-                    parent_span.set_status(Status(StatusCode.ERROR, "No API key"))
-                    
-                    detailed_guidance = (
-                        "To use Agent Sparrow, please configure your Gemini API key:\n\n"
-                        "1. Go to Settings in the application\n"
-                        "2. Navigate to the API Keys section\n"
-                        "3. Enter your Google Gemini API key (get one at https://makersuite.google.com/app/apikey)\n"
-                        "4. Save your settings and try again\n\n"
-                        "Your API key should start with 'AIza' and be 39 characters long."
-                    )
-                    from langchain_core.messages import AIMessage
-                    return {"messages": [AIMessage(content=detailed_guidance)], "qa_retry_count": 0}
+            # Get the appropriate API key using centralized service
+            from app.core.api_key_service import get_api_key_for_model
+            api_key, error_message = await get_api_key_for_model(
+                model_name=model_enum.value,
+                user_query=user_query,
+                span=parent_span
+            )
+            
+            if not api_key:
+                # Return the error message generated by the API key service
+                return {"messages": [error_message], "qa_retry_count": 0}
             
             model_with_tools = create_user_specific_model(api_key, selected_model)
 
@@ -302,14 +263,8 @@ async def run_primary_agent(state: PrimaryAgentState) -> Dict[str, Any]:
                 polish_threshold=0.75
             )
             
-            # Convert selected_model string to SupportedModel enum
-            try:
-                model_enum = validate_model_id(selected_model) if selected_model else DEFAULT_MODEL
-            except ValueError:
-                model_enum = DEFAULT_MODEL
-                
             reasoning_engine = UnifiedDeepReasoningEngine(
-                model_enum,  # Pass the validated model enum
+                model_enum,  # Pass the already validated model enum
                 reasoning_config
             )
             await reasoning_engine.initialize()
@@ -372,11 +327,14 @@ async def run_primary_agent(state: PrimaryAgentState) -> Dict[str, Any]:
                 "confidence": reasoning_result.quality.confidence,
             }
             
-            # Add optional fields if they exist
-            if hasattr(reasoning_result.reasoning_ui, 'model_effective'):
+            # Add optional fields if they exist (with type safety)
+            if hasattr(reasoning_result.reasoning_ui, 'model_effective') and reasoning_result.reasoning_ui.model_effective is not None:
                 additional_kwargs["model_effective"] = reasoning_result.reasoning_ui.model_effective
-            if hasattr(reasoning_result.reasoning_ui, 'budget'):
-                additional_kwargs["budget"] = reasoning_result.reasoning_ui.budget.model_dump()
+            if hasattr(reasoning_result.reasoning_ui, 'budget') and reasoning_result.reasoning_ui.budget is not None:
+                try:
+                    additional_kwargs["budget"] = reasoning_result.reasoning_ui.budget.model_dump()
+                except (AttributeError, TypeError) as e:
+                    logger.warning(f"Failed to serialize budget: {e}")
                 
             final_msg = AIMessage(
                 content=final_response,
@@ -384,9 +342,9 @@ async def run_primary_agent(state: PrimaryAgentState) -> Dict[str, Any]:
             )
             messages.append(final_msg)
             
-            # Save the interaction to memory for context retention
+            # Save the interaction to memory for context retention (with type safety)
             session_id = getattr(state, 'session_id', None)
-            if session_id:
+            if session_id and isinstance(session_id, (str, int)):
                 try:
                     from app.services.qdrant_memory import QdrantMemory
                     memory = QdrantMemory()

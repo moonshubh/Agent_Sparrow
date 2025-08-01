@@ -180,7 +180,7 @@ export function useErrorHandler() {
   React.useEffect(() => {
     if (error) {
       // You could also report to an error tracking service here
-      console.error('Error boundary hook error:', error)
+      // Note: Error already logged in handleError, avoid duplicate logging
     }
   }, [error])
 

@@ -5,7 +5,7 @@ Pre-defined patterns for common Mailbird support queries to enable
 fast, LLM-free routing based on semantic similarity.
 """
 
-from typing import List, Dict, Optional, Tuple
+from typing import List, Dict, Optional, Tuple, Any
 import json
 import os
 import numpy as np
@@ -17,100 +17,42 @@ from app.tools.embeddings import embed_texts, GeminiEmbeddings
 
 logger = logging.getLogger(__name__)
 
-# Pattern definitions by category
-PATTERN_DEFINITIONS = {
-    "log_analysis": {
-        "patterns": [
-            # Direct log analysis requests
-            "analyze this log file",
-            "debug this error log", 
-            "check my mailbird logs",
-            "parse these log entries",
-            "examine this crash log",
-            "review system logs for errors",
-            "investigate log warnings",
-            "find issues in debug output",
-            
-            # Error patterns commonly found in logs
-            "AADSTS700082 token expired error",
-            "OAuth authentication loop problem", 
-            "IMAP connection timeout issues",
-            "SMTP authentication failed repeatedly",
-            "SSL certificate verification error",
-            "socket connection refused errors",
-            "database indexing paused unexpectedly",
-            "mail sync stuck at specific percentage",
-            
-            # Performance issues visible in logs
-            "high CPU usage in logs",
-            "memory leak indicators",
-            "slow query performance",
-            "indexer taking too long",
-            "repeated connection failures"
-        ],
-        "confidence_threshold": 0.72
-    },
+def _load_pattern_definitions() -> Dict[str, Dict[str, Any]]:
+    """Load pattern definitions from external configuration file."""
+    config_file = Path(__file__).parent / "pattern_definitions.json"
     
-    "primary_support": {
-        "patterns": [
-            # Account setup and configuration
-            "how to set up gmail account",
-            "configure outlook email settings",
-            "add yahoo mail to mailbird",
-            "setup two factor authentication",
-            "change email password in app",
-            "update server settings",
-            
-            # General troubleshooting
-            "emails not syncing properly",
-            "can't send emails getting errors",
-            "receiving duplicate messages",
-            "attachments won't download",
-            "search function not working",
-            "contacts not importing correctly",
-            
-            # Feature questions
-            "how to use unified inbox",
-            "set up email signatures", 
-            "create email filters and rules",
-            "enable dark mode theme",
-            "keyboard shortcuts list",
-            "backup mailbird data",
-            
-            # Performance and optimization
-            "mailbird running slowly",
-            "reduce memory usage",
-            "optimize for better performance",
-            "clear cache and temporary files",
-            "rebuild search index"
-        ],
-        "confidence_threshold": 0.65
-    },
-    
-    "research": {
-        "patterns": [
-            # Explicit research requests
-            "research email client comparisons",
-            "find latest email security best practices",
-            "investigate new email protocols",
-            "gather information about email providers",
-            "compare IMAP vs Exchange features",
-            
-            # Competitive analysis
-            "how does mailbird compare to outlook",
-            "thunderbird vs mailbird features",
-            "best email clients for windows",
-            "email client market analysis",
-            
-            # Technical research
-            "latest OAuth2 implementation standards",
-            "modern email encryption methods",
-            "email deliverability best practices",
-            "spam filtering techniques comparison"
-        ],
-        "confidence_threshold": 0.70
-    }
-}
+    try:
+        with open(config_file, 'r') as f:
+            return json.load(f)
+    except FileNotFoundError:
+        logger.error(f"Pattern definitions file not found: {config_file}")
+        # Return minimal fallback configuration
+        return {
+            "primary_support": {
+                "patterns": ["help with email", "mailbird support"],
+                "confidence_threshold": 0.65
+            }
+        }
+    except json.JSONDecodeError as e:
+        logger.error(f"Invalid JSON in pattern definitions file: {e}")
+        return {
+            "primary_support": {
+                "patterns": ["help with email", "mailbird support"],
+                "confidence_threshold": 0.65
+            }
+        }
+    except Exception as e:
+        logger.error(f"Failed to load pattern definitions: {e}")
+        return {
+            "primary_support": {
+                "patterns": ["help with email", "mailbird support"],
+                "confidence_threshold": 0.65
+            }
+        }
+
+
+# Load pattern definitions from external configuration
+PATTERN_DEFINITIONS = _load_pattern_definitions()
 
 
 class RouterPatternMatcher:
@@ -130,7 +72,7 @@ class RouterPatternMatcher:
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         
         self.embeddings_client = GeminiEmbeddings(dimension=768)
-        self.pattern_embeddings: Dict[str, Dict[str, any]] = {}
+        self.pattern_embeddings: Dict[str, Dict[str, Any]] = {}
         self.embeddings_file = self.cache_dir / "pattern_embeddings.json"
         
         # Load cached embeddings on init
@@ -151,18 +93,35 @@ class RouterPatternMatcher:
             patterns = config["patterns"]
             logger.info(f"Computing embeddings for {category} ({len(patterns)} patterns)")
             
-            # Batch embed all patterns for this category
-            embeddings = await self.embeddings_client.embed_texts(
-                patterns, 
-                task_type="retrieval_document"
-            )
-            
-            # Store with patterns
-            self.pattern_embeddings[category] = {
-                "patterns": patterns,
-                "embeddings": [emb.tolist() for emb in embeddings],
-                "confidence_threshold": config["confidence_threshold"]
-            }
+            try:
+                # Batch embed all patterns for this category
+                embeddings = await self.embeddings_client.embed_texts(
+                    patterns, 
+                    task_type="retrieval_document"
+                )
+                
+                if not embeddings:
+                    logger.warning(f"No embeddings generated for category {category}, skipping")
+                    continue
+                
+                # Store with patterns
+                self.pattern_embeddings[category] = {
+                    "patterns": patterns,
+                    "embeddings": [emb.tolist() for emb in embeddings],
+                    "confidence_threshold": config["confidence_threshold"]
+                }
+                
+            except Exception as e:
+                logger.error(f"Failed to compute embeddings for category {category}: {e}")
+                # Set default embeddings (zeros) to prevent complete failure
+                default_embedding = [0.0] * 768  # Default dimension
+                self.pattern_embeddings[category] = {
+                    "patterns": patterns,
+                    "embeddings": [default_embedding] * len(patterns),
+                    "confidence_threshold": config["confidence_threshold"]
+                }
+                logger.warning(f"Using default embeddings for category {category}")
+                continue
     
     def _save_embeddings(self):
         """Save embeddings to cache file."""
@@ -181,13 +140,17 @@ class RouterPatternMatcher:
                     data = json.load(f)
                 
                 # Convert lists back to numpy arrays
+                # Create new dictionary to avoid modifying during iteration
+                transformed_data = {}
                 for category, config in data.items():
-                    config["embeddings"] = [
+                    transformed_config = config.copy()
+                    transformed_config["embeddings"] = [
                         np.array(emb, dtype=np.float32) 
                         for emb in config["embeddings"]
                     ]
+                    transformed_data[category] = transformed_config
                 
-                self.pattern_embeddings = data
+                self.pattern_embeddings = transformed_data
                 logger.info(f"Loaded pattern embeddings from {self.embeddings_file}")
             except Exception as e:
                 logger.error(f"Failed to load pattern embeddings: {e}")
@@ -264,7 +227,8 @@ class RouterPatternMatcher:
         if embeddings:
             config = self.pattern_embeddings[category]
             config["patterns"].append(pattern)
-            config["embeddings"].append(embeddings[0])
+            # Convert embedding to list for JSON serialization
+            config["embeddings"].append(embeddings[0].tolist() if hasattr(embeddings[0], 'tolist') else embeddings[0])
             
             # Save updated embeddings
             self._save_embeddings()
@@ -279,14 +243,24 @@ class RouterPatternMatcher:
         return list(self.pattern_embeddings.keys())
 
 
-# Global pattern matcher instance
+# Global pattern matcher instance and lock for thread safety
 _pattern_matcher: Optional[RouterPatternMatcher] = None
+_pattern_matcher_lock = asyncio.Lock()
 
 
 async def get_pattern_matcher() -> RouterPatternMatcher:
-    """Get or create the global pattern matcher."""
+    """Get or create the global pattern matcher with concurrency protection."""
     global _pattern_matcher
-    if _pattern_matcher is None:
-        _pattern_matcher = RouterPatternMatcher()
-        await _pattern_matcher.initialize()
+    
+    # Fast path: if already initialized, return immediately
+    if _pattern_matcher is not None:
+        return _pattern_matcher
+    
+    # Slow path: acquire lock and initialize if needed
+    async with _pattern_matcher_lock:
+        # Double-check pattern to avoid race conditions
+        if _pattern_matcher is None:
+            _pattern_matcher = RouterPatternMatcher()
+            await _pattern_matcher.initialize()
+    
     return _pattern_matcher

@@ -16,8 +16,21 @@ def __getattr__(name: str):
         return PrimaryAgentState
     raise AttributeError(f"module '{__name__}' has no attribute '{name}'")
 
-# Exception hierarchy - import all from exceptions module
-from .exceptions import *
+# Exception hierarchy - explicit imports for better IDE support and maintainability
+from .exceptions import (
+    AgentException,
+    RateLimitException,
+    InvalidAPIKeyException,
+    TimeoutException,
+    NetworkException,
+    ConfigurationException,
+    KnowledgeBaseException,
+    ToolExecutionException,
+    ReasoningException,
+    ModelOverloadException,
+    ErrorSeverity,
+    create_exception_from_error
+)
 
 __all__ = (
     # Core functionality

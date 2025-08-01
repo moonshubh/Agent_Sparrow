@@ -1,27 +1,41 @@
 from typing import List, Literal, Optional, Any, Dict
+
 from langchain_core.documents import Document
 from langchain_core.messages import BaseMessage
-from pydantic import BaseModel, Field, model_serializer
+from pydantic import BaseModel, Field, model_serializer, validator
+
+from app.agents_v2.log_analysis_agent.enhanced_schemas import ComprehensiveLogAnalysisOutput, StructuredLogAnalysisOutput
+from app.agents_v2.reflection.schema import ReflectionFeedback
 
 
 class ThoughtStep(BaseModel):
     """Represents a structured thought step from the reasoning engine with enhanced frontend support."""
-    step: str = Field(description="The name/title of the reasoning step")
-    content: str = Field(description="The detailed content/reasoning for this step")
-    confidence: float = Field(description="Confidence score for this step (0.0 to 1.0)")
-    phase: str = Field(description="The reasoning phase this step belongs to")
+    step: str = Field(..., min_length=1, description="The name/title of the reasoning step")
+    content: str = Field(..., min_length=1, description="The detailed content/reasoning for this step")
+    confidence: float = Field(..., ge=0.0, le=1.0, description="Confidence score for this step (0.0 to 1.0)")
+    phase: str = Field(..., min_length=1, description="The reasoning phase this step belongs to")
     evidence: List[str] = Field(default_factory=list, description="Supporting evidence for this reasoning step")
-    category: str = Field(default="analysis", description="Category: analysis, solution, validation, or critique")
+    category: str = Field(
+        default="analysis", 
+        pattern="^(analysis|solution|validation|critique)$",
+        description="Category: analysis, solution, validation, or critique"
+    )
     user_friendly: bool = Field(default=True, description="Whether this step should be shown to users")
-    processing_time_ms: Optional[float] = Field(default=None, description="Time taken for this step in milliseconds")
+    processing_time_ms: Optional[float] = Field(
+        default=None, 
+        ge=0.0, 
+        description="Time taken for this step in milliseconds"
+    )
+    
+    @validator('evidence')
+    def validate_evidence(cls, v):
+        """Ensure evidence items are non-empty strings."""
+        if v:
+            return [item.strip() for item in v if item and item.strip()]
+        return v
     
     class Config:
         frozen = True
-
-from app.agents_v2.log_analysis_agent.enhanced_schemas import ComprehensiveLogAnalysisOutput, StructuredLogAnalysisOutput
-from app.agents_v2.reflection.schema import ReflectionFeedback  # noqa: E402, isort:skip
-
-from pydantic import model_serializer
 
 class GraphState(BaseModel):
     """
@@ -49,10 +63,10 @@ class GraphState(BaseModel):
     # Summary of reasoning process for quick overview
     reasoning_summary: Optional[str] = None
     # Overall confidence score for the response
-    overall_confidence: Optional[float] = None
+    overall_confidence: Optional[float] = Field(None, ge=0.0, le=1.0, description="Overall confidence score (0.0 to 1.0)")
     # Routing metadata from enhanced router
-    routing_confidence: Optional[float] = None
-    query_complexity: Optional[float] = None
+    routing_confidence: Optional[float] = Field(None, ge=0.0, le=1.0, description="Routing confidence score (0.0 to 1.0)")
+    query_complexity: Optional[float] = Field(None, ge=0.0, le=1.0, description="Query complexity score (0.0 to 1.0)")
     routing_metadata: Optional[Dict[str, Any]] = None
 
     # ------------------------------------------------------------------

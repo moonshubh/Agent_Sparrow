@@ -67,6 +67,18 @@ class RateLimitConfig:
         if self.safety_margin < 0 or self.safety_margin > 0.5:
             raise ValueError("Safety margin must be between 0 and 0.5")
         
+        if self.pro_reasoning_delay_seconds < 0:
+            raise ValueError("Pro reasoning delay must be non-negative")
+        
+        if self.flash_reasoning_delay_seconds < 0:
+            raise ValueError("Flash reasoning delay must be non-negative")
+        
+        if self.max_reasoning_time_minutes <= 0:
+            raise ValueError("Max reasoning time must be positive")
+        
+        if self.retry_backoff_factor < 0:
+            raise ValueError("Retry backoff factor must be non-negative")
+        
         if self.flash_rpm_limit <= 0 or self.flash_rpd_limit <= 0:
             raise ValueError("Flash rate limits must be positive")
             

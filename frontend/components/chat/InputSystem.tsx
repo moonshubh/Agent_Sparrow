@@ -327,9 +327,9 @@ const InputSystem = forwardRef<InputSystemRef, InputSystemProps>(function InputS
       }, 500)
       
     } catch (error) {
-      // Restore input values on error
-      onChange(messageText)
-      onFilesChange(files)
+      // Restore input values on error using preserved values
+      onChange(currentValue)
+      onFilesChange(currentFiles)
       setIsSubmitting(false)
       console.error('Failed to send message:', error)
       toast.error('Failed to send message')

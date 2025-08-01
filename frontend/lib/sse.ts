@@ -8,17 +8,17 @@
  * - TypeScript support
  */
 
-export interface SSEEvent {
+export interface SSEEvent<T = unknown> {
   event: string
-  data: any
+  data: T
 }
 
-export interface SSEOptions {
+export interface SSEOptions<T = unknown> {
   url: string
   method?: 'GET' | 'POST'
   headers?: Record<string, string>
-  body?: any
-  onMessage?: (event: SSEEvent) => void
+  body?: unknown
+  onMessage?: (event: SSEEvent<T>) => void
   onError?: (error: Error) => void
   onOpen?: () => void
   onClose?: () => void
@@ -27,13 +27,15 @@ export interface SSEOptions {
   reconnectAttempts?: number
 }
 
-export class SSEClient {
+export class SSEClient<T = unknown> {
   private eventSource: EventSource | null = null
   private abortController: AbortController | null = null
   private reconnectCount = 0
   private closed = false
+  private currentEventType: string | null = null
+  private lastEventId: string | null = null
   
-  constructor(private options: SSEOptions) {
+  constructor(private options: SSEOptions<T>) {
     this.options = {
       method: 'GET',
       reconnect: true,
@@ -133,29 +135,21 @@ export class SSEClient {
     }
     
     this.eventSource.onmessage = (event) => {
-      try {
-        const data = JSON.parse(event.data)
-        this.options.onMessage?.({ event: 'message', data })
-      } catch (error) {
-        // Handle non-JSON data
-        this.options.onMessage?.({ event: 'message', data: event.data })
-      }
+      const parsedData = this.safeParseJSON(event.data)
+      this.options.onMessage?.({ event: 'message', data: parsedData })
     }
     
     this.eventSource.onerror = (error) => {
-      this.handleError(new Error('EventSource error'))
+      this.handleError(new Error(`EventSource error: ${error.type || 'Unknown error'}`), error)
     }
     
     // Add custom event listeners for typed events
     const events = ['thinking', 'token', 'completion.final', 'error']
     events.forEach(eventType => {
-      this.eventSource?.addEventListener(eventType, (event: any) => {
-        try {
-          const data = JSON.parse(event.data)
-          this.options.onMessage?.({ event: eventType, data })
-        } catch (error) {
-          this.options.onMessage?.({ event: eventType, data: event.data })
-        }
+      this.eventSource?.addEventListener(eventType, (event: Event) => {
+        const messageEvent = event as MessageEvent
+        const parsedData = this.safeParseJSON(messageEvent.data)
+        this.options.onMessage?.({ event: eventType, data: parsedData })
       })
     })
   }
@@ -166,48 +160,136 @@ export class SSEClient {
       return
     }
     
+    // Handle SSE specification fields
+    if (line.startsWith('event: ')) {
+      // Store event type for next data line
+      this.currentEventType = line.slice(7).trim()
+      return
+    }
+    
+    if (line.startsWith('id: ')) {
+      // Store event ID for reconnection
+      this.lastEventId = line.slice(4).trim()
+      return
+    }
+    
+    if (line.startsWith('retry: ')) {
+      // Update reconnection delay
+      const retryDelay = parseInt(line.slice(7))
+      if (!isNaN(retryDelay)) {
+        this.options.reconnectDelay = retryDelay
+      }
+      return
+    }
+    
     if (line.startsWith('data: ')) {
       const data = line.slice(6)
+      const parsedData = this.safeParseJSON(data)
       
-      try {
-        const parsed = JSON.parse(data)
-        
-        // Check if it has an event field
-        if (parsed.event && parsed.data) {
-          this.options.onMessage?.({ 
-            event: parsed.event, 
-            data: parsed.data 
-          })
-        } else {
-          // Default message event
-          this.options.onMessage?.({ 
-            event: 'message', 
-            data: parsed 
-          })
-        }
-      } catch (error) {
-        // Handle non-JSON data
-        this.options.onMessage?.({ 
-          event: 'message', 
-          data: data 
-        })
+      // Use stored event type or check if data has event field
+      let eventType = this.currentEventType || 'message'
+      let eventData = parsedData
+      
+      if (this.isEventDataObject(parsedData)) {
+        eventType = parsedData.event
+        eventData = parsedData.data
       }
+      
+      this.options.onMessage?.({ 
+        event: eventType, 
+        data: eventData 
+      })
+      
+      // Reset event type after processing
+      this.currentEventType = null
     }
   }
   
-  private handleError(error: Error): void {
-    this.options.onError?.(error)
+  private safeParseJSON(data: string): unknown {
+    try {
+      return JSON.parse(data)
+    } catch {
+      return data
+    }
+  }
+  
+  /**
+   * Type guard to check if data is an event object with event and data fields
+   */
+  private isEventDataObject(data: unknown): data is { event: string; data: unknown } {
+    return (
+      typeof data === 'object' && 
+      data !== null && 
+      'event' in data && 
+      'data' in data &&
+      typeof (data as Record<string, unknown>).event === 'string'
+    )
+  }
+  
+  /**
+   * Type guard to check if data is a token object with content field
+   */
+  private static isTokenObject(data: unknown): data is { content: string } {
+    return (
+      typeof data === 'object' && 
+      data !== null && 
+      'content' in data &&
+      typeof (data as Record<string, unknown>).content === 'string'
+    )
+  }
+  
+  /**
+   * Type guard to check if data is an error object with error field
+   */
+  private static isErrorObject(data: unknown): data is { error: string } {
+    return (
+      typeof data === 'object' && 
+      data !== null && 
+      'error' in data &&
+      typeof (data as Record<string, unknown>).error === 'string'
+    )
+  }
+  
+  private handleError(error: Error, originalError?: Event): void {
+    // Create enhanced error with original details
+    const enhancedError = new Error(error.message)
+    enhancedError.name = error.name
+    enhancedError.stack = error.stack
+    if (originalError) {
+      // Add originalError property in a type-safe way
+      Object.defineProperty(enhancedError, 'originalError', {
+        value: originalError,
+        writable: true,
+        enumerable: true,
+        configurable: true
+      })
+    }
+    
+    this.options.onError?.(enhancedError)
     
     if (this.options.reconnect && 
         this.reconnectCount < (this.options.reconnectAttempts || 3) &&
         !this.closed) {
       this.reconnectCount++
+      
+      // Exponential backoff: delay = baseDelay * (2 ^ attempt)
+      const exponentialDelay = (this.options.reconnectDelay || 1000) * Math.pow(2, this.reconnectCount - 1)
+      const maxDelay = 30000 // Cap at 30 seconds
+      const finalDelay = Math.min(exponentialDelay, maxDelay)
+      
       setTimeout(() => {
         if (!this.closed) {
           this.connect()
         }
-      }, this.options.reconnectDelay)
+      }, finalDelay)
     }
+  }
+  
+  /**
+   * Get the last event ID for reconnection purposes
+   */
+  getLastEventId(): string | null {
+    return this.lastEventId
   }
   
   close(): void {
@@ -227,39 +309,70 @@ export class SSEClient {
   }
 }
 
+
 /**
  * Convenience function to create a streaming chat connection
  */
-export async function streamChat(
+export async function streamChat<T = unknown>(
   endpoint: string,
-  request: any,
+  request: unknown,
   handlers: {
-    onThinking?: (data: any) => void
+    onThinking?: (data: T) => void
     onToken?: (token: string) => void
-    onFinal?: (data: any) => void
+    onFinal?: (data: T) => void
     onError?: (error: Error) => void
   }
 ): Promise<() => void> {
-  const client = new SSEClient({
+  // Validate inputs
+  if (!endpoint) {
+    throw new Error('Endpoint URL is required')
+  }
+  
+  // Safely access localStorage
+  let authToken = ''
+  try {
+    if (typeof window !== 'undefined' && window.localStorage) {
+      authToken = localStorage.getItem('auth_token') || ''
+    }
+  } catch (error) {
+    console.warn('Failed to access localStorage:', error)
+  }
+  
+  const client = new SSEClient<T>({
     url: endpoint,
     method: 'POST',
     body: request,
     headers: {
-      'Authorization': `Bearer ${localStorage.getItem('auth_token') || ''}`
+      'Authorization': `Bearer ${authToken}`
     },
     onMessage: (event) => {
+      // Validate event data before processing
+      if (!event || typeof event.event !== 'string') {
+        console.warn('Invalid SSE event received:', event)
+        return
+      }
+      
       switch (event.event) {
         case 'thinking':
           handlers.onThinking?.(event.data)
           break
         case 'token':
-          handlers.onToken?.(event.data.content)
+          // Use type guard instead of 'as any'
+          if (SSEClient.isTokenObject(event.data)) {
+            handlers.onToken?.(event.data.content)
+          } else {
+            handlers.onToken?.(String(event.data))
+          }
           break
         case 'completion.final':
           handlers.onFinal?.(event.data)
           break
         case 'error':
-          handlers.onError?.(new Error(event.data.error))
+          // Use type guard instead of 'as any'
+          const errorMessage = SSEClient.isErrorObject(event.data)
+            ? event.data.error 
+            : String(event.data)
+          handlers.onError?.(new Error(errorMessage))
           break
       }
     },

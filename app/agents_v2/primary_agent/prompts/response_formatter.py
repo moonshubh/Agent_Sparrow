@@ -63,6 +63,18 @@ class ResponseFormatter:
     - Supportive closing with continuation offer
     """
     
+    # Emotion-based closing templates (shared across methods)
+    CLOSING_TEMPLATES = {
+        EmotionalState.FRUSTRATED: "You've got this! These steps will have your email working perfectly again. Remember, you're just a few clicks away from inbox bliss.",
+        EmotionalState.CONFUSED: "See? Not so complicated after all! You're becoming a Mailbird pro already. Your email setup is in great hands - yours!",
+        EmotionalState.ANXIOUS: "Breathe easy - your emails are safe and you're back in control. You handled that beautifully!",
+        EmotionalState.PROFESSIONAL: "Excellent. Your email system is now optimized for peak performance. You're all set for productive communication.",
+        EmotionalState.URGENT: "Crisis averted! Your urgent emails are flowing again. You can focus on what matters most.",
+        EmotionalState.EXCITED: "This is just the beginning! Wait until you discover all the other amazing things Mailbird can do. Enjoy exploring!",
+        EmotionalState.DISAPPOINTED: "I know this wasn't the experience you expected, but look - we've turned it around together. Your Mailbird is now working exactly as it should.",
+        EmotionalState.NEUTRAL: "Perfect! Everything's running smoothly now. Enjoy your streamlined email experience!"
+    }
+    
     # Mandatory response structure template
     MANDATORY_STRUCTURE_TEMPLATE = """[Empathetic Opening - Acknowledge emotion and situation]
 
@@ -393,18 +405,7 @@ class ResponseFormatter:
         primary_heading = heading_templates.get(solution_type, f"## Solving Your {issue} Challenge")
         
         # Select appropriate closing based on emotion - warm, confidence-building, never questioning
-        closing_templates = {
-            EmotionalState.FRUSTRATED: "You've got this! These steps will have your email working perfectly again. Remember, you're just a few clicks away from inbox bliss.",
-            EmotionalState.CONFUSED: "See? Not so complicated after all! You're becoming a Mailbird pro already. Your email setup is in great hands - yours!",
-            EmotionalState.ANXIOUS: "Breathe easy - your emails are safe and you're back in control. You handled that beautifully!",
-            EmotionalState.PROFESSIONAL: "Excellent. Your email system is now optimized for peak performance. You're all set for productive communication.",
-            EmotionalState.URGENT: "Crisis averted! Your urgent emails are flowing again. You can focus on what matters most.",
-            EmotionalState.EXCITED: "This is just the beginning! Wait until you discover all the other amazing things Mailbird can do. Enjoy exploring!",
-            EmotionalState.DISAPPOINTED: "I know this wasn't the experience you expected, but look - we've turned it around together. Your Mailbird is now working exactly as it should.",
-            EmotionalState.NEUTRAL: "Perfect! Everything's running smoothly now. Enjoy your streamlined email experience!"
-        }
-        
-        supportive_closing = closing_templates.get(emotion, 
+        supportive_closing = cls.CLOSING_TEMPLATES.get(emotion, 
             "You're all set! Your email is working beautifully now. Happy emailing!")
         
         template = f"""{empathy_opening}
@@ -517,18 +518,7 @@ class ResponseFormatter:
         # Generate supportive closing if missing or inadequate
         if not structure.has_closing or len(structure.has_closing) < 30:
             # Use warm, confidence-building closings based on emotion
-            closing_templates = {
-                EmotionalState.FRUSTRATED: "You've got this! These steps will have your email working perfectly again. Remember, you're just a few clicks away from inbox bliss.",
-                EmotionalState.CONFUSED: "See? Not so complicated after all! You're becoming a Mailbird pro already. Your email setup is in great hands - yours!",
-                EmotionalState.ANXIOUS: "Breathe easy - your emails are safe and you're back in control. You handled that beautifully!",
-                EmotionalState.PROFESSIONAL: "Excellent. Your email system is now optimized for peak performance. You're all set for productive communication.",
-                EmotionalState.URGENT: "Crisis averted! Your urgent emails are flowing again. You can focus on what matters most.",
-                EmotionalState.EXCITED: "This is just the beginning! Wait until you discover all the other amazing things Mailbird can do. Enjoy exploring!",
-                EmotionalState.DISAPPOINTED: "I know this wasn't the experience you expected, but look - we've turned it around together. Your Mailbird is now working exactly as it should.",
-                EmotionalState.NEUTRAL: "Perfect! Everything's running smoothly now. Enjoy your streamlined email experience!"
-            }
-            
-            supportive_closing = closing_templates.get(
+            supportive_closing = cls.CLOSING_TEMPLATES.get(
                 emotion_result.primary_emotion,
                 "You're all set! Your email is working beautifully now. Happy emailing!"
             )

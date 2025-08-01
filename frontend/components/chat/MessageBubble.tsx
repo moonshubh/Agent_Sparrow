@@ -9,7 +9,6 @@ import { Separator } from '@/components/ui/separator'
 import { Avatar, AvatarImage, AvatarFallback } from '@/components/ui/avatar'
 import { AgentAvatar } from '@/components/ui/AgentAvatar'
 import { MarkdownMessage } from '@/components/markdown/MarkdownMessage'
-import { BrainSpinner } from '@/components/ui/BrainSpinner'
 import { ReasoningDisclosure, type UIReasoning } from '@/components/chat/ReasoningDisclosure'
 import {
   MessageCircle,
@@ -30,10 +29,7 @@ import {
   Globe,
   BookOpen,
   FileText,
-  Brain,
-  Eye,
-  Clock,
-  Zap
+  Brain
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { toast } from 'sonner'
@@ -191,27 +187,6 @@ function ThoughtStepsDisplay({ thoughtSteps, defaultExpanded = false }: { though
     }
   }, [isExpanded, thoughtSteps.length])
   
-  const getStepIcon = (idx: number) => {
-    if (!isExpanded) return null
-    if (isAnimating && idx >= visibleSteps) {
-      return (
-        <div className="inline-flex items-center justify-center w-6 h-6 rounded-full bg-muted animate-pulse flex-shrink-0">
-          <div className="w-2 h-2 bg-muted-foreground rounded-full animate-bounce" />
-        </div>
-      )
-    }
-    return (
-      <span className="inline-flex items-center justify-center w-6 h-6 rounded-full bg-gradient-to-br from-primary to-accent text-primary-foreground text-xs font-semibold flex-shrink-0 shadow-sm animate-in fade-in zoom-in duration-300">
-        {idx + 1}
-      </span>
-    )
-  }
-  
-  const getConfidenceColor = (confidence: number) => {
-    if (confidence >= 0.8) return 'bg-green-100 text-green-800 border-green-200'
-    if (confidence >= 0.6) return 'bg-yellow-100 text-yellow-800 border-yellow-200'
-    return 'bg-red-100 text-red-800 border-red-200'
-  }
   
   return (
     <div className="mt-4 pt-3 border-t border-border/50">
@@ -247,9 +222,6 @@ function ThoughtStepsDisplay({ thoughtSteps, defaultExpanded = false }: { though
         <div className="space-y-3 pt-2">
           
           {thoughtSteps.map((step, idx) => {
-            const isVisible = !isAnimating || idx < visibleSteps
-            const isCurrentStep = isAnimating && idx === visibleSteps - 1
-            
             return (
               <div 
                 key={idx} 
@@ -733,15 +705,21 @@ export default function MessageBubble({
                   "text-sm leading-relaxed whitespace-pre-wrap",
                   // Apply collapsible styles for user messages with proper padding for button
                   isUser && content.length > 150 && "pr-8", // Add padding-right to prevent overlap with collapse button
-                  content.length > 150 && collapsed && "line-clamp-3 overflow-hidden"
+                  content.length > 150 && collapsed && "overflow-hidden"
                 )}
                 style={{
                   // Ensure consistent line height and prevent text cutoff
                   lineHeight: '1.5',
                   maxHeight: collapsed && content.length > 150 ? '4.5rem' : 'none',
+                  // Use standards-compliant CSS for line clamping with fallback
                   display: collapsed && content.length > 150 ? '-webkit-box' : 'block',
-                  WebkitLineClamp: collapsed && content.length > 150 ? 3 : 'unset',
-                  WebkitBoxOrient: collapsed && content.length > 150 ? 'vertical' : 'unset'
+                  WebkitLineClamp: collapsed && content.length > 150 ? 3 : undefined,
+                  WebkitBoxOrient: collapsed && content.length > 150 ? 'vertical' as const : undefined,
+                  // Fallback for browsers that don't support -webkit-line-clamp
+                  ...(collapsed && content.length > 150 && {
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis'
+                  })
                 }}>
                   {content}
                 </div>

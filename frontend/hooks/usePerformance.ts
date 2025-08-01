@@ -1,6 +1,6 @@
 "use client"
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState, useMemo } from 'react'
 
 /**
  * Debounce hook that delays execution of a function until after delay milliseconds
@@ -64,22 +64,43 @@ export function useDebouncedCallback<T extends (...args: any[]) => any>(
 
 /**
  * Throttle hook that limits the rate at which a function can fire.
+ * Fixed to prevent race conditions and ensure consistent behavior.
  */
 export function useThrottle<T>(value: T, interval: number): T {
   const [throttledValue, setThrottledValue] = useState<T>(value)
-  const lastExecuted = useRef<number>(Date.now())
+  const lastExecuted = useRef<number>(0)
+  const timeoutRef = useRef<NodeJS.Timeout | null>(null)
+  const latestValueRef = useRef<T>(value)
 
   useEffect(() => {
-    if (Date.now() >= lastExecuted.current + interval) {
-      lastExecuted.current = Date.now()
+    latestValueRef.current = value
+    const now = Date.now()
+    
+    // Clear any existing timeout
+    if (timeoutRef.current) {
+      clearTimeout(timeoutRef.current)
+      timeoutRef.current = null
+    }
+    
+    if (now >= lastExecuted.current + interval) {
+      // Can execute immediately
+      lastExecuted.current = now
       setThrottledValue(value)
     } else {
-      const timerId = setTimeout(() => {
+      // Schedule execution after remaining interval
+      const remainingTime = lastExecuted.current + interval - now
+      timeoutRef.current = setTimeout(() => {
         lastExecuted.current = Date.now()
-        setThrottledValue(value)
-      }, interval)
-
-      return () => clearTimeout(timerId)
+        setThrottledValue(latestValueRef.current)
+        timeoutRef.current = null
+      }, remainingTime)
+    }
+    
+    return () => {
+      if (timeoutRef.current) {
+        clearTimeout(timeoutRef.current)
+        timeoutRef.current = null
+      }
     }
   }, [value, interval])
 
@@ -88,19 +109,21 @@ export function useThrottle<T>(value: T, interval: number): T {
 
 /**
  * Performance monitoring hook for measuring render times and detecting performance issues.
+ * Fixed to avoid render mutations and consolidate timing logic.
  */
 export function usePerformanceMonitor(componentName: string, logThreshold: number = 16) {
+  const [renderStats, setRenderStats] = useState({ renderCount: 0, slowRenderCount: 0 })
   const renderStartTime = useRef<number>(0)
   const renderCount = useRef<number>(0)
   const slowRenderCount = useRef<number>(0)
 
   useEffect(() => {
-    renderStartTime.current = performance.now()
+    // Measure render time after render completes
+    const renderEndTime = performance.now()
+    const renderTime = renderEndTime - renderStartTime.current
+    
+    // Update counters
     renderCount.current += 1
-  })
-
-  useEffect(() => {
-    const renderTime = performance.now() - renderStartTime.current
     
     if (renderTime > logThreshold) {
       slowRenderCount.current += 1
@@ -118,16 +141,23 @@ export function usePerformanceMonitor(componentName: string, logThreshold: numbe
         `${slowRenderCount.current} slow (>${logThreshold}ms)`
       )
     }
+    
+    // Update state to trigger re-render with latest stats
+    setRenderStats({
+      renderCount: renderCount.current,
+      slowRenderCount: slowRenderCount.current
+    })
+    
+    // Set start time for next render
+    renderStartTime.current = performance.now()
   })
 
-  return {
-    renderCount: renderCount.current,
-    slowRenderCount: slowRenderCount.current
-  }
+  return renderStats
 }
 
 /**
  * Intersection Observer hook for implementing lazy loading and visibility detection.
+ * Fixed to memoize options and prevent unnecessary observer recreations.
  */
 export function useIntersectionObserver(
   options: IntersectionObserverInit = {},
@@ -136,6 +166,13 @@ export function useIntersectionObserver(
   const [isIntersecting, setIsIntersecting] = useState(false)
   const [hasIntersected, setHasIntersected] = useState(false)
   const targetRef = useRef<HTMLElement | null>(null)
+  
+  // Memoize the merged options to prevent unnecessary observer recreations
+  const mergedOptions = useMemo(() => ({
+    threshold: 0.1,
+    rootMargin: '10px',
+    ...options
+  }), [options.root, options.rootMargin, options.threshold])
 
   useEffect(() => {
     const target = targetRef.current
@@ -153,11 +190,7 @@ export function useIntersectionObserver(
           }
         }
       },
-      {
-        threshold: 0.1,
-        rootMargin: '10px',
-        ...options
-      }
+      mergedOptions
     )
 
     observer.observe(target)
@@ -165,7 +198,7 @@ export function useIntersectionObserver(
     return () => {
       observer.unobserve(target)
     }
-  }, [options.root, options.rootMargin, options.threshold, triggerOnce])
+  }, [mergedOptions, triggerOnce])
 
   return {
     targetRef,
@@ -248,6 +281,7 @@ export function useLazyComponent<T extends React.ComponentType<any>>(
 
 /**
  * Optimized re-render hook that prevents unnecessary re-renders.
+ * Fixed to include callback in dependency array.
  */
 export function useStableCallback<T extends (...args: any[]) => any>(
   callback: T
@@ -256,7 +290,7 @@ export function useStableCallback<T extends (...args: any[]) => any>(
 
   useEffect(() => {
     callbackRef.current = callback
-  })
+  }, [callback])
 
   return useCallback(
     ((...args: Parameters<T>) => callbackRef.current(...args)) as T,
@@ -266,23 +300,31 @@ export function useStableCallback<T extends (...args: any[]) => any>(
 
 /**
  * Memory usage monitor (development only).
+ * Fixed to check performance.memory availability before accessing.
  */
 export function useMemoryMonitor(componentName: string, interval: number = 5000) {
   useEffect(() => {
     if (process.env.NODE_ENV !== 'development') return
 
     const checkMemory = () => {
-      if ('memory' in performance) {
-        const memory = (performance as any).memory
-        const used = Math.round(memory.usedJSHeapSize / 1048576 * 100) / 100
-        const total = Math.round(memory.totalJSHeapSize / 1048576 * 100) / 100
-        const limit = Math.round(memory.jsHeapSizeLimit / 1048576 * 100) / 100
+      // Check if performance.memory exists (non-standard API)
+      if (typeof performance !== 'undefined' && 
+          'memory' in performance && 
+          performance.memory) {
+        try {
+          const memory = performance.memory
+          const used = Math.round(memory.usedJSHeapSize / 1048576 * 100) / 100
+          const total = Math.round(memory.totalJSHeapSize / 1048576 * 100) / 100
+          const limit = Math.round(memory.jsHeapSizeLimit / 1048576 * 100) / 100
 
-        if (used > limit * 0.8) {
-          console.warn(
-            `🚨 High memory usage in ${componentName}:`,
-            `${used}MB / ${limit}MB (${Math.round((used / limit) * 100)}%)`
-          )
+          if (used > limit * 0.8) {
+            console.warn(
+              `🚨 High memory usage in ${componentName}:`,
+              `${used}MB / ${limit}MB (${Math.round((used / limit) * 100)}%)`
+            )
+          }
+        } catch (error) {
+          console.warn(`Failed to read memory usage for ${componentName}:`, error)
         }
       }
     }
@@ -294,6 +336,7 @@ export function useMemoryMonitor(componentName: string, interval: number = 5000)
 
 /**
  * Efficient list virtualization helper.
+ * Enhanced with edge case handling and memoization for better performance.
  */
 export function useVirtualization<T>(
   items: T[],
@@ -302,29 +345,61 @@ export function useVirtualization<T>(
   overscan: number = 5
 ) {
   const [scrollTop, setScrollTop] = useState(0)
+  
+  // Edge case handling
+  const safeItemHeight = Math.max(1, itemHeight)
+  const safeContainerHeight = Math.max(1, containerHeight)
+  const safeItems = items || []
+  const safeOverscan = Math.max(0, overscan)
+  
+  // Memoize calculations to avoid unnecessary recalculations
+  const calculations = useMemo(() => {
+    if (safeItems.length === 0) {
+      return {
+        visibleStart: 0,
+        visibleEnd: 0,
+        startIndex: 0,
+        endIndex: 0,
+        totalHeight: 0
+      }
+    }
+    
+    const visibleStart = Math.floor(scrollTop / safeItemHeight)
+    const visibleEnd = Math.min(
+      visibleStart + Math.ceil(safeContainerHeight / safeItemHeight),
+      safeItems.length - 1
+    )
 
-  const visibleStart = Math.floor(scrollTop / itemHeight)
-  const visibleEnd = Math.min(
-    visibleStart + Math.ceil(containerHeight / itemHeight),
-    items.length - 1
-  )
-
-  const startIndex = Math.max(0, visibleStart - overscan)
-  const endIndex = Math.min(items.length - 1, visibleEnd + overscan)
-
-  const visibleItems = items.slice(startIndex, endIndex + 1).map((item, index) => ({
-    item,
-    index: startIndex + index,
-    offsetTop: (startIndex + index) * itemHeight
-  }))
-
-  const totalHeight = items.length * itemHeight
+    const startIndex = Math.max(0, visibleStart - safeOverscan)
+    const endIndex = Math.min(safeItems.length - 1, visibleEnd + safeOverscan)
+    const totalHeight = safeItems.length * safeItemHeight
+    
+    return {
+      visibleStart,
+      visibleEnd,
+      startIndex,
+      endIndex,
+      totalHeight
+    }
+  }, [scrollTop, safeItemHeight, safeContainerHeight, safeItems.length, safeOverscan])
+  
+  const visibleItems = useMemo(() => {
+    if (safeItems.length === 0 || calculations.startIndex > calculations.endIndex) {
+      return []
+    }
+    
+    return safeItems.slice(calculations.startIndex, calculations.endIndex + 1).map((item, index) => ({
+      item,
+      index: calculations.startIndex + index,
+      offsetTop: (calculations.startIndex + index) * safeItemHeight
+    }))
+  }, [safeItems, calculations.startIndex, calculations.endIndex, safeItemHeight])
 
   return {
     visibleItems,
-    totalHeight,
+    totalHeight: calculations.totalHeight,
     setScrollTop,
-    startIndex,
-    endIndex
+    startIndex: calculations.startIndex,
+    endIndex: calculations.endIndex
   }
 }

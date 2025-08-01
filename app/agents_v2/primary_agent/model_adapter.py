@@ -288,7 +288,9 @@ Remember to respond with genuine empathy and warmth. This person needs your help
         
         # Ensure empathetic opening if missing
         if not self._has_empathetic_opening(content):
-            content = self._add_empathetic_opening(content)
+            # Try to extract context from the content for more appropriate opening
+            context = content[:200] if len(content) > 50 else None
+            content = self._add_empathetic_opening(content, context)
         
         # Clean up any double spaces or awkward phrasing from replacements
         content = re.sub(r'\s+', ' ', content)
@@ -297,20 +299,71 @@ Remember to respond with genuine empathy and warmth. This person needs your help
         return content.strip()
     
     def _has_empathetic_opening(self, content: str) -> bool:
-        """Check if the response starts with empathetic language."""
+        """Check if the response starts with empathetic language using robust sentence extraction."""
         empathy_indicators = [
             'i understand', 'i can see', 'i know how', 'that sounds', 'i can tell',
             'you\'re right', 'i completely understand', 'that must be', 'i realize',
             'i hear you', 'i feel', 'this is frustrating', 'that\'s concerning'
         ]
         
-        first_sentence = content.split('.')[0].lower()
+        # Robust sentence extraction - handle abbreviations and edge cases
+        first_sentence = self._extract_first_sentence(content).lower()
         return any(indicator in first_sentence for indicator in empathy_indicators)
     
-    def _add_empathetic_opening(self, content: str) -> str:
+    def _extract_first_sentence(self, content: str) -> str:
+        """Extract the first sentence handling abbreviations and edge cases."""
+        if not content:
+            return ""
+        
+        # Common abbreviations that shouldn't end sentences
+        abbreviations = ['dr', 'mr', 'mrs', 'ms', 'prof', 'vs', 'etc', 'inc', 'ltd', 'co']
+        
+        # Find all potential sentence endings
+        sentence_pattern = r'[.!?]+'
+        matches = list(re.finditer(sentence_pattern, content))
+        
+        if not matches:
+            # No sentence ending found, return first 100 chars or until newline
+            newline_pos = content.find('\n')
+            if newline_pos > 0:
+                return content[:newline_pos].strip()
+            return content[:100].strip()
+        
+        for match in matches:
+            end_pos = match.end()
+            potential_sentence = content[:end_pos].strip()
+            
+            # Check if this might be an abbreviation
+            words_before = potential_sentence.split()
+            if words_before:
+                last_word = words_before[-1].rstrip('.!?').lower()
+                if last_word in abbreviations:
+                    continue  # Skip this match, likely an abbreviation
+            
+            return potential_sentence
+        
+        # If all matches were abbreviations, return up to first match
+        return content[:matches[0].end()].strip()
+    
+    def _add_empathetic_opening(self, content: str, context: Optional[str] = None) -> str:
         """Add an empathetic opening to responses that lack one."""
-        # Simple empathetic opening that works for most technical issues
-        empathetic_opening = "I understand how frustrating email issues can be. "
+        # Context-aware empathetic openings
+        if context:
+            context_lower = context.lower()
+            if 'email' in context_lower or 'sync' in context_lower or 'inbox' in context_lower:
+                empathetic_opening = "I understand how frustrating email issues can be. "
+            elif 'password' in context_lower or 'login' in context_lower or 'authentication' in context_lower:
+                empathetic_opening = "I know how concerning login issues can be. "
+            elif 'crash' in context_lower or 'error' in context_lower or 'bug' in context_lower:
+                empathetic_opening = "I can see how disruptive technical issues can be. "
+            elif 'slow' in context_lower or 'performance' in context_lower:
+                empathetic_opening = "I understand how frustrating performance issues can be. "
+            else:
+                empathetic_opening = "I understand your concern and I'm here to help. "
+        else:
+            # Generic empathetic opening that works for most situations
+            empathetic_opening = "I understand your concern and I'm here to help. "
+        
         return empathetic_opening + content
     
     def get_model_info(self) -> Dict[str, Any]:

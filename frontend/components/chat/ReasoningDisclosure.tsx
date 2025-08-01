@@ -11,6 +11,20 @@ import {
 import { Badge } from "@/components/ui/badge"
 import { cn } from "@/lib/utils"
 
+/**
+ * Utility function to get confidence-based color classes
+ * @param confidence - Confidence score between 0 and 1
+ * @returns Tailwind CSS color classes for the confidence level
+ */
+function getConfidenceColor(confidence: number): string {
+  // Validate confidence is within expected range
+  const validConfidence = Math.max(0, Math.min(1, confidence))
+  
+  if (validConfidence >= 0.8) return "text-green-600 dark:text-green-400"
+  if (validConfidence >= 0.6) return "text-yellow-600 dark:text-yellow-400"
+  return "text-red-600 dark:text-red-400"
+}
+
 // Types for reasoning UI
 export interface UIDecisionStep {
   label: string
@@ -18,11 +32,25 @@ export interface UIDecisionStep {
   evidence?: string
 }
 
+/**
+ * User interface reasoning data structure for displaying AI decision-making process
+ * @interface UIReasoning
+ * @property {string} summary - Brief summary of the reasoning process
+ * @property {UIDecisionStep[]} decision_path - Step-by-step decision pathway
+ * @property {string[]} assumptions - List of assumptions made during reasoning
+ * @property {number} confidence - Confidence score between 0 and 1
+ * @property {string[]} flags - Array of processing flags and warnings
+ */
 export interface UIReasoning {
+  /** Brief summary of the reasoning process */
   summary: string
+  /** Step-by-step decision pathway */
   decision_path: UIDecisionStep[]
+  /** List of assumptions made during reasoning */
   assumptions: string[]
+  /** Confidence score between 0 and 1 */
   confidence: number
+  /** Array of processing flags and warnings */
   flags: (
     | "downgraded_model"
     | "missing_info"
@@ -45,10 +73,7 @@ export function ReasoningDisclosure({
 }: ReasoningDisclosureProps) {
   if (!reasoning) return null
 
-  const confidenceColor = 
-    reasoning.confidence >= 0.8 ? "text-green-600 dark:text-green-400" :
-    reasoning.confidence >= 0.6 ? "text-yellow-600 dark:text-yellow-400" :
-    "text-red-600 dark:text-red-400"
+  const confidenceColor = getConfidenceColor(reasoning.confidence)
 
   const flagVariants: Record<string, { variant: "default" | "secondary" | "destructive" | "outline", label: string }> = {
     downgraded_model: { variant: "secondary", label: "Model downgraded" },

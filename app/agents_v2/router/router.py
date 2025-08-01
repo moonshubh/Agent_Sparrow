@@ -6,10 +6,12 @@ from langchain_core.messages import BaseMessage, HumanMessage # Added HumanMessa
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_google_genai import ChatGoogleGenerativeAI
 import asyncio
+import re
 
 from app.core.settings import settings
 from app.agents_v2.router.patterns import get_pattern_matcher
 from app.core.rate_limiting.budget_manager import BudgetManager
+from app.agents_v2.router.routing_config import RouterPatterns, ComplexityPatterns, DEFAULT_ROUTER_CONFIG
 
 if TYPE_CHECKING:
     from app.agents_v2.orchestration.state import GraphState # Import Pydantic GraphState
@@ -39,71 +41,58 @@ except FileNotFoundError:
 
 logger = logging.getLogger(__name__)
 
-def _smart_bypass_router(query: str) -> str | None:
+def _smart_bypass_router(query: str, compiled_patterns=None) -> str | None:
     """
-    Smart router bypass for obvious queries to reduce LLM calls.
+    Smart router bypass for obvious queries to reduce LLM calls using regex patterns.
+    
+    Args:
+        query: User query to analyze
+        compiled_patterns: Pre-compiled regex patterns for efficiency
     
     Returns:
         str: Direct destination if obvious pattern detected, None otherwise
     """
-    query_lower = query.lower()
+    if compiled_patterns is None:
+        compiled_patterns = RouterPatterns.compile_patterns()
     
     # HIGH PRIORITY: Obvious Mailbird technical issues -> primary_agent
     # These patterns take precedence over log analysis patterns
-    mailbird_technical_patterns = [
-        # Application startup/crash issues  
-        'mailbird won\'t open', 'mailbird bounces', 'mailbird crashes', 'mailbird won\'t start',
-        'mailbird won\'t launch', 'mailbird freezes', 'mailbird not working', 'mailbird broken',
-        'mailbird keeps crashing', 'mailbird crashing', 'freezes during', 'keeps freezing',
-        
-        # Email functionality issues
-        'emails not loading', 'can\'t send email', 'can\'t receive email', 'sync not working',
-        'mailbird slow', 'mailbird error', 'connection problem', 'login failed',
-        'oauth authentication', 'ssl handshake failed', 'office 365 account',
-        
-        # Account/setup issues with Mailbird context
-        'add account to mailbird', 'setup mailbird', 'configure mailbird', 'mailbird settings'
-    ]
-    
-    # Check for Mailbird technical issues FIRST (higher priority than log patterns)
-    if any(pattern in query_lower for pattern in mailbird_technical_patterns):
-        return "primary_agent"
+    for pattern in compiled_patterns['mailbird_technical']:
+        if pattern.search(query):
+            logger.debug(f"Mailbird technical pattern matched: {pattern.pattern}")
+            return "primary_agent"
     
     # Log file keywords -> log_analyst  
-    log_patterns = [
-        'log file', 'crash log', 'debug log', 'error log', 'mailbird.log',
-        'here\'s my log', 'attached log', 'log shows', 'check my logs'
-    ]
-    
-    if any(pattern in query_lower for pattern in log_patterns):
-        return "log_analyst"
+    for pattern in compiled_patterns['log']:
+        if pattern.search(query):
+            logger.debug(f"Log pattern matched: {pattern.pattern}")
+            return "log_analyst"
     
     # Research-type queries -> researcher
-    research_patterns = [
-        'what is the latest', 'recent update', 'new features', 'changelog',
-        'compared to other', 'best practices', 'industry standard', 'alternatives to'
-    ]
-    
-    if any(pattern in query_lower for pattern in research_patterns):
-        return "researcher"
+    for pattern in compiled_patterns['research']:
+        if pattern.search(query):
+            logger.debug(f"Research pattern matched: {pattern.pattern}")
+            return "researcher"
     
     # General Mailbird questions with high confidence -> primary_agent
-    if 'mailbird' in query_lower and any(term in query_lower for term in [
-        'how to', 'how do i', 'help with', 'problem with', 'issue with', 'question about'
-    ]):
-        return "primary_agent"
+    if re.search(r'\bmailbird\b', query, re.IGNORECASE):
+        for pattern in compiled_patterns['general_mailbird']:
+            if pattern.search(query):
+                logger.debug(f"General Mailbird pattern matched: {pattern.pattern}")
+                return "primary_agent"
     
     return None  # No obvious pattern, use LLM router
 
 def _calculate_query_complexity(query: str) -> float:
     """
-    Calculate query complexity score (0.0 to 1.0).
+    Calculate query complexity score (0.0 to 1.0) using configurable patterns.
     
     Considers:
     - Query length
     - Technical term density
     - Error/log patterns
     - Multiple issues mentioned
+    - Complex scenario patterns
     """
     complexity = 0.0
     query_lower = query.lower()
@@ -116,34 +105,25 @@ def _calculate_query_complexity(query: str) -> float:
         complexity += 0.1
         
     # Technical complexity indicators
-    technical_terms = [
-        'oauth', 'imap', 'smtp', 'ssl', 'tls', 'certificate', 'token',
-        'authentication', 'synchronization', 'indexing', 'database',
-        'memory leak', 'cpu usage', 'performance', 'latency', 'timeout'
-    ]
-    
-    tech_count = sum(1 for term in technical_terms if term in query_lower)
+    tech_count = sum(1 for term in ComplexityPatterns.TECHNICAL_TERMS if term in query_lower)
     complexity += min(0.3, tech_count * 0.1)
     
     # Error/log pattern complexity
-    error_patterns = [
-        'error', 'exception', 'failed', 'crash', 'stack trace',
-        'debug', 'warning', 'critical', 'fatal'
-    ]
-    
-    error_count = sum(1 for pattern in error_patterns if pattern in query_lower)
+    error_count = sum(1 for pattern in ComplexityPatterns.ERROR_PATTERNS if pattern in query_lower)
     complexity += min(0.2, error_count * 0.1)
     
     # Multiple issues indicator
-    if any(word in query_lower for word in ['and also', 'additionally', 'furthermore', 'moreover']):
+    if any(indicator in query_lower for indicator in ComplexityPatterns.MULTIPLE_ISSUE_INDICATORS):
         complexity += 0.1
         
     # Specific complex scenarios
-    if 'oauth' in query_lower and 'loop' in query_lower:
-        complexity += 0.2
-    
-    if 'performance' in query_lower and any(term in query_lower for term in ['slow', 'lag', 'freeze']):
-        complexity += 0.15
+    for scenario_name, (primary_term, secondary_terms) in ComplexityPatterns.COMPLEX_SCENARIOS.items():
+        if primary_term in query_lower:
+            if isinstance(secondary_terms, list):
+                if any(term in query_lower for term in secondary_terms):
+                    complexity += 0.15 if scenario_name == 'performance_issue' else 0.2
+            elif secondary_terms in query_lower:
+                complexity += 0.2
         
     return min(1.0, complexity)
 
@@ -178,28 +158,28 @@ def get_user_query(messages: List[Union[BaseMessage, tuple, list, dict]]) -> str
         pass
     return ""
 
-async def _embedding_route_check(query: str) -> Optional[str]:
+async def _embedding_route_check(query: str, config: RouterConfig = None) -> Optional[str]:
     """
     Check if query matches pre-computed patterns using embeddings.
+    
+    Args:
+        query: User query to match
+        config: Router configuration with thresholds and mappings
     
     Returns:
         str: Destination if match found with high confidence, None otherwise
     """
+    if config is None:
+        config = DEFAULT_ROUTER_CONFIG
+        
     try:
         pattern_matcher = await get_pattern_matcher()
         category, confidence, matched_pattern = await pattern_matcher.match_query(query)
         
-        if category and confidence >= 0.72:  # High confidence threshold
-            logger.info(f"Embedding match: {category} (confidence: {confidence:.3f})")
+        if category and confidence >= config.embedding_confidence_threshold:
+            logger.info(f"Embedding match: {category} (confidence: {confidence:.3f}, pattern: {matched_pattern})")
             
-            # Map category to destination
-            category_to_dest = {
-                "log_analysis": "log_analyst",
-                "primary_support": "primary_agent", 
-                "research": "researcher"
-            }
-            
-            return category_to_dest.get(category, "primary_agent")
+            return config.category_mappings.get(category, "primary_agent")
     except Exception as e:
         logger.error(f"Embedding route check failed: {e}")
     
@@ -231,29 +211,40 @@ def query_router(state: 'GraphState' | dict) -> Union[dict, str]:
         return {"destination": "__end__"} # Or perhaps a default agent
     
     # Smart bypass: Direct route obvious queries to save LLM calls
-    bypass_destination = _smart_bypass_router(user_query)
+    compiled_patterns = RouterPatterns.compile_patterns()
+    bypass_destination = _smart_bypass_router(user_query, compiled_patterns)
     if bypass_destination:
         complexity = _calculate_query_complexity(user_query)
+        logger.info(f"Smart bypass routing to {bypass_destination} with complexity {complexity:.2f}")
         print(f"---SMART BYPASS TO: {bypass_destination} (saved LLM call)---")
         return {
             "destination": bypass_destination,
-            "routing_confidence": 0.95,  # High confidence for pattern match
+            "routing_confidence": DEFAULT_ROUTER_CONFIG.smart_bypass_confidence,
             "query_complexity": complexity,
             "routing_metadata": {"routing_reason": "Smart pattern bypass"}
         }
     
-    # Embedding-based routing check (async -> sync wrapper)
+    # Embedding-based routing check with proper event loop handling
     try:
-        loop = asyncio.new_event_loop()
-        embedding_destination = loop.run_until_complete(_embedding_route_check(user_query))
-        loop.close()
+        # Check if we're already in an async context
+        try:
+            current_loop = asyncio.get_running_loop()
+            # We're in an async context, use asyncio.create_task or run in thread
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                future = executor.submit(asyncio.run, _embedding_route_check(user_query))
+                embedding_destination = future.result(timeout=5.0)
+        except RuntimeError:
+            # No running loop, safe to use asyncio.run
+            embedding_destination = asyncio.run(_embedding_route_check(user_query))
         
         if embedding_destination:
             complexity = _calculate_query_complexity(user_query)
+            logger.info(f"Embedding routing to {embedding_destination} with complexity {complexity:.2f}")
             print(f"---EMBEDDING ROUTE TO: {embedding_destination} (saved LLM call)---")
             return {
                 "destination": embedding_destination,
-                "routing_confidence": 0.85,  # Good confidence for embedding match
+                "routing_confidence": DEFAULT_ROUTER_CONFIG.embedding_route_confidence,
                 "query_complexity": complexity,
                 "routing_metadata": {"routing_reason": "Embedding similarity match"}
             }
@@ -298,11 +289,11 @@ def query_router(state: 'GraphState' | dict) -> Union[dict, str]:
         logger.info("Router decision: dest=%s confidence=%.2f complexity=%.2f", 
                    destination, confidence, complexity)
 
-        # Apply threshold fallback
-        CONF_THRESHOLD = settings.router_conf_threshold
-        if confidence < CONF_THRESHOLD:
+        # Apply configurable threshold fallback
+        conf_threshold = getattr(settings, 'router_conf_threshold', DEFAULT_ROUTER_CONFIG.confidence_threshold)
+        if confidence < conf_threshold:
             logger.warning(
-                "Low confidence (%.2f < %.2f). Falling back to primary_agent", confidence, CONF_THRESHOLD
+                "Low confidence (%.2f < %.2f). Falling back to primary_agent", confidence, conf_threshold
             )
             destination = "primary_agent"
             

@@ -8,7 +8,7 @@ Following the established MB-Sparrow patterns from FeedMe endpoints.
 
 import logging
 from typing import List, Optional, Dict, Any
-from datetime import datetime
+from datetime import datetime, timezone
 from fastapi import APIRouter, HTTPException, Depends, Query
 from fastapi.responses import JSONResponse
 from psycopg2.extras import RealDictCursor
@@ -187,7 +187,7 @@ async def create_chat_message_in_db(message_data: ChatMessageCreate, user_id: st
         # which is preferable to losing the message
         try:
             client.client.table('chat_sessions')\
-                .update({'last_message_at': datetime.now().isoformat()})\
+                .update({'last_message_at': datetime.now(timezone.utc).isoformat()})\
                 .eq('id', message_data.session_id)\
                 .execute()
         except Exception as update_error:

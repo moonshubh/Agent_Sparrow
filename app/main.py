@@ -144,6 +144,14 @@ app.include_router(feedme_websocket.router, prefix="/ws", tags=["FeedMe WebSocke
 @app.on_event("startup")
 async def startup_event():
     """Log security configuration on application startup."""
+    # First, validate critical configuration
+    try:
+        from app.core.settings import validate_startup_configuration
+        validate_startup_configuration()
+    except Exception as e:
+        logging.error(f"Configuration validation failed: {e}")
+        raise  # Prevent startup with invalid configuration
+    
     is_production = settings.is_production_mode()
     auth_enabled = settings.should_enable_auth_endpoints()
     api_key_enabled = settings.should_enable_api_key_endpoints()
@@ -363,11 +371,8 @@ async def agent_invoke_endpoint(request: AgentQueryRequest):
     # Load session history if session_id is provided
     messages = []
     
-    # Use direct attribute access with validation
+    # Use direct attribute access - Pydantic handles type validation
     if request.session_id:
-        # Validate session_id is a positive integer
-        if not isinstance(request.session_id, int) or request.session_id <= 0:
-            raise HTTPException(status_code=400, detail="Invalid session_id")
         
         try:
             # Import the chat session client

@@ -13,17 +13,15 @@ from datetime import datetime, timedelta
 from dataclasses import dataclass
 from enum import Enum
 import asyncio
+import threading
 
 from pydantic import BaseModel, Field, ValidationError
 from langchain_core.messages import HumanMessage, AIMessage
-import numpy as np
-
 from app.core.settings import settings
 from app.core.rate_limiting.budget_manager import BudgetManager
 from app.agents_v2.primary_agent.llm_registry import SupportedModel
 from app.agents_v2.primary_agent.llm_factory import build_llm
 from app.agents_v2.primary_agent.model_adapter import ModelAdapter
-from app.tools.embeddings import embed_query, GeminiEmbeddings
 from app.agents_v2.primary_agent.prompts.model_specific_factory import (
     ModelSpecificPromptFactory, PromptOptimizationLevel, ModelPromptConfig
 )
@@ -126,12 +124,13 @@ class UnifiedReasoningConfig:
 
 
 class ReasoningCache:
-    """Simple in-memory cache for reasoning results."""
+    """Thread-safe in-memory cache for reasoning results."""
     
     def __init__(self, ttl: int = 86400):
         self.cache: Dict[str, Tuple[UnifiedReasoningOutput, datetime]] = {}
         self.ttl = timedelta(seconds=ttl)
         self.max_size = 100
+        self._lock = threading.Lock()
     
     def _generate_key(self, query: str, model: str, context_hash: str) -> str:
         """Generate cache key from query and context."""
@@ -142,28 +141,30 @@ class ReasoningCache:
         """Get cached result if available and not expired."""
         key = self._generate_key(query, model, context_hash)
         
-        if key in self.cache:
-            result, timestamp = self.cache[key]
-            if datetime.now() - timestamp < self.ttl:
-                logger.info(f"Cache hit for query pattern")
-                return result
-            else:
-                # Expired, remove it
-                del self.cache[key]
+        with self._lock:
+            if key in self.cache:
+                result, timestamp = self.cache[key]
+                if datetime.now() - timestamp < self.ttl:
+                    logger.info(f"Cache hit for query pattern")
+                    return result
+                else:
+                    # Expired, remove it
+                    del self.cache[key]
         
         return None
     
     def set(self, query: str, model: str, context_hash: str, result: UnifiedReasoningOutput):
         """Cache a reasoning result."""
-        # Limit cache size
-        if len(self.cache) >= self.max_size:
-            # Remove oldest entry
-            oldest_key = min(self.cache.keys(), 
-                           key=lambda k: self.cache[k][1])
-            del self.cache[oldest_key]
-        
-        key = self._generate_key(query, model, context_hash)
-        self.cache[key] = (result, datetime.now())
+        with self._lock:
+            # Limit cache size
+            if len(self.cache) >= self.max_size:
+                # Remove oldest entry
+                oldest_key = min(self.cache.keys(), 
+                               key=lambda k: self.cache[k][1])
+                del self.cache[oldest_key]
+            
+            key = self._generate_key(query, model, context_hash)
+            self.cache[key] = (result, datetime.now())
 
 
 class UnifiedDeepReasoningEngine:
@@ -205,12 +206,6 @@ class UnifiedDeepReasoningEngine:
             self.top_p = 0.95
             self.top_k = 40
             self.thinking_budget = 512
-        elif self.model == SupportedModel.GEMINI_FLASH:
-            self.temperature = 0.0
-            self.max_output_tokens = 256
-            self.top_p = 1.0
-            self.top_k = 1
-            self.thinking_budget = 0
         elif self.model == SupportedModel.KIMI_K2:
             self.temperature = 0.2
             self.max_output_tokens = 2000

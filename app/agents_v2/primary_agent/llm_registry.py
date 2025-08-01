@@ -13,9 +13,9 @@ class SupportedModel(str, Enum):
     Enumeration of supported models for the Primary Agent.
     
     Each model has different characteristics:
-    - GEMINI_FLASH: Default model, fastest (10 RPM, 250/day), cost-effective
-    - GEMINI_PRO: Advanced reasoning (5 RPM, 100/day), higher quality
-    - KIMI_K2: Open-source 1T parameter MoE model via OpenRouter, 20 RPM free tier
+    - GEMINI_FLASH: Default model with thinking capabilities (8K output, 1M context)
+    - GEMINI_PRO: Advanced reasoning with extended output (65K output, 1M context) 
+    - KIMI_K2: 1T parameter MoE model optimized for coding (8K output, 128K context)
     """
     GEMINI_FLASH = "google/gemini-2.5-flash"
     GEMINI_PRO = "google/gemini-2.5-pro"
@@ -29,26 +29,45 @@ DEFAULT_MODEL = SupportedModel.GEMINI_FLASH
 MODEL_METADATA = {
     SupportedModel.GEMINI_FLASH: {
         "display_name": "Gemini 2.5 Flash",
-        "description": "Fast and efficient (default)",
+        "description": "Fast and efficient with thinking capabilities (default)",
         "rpm_limit": 10,  # Actual Google API free tier limit
         "rpd_limit": 250,  # Requests per day limit
-        "context_window": 1048576,
-        "provider": "google"
+        "context_window": 1048576,  # 1M tokens context
+        "max_output_tokens": 8192,  # Based on Google documentation
+        "provider": "google",
+        "required_env_var": "GEMINI_API_KEY",
+        "pricing": {
+            "input_tokens_per_1k": 0.00015,  # $0.15 per 1M tokens
+            "output_tokens_per_1k": 0.0006   # $0.60 per 1M tokens
+        }
     },
     SupportedModel.GEMINI_PRO: {
         "display_name": "Gemini 2.5 Pro",
-        "description": "Advanced reasoning capabilities", 
+        "description": "Advanced reasoning with extended output capabilities", 
         "rpm_limit": 5,  # Actual Google API free tier limit
         "rpd_limit": 100,  # Requests per day limit
-        "context_window": 2097152,
-        "provider": "google"
+        "context_window": 1048576,  # 1M tokens context
+        "max_output_tokens": 65000,  # Significantly higher output capacity
+        "provider": "google",
+        "required_env_var": "GEMINI_API_KEY",
+        "pricing": {
+            "input_tokens_per_1k": 0.00125,  # $1.25 per 1M tokens (up to 200K)
+            "output_tokens_per_1k": 0.01     # $10 per 1M tokens
+        }
     },
     SupportedModel.KIMI_K2: {
-        "display_name": "Kimi K2 (open-source)",
-        "description": "1T parameter MoE model",
-        "rpm_limit": 20,  # Free tier limit
-        "context_window": 128000,
-        "provider": "openrouter"
+        "display_name": "Kimi K2 (MoE)",
+        "description": "1T parameter MoE model with excellent coding capabilities",
+        "rpm_limit": 20,  # Free tier limit on OpenRouter
+        "rpd_limit": 1000,  # Estimated based on OpenRouter free tier
+        "context_window": 128000,  # 128K tokens context
+        "max_output_tokens": 8192,  # Standard output limit for most models
+        "provider": "openrouter",
+        "required_env_var": "OPENROUTER_API_KEY",
+        "pricing": {
+            "input_tokens_per_1k": 0.00015,  # $0.15 per 1M tokens
+            "output_tokens_per_1k": 0.0025   # $2.50 per 1M tokens
+        }
     }
 }
 
@@ -98,6 +117,14 @@ def get_all_models() -> list[SupportedModel]:
     return list(SupportedModel)
 
 
+# Model capabilities mapping - accurate per model
+MODEL_CAPABILITIES = {
+    SupportedModel.GEMINI_FLASH: ["chat", "streaming", "function_calling", "thinking"],
+    SupportedModel.GEMINI_PRO: ["chat", "streaming", "function_calling", "thinking", "extended_output"],
+    SupportedModel.KIMI_K2: ["chat", "coding", "long_context"]  # No streaming/function_calling confirmed
+}
+
+
 def get_model_metadata(model: SupportedModel) -> dict:
     """
     Get comprehensive metadata for a model suitable for API responses.
@@ -113,12 +140,9 @@ def get_model_metadata(model: SupportedModel) -> dict:
         "name": base_info["display_name"],
         "provider": base_info["provider"],
         "description": base_info["description"],
-        "capabilities": ["chat", "streaming", "function_calling"],
-        "max_tokens": 8192,  # Output tokens limit
+        "capabilities": MODEL_CAPABILITIES.get(model, ["chat"]),
+        "max_tokens": base_info["max_output_tokens"],  # Dynamic lookup
         "context_window": base_info["context_window"],
-        "required_env_var": "GEMINI_API_KEY" if base_info["provider"] == "google" else "OPENROUTER_API_KEY",
-        "pricing": {
-            "input_tokens_per_1k": 0.0001 if base_info["provider"] == "google" else 0.0002,
-            "output_tokens_per_1k": 0.0003 if base_info["provider"] == "google" else 0.0004
-        }
+        "required_env_var": base_info["required_env_var"],  # From metadata
+        "pricing": base_info["pricing"]  # From metadata
     }

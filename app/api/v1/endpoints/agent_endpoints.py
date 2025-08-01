@@ -4,6 +4,7 @@ from pydantic import BaseModel
 from typing import AsyncIterable, List, Annotated, Optional, Dict, Any
 from datetime import datetime
 import asyncio
+import logging
 
 from app.agents_v2.primary_agent.agent import run_primary_agent
 from app.agents_v2.primary_agent.schemas import PrimaryAgentState # Import PrimaryAgentState
@@ -36,6 +37,14 @@ except ImportError:
 from app.core.user_context import user_context_scope, create_user_context_from_user_id
 
 router = APIRouter()
+
+# Initialize logger
+logger = logging.getLogger(__name__)
+
+# Configuration constants for streaming behavior
+STREAMING_BATCH_SIZE = 3  # Number of words per batch in simulated streaming
+STREAMING_DELAY = 0.05    # Delay between batches in seconds
+DEBUG_VERBOSE = False     # Enable verbose debug messages (set to True for debugging)
 
 # --- Helper Functions ---
 
@@ -199,14 +208,14 @@ async def primary_agent_stream_generator(query: str, user_id: str, model: str | 
                     if hasattr(message, 'content') and message.content:
                         # Stream the message content word by word for natural feel
                         words = message.content.split()
-                        for i in range(0, len(words), 3):  # Send 3 words at a time
-                            batch = words[i:i+3]
+                        for i in range(0, len(words), STREAMING_BATCH_SIZE):
+                            batch = words[i:i+STREAMING_BATCH_SIZE]
                             json_payload = json.dumps({
                                 "role": "assistant", 
                                 "content": " ".join(batch) + " "
                             }, ensure_ascii=False)
                             yield f"data: {json_payload}\n\n"
-                            await asyncio.sleep(0.05)  # Small delay for streaming effect
+                            await asyncio.sleep(STREAMING_DELAY)  # Configurable delay for streaming effect
                     
     except Exception as e:
         # Use logger for consistency if available, otherwise print
@@ -650,51 +659,53 @@ async def agent_stream_with_reasoning(
     """
     async def stream_generator() -> AsyncIterable[str]:
         try:
-            # Send debug message
-            debug_msg = json.dumps({
-                "event": "debug",
-                "data": {"message": "Starting stream generator"}
-            })
-            yield f"data: {debug_msg}\n\n"
+            # Send debug message (only if debug mode enabled)
+            if DEBUG_VERBOSE:
+                debug_msg = json.dumps({
+                    "event": "debug",
+                    "data": {"message": "Starting stream generator"}
+                })
+                yield f"data: {debug_msg}\n\n"
             
             # Initialize budget manager
             budget_manager = BudgetManager()
             await budget_manager.initialize()
             
-            debug_msg = json.dumps({
-                "event": "debug", 
-                "data": {"message": "Budget manager initialized"}
-            })
-            yield f"data: {debug_msg}\n\n"
+            if DEBUG_VERBOSE:
+                debug_msg = json.dumps({
+                    "event": "debug", 
+                    "data": {"message": "Budget manager initialized"}
+                })
+                yield f"data: {debug_msg}\n\n"
             
             # Validate and select model
             requested_model = validate_model_id(request.model) if request.model else DEFAULT_MODEL
             
-            debug_msg = json.dumps({
-                "event": "debug",
-                "data": {"message": f"Requested model: {requested_model.value}"}
-            })
-            yield f"data: {debug_msg}\n\n"
+            if DEBUG_VERBOSE:
+                debug_msg = json.dumps({
+                    "event": "debug",
+                    "data": {"message": f"Requested model: {requested_model.value}"}
+                })
+                yield f"data: {debug_msg}\n\n"
             
             # Check budget and potentially downgrade
             allowed_model_str = await budget_manager.pick_allowed(requested_model.value)
             
-            debug_msg = json.dumps({
-                "event": "debug",
-                "data": {"message": f"Budget manager returned: {allowed_model_str}"}
-            })
-            yield f"data: {debug_msg}\n\n"
+            if DEBUG_VERBOSE:
+                debug_msg = json.dumps({
+                    "event": "debug",
+                    "data": {"message": f"Budget manager returned: {allowed_model_str}"}
+                })
+                yield f"data: {debug_msg}\n\n"
             
-            # Fix: Map budget manager model names back to SupportedModel enum values
-            if allowed_model_str == "gemini-2.5-flash":
-                effective_model = SupportedModel.GEMINI_FLASH
-            elif allowed_model_str == "gemini-2.5-pro":
-                effective_model = SupportedModel.GEMINI_PRO
-            elif allowed_model_str == "kimi-k2":
-                effective_model = SupportedModel.KIMI_K2
-            else:
-                # Fallback to the original requested model
-                effective_model = requested_model
+            # Map budget manager model names back to SupportedModel enum values
+            MODEL_NAME_MAPPING = {
+                "gemini-2.5-flash": SupportedModel.GEMINI_FLASH,
+                "gemini-2.5-pro": SupportedModel.GEMINI_PRO,
+                "kimi-k2": SupportedModel.KIMI_K2
+            }
+            
+            effective_model = MODEL_NAME_MAPPING.get(allowed_model_str, requested_model)
             
             # Get user API key
             user_context = await create_user_context_from_user_id(user_id)
@@ -735,19 +746,31 @@ async def agent_stream_with_reasoning(
             })
             yield f"data: {thinking_msg}\n\n"
             
-            # Extract context from request
+            # Extract context from request with error handling
             context_messages = []
-            if hasattr(request, 'messages'):
-                for msg in request.messages[-5:]:  # Last 5 messages
-                    context_messages.append({
-                        "role": "user" if msg.get("role") == "user" else "assistant",
-                        "content": msg.get("content", "")
-                    })
+            try:
+                if hasattr(request, 'messages') and request.messages is not None:
+                    if isinstance(request.messages, list):
+                        for msg in request.messages[-5:]:  # Last 5 messages
+                            if isinstance(msg, dict):
+                                context_messages.append({
+                                    "role": "user" if msg.get("role") == "user" else "assistant",
+                                    "content": msg.get("content", "")
+                                })
+                            else:
+                                logger.warning(f"Invalid message format in request: {type(msg)}")
+                    else:
+                        logger.warning(f"request.messages is not a list: {type(request.messages)}")
+            except Exception as e:
+                logger.error(f"Error extracting context messages: {e}")
+                # Continue with empty context_messages
             
             # Get router metadata if available (from state)
+            # TODO: Replace these placeholder values with dynamic data from actual router
+            # These values should be obtained from the router's analysis of the query
             router_metadata = {
-                "query_complexity": 0.5,  # Default, would come from router
-                "routing_confidence": 0.8
+                "query_complexity": 0.5,  # PLACEHOLDER: Should come from router analysis
+                "routing_confidence": 0.8  # PLACEHOLDER: Should come from router confidence scoring
             }
             
             # Perform reasoning
@@ -763,9 +786,8 @@ async def agent_stream_with_reasoning(
             words = response_text.split()
             
             # Stream words in small batches for natural feel
-            batch_size = 3
-            for i in range(0, len(words), batch_size):
-                batch = words[i:i+batch_size]
+            for i in range(0, len(words), STREAMING_BATCH_SIZE):
+                batch = words[i:i+STREAMING_BATCH_SIZE]
                 token_msg = json.dumps({
                     "event": "token",
                     "data": {
@@ -773,7 +795,7 @@ async def agent_stream_with_reasoning(
                     }
                 })
                 yield f"data: {token_msg}\n\n"
-                await asyncio.sleep(0.05)  # Small delay for natural streaming
+                await asyncio.sleep(STREAMING_DELAY)  # Configurable delay for natural streaming
             
             # Redact reasoning UI for safety
             safe_reasoning_ui = redact_reasoning_ui(reasoning_output.reasoning_ui.dict())

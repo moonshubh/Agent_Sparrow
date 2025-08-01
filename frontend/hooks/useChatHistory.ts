@@ -359,7 +359,24 @@ export function useChatHistory() {
   }, [])
   
   // Clear all session data and reset to initial state
-  const clearAllSessions = useCallback(() => {
+  const clearAllSessions = useCallback(async () => {
+    try {
+      // Delete all sessions from API if persistence is available
+      if (state.isPersistenceAvailable && state.sessions.length > 0) {
+        const deletePromises = state.sessions
+          .filter(session => session.id && !isNaN(parseInt(session.id)))
+          .map(session => 
+            chatAPI.deleteSession(parseInt(session.id)).catch(error => {
+              console.warn(`Failed to delete session ${session.id}:`, error)
+            })
+          )
+        
+        await Promise.allSettled(deletePromises)
+      }
+    } catch (error) {
+      console.warn('Failed to clear sessions from API:', error)
+    }
+    
     setState({
       sessions: [],
       currentSessionId: null,
@@ -369,7 +386,7 @@ export function useChatHistory() {
     
     // Clear localStorage as well
     localStorage.removeItem(STORAGE_KEY)
-  }, [state.isPersistenceAvailable])
+  }, [state.isPersistenceAvailable, state.sessions])
   
   return {
     sessions: state.sessions,

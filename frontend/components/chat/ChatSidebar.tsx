@@ -23,7 +23,6 @@ import {
   AlertCircle
 } from 'lucide-react'
 import Image from 'next/image'
-import { toast } from 'sonner'
 
 export interface ChatSession {
   id: string
@@ -70,13 +69,40 @@ export function ChatSidebar({
   const [editingTitle, setEditingTitle] = useState('')
   const [optimisticSessions, setOptimisticSessions] = useState<OptimisticSession[]>([])
   const [loadingStates, setLoadingStates] = useState<Record<string, boolean>>({})
-  const [error, setError] = useState<string | null>(null)
   const previousSessionsRef = useRef<ChatSession[]>([])
+  
+  // Efficient session comparison helper
+  const areSessionsEqual = useCallback((a: ChatSession[], b: ChatSession[]): boolean => {
+    if (a.length !== b.length) return false
+    
+    // Create maps for O(1) lookup
+    const mapA = new Map(a.map(s => [s.id, s]))
+    const mapB = new Map(b.map(s => [s.id, s]))
+    
+    // Check if all sessions exist and have same properties
+    for (const session of a) {
+      const otherSession = mapB.get(session.id)
+      if (!otherSession) return false
+      
+      // Compare relevant properties (avoid Date object issues)
+      if (
+        session.title !== otherSession.title ||
+        session.agentType !== otherSession.agentType ||
+        session.preview !== otherSession.preview ||
+        session.lastMessageAt.getTime() !== otherSession.lastMessageAt.getTime() ||
+        session.createdAt.getTime() !== otherSession.createdAt.getTime()
+      ) {
+        return false
+      }
+    }
+    
+    return true
+  }, [])
   
   // Update optimistic sessions when real sessions change
   useEffect(() => {
     // Check if sessions actually changed to prevent unnecessary updates
-    const sessionsChanged = JSON.stringify(sessions) !== JSON.stringify(previousSessionsRef.current)
+    const sessionsChanged = !areSessionsEqual(sessions, previousSessionsRef.current)
     if (sessionsChanged) {
       previousSessionsRef.current = sessions
       
@@ -96,7 +122,7 @@ export function ChatSidebar({
         return newStates
       })
     }
-  }, [sessions])
+  }, [sessions, areSessionsEqual])
   
   // Combine real and optimistic sessions
   const allSessions = [...sessions, ...optimisticSessions]
@@ -466,6 +492,9 @@ function SessionItem({
                     </span>
                     {isLoading && (
                       <Loader2 className="w-3 h-3 animate-spin flex-shrink-0 text-muted-foreground" />
+                    )}
+                    {hasError && (
+                      <AlertCircle className="w-3 h-3 flex-shrink-0 text-destructive" />
                     )}
                   </div>
                 )}

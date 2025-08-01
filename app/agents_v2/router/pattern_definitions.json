@@ -1,0 +1,76 @@
+{
+  "log_analysis": {
+    "patterns": [
+      "analyze this log file",
+      "debug this error log", 
+      "check my mailbird logs",
+      "parse these log entries",
+      "examine this crash log",
+      "review system logs for errors",
+      "investigate log warnings",
+      "find issues in debug output",
+      "AADSTS700082 token expired error",
+      "OAuth authentication loop problem", 
+      "IMAP connection timeout issues",
+      "SMTP authentication failed repeatedly",
+      "SSL certificate verification error",
+      "socket connection refused errors",
+      "database indexing paused unexpectedly",
+      "mail sync stuck at specific percentage",
+      "high CPU usage in logs",
+      "memory leak indicators",
+      "slow query performance",
+      "indexer taking too long",
+      "repeated connection failures"
+    ],
+    "confidence_threshold": 0.72
+  },
+  
+  "primary_support": {
+    "patterns": [
+      "how to set up gmail account",
+      "configure outlook email settings",
+      "add yahoo mail to mailbird",
+      "setup two factor authentication",
+      "change email password in app",
+      "update server settings",
+      "emails not syncing properly",
+      "can't send emails getting errors",
+      "receiving duplicate messages",
+      "attachments won't download",
+      "search function not working",
+      "contacts not importing correctly",
+      "how to use unified inbox",
+      "set up email signatures", 
+      "create email filters and rules",
+      "enable dark mode theme",
+      "keyboard shortcuts list",
+      "backup mailbird data",
+      "mailbird running slowly",
+      "reduce memory usage",
+      "optimize for better performance",
+      "clear cache and temporary files",
+      "rebuild search index"
+    ],
+    "confidence_threshold": 0.65
+  },
+  
+  "research": {
+    "patterns": [
+      "research email client comparisons",
+      "find latest email security best practices",
+      "investigate new email protocols",
+      "gather information about email providers",
+      "compare IMAP vs Exchange features",
+      "how does mailbird compare to outlook",
+      "thunderbird vs mailbird features",
+      "best email clients for windows",
+      "email client market analysis",
+      "latest OAuth2 implementation standards",
+      "modern email encryption methods",
+      "email deliverability best practices",
+      "spam filtering techniques comparison"
+    ],
+    "confidence_threshold": 0.70
+  }
+}

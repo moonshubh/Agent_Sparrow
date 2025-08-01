@@ -429,9 +429,8 @@ export default function UnifiedChatInterface() {
                         {/* Messages */}
                         {state.messages.slice(1).map((message) => ( // Skip welcome message
                           <ErrorBoundary
-                            key={`error-boundary-${message.id}`}
+                            key={message.id}
                             showDetails={process.env.NODE_ENV === 'development'}
-                            onError={(error) => console.error(`Message ${message.id} error:`, error)}
                           >
                             <MessageBubble
                               key={message.id}

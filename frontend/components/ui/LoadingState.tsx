@@ -1,20 +1,70 @@
 "use client"
 
-import React from 'react'
+import React, { useMemo, useCallback } from 'react'
 import { cn } from '@/lib/utils'
 import { Loader2, Bot, MessageCircle, FileSearch, Search } from 'lucide-react'
 
+/**
+ * Size variants for loading components
+ */
+type LoadingSize = 'sm' | 'md' | 'lg'
+
+/**
+ * Visual variants for loading states
+ */
+type LoadingVariant = 'default' | 'card' | 'inline' | 'overlay'
+
+/**
+ * Supported agent types for specialized loading states
+ */
+type AgentType = 'primary' | 'log_analyst' | 'researcher'
+
+/**
+ * Props for the main LoadingState component
+ */
 interface LoadingStateProps {
+  /** Additional CSS classes */
   className?: string
-  size?: 'sm' | 'md' | 'lg'
-  variant?: 'default' | 'card' | 'inline' | 'overlay'
+  /** Size variant */
+  size?: LoadingSize
+  /** Visual variant */
+  variant?: LoadingVariant
+  /** Optional loading message */
   message?: string
-  agentType?: 'primary' | 'log_analyst' | 'researcher'
+  /** Agent type for specialized styling */
+  agentType?: AgentType
+  /** Whether to show the loading icon */
   showIcon?: boolean
+  /** Additional content to render */
   children?: React.ReactNode
 }
 
-const agentInfo = {
+/**
+ * Props for LoadingDots component
+ */
+interface LoadingDotsProps {
+  /** Additional CSS classes */
+  className?: string
+  /** Size variant */
+  size?: LoadingSize
+  /** Number of dots to display */
+  dotCount?: number
+}
+
+/**
+ * Props for LoadingProgress component
+ */
+interface LoadingProgressProps {
+  /** Array of step names */
+  steps: string[]
+  /** Current step index (0-based) */
+  currentStep: number
+  /** Additional CSS classes */
+  className?: string
+}
+
+// Move static objects outside component to prevent recreation
+const AGENT_INFO = {
   primary: {
     icon: MessageCircle,
     label: 'Primary Support',
@@ -30,7 +80,28 @@ const agentInfo = {
     label: 'Researcher',
     color: 'text-purple-500'
   }
-}
+} as const
+
+// Size classes constants to prevent recreation
+const SIZE_CLASSES = {
+  sm: 'w-4 h-4',
+  md: 'w-6 h-6',
+  lg: 'w-8 h-8'
+} as const
+
+// Icon size constants
+const ICON_SIZE_CLASSES = {
+  sm: 'w-2 h-2',
+  md: 'w-2 h-2', 
+  lg: 'w-3 h-3'
+} as const
+
+// Dot size constants
+const DOT_SIZE_CLASSES = {
+  sm: 'w-1 h-1',
+  md: 'w-1.5 h-1.5',
+  lg: 'w-2 h-2'
+} as const
 
 export function LoadingState({ 
   className,
@@ -41,41 +112,38 @@ export function LoadingState({
   showIcon = true,
   children
 }: LoadingStateProps) {
-  const sizeClasses = {
-    sm: 'w-4 h-4',
-    md: 'w-6 h-6',
-    lg: 'w-8 h-8'
-  }
-
-  const getAgentIcon = () => {
+  // Memoize helper functions to prevent recreation
+  const getAgentIcon = useCallback(() => {
     if (!agentType) return Bot
-    return agentInfo[agentType]?.icon || Bot
-  }
+    return AGENT_INFO[agentType]?.icon || Bot
+  }, [agentType])
 
-  const getAgentLabel = () => {
+  const getAgentLabel = useCallback(() => {
     if (!agentType) return 'Loading'
-    return agentInfo[agentType]?.label || 'Loading'
-  }
+    return AGENT_INFO[agentType]?.label || 'Loading'
+  }, [agentType])
 
-  const getAgentColor = () => {
+  const getAgentColor = useCallback(() => {
     if (!agentType) return 'text-muted-foreground'
-    return agentInfo[agentType]?.color || 'text-muted-foreground'
-  }
+    return AGENT_INFO[agentType]?.color || 'text-muted-foreground'
+  }, [agentType])
+
+  // Memoize computed values
+  const iconSizeClass = useMemo(() => ICON_SIZE_CLASSES[size], [size])
+  const loaderSizeClass = useMemo(() => SIZE_CLASSES[size], [size])
 
   const renderContent = () => (
     <div className="flex items-center gap-3">
       {showIcon && (
         <div className="relative">
-          <Loader2 className={cn(sizeClasses[size], "animate-spin text-primary")} />
+          <Loader2 className={cn(loaderSizeClass, "animate-spin text-primary")} />
           {agentType && size !== 'sm' && (
             <div className={cn(
               "absolute inset-0 flex items-center justify-center",
               getAgentColor()
             )}>
               {React.createElement(getAgentIcon(), { 
-                className: cn(
-                  size === 'lg' ? 'w-3 h-3' : 'w-2 h-2'
-                )
+                className: iconSizeClass
               })}
             </div>
           )}
@@ -155,13 +223,17 @@ export function LoadingState({
 
 // Skeleton loading components
 export function SkeletonLine({ className, width }: { className?: string, width?: string }) {
+  // Use CSS custom property for consistency with other components
+  const style = useMemo(() => ({ '--skeleton-width': width } as React.CSSProperties), [width])
+  
   return (
     <div 
       className={cn(
         "h-4 bg-muted animate-pulse rounded",
+        width && "[width:var(--skeleton-width)]",
         className
       )}
-      style={{ width }}
+      style={width ? style : undefined}
     />
   )
 }
@@ -197,21 +269,30 @@ export function SkeletonCard({ className }: { className?: string }) {
   )
 }
 
-// Loading dots animation
-export function LoadingDots({ className, size = 'md' }: { className?: string, size?: 'sm' | 'md' | 'lg' }) {
-  const dotSizes = {
-    sm: 'w-1 h-1',
-    md: 'w-1.5 h-1.5',
-    lg: 'w-2 h-2'
-  }
+/**
+ * Loading dots animation component with configurable dot count
+ */
+export function LoadingDots({ 
+  className, 
+  size = 'md', 
+  dotCount = 3 
+}: LoadingDotsProps) {
+  // Memoize dot size class
+  const dotSizeClass = useMemo(() => DOT_SIZE_CLASSES[size], [size])
+  
+  // Memoize dots array to prevent recreation
+  const dots = useMemo(() => 
+    Array.from({ length: dotCount }, (_, i) => i), 
+    [dotCount]
+  )
 
   return (
     <div className={cn("flex items-center gap-1", className)}>
-      {[0, 1, 2].map((i) => (
+      {dots.map((i) => (
         <div
           key={i}
           className={cn(
-            dotSizes[size],
+            dotSizeClass,
             "bg-current rounded-full animate-bounce"
           )}
           style={{
@@ -223,26 +304,44 @@ export function LoadingDots({ className, size = 'md' }: { className?: string, si
   )
 }
 
-// Progress bar with steps
+/**
+ * Progress bar with steps - includes bounds checking and safe display
+ */
 export function LoadingProgress({ 
   steps, 
   currentStep, 
   className 
-}: { 
-  steps: string[]
-  currentStep: number
-  className?: string 
-}) {
-  const progress = ((currentStep + 1) / steps.length) * 100
+}: LoadingProgressProps) {
+  // Add bounds checking for safety
+  const safeCurrentStep = Math.max(0, Math.min(currentStep, steps.length - 1))
+  const safeStepsLength = Math.max(1, steps.length) // Prevent division by zero
+  
+  // Memoize progress calculation
+  const progress = useMemo(() => 
+    ((safeCurrentStep + 1) / safeStepsLength) * 100, 
+    [safeCurrentStep, safeStepsLength]
+  )
+
+  // Memoize current step text with bounds checking
+  const currentStepText = useMemo(() => {
+    if (steps.length === 0) return 'Processing...'
+    return steps[safeCurrentStep] || 'Processing...'
+  }, [steps, safeCurrentStep])
+  
+  // Memoize step count display with zero-length handling
+  const stepCountText = useMemo(() => {
+    if (steps.length === 0) return '0 / 0'
+    return `${safeCurrentStep + 1} / ${steps.length}`
+  }, [safeCurrentStep, steps.length])
 
   return (
     <div className={cn("space-y-3", className)}>
       <div className="flex items-center justify-between text-sm">
         <span className="font-medium text-foreground">
-          {steps[currentStep] || 'Processing...'}
+          {currentStepText}
         </span>
         <span className="text-muted-foreground">
-          {currentStep + 1} / {steps.length}
+          {stepCountText}
         </span>
       </div>
       
@@ -253,19 +352,21 @@ export function LoadingProgress({
         />
       </div>
       
-      <div className="flex justify-between text-xs text-muted-foreground">
-        {steps.map((step, index) => (
-          <span 
-            key={index}
-            className={cn(
-              "px-1",
-              index <= currentStep ? "text-primary font-medium" : ""
-            )}
-          >
-            {index + 1}
-          </span>
-        ))}
-      </div>
+      {steps.length > 0 && (
+        <div className="flex justify-between text-xs text-muted-foreground">
+          {steps.map((step, index) => (
+            <span 
+              key={index}
+              className={cn(
+                "px-1",
+                index <= safeCurrentStep ? "text-primary font-medium" : ""
+              )}
+            >
+              {index + 1}
+            </span>
+          ))}
+        </div>
+      )}
     </div>
   )
 }

@@ -15,6 +15,6 @@ Query: {query}
 
 Return the result **strictly** as a single-line JSON object with exactly these two keys:
 
-{{"destination": "<primary_agent|log_analyst|researcher>", "confidence": <number between 0 and 1>}}
+{"destination": "<primary_agent|log_analyst|researcher>", "confidence": <number between 0 and 1>}
 
 Do not output anything else — no markdown, no code fences, no additional keys or text.

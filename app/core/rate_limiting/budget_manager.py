@@ -13,7 +13,11 @@ import logging
 import asyncio
 from typing import Dict, Optional, Tuple, Any
 from datetime import datetime, timezone, timedelta
-import pytz
+try:
+    from zoneinfo import ZoneInfo
+except ImportError:
+    # Fallback for Python < 3.9
+    from backports.zoneinfo import ZoneInfo
 import redis.asyncio as redis
 from dataclasses import dataclass, field
 import json
@@ -37,7 +41,7 @@ class ModelUsage:
     rpm_used: int = 0
     rpd_used: int = 0
     tpm_used: int = 0
-    last_reset_time: datetime = field(default_factory=lambda: datetime.now(pytz.timezone('US/Pacific')))
+    last_reset_time: datetime = field(default_factory=lambda: datetime.now(ZoneInfo('US/Pacific')))
     
     def to_dict(self) -> dict:
         """Convert to dictionary for Redis storage."""
@@ -45,18 +49,35 @@ class ModelUsage:
             'rpm_used': self.rpm_used,
             'rpd_used': self.rpd_used,
             'tpm_used': self.tpm_used,
-            'last_reset_time': self.last_reset_time.isoformat()
+            # Ensure timezone info is preserved in ISO format
+            'last_reset_time': self.last_reset_time.isoformat() if self.last_reset_time.tzinfo else self.last_reset_time.replace(tzinfo=ZoneInfo('US/Pacific')).isoformat()
         }
     
     @classmethod
     def from_dict(cls, data: dict) -> 'ModelUsage':
         """Create from dictionary loaded from Redis."""
+        from dateutil import parser
+        pacific_tz = ZoneInfo('US/Pacific')
+        
+        # Parse datetime preserving timezone info
+        reset_time_str = data.get('last_reset_time')
+        if reset_time_str:
+            try:
+                # Use dateutil.parser to correctly parse timezone info
+                last_reset_time = parser.isoparse(reset_time_str)
+                # Ensure it has timezone info
+                if not last_reset_time.tzinfo:
+                    last_reset_time = last_reset_time.replace(tzinfo=pacific_tz)
+            except:
+                last_reset_time = datetime.now(pacific_tz)
+        else:
+            last_reset_time = datetime.now(pacific_tz)
+            
         return cls(
             rpm_used=data.get('rpm_used', 0),
             rpd_used=data.get('rpd_used', 0),
             tpm_used=data.get('tpm_used', 0),
-            last_reset_time=datetime.fromisoformat(data.get('last_reset_time', 
-                datetime.now(pytz.timezone('US/Pacific')).isoformat()))
+            last_reset_time=last_reset_time
         )
 
 class BudgetManager:
@@ -75,9 +96,14 @@ class BudgetManager:
     # Model hierarchy for downgrades (highest to lowest capability)
     MODEL_HIERARCHY = [
         "gemini-2.5-pro",
-        "gemini-2.5-flash", 
+        "gemini-2.5-flash",
+        "kimi-k2",
         "gemini-2.5-flash-lite"
     ]
+    
+    # Configurable status thresholds for headroom calculation
+    STATUS_THRESHOLD_OK = 0.5  # Above 50% headroom
+    STATUS_THRESHOLD_LOW = 0.2  # Above 20% headroom
     
     def __init__(self, config: Optional[RateLimitConfig] = None):
         """Initialize BudgetManager with configuration."""
@@ -115,7 +141,7 @@ class BudgetManager:
         }
         
         # Pacific timezone for consistent reset timing
-        self.pacific_tz = pytz.timezone('US/Pacific')
+        self.pacific_tz = ZoneInfo('US/Pacific')
         
     async def initialize(self):
         """Initialize Redis connection."""
@@ -149,7 +175,12 @@ class BudgetManager:
                         usage = ModelUsage.from_dict(json.loads(data))
                         
                         # Check if we need to reset (past midnight Pacific)
-                        last_reset = usage.last_reset_time.replace(tzinfo=self.pacific_tz)
+                        # Properly handle timezone-aware datetime
+                        if usage.last_reset_time.tzinfo:
+                            last_reset = usage.last_reset_time
+                        else:
+                            # For zoneinfo, use replace for naive datetime
+                            last_reset = usage.last_reset_time.replace(tzinfo=self.pacific_tz)
                         if now.date() > last_reset.date():
                             # Reset daily counters
                             usage.rpd_used = 0
@@ -161,6 +192,8 @@ class BudgetManager:
                         if (now - last_reset).total_seconds() >= 60:
                             usage.rpm_used = 0
                             usage.tpm_used = 0
+                            usage.last_reset_time = now
+                            await self._save_usage(model, usage)
                             
                         return usage
                 except Exception as e:
@@ -180,6 +213,7 @@ class BudgetManager:
             if (now - usage.last_reset_time).total_seconds() >= 60:
                 usage.rpm_used = 0
                 usage.tpm_used = 0
+                usage.last_reset_time = now
                 
             return usage
     
@@ -196,9 +230,64 @@ class BudgetManager:
             except Exception as e:
                 logger.error(f"BudgetManager: Redis error saving usage: {e}")
     
+    async def check_and_record(self, model: str, tokens_in: int = 0, tokens_out: int = 0) -> bool:
+        """
+        Atomically check if a request is allowed and record usage if so.
+        This prevents race conditions between checking and recording.
+        
+        Args:
+            model: Model identifier (e.g., "gemini-2.5-pro")
+            tokens_in: Input tokens (for TPM tracking)
+            tokens_out: Output tokens (for TPM tracking)
+            
+        Returns:
+            bool: True if request was allowed and recorded, False otherwise
+        """
+        if model not in self.model_limits:
+            logger.error(f"BudgetManager: Unknown model {model}, denying by default")
+            return False
+            
+        async with self._lock:
+            limits = self.model_limits[model]
+            usage = await self._get_usage(model)
+            
+            # Check RPM limit
+            if usage.rpm_used >= limits.rpm:
+                logger.warning(f"BudgetManager: RPM limit exceeded for {model} ({usage.rpm_used}/{limits.rpm})")
+                return False
+                
+            # Check RPD limit (considering reserve pool)
+            effective_rpd = limits.rpd - limits.reserve_pool
+            if usage.rpd_used >= effective_rpd:
+                logger.warning(f"BudgetManager: RPD limit exceeded for {model} ({usage.rpd_used}/{effective_rpd})")
+                return False
+                
+            # Check TPM limit if applicable
+            if limits.tpm > 0:
+                total_tokens = tokens_in + tokens_out
+                if usage.tpm_used + total_tokens > limits.tpm:
+                    logger.warning(f"BudgetManager: TPM limit exceeded for {model}")
+                    return False
+            
+            # All checks passed, now record the usage atomically
+            usage.rpm_used += 1
+            usage.rpd_used += 1
+            if limits.tpm > 0:
+                usage.tpm_used += tokens_in + tokens_out
+                
+            # Save to Redis
+            await self._save_usage(model, usage)
+            
+            # Update in-memory cache
+            self._usage_cache[model] = usage
+            
+            logger.debug(f"BudgetManager: Recorded usage for {model} - RPM: {usage.rpm_used}, RPD: {usage.rpd_used}")
+            return True
+    
     async def allow(self, model: str, tokens_in: int = 0, tokens_out: int = 0) -> bool:
         """
         Check if a request is allowed within budget constraints.
+        Note: This method only checks without recording. Use check_and_record() for atomic operations.
         
         Args:
             model: Model identifier (e.g., "gemini-2.5-pro")
@@ -209,8 +298,8 @@ class BudgetManager:
             bool: True if request is allowed, False otherwise
         """
         if model not in self.model_limits:
-            logger.warning(f"BudgetManager: Unknown model {model}, allowing by default")
-            return True
+            logger.error(f"BudgetManager: Unknown model {model}, denying by default")
+            return False
             
         limits = self.model_limits[model]
         usage = await self._get_usage(model)
@@ -238,6 +327,7 @@ class BudgetManager:
     async def record(self, model: str, tokens_in: int = 0, tokens_out: int = 0):
         """
         Record usage of a model.
+        Note: This method only records without checking. Use check_and_record() for atomic operations.
         
         Args:
             model: Model identifier
@@ -274,7 +364,7 @@ class BudgetManager:
             str: The allowed model (may be downgraded)
         """
         # Normalize model name
-        if requested not in self.MODEL_HIERARCHY and requested != "kimi-k2":
+        if requested not in self.MODEL_HIERARCHY:
             requested = "gemini-2.5-flash"  # Default
             
         # Check if requested model is allowed
@@ -317,10 +407,10 @@ class BudgetManager:
         # Overall headroom is minimum of all constraints
         overall_headroom = min(rpm_headroom, rpd_headroom)
         
-        # Determine status
-        if overall_headroom > 0.5:
+        # Determine status using configurable thresholds
+        if overall_headroom > self.STATUS_THRESHOLD_OK:
             status = "OK"
-        elif overall_headroom > 0.2:
+        elif overall_headroom > self.STATUS_THRESHOLD_LOW:
             status = "Low"
         else:
             status = "Exhausted"
@@ -328,7 +418,7 @@ class BudgetManager:
         # Calculate reset time (midnight Pacific)
         now = datetime.now(self.pacific_tz)
         tomorrow = now.date() + timedelta(days=1)
-        reset_time = self.pacific_tz.localize(datetime.combine(tomorrow, datetime.min.time()))
+        reset_time = datetime.combine(tomorrow, datetime.min.time()).replace(tzinfo=self.pacific_tz)
         hours_to_reset = (reset_time - now).total_seconds() / 3600
         
         return {
@@ -351,31 +441,60 @@ class BudgetManager:
             result[model] = await self.headroom(model)
         return result
     
-    async def force_use_reserve(self, model: str) -> bool:
+    async def can_use_reserve(self, model: str, tokens_in: int = 0, tokens_out: int = 0) -> bool:
         """
-        Force use of reserve pool for critical escalations.
+        Check if reserve pool can be used and record usage if allowed.
+        This is for critical escalations that need to bypass normal limits.
         
         Args:
             model: Model to use from reserve
+            tokens_in: Input tokens (for TPM tracking)
+            tokens_out: Output tokens (for TPM tracking)
             
         Returns:
-            bool: True if reserve usage allowed
+            bool: True if reserve usage was allowed and recorded
         """
         if model not in self.model_limits:
             return False
             
-        limits = self.model_limits[model]
-        if limits.reserve_pool == 0:
-            return False
+        async with self._lock:
+            limits = self.model_limits[model]
+            if limits.reserve_pool == 0:
+                return False
+                
+            usage = await self._get_usage(model)
             
-        usage = await self._get_usage(model)
-        
-        # Check if we're within total limit (including reserve)
-        if usage.rpd_used < limits.rpd:
-            logger.info(f"BudgetManager: Using reserve pool for {model}")
+            # Check RPM limit even for reserve usage
+            if usage.rpm_used >= limits.rpm:
+                logger.warning(f"BudgetManager: RPM limit exceeded for reserve pool {model}")
+                return False
+            
+            # Check if we're within total limit (including reserve)
+            if usage.rpd_used >= limits.rpd:
+                logger.warning(f"BudgetManager: Total RPD limit exceeded for {model}, cannot use reserve")
+                return False
+                
+            # Check TPM limit if applicable
+            if limits.tpm > 0:
+                total_tokens = tokens_in + tokens_out
+                if usage.tpm_used + total_tokens > limits.tpm:
+                    logger.warning(f"BudgetManager: TPM limit exceeded for reserve pool {model}")
+                    return False
+            
+            # All checks passed, record the usage
+            usage.rpm_used += 1
+            usage.rpd_used += 1
+            if limits.tpm > 0:
+                usage.tpm_used += tokens_in + tokens_out
+                
+            # Save to Redis
+            await self._save_usage(model, usage)
+            
+            # Update in-memory cache
+            self._usage_cache[model] = usage
+            
+            logger.info(f"BudgetManager: Using reserve pool for {model} - RPD: {usage.rpd_used}/{limits.rpd}")
             return True
-            
-        return False
     
     async def close(self):
         """Close Redis connection."""

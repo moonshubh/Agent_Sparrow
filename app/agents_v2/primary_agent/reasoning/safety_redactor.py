@@ -6,6 +6,7 @@ leak through the reasoning UI shown to users.
 """
 
 import re
+import copy
 import logging
 from typing import Dict, List, Any, Optional
 from dataclasses import dataclass
@@ -105,12 +106,12 @@ class SafetyRedactor:
         ),
         RedactionPattern(
             name="ip_address",
-            pattern=r'\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b',
+            pattern=r'\b(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\b',
             replacement="[IP_ADDRESS]"
         ),
         RedactionPattern(
             name="credit_card",
-            pattern=r'\b(?:\d{4}[\s\-]?){3}\d{4}\b',
+            pattern=r'\b(?:4[0-9]{12}(?:[0-9]{3})?|5[1-5][0-9]{14}|3[47][0-9]{13}|3[0-9]{13}|6(?:011|5[0-9]{2})[0-9]{12})\b',
             replacement="[CREDIT_CARD]"
         ),
         
@@ -181,15 +182,24 @@ class SafetyRedactor:
                     pattern_info["replacement"], 
                     redacted
                 )
-            except Exception as e:
+            except (re.error, TypeError, AttributeError) as e:
                 logger.error(f"Redaction pattern {pattern_info['name']} failed: {e}")
         
         # Normalize whitespace
         redacted = self._normalize_whitespace(redacted)
         
-        # Truncate if needed
+        # Truncate if needed (preserve word boundaries)
         if max_length and len(redacted) > max_length:
-            redacted = redacted[:max_length-3] + "..."
+            if max_length <= 3:
+                redacted = "..."
+            else:
+                # Find the last space before max_length-3
+                truncate_pos = max_length - 3
+                last_space = redacted.rfind(' ', 0, truncate_pos)
+                if last_space > 0 and last_space > truncate_pos - 20:  # Don't go too far back
+                    redacted = redacted[:last_space] + "..."
+                else:
+                    redacted = redacted[:truncate_pos] + "..."
         
         return redacted
     
@@ -203,7 +213,7 @@ class SafetyRedactor:
         Returns:
             Redacted reasoning UI
         """
-        redacted = reasoning_ui.copy()
+        redacted = copy.deepcopy(reasoning_ui)
         
         # Redact summary
         if "summary" in redacted:
@@ -267,22 +277,29 @@ class SafetyRedactor:
         Returns:
             True if content appears safe
         """
-        # Check for any remaining sensitive patterns
-        suspicious_patterns = [
-            r'sk-[A-Za-z0-9]+',  # API keys
-            r'Bearer\s+[A-Za-z0-9]+',  # Auth tokens
-            r'/home/[^/\s]+',  # Unix home paths
-            r'C:\\Users\\[^\\]+',  # Windows user paths
-            r'password\s*=',  # Password assignments
-            r'OPENAI_API_KEY',  # Environment variables
+        # Check for any remaining sensitive patterns using compiled patterns
+        suspicious_pattern_names = [
+            "api_key", "google_api_key", "email_password", 
+            "unix_path", "windows_path"
         ]
+        
+        # Get patterns that should always be flagged as suspicious
+        suspicious_patterns = []
+        for pattern in self.REDACTION_PATTERNS:
+            if pattern.name in suspicious_pattern_names:
+                suspicious_patterns.append(pattern.pattern)
         
         content_str = str(content)
         
-        for pattern in suspicious_patterns:
-            if re.search(pattern, content_str, re.IGNORECASE):
-                logger.warning(f"Suspicious pattern found: {pattern}")
-                return False
+        for i, pattern in enumerate(suspicious_patterns):
+            try:
+                if re.search(pattern, content_str, re.IGNORECASE):
+                    pattern_name = suspicious_pattern_names[i] if i < len(suspicious_pattern_names) else "unknown"
+                    logger.warning(f"Suspicious pattern found: {pattern_name}")
+                    return False
+            except (re.error, TypeError) as e:
+                logger.error(f"Error checking suspicious pattern {suspicious_pattern_names[i] if i < len(suspicious_pattern_names) else 'unknown'}: {e}")
+                continue
         
         return True
 

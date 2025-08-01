@@ -325,25 +325,38 @@ class EmotionTemplates:
                     score += 2.0  # Patterns are stronger indicators
                     emotion_indicators.append(f"pattern: {pattern}")
             
-            # Apply intensity multipliers
+            # Apply intensity multipliers with capping to prevent excessive inflation
             multipliers = patterns.get("intensity_multipliers", {})
+            total_multiplier = 1.0
+            exclamation_applied = False
+            
             for trigger, multiplier in multipliers.items():
-                if trigger == "!!!!+" and "!!!!" in message:
-                    score *= multiplier
-                elif trigger == "!!!" and "!!!" in message:
-                    score *= multiplier
-                elif trigger == "!!" and "!!" in message:
-                    score *= multiplier
+                # Handle exclamation marks with priority (only apply one)
+                if trigger == "!!!!+" and "!!!!" in message and not exclamation_applied:
+                    total_multiplier *= multiplier
+                    exclamation_applied = True
+                elif trigger == "!!!" and "!!!" in message and not exclamation_applied:
+                    total_multiplier *= multiplier
+                    exclamation_applied = True
+                elif trigger == "!!" and "!!" in message and not exclamation_applied:
+                    total_multiplier *= multiplier
+                    exclamation_applied = True
+                
+                # Handle other multipliers independently
                 elif trigger == "CAPS" and has_caps:
-                    score *= multiplier
+                    total_multiplier *= min(multiplier, 1.5)  # Cap CAPS multiplier
                 elif trigger == "all_caps_help" and any(word in message for word in ["HELP", "URGENT", "ASAP"]):
-                    score *= multiplier
+                    total_multiplier *= min(multiplier, 1.4)  # Cap help multiplier
                 elif trigger == "multiple_urgent" and sum(1 for word in ["urgent", "asap", "now", "immediately"] if word in message_lower) >= 2:
-                    score *= multiplier
+                    total_multiplier *= min(multiplier, 1.3)  # Cap urgent multiplier
                 elif trigger == "time_pressure" and re.search(r"(?i)(in \d+ (minutes?|hours?)|by \d+|before \d+)", message):
-                    score *= multiplier
-                elif trigger == "multiple_issues" and message_lower.count("and") >= 3:
-                    score *= multiplier
+                    total_multiplier *= min(multiplier, 1.4)  # Cap time pressure multiplier
+                elif trigger == "multiple_issues" and cls._detect_multiple_issues(message_lower):
+                    total_multiplier *= min(multiplier, 1.4)  # Cap multiple issues multiplier
+            
+            # Cap the total multiplier to prevent score inflation
+            total_multiplier = min(total_multiplier, 3.0)
+            score *= total_multiplier
             
             if score > 0:
                 scores[emotion] = score
@@ -377,6 +390,38 @@ class EmotionTemplates:
             detected_indicators=detected_indicators,
             secondary_emotions=secondary_emotions
         )
+    
+    @classmethod
+    def _detect_multiple_issues(cls, message_lower: str) -> bool:
+        """
+        Improved detection for multiple issues to reduce false positives.
+        
+        Args:
+            message_lower: Lowercase message content
+            
+        Returns:
+            True if multiple distinct issues are detected
+        """
+        # Look for issue patterns rather than just counting "and"
+        issue_indicators = [
+            "can't", "cannot", "doesn't", "won't", "not working", "broken",
+            "error", "problem", "issue", "trouble", "fail", "crash",
+            "stuck", "help", "missing", "lost", "slow", "freeze",
+            # Expanded issue indicators
+            "stopped working", "not responding", "won't load", "keeps crashing",
+            "timeout", "connection failed", "sync error", "login failed",
+            "can't connect", "authentication", "blocked", "denied",
+            "corrupted", "damaged", "invalid", "expired", "outdated"
+        ]
+        
+        # Count distinct issue indicators
+        issue_count = sum(1 for indicator in issue_indicators if indicator in message_lower)
+        
+        # Multiple issues if we have 2+ issue indicators AND connector words
+        connectors = ["and", "also", "plus", "additionally", "furthermore", "moreover"]
+        has_connectors = any(connector in message_lower for connector in connectors)
+        
+        return issue_count >= 2 and has_connectors
     
     @classmethod
     def get_empathy_template(cls, emotion: EmotionalState, issue: str = "") -> str:

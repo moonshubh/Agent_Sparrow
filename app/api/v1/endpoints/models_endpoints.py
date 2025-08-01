@@ -5,6 +5,7 @@ This module provides endpoints for discovering available AI models
 and their metadata for the MB-Sparrow system.
 """
 
+import os
 from typing import List, Dict, Any, Optional
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
@@ -18,13 +19,18 @@ from app.agents_v2.primary_agent.llm_registry import (
 )
 # Conditional import for authentication  
 try:
-    from app.api.v1.endpoints.auth import get_current_user_id as get_current_user
-    AUTH_AVAILABLE = True
-except ImportError:
-    AUTH_AVAILABLE = False
-    # Fallback function when auth is not available
+    from app.api.v1.endpoints.auth import get_current_user_id
+    # Create a wrapper to match expected signature
     async def get_current_user() -> dict:
-        return {"id": "dev-user-12345", "email": "dev@example.com"}
+        user_id = await get_current_user_id()
+        return {"id": user_id}
+except ImportError:
+    # In production, this should fail rather than use hardcoded data
+    async def get_current_user() -> dict:
+        raise HTTPException(
+            status_code=503,
+            detail="Authentication service is not available"
+        )
 
 from app.core.settings import settings
 
@@ -53,6 +59,66 @@ class ModelsResponse(BaseModel):
     total_count: int
 
 
+class ValidationResponse(BaseModel):
+    """Response for model access validation."""
+    valid: bool
+    model_id: str
+    reason: Optional[str] = None
+    message: Optional[str] = None
+    required_env_var: Optional[str] = None
+
+
+def _get_model_by_id(model_id: str) -> SupportedModel:
+    """
+    Get a SupportedModel by its ID string.
+    
+    Args:
+        model_id: The model identifier string
+        
+    Returns:
+        The SupportedModel enum
+        
+    Raises:
+        HTTPException: If model not found
+    """
+    try:
+        return SupportedModel(model_id)
+    except ValueError:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Model '{model_id}' not found"
+        )
+
+
+def _create_model_info(model: SupportedModel, current_user: dict) -> ModelInfo:
+    """
+    Create a ModelInfo object for a given model.
+    
+    Args:
+        model: The SupportedModel enum
+        current_user: Current user information
+        
+    Returns:
+        ModelInfo object with all metadata
+    """
+    info = get_model_metadata(model)
+    is_available = _check_model_availability(model, current_user)
+    
+    return ModelInfo(
+        id=model.value,
+        name=info["name"],
+        provider=info["provider"],
+        description=info["description"],
+        capabilities=info["capabilities"],
+        max_tokens=info["max_tokens"],
+        context_window=info["context_window"],
+        is_default=(model == DEFAULT_MODEL),
+        is_available=is_available,
+        required_env_var=info.get("required_env_var"),
+        pricing=info.get("pricing")
+    )
+
+
 @router.get("", response_model=ModelsResponse)
 async def get_available_models(
     current_user: dict = Depends(get_current_user)
@@ -68,24 +134,7 @@ async def get_available_models(
         model_list = []
         
         for model in all_models:
-            info = get_model_metadata(model)
-            
-            # Check if model is available based on API keys
-            is_available = _check_model_availability(model, current_user)
-            
-            model_info = ModelInfo(
-                id=model.value,
-                name=info["name"],
-                provider=info["provider"],
-                description=info["description"],
-                capabilities=info["capabilities"],
-                max_tokens=info["max_tokens"],
-                context_window=info["context_window"],
-                is_default=(model == DEFAULT_MODEL),
-                is_available=is_available,
-                required_env_var=info.get("required_env_var"),
-                pricing=info.get("pricing")
-            )
+            model_info = _create_model_info(model, current_user)
             model_list.append(model_info)
         
         return ModelsResponse(
@@ -94,7 +143,20 @@ async def get_available_models(
             total_count=len(model_list)
         )
         
+    except ValueError as e:
+        # Handle model enumeration or metadata errors
+        raise HTTPException(
+            status_code=500,
+            detail=f"Model configuration error: {str(e)}"
+        )
+    except KeyError as e:
+        # Handle missing metadata fields
+        raise HTTPException(
+            status_code=500,
+            detail=f"Missing model metadata: {str(e)}"
+        )
     except Exception as e:
+        # Catch any other unexpected errors
         raise HTTPException(
             status_code=500,
             detail=f"Failed to retrieve models: {str(e)}"
@@ -116,50 +178,34 @@ async def get_model_details(
         Detailed model information including availability status
     """
     try:
-        # Validate model ID
-        model = None
-        for supported_model in SupportedModel:
-            if supported_model.value == model_id:
-                model = supported_model
-                break
+        # Validate model ID using helper
+        model = _get_model_by_id(model_id)
         
-        if not model:
-            raise HTTPException(
-                status_code=404,
-                detail=f"Model '{model_id}' not found"
-            )
-        
-        info = get_model_metadata(model)
-        is_available = _check_model_availability(model, current_user)
-        
-        return ModelInfo(
-            id=model.value,
-            name=info["name"],
-            provider=info["provider"],
-            description=info["description"],
-            capabilities=info["capabilities"],
-            max_tokens=info["max_tokens"],
-            context_window=info["context_window"],
-            is_default=(model == DEFAULT_MODEL),
-            is_available=is_available,
-            required_env_var=info.get("required_env_var"),
-            pricing=info.get("pricing")
-        )
+        # Create and return model info using helper
+        return _create_model_info(model, current_user)
         
     except HTTPException:
+        # Re-raise HTTP exceptions as-is
         raise
+    except KeyError as e:
+        # Handle missing metadata fields
+        raise HTTPException(
+            status_code=500,
+            detail=f"Missing model metadata: {str(e)}"
+        )
     except Exception as e:
+        # Catch any other unexpected errors
         raise HTTPException(
             status_code=500,
             detail=f"Failed to retrieve model details: {str(e)}"
         )
 
 
-@router.get("/validate/{model_id}")
+@router.get("/validate/{model_id}", response_model=ValidationResponse)
 async def validate_model_access(
     model_id: str,
     current_user: dict = Depends(get_current_user)
-) -> Dict[str, Any]:
+) -> ValidationResponse:
     """
     Validate if the current user has access to use a specific model.
     
@@ -170,40 +216,43 @@ async def validate_model_access(
         Validation result with access status and any missing requirements
     """
     try:
-        # Validate model ID
-        model = None
-        for supported_model in SupportedModel:
-            if supported_model.value == model_id:
-                model = supported_model
-                break
-        
-        if not model:
-            return {
-                "valid": False,
-                "reason": "Model not found",
-                "model_id": model_id
-            }
+        # Validate model ID using helper
+        try:
+            model = _get_model_by_id(model_id)
+        except HTTPException:
+            return ValidationResponse(
+                valid=False,
+                model_id=model_id,
+                reason="Model not found"
+            )
         
         # Check availability
         is_available = _check_model_availability(model, current_user)
         info = get_model_metadata(model)
         
         if is_available:
-            return {
-                "valid": True,
-                "model_id": model_id,
-                "message": f"Access to {info['name']} is validated"
-            }
+            return ValidationResponse(
+                valid=True,
+                model_id=model_id,
+                message=f"Access to {info['name']} is validated"
+            )
         else:
-            return {
-                "valid": False,
-                "reason": "Missing API key",
-                "model_id": model_id,
-                "required_env_var": info.get("required_env_var"),
-                "message": f"API key required for {info['provider']} models"
-            }
+            return ValidationResponse(
+                valid=False,
+                model_id=model_id,
+                reason="Missing API key",
+                required_env_var=info.get("required_env_var"),
+                message=f"API key required for {info['provider']} models"
+            )
             
+    except KeyError as e:
+        # Handle missing metadata fields
+        raise HTTPException(
+            status_code=500,
+            detail=f"Missing model metadata: {str(e)}"
+        )
     except Exception as e:
+        # Catch any other unexpected errors
         raise HTTPException(
             status_code=500,
             detail=f"Failed to validate model access: {str(e)}"
@@ -223,15 +272,19 @@ def _check_model_availability(model: SupportedModel, user: dict) -> bool:
     """
     # For Gemini models, check if user has Gemini API key
     if model in (SupportedModel.GEMINI_FLASH, SupportedModel.GEMINI_PRO):
-        # In a real implementation, this would check user's stored API keys
-        # For now, we'll assume it's available if the user is authenticated
-        return True
+        # Check for Gemini API key in environment or settings
+        # Priority: environment variable > settings > user config
+        gemini_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+        if not gemini_key and hasattr(settings, 'gemini_api_key'):
+            gemini_key = settings.gemini_api_key
+        return bool(gemini_key)
     
     # For Kimi K2, check if OpenRouter API key is configured
     elif model == SupportedModel.KIMI_K2:
-        # This would check if the user has configured OpenRouter access
-        # For now, return True if settings have OpenRouter key
-        import os
-        return bool(os.getenv("OPENROUTER_API_KEY"))
+        # Check for OpenRouter API key
+        openrouter_key = os.getenv("OPENROUTER_API_KEY")
+        if not openrouter_key and hasattr(settings, 'openrouter_api_key'):
+            openrouter_key = settings.openrouter_api_key
+        return bool(openrouter_key)
     
     return False

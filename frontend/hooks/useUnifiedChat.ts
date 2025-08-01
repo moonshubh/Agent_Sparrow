@@ -64,6 +64,13 @@ const generateUniqueId = (prefix: string = ''): string => {
   return prefix ? `${prefix}-${timestamp}-${counter}` : `${timestamp}-${counter}`
 }
 
+// Helper function to parse session ID with validation
+const parseSessionId = (sessionId?: string): number | null => {
+  if (!sessionId) return null
+  const numericSessionId = parseInt(sessionId, 10)
+  return !isNaN(numericSessionId) ? numericSessionId : null
+}
+
 /**
  * Provides a unified chat hook that routes user queries to the appropriate agent (primary, log analyst, or researcher) and manages the conversation state.
  *
@@ -270,7 +277,8 @@ export function useUnifiedChat(): UseUnifiedChatReturn {
       
       let assistantContent = ''
       let reasoningUI = null
-      let modelEffective = model || 'gemini-2.5-flash'
+      const DEFAULT_MODEL = 'gemini-2.5-flash'
+      let modelEffective = model || DEFAULT_MODEL
       let budget = null
       
       const cleanup = await streamChat(
@@ -346,13 +354,15 @@ export function useUnifiedChat(): UseUnifiedChatReturn {
         }
       )
       
-      // Store cleanup function
-      abortControllerRef.current = {
+      // Store cleanup function with proper AbortController interface
+      const customAbortController: AbortController = {
+        signal: abortController.signal,
         abort: () => {
           cleanup()
           abortController.abort()
         }
-      } as any
+      }
+      abortControllerRef.current = customAbortController
       
     } catch (error: any) {
       console.error('💥 Streaming error:', error)
@@ -368,14 +378,8 @@ export function useUnifiedChat(): UseUnifiedChatReturn {
   const handleUnifiedChat = async (content: string, suggestedAgent: string, abortController: AbortController, sessionId?: string, model?: string) => {
     try {
       console.log('🚀 Making API call to:', `${apiBaseUrl}/agent`)
-      // Validate sessionId is numeric before parsing
-      let parsedSessionId: number | null = null
-      if (sessionId) {
-        const numericSessionId = parseInt(sessionId)
-        if (!isNaN(numericSessionId)) {
-          parsedSessionId = numericSessionId
-        }
-      }
+      // Parse and validate session ID
+      const parsedSessionId = parseSessionId(sessionId)
       
       const payload = { 
         query: content,
@@ -549,14 +553,8 @@ export function useUnifiedChat(): UseUnifiedChatReturn {
       }, 600000) // 10 minutes
       
       try {
-        // Validate sessionId is numeric before parsing
-        let parsedSessionId: number | null = null
-        if (sessionId) {
-          const numericSessionId = parseInt(sessionId)
-          if (!isNaN(numericSessionId)) {
-            parsedSessionId = numericSessionId
-          }
-        }
+        // Parse and validate session ID
+        const parsedSessionId = parseSessionId(sessionId)
         
         const response = await fetch(`${apiBaseUrl}/agent`, {
           method: 'POST',
@@ -665,14 +663,8 @@ const handleResearchQuery = async (content: string, abortController: AbortContro
     const steps: any[] = [];
 
     try {
-      // Validate sessionId is numeric before parsing
-      let parsedSessionId: number | null = null
-      if (sessionId) {
-        const numericSessionId = parseInt(sessionId)
-        if (!isNaN(numericSessionId)) {
-          parsedSessionId = numericSessionId
-        }
-      }
+      // Parse and validate session ID
+      const parsedSessionId = parseSessionId(sessionId)
       
       const response = await fetch(`${apiBaseUrl}/agent`, {
         method: 'POST',
