@@ -12,6 +12,9 @@ from dotenv import load_dotenv
 from pydantic_settings import BaseSettings
 from pydantic import Field, field_validator
 
+from app.core.rate_limiting.config import RateLimitConfig
+from app.core.model_config import get_model_config_service
+
 # Load environment variables from project root .env if present
 # Calculate the path safely with depth validation
 current_file_path = Path(__file__).resolve()
@@ -277,7 +280,6 @@ def validate_startup_configuration() -> None:
         
         # Validate rate limiting configuration
         try:
-            from app.core.rate_limiting.config import RateLimitConfig
             config = RateLimitConfig.from_environment()
             # This will trigger validation in __post_init__
         except Exception as e:
@@ -291,7 +293,6 @@ def validate_startup_configuration() -> None:
         
         # Validate model configuration service
         try:
-            from app.core.model_config import get_model_config_service
             service = get_model_config_service()
         except Exception as e:
             raise ValueError(f"Model configuration service initialization failed: {e}")
