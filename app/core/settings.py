@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import os
 from functools import lru_cache
+import re
+import logging
+from urllib.parse import urlparse
 from pathlib import Path
 from typing import Optional, List
 
@@ -23,6 +26,9 @@ else:
 
 ENV_PATH = project_root / ".env"
 load_dotenv(ENV_PATH)
+
+# Module-level logger
+logger = logging.getLogger(__name__)
 
 class Settings(BaseSettings):
     """Application configuration loaded from environment variables."""
@@ -250,6 +256,52 @@ def get_settings() -> Settings:
     Uses an internal cache to ensure the same Settings instance is returned on each call.
     """
     return Settings()
+
+def validate_startup_configuration() -> None:
+    """
+    Validate critical configuration at startup to prevent runtime failures.
+    
+    Raises:
+        ValueError: If critical configuration is invalid
+        ImportError: If required dependencies are missing
+    """
+    try:
+        settings = get_settings()
+        
+        # Validate Gemini API key format (at least 20 allowed chars, starts with allowed prefix)
+        if settings.gemini_api_key:
+            key = settings.gemini_api_key.strip()
+            gemini_key_pattern = re.compile(r"^[A-Za-z0-9_\-]{20,}$")
+            if not gemini_key_pattern.match(key):
+                raise ValueError("GEMINI_API_KEY appears to be invalid (incorrect format)")
+        
+        # Validate rate limiting configuration
+        try:
+            from app.core.rate_limiting.config import RateLimitConfig
+            config = RateLimitConfig.from_environment()
+            # This will trigger validation in __post_init__
+        except Exception as e:
+            raise ValueError(f"Rate limiting configuration is invalid: {e}")
+        
+        # Validate Redis connection URL structure
+        if settings.redis_url:
+            parsed = urlparse(settings.redis_url)
+            if parsed.scheme not in ("redis", "rediss") or not parsed.hostname:
+                raise ValueError(f"Invalid Redis URL format: {settings.redis_url}")
+        
+        # Validate model configuration service
+        try:
+            from app.core.model_config import get_model_config_service
+            service = get_model_config_service()
+        except Exception as e:
+            raise ValueError(f"Model configuration service initialization failed: {e}")
+            
+        # Log successful validation
+        logger.info("✓ Startup configuration validation passed")
+        
+    except Exception as e:
+        logger.error(f"✗ Startup configuration validation failed: {e}")
+        raise
 
 # Instantiate settings at import time for convenience
 settings: Settings = get_settings()

@@ -6,6 +6,7 @@ to any LangChain-compatible model, including OpenRouter models like Kimi K2.
 """
 
 import asyncio
+import concurrent.futures
 import time
 from typing import Any, Dict, Optional
 from collections import defaultdict
@@ -13,6 +14,7 @@ from datetime import datetime, timedelta
 
 from app.core.logging_config import get_logger
 from .exceptions import RateLimitExceededException
+from .token_estimation import estimate_tokens
 
 logger = get_logger(__name__)
 
@@ -229,7 +231,8 @@ class RateLimitedModelWrapper:
         self,
         model: Any,
         rate_limiter: GenericRateLimiter,
-        fail_gracefully: bool = True
+        fail_gracefully: bool = True,
+        rate_check_timeout: float = 3.0,
     ):
         """
         Initialize the rate-limited model wrapper.
@@ -242,6 +245,8 @@ class RateLimitedModelWrapper:
         self.model = model
         self.rate_limiter = rate_limiter
         self.fail_gracefully = fail_gracefully
+        # Configurable timeout for rate-limit checks executed via executor
+        self._rate_check_timeout = rate_check_timeout
         self.logger = get_logger(f"rate_limited_{rate_limiter.model_name}")
         
         # Preserve model attributes
@@ -277,14 +282,33 @@ class RateLimitedModelWrapper:
         # For sync streaming, we do a simple check
         estimated_tokens = self._estimate_tokens(args, kwargs)
         
-        # Run async check in sync context
-        loop = asyncio.new_event_loop()
+        # Run async check in sync context using improved loop handling
         try:
-            can_proceed = loop.run_until_complete(
-                self.rate_limiter.check_rate_limit(estimated_tokens)
-            )
-        finally:
-            loop.close()
+            # Try to get existing event loop
+            try:
+                loop = asyncio.get_running_loop()
+                # If we have a running loop, we need to use run_in_executor
+                import concurrent.futures
+                # Use a shared thread pool executor to prevent resource leaks
+                if not hasattr(self, '_executor'):
+                    self._executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+                
+                future = self._executor.submit(
+                    asyncio.run,
+                    self.rate_limiter.check_rate_limit(estimated_tokens)
+                )
+                can_proceed = future.result(timeout=self._rate_check_timeout)
+            except RuntimeError:
+                # No running event loop, we can use asyncio.run
+                can_proceed = asyncio.run(
+                    self.rate_limiter.check_rate_limit(estimated_tokens)
+                )
+        except (asyncio.TimeoutError, concurrent.futures.TimeoutError) as e:
+            logger.warning(f"Timeout during rate-limit check: {e}")
+            can_proceed = False
+        except Exception as e:  # pragma: no cover
+            logger.exception("Unexpected error during rate-limit check")
+            can_proceed = False
         
         if not can_proceed:
             retry_after = self.rate_limiter.get_retry_after()
@@ -331,31 +355,106 @@ class RateLimitedModelWrapper:
     
     def _estimate_tokens(self, args: tuple, kwargs: dict) -> int:
         """
-        Estimate the number of tokens for a request.
+        Estimate the number of tokens for a request using advanced estimation service.
         
-        This is a simple heuristic based on message length.
+        Uses model-specific tokenization with configurable parameters and caching.
         """
-        # Extract messages if available
+        try:
+            # Get model name from various sources
+            model_name = self._extract_model_name(args, kwargs)
+            
+            # Use advanced token estimation
+            return estimate_tokens(
+                args=args,
+                kwargs=kwargs, 
+                model_name=model_name,
+                include_context=True
+            )
+            
+        except Exception as e:
+            logger.warning(f"Advanced token estimation failed, using fallback: {e}")
+            return self._fallback_token_estimation(args, kwargs)
+    
+    def _extract_model_name(self, args: tuple, kwargs: dict) -> Optional[str]:
+        """Enhanced model name extraction from request arguments."""
+        # Check common parameter names with improved extraction
+        for param_name in ['model', 'model_name', 'model_id', 'engine']:
+            if param_name in kwargs:
+                model_name = str(kwargs[param_name])
+                # Clean and normalize model name
+                return self._normalize_model_name(model_name)
+        
+        # Check if model is embedded in the wrapped model object
+        if hasattr(self, 'model_name'):
+            return self._normalize_model_name(self.model_name)
+        
+        # Check model attribute on the wrapped model
+        if hasattr(self, 'model') and hasattr(self.model, 'model_name'):
+            return self._normalize_model_name(self.model.model_name)
+        
+        # Check for model info in args (first argument might be model config)
+        if args and isinstance(args[0], dict) and 'model' in args[0]:
+            return self._normalize_model_name(str(args[0]['model']))
+            
+        return None
+    
+    def _normalize_model_name(self, model_name: str) -> str:
+        """Normalize model name for consistent processing."""
+        if not model_name:
+            return model_name
+        
+        # Remove common prefixes/suffixes and normalize
+        normalized = model_name.lower().strip()
+        
+        # Handle common model name variations
+        if 'gemini' in normalized:
+            if '2.5' in normalized and 'pro' in normalized:
+                return 'gemini-2.5-pro'
+            elif '2.5' in normalized and 'flash' in normalized:
+                return 'gemini-2.5-flash'
+        elif 'kimi' in normalized:
+            return 'kimi-k2'
+        elif 'gpt' in normalized:
+            if '4' in normalized:
+                return 'gpt-4'
+            elif '3.5' in normalized:
+                return 'gpt-3.5-turbo'
+        
+        return normalized
+    
+    def _fallback_token_estimation(self, args: tuple, kwargs: dict) -> int:
+        """Fallback token estimation using simple heuristics."""
+        # Extract messages if available (with type safety)
         messages = None
-        if args and hasattr(args[0], '__iter__'):
-            messages = args[0]
-        elif 'messages' in kwargs:
+        if args and len(args) > 0 and hasattr(args[0], '__iter__') and not isinstance(args[0], str):
+            try:
+                messages = list(args[0])  # Convert to list for safety
+            except (TypeError, ValueError):
+                messages = None
+        elif 'messages' in kwargs and isinstance(kwargs['messages'], (list, tuple)):
             messages = kwargs['messages']
         
         if not messages:
-            return 1000  # Default estimate
+            return 1200  # Conservative default estimate
         
-        # Simple estimation: ~4 characters per token
-        total_chars = sum(
-            len(str(msg.content)) if hasattr(msg, 'content') else len(str(msg))
-            for msg in messages
-        )
+        # Simple estimation: ~4 characters per token with overhead (with error handling)
+        total_chars = 0
+        for msg in messages:
+            try:
+                if hasattr(msg, 'content') and msg.content is not None:
+                    total_chars += len(str(msg.content))
+                else:
+                    total_chars += len(str(msg)) if msg is not None else 0
+            except (AttributeError, TypeError, ValueError):
+                # Skip problematic messages and add conservative estimate
+                total_chars += 100
         
-        # Add some buffer for response tokens
-        estimated_input = total_chars // 4
-        estimated_output = 1000  # Assume 1000 tokens for response
+        # More conservative calculation
+        estimated_input = int(total_chars / 3.5)  # Slightly more tokens per char
+        estimated_output = 1200  # Higher response estimate
+        overhead = 150  # System prompt and formatting overhead
         
-        return estimated_input + estimated_output
+        return estimated_input + estimated_output + overhead
     
     def _create_error_response(self, message: str) -> Dict[str, Any]:
         """Create an error response for graceful failure."""
@@ -369,6 +468,24 @@ class RateLimitedModelWrapper:
     def get_usage_stats(self) -> Dict[str, Any]:
         """Get rate limiter usage statistics."""
         return self.rate_limiter.get_usage_stats()
+    
+    # --------------------------------------------------------------------- #
+    # Context manager support for safe executor cleanup                      #
+    # --------------------------------------------------------------------- #
+    def __enter__(self):
+        """Enter the context manager and return self."""
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """Ensure the thread-pool executor is shut down gracefully."""
+        if hasattr(self, "_executor") and self._executor:
+            try:
+                # Wait for running tasks to finish before shutting down
+                self._executor.shutdown(wait=True)
+            except Exception as e:  # pragma: no cover
+                logger.warning("Failed shutting down executor: %s", e)
+        # Do not suppress exceptions
+        return False
 
 
 # Factory function to create rate-limited models
@@ -381,6 +498,15 @@ def create_rate_limited_model(
 ) -> RateLimitedModelWrapper:
     """
     Create a rate-limited wrapper for any model.
+
+    Note:
+        The returned object implements the context-manager protocol, so it is
+        recommended to use it via `with` for deterministic resource cleanup:
+
+        ```python
+        with create_rate_limited_model(model, "my-model") as limited:
+            limited.invoke(...)
+        ```
     
     Args:
         model: The model to wrap
