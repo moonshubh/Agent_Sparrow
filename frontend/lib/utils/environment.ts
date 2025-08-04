@@ -11,8 +11,14 @@ export const isDevelopment = process.env.NODE_ENV === 'development'
  */
 export function getApiUrl(): string {
   // Always log the current environment for debugging
-  if (typeof window !== 'undefined' && isProduction) {
-    console.log('🌍 Production Environment Detected');
+  if (typeof window !== 'undefined') {
+    console.log('🔍 API URL Resolution:', {
+      isProduction,
+      isDevelopment,
+      NODE_ENV: process.env.NODE_ENV,
+      NEXT_PUBLIC_API_URL: process.env.NEXT_PUBLIC_API_URL,
+      hasApiUrl: !!process.env.NEXT_PUBLIC_API_URL
+    });
   }
   
   // If NEXT_PUBLIC_API_URL is set, use it
@@ -25,6 +31,7 @@ export function getApiUrl(): string {
       console.error('Please set NEXT_PUBLIC_API_URL in your deployment platform');
     }
     
+    console.log('✅ Using API URL:', apiUrl);
     return apiUrl;
   }
   
