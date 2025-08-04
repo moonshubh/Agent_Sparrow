@@ -29,18 +29,23 @@ export function getApiUrl(): string {
   }
   
   // Otherwise, use localhost for development
-  if (isDevelopment) {
+  if (isDevelopment || !isProduction) {
+    console.info('📍 Using default localhost:8000 for development');
     return 'http://localhost:8000'
   }
   
   // For production, this should never happen if env vars are set correctly
   if (typeof window !== 'undefined') {
-    console.error('⚠️ CRITICAL: NEXT_PUBLIC_API_URL not set in production!');
+    console.error('🚨 CRITICAL: NEXT_PUBLIC_API_URL not set in production!');
     console.error('Your app will not be able to connect to the backend.');
-    console.error('Please set NEXT_PUBLIC_API_URL in your deployment platform to your backend URL');
+    console.error('Please set NEXT_PUBLIC_API_URL in your Railway service variables.');
+    console.error('The build must have this variable set, not just at runtime.');
+    
+    // Show alert to make it obvious
+    alert('Configuration Error: Backend URL not set. Please contact support.');
   }
   
-  // Return empty string to make the error obvious
+  // Never default to localhost in production - return empty to make errors obvious
   return ''
 }
 

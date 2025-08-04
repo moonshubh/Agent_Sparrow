@@ -148,16 +148,32 @@ export interface APIKeyStatus {
   last_validation_check?: string
 }
 
-import { getApiUrl } from '@/lib/utils/environment'
+import { getApiUrl, logEnvironment } from '@/lib/utils/environment'
 
 // API client functions
 // Get API base URL from environment variable with fallback to default
 const getAPIBaseURL = (): string => {
   const apiUrl = getApiUrl()
+  
+  // Debug logging
+  if (typeof window !== 'undefined') {
+    console.log('🔍 API Keys Module - Environment Check:', {
+      apiUrl,
+      NEXT_PUBLIC_API_URL: process.env.NEXT_PUBLIC_API_URL,
+      NODE_ENV: process.env.NODE_ENV,
+      willUse: apiUrl ? `${apiUrl}/api/v1` : '/api/v1'
+    })
+  }
+  
   return apiUrl ? `${apiUrl}/api/v1` : '/api/v1'
 }
 
 const API_BASE = getAPIBaseURL()
+
+// Log environment on module load
+if (typeof window !== 'undefined') {
+  logEnvironment()
+}
 
 // Secure token management utilities
 class SecureTokenManager {
