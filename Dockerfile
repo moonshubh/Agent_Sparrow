@@ -23,6 +23,8 @@ FROM python:3.10.14-slim
 # Install runtime dependencies only
 RUN apt-get update && apt-get install -y \
     libgomp1 \
+    curl \
+    poppler-utils \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -44,9 +46,9 @@ ENV PORT=8000
 # Use the PORT environment variable provided by Railway
 EXPOSE ${PORT}
 
-# Health check
+# Health check (using curl which is more reliable in containers)
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
-  CMD python -c "import requests; requests.get('http://localhost:${PORT}/health')" || exit 1
+  CMD curl -f http://localhost:${PORT}/health || exit 1
 
 # Start the application
 CMD ["sh", "-c", "echo 'Starting MB-Sparrow on port ${PORT}...' && uvicorn app.main:app --host 0.0.0.0 --port ${PORT}"]

@@ -62,7 +62,7 @@ sentence-transformers
 typing-extensions
 
 # LLM Dependencies
-# Removed google-generativeai to resolve dependency conflict with langchain-google-genai
+google-generativeai>=0.3.0  # Required by feedme AI extraction engine
 httpx>=0.25.0
 aiohttp
 openai  # Required by langchain
@@ -96,6 +96,11 @@ python-dateutil
 click
 rich
 faker
+nltk>=3.8  # Natural language processing for word corpus
+networkx>=3.0  # Graph analysis for log correlation
+scikit-learn>=1.3.0  # Machine learning for pattern detection
+tenacity>=8.2.0  # Retry logic for API calls
+pdf2image>=1.16.0  # PDF to image conversion
 
 # Testing
 pytest
