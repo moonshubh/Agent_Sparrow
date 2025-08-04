@@ -562,3 +562,5 @@ export default function UpdatedConversationManager() {
     </div>
   )
 }
+
+export { FeedMeConversationManager }

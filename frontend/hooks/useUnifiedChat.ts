@@ -2,6 +2,7 @@
 
 import { useState, useCallback, useRef, useEffect } from "react"
 import { toast } from "sonner"
+import { getApiUrl } from "@/lib/utils/environment"
 
 // Types for unified chat system
 export interface UnifiedMessage {
@@ -59,7 +60,8 @@ const generateUniqueId = (prefix: string = ''): string => {
  * @returns An object containing the current chat state, a function to send messages (with optional files), a function to clear the conversation, and a function to retry the last user message.
  */
 export function useUnifiedChat(): UseUnifiedChatReturn {
-  const apiBaseUrl = process.env.NEXT_PUBLIC_API_URL || ""
+  // Use environment-aware API URL
+  const apiBaseUrl = getApiUrl()
   const abortControllerRef = useRef<AbortController | null>(null)
   
   // Test backend connectivity on initialization
@@ -77,12 +79,19 @@ export function useUnifiedChat(): UseUnifiedChatReturn {
           console.warn('⚠️ Backend responded with status:', response.status)
         }
       } catch (error) {
-        console.error('❌ Backend connectivity test failed:', error)
+        const errorMessage = error instanceof Error ? error.message : 'Unknown error'
+        console.error('❌ Backend connectivity test failed:', errorMessage)
         console.log('🔍 Checking if API_URL is set correctly:', {
           apiBaseUrl,
           NODE_ENV: process.env.NODE_ENV,
-          NEXT_PUBLIC_API_URL: process.env.NEXT_PUBLIC_API_URL
+          NEXT_PUBLIC_API_URL: process.env.NEXT_PUBLIC_API_URL,
+          hostname: typeof window !== 'undefined' ? window.location.hostname : 'N/A'
         })
+        
+        // If in production and backend is not reachable, show a warning
+        if (process.env.NODE_ENV === 'production' && typeof window !== 'undefined') {
+          console.warn('⚠️ Backend API is not reachable. Please ensure the backend server is running.')
+        }
       }
     }
     

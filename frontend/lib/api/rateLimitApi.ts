@@ -2,10 +2,10 @@
  * API client for rate limiting endpoints
  */
 
-// Use environment variable or default for API base URL
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL ? 
-  `${process.env.NEXT_PUBLIC_API_URL}/api/v1` : 
-  '/api/v1';
+import { getApiBasePath } from '@/lib/utils/environment';
+
+// Use environment-aware API base URL
+const API_BASE_URL = getApiBasePath();
 
 // Type definitions matching backend schemas
 export interface RateLimitMetadata {
