@@ -6,6 +6,12 @@
 [build]
 builder = "NIXPACKS"
 buildCommand = "npm install && npm run build"
+nixpacksPlan = { providers = ["node"] }
+
+[env]
+NODE_ENV = "production"
+# Ensure Next.js uses production mode
+NEXT_PUBLIC_NODE_ENV = "production"
 
 [deploy]
 startCommand = "npm start"

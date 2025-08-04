@@ -10,9 +10,22 @@ export const isDevelopment = process.env.NODE_ENV === 'development'
  * Falls back to localhost for development
  */
 export function getApiUrl(): string {
+  // Always log the current environment for debugging
+  if (typeof window !== 'undefined' && isProduction) {
+    console.log('🌍 Production Environment Detected');
+  }
+  
   // If NEXT_PUBLIC_API_URL is set, use it
   if (process.env.NEXT_PUBLIC_API_URL) {
-    return process.env.NEXT_PUBLIC_API_URL
+    const apiUrl = process.env.NEXT_PUBLIC_API_URL;
+    
+    // Warn if using localhost in production
+    if (isProduction && apiUrl.includes('localhost') && typeof window !== 'undefined') {
+      console.error('⚠️ WARNING: Using localhost API URL in production!', apiUrl);
+      console.error('Please set NEXT_PUBLIC_API_URL in your deployment platform');
+    }
+    
+    return apiUrl;
   }
   
   // Otherwise, use localhost for development
@@ -21,7 +34,13 @@ export function getApiUrl(): string {
   }
   
   // For production, this should never happen if env vars are set correctly
-  console.error('⚠️ NEXT_PUBLIC_API_URL not set in production!')
+  if (typeof window !== 'undefined') {
+    console.error('⚠️ CRITICAL: NEXT_PUBLIC_API_URL not set in production!');
+    console.error('Your app will not be able to connect to the backend.');
+    console.error('Please set NEXT_PUBLIC_API_URL in your deployment platform to your backend URL');
+  }
+  
+  // Return empty string to make the error obvious
   return ''
 }
 

@@ -9,7 +9,8 @@
     "lint": "next lint",
     "test": "vitest",
     "test:security": "node scripts/test-security.js",
-    "test:security:full": "node scripts/test-security.js --enable-rate-limiting"
+    "test:security:full": "node scripts/test-security.js --enable-rate-limiting",
+    "verify:env": "node scripts/verify-env.js"
   },
   "dependencies": {
     "@hello-pangea/dnd": "^18.0.1",
