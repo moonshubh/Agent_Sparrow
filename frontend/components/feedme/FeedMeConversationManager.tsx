@@ -219,7 +219,7 @@ function ConversationCard({ conversation, onView, onDelete, onRefresh }: Convers
   )
 }
 
-export default function UpdatedConversationManager() {
+export default function FeedMeConversationManager() {
   const [conversations, setConversations] = useState<ConversationData[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [searchQuery, setSearchQuery] = useState('')
@@ -562,5 +562,3 @@ export default function UpdatedConversationManager() {
     </div>
   )
 }
-
-export { FeedMeConversationManager }
