@@ -17,7 +17,8 @@ export function getApiUrl(): string {
       isDevelopment,
       NODE_ENV: process.env.NODE_ENV,
       NEXT_PUBLIC_API_URL: process.env.NEXT_PUBLIC_API_URL,
-      hasApiUrl: !!process.env.NEXT_PUBLIC_API_URL
+      hasApiUrl: !!process.env.NEXT_PUBLIC_API_URL,
+      windowLocation: window.location.href
     });
   }
   
@@ -25,14 +26,31 @@ export function getApiUrl(): string {
   if (process.env.NEXT_PUBLIC_API_URL) {
     const apiUrl = process.env.NEXT_PUBLIC_API_URL;
     
+    // Remove any trailing port like :8080 from Railway URLs
+    // Railway automatically maps internal ports to HTTPS (443)
+    const cleanedUrl = apiUrl.replace(/:8080$/, '');
+    
     // Warn if using localhost in production
-    if (isProduction && apiUrl.includes('localhost') && typeof window !== 'undefined') {
-      console.error('⚠️ WARNING: Using localhost API URL in production!', apiUrl);
+    if (isProduction && cleanedUrl.includes('localhost') && typeof window !== 'undefined') {
+      console.error('⚠️ WARNING: Using localhost API URL in production!', cleanedUrl);
       console.error('Please set NEXT_PUBLIC_API_URL in your deployment platform');
     }
     
-    console.log('✅ Using API URL:', apiUrl);
-    return apiUrl;
+    console.log('✅ Using API URL:', cleanedUrl);
+    return cleanedUrl;
+  }
+  
+  // For Railway deployments, try to detect the backend URL pattern
+  if (isProduction && typeof window !== 'undefined') {
+    // Check if we're on a Railway deployment
+    if (window.location.hostname.includes('railway.app')) {
+      // Try to construct the backend URL based on common Railway patterns
+      // This is a fallback - the env var should always be set
+      const possibleBackendUrl = 'https://agentsparrow-production.up.railway.app';
+      console.warn('🔧 Using fallback Railway backend URL:', possibleBackendUrl);
+      console.warn('Please set NEXT_PUBLIC_API_URL in Railway service variables for reliability');
+      return possibleBackendUrl;
+    }
   }
   
   // Otherwise, use localhost for development

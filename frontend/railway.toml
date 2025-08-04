@@ -12,6 +12,8 @@ nixpacksPlan = { providers = ["node"] }
 NODE_ENV = "production"
 # Ensure Next.js uses production mode
 NEXT_PUBLIC_NODE_ENV = "production"
+# CRITICAL: Backend API URL - Railway maps internal port 8080 to HTTPS
+NEXT_PUBLIC_API_URL = "https://agentsparrow-production.up.railway.app"
 
 [deploy]
 startCommand = "npm start"
