@@ -5,8 +5,7 @@
 
 [build]
 builder = "NIXPACKS"
-buildCommand = "npm install --force && npm run build"
-nixpacksPlan = { providers = ["node"] }
+buildCommand = "npm install && npm run build"
 
 [deploy]
 startCommand = "npm start"
