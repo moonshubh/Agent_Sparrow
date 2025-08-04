@@ -1,5 +1,3 @@
-$schema = "https://railway.app/config-schema.json"
-
 # Railway deployment configuration for MB-Sparrow with Supabase (no local PostgreSQL)
 # This configuration deploys backend, frontend, Celery workers, and Redis only
 # All database operations use Supabase PostgreSQL
