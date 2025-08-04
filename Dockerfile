@@ -38,8 +38,15 @@ COPY . .
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONDONTWRITEBYTECODE=1
 
+# Default port (Railway will override with PORT env var)
+ENV PORT=8000
+
 # Use the PORT environment variable provided by Railway
 EXPOSE ${PORT}
 
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
+  CMD python -c "import requests; requests.get('http://localhost:${PORT}/api/health')" || exit 1
+
 # Start the application
-CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port ${PORT}"]
+CMD ["sh", "-c", "echo 'Starting MB-Sparrow on port ${PORT}...' && uvicorn app.main:app --host 0.0.0.0 --port ${PORT}"]
