@@ -13,7 +13,7 @@ python-dotenv
 langchain==0.3.25
 langchain-core==0.3.65
 langchain-community==0.3.25
-langchain-google-genai==2.1.5
+langchain-google-genai==2.0.0  # Downgraded to avoid dependency conflicts
 langgraph
 
 # Torch (CPU version will be selected by --extra-index-url)
@@ -62,7 +62,7 @@ sentence-transformers
 typing-extensions
 
 # LLM Dependencies
-google-generativeai>=0.3.0  # Required by feedme AI extraction engine
+google-generativeai>=0.8.0  # Updated to avoid conflict with langchain-google-genai
 httpx>=0.25.0
 aiohttp
 openai  # Required by langchain
