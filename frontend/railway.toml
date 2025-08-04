@@ -5,8 +5,11 @@
 
 [build]
 builder = "NIXPACKS"
+buildCommand = "npm install --force && npm run build"
+nixpacksPlan = { providers = ["node"] }
 
 [deploy]
+startCommand = "npm start"
 healthcheckPath = "/"
 healthcheckTimeout = 300
 restartPolicyType = "ON_FAILURE"
