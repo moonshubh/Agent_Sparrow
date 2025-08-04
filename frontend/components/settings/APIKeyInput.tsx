@@ -175,7 +175,14 @@ export function APIKeyInput({
   const canDelete = existingKey && !isRequired
 
   return (
-    <div className={`space-y-4 p-6 border border-border rounded-lg bg-card/30 ${className}`}>
+    <form 
+      onSubmit={(e) => {
+        e.preventDefault()
+        if (apiKey && validationResult?.isValid) {
+          handleSave()
+        }
+      }}
+      className={`space-y-4 p-6 border border-border rounded-lg bg-card/30 ${className}`}>
       {/* Header */}
       <div className="flex items-center justify-between">
         <div className="space-y-1">
@@ -286,7 +293,7 @@ export function APIKeyInput({
             </Button>
           </div>
           <Button
-            onClick={handleSave}
+            type="submit"
             disabled={!canSave || isSaving}
             className="min-w-[80px]"
           >
@@ -362,6 +369,6 @@ export function APIKeyInput({
           <span>{formatRequirements}</span>
         </div>
       </div>
-    </div>
+    </form>
   )
 }

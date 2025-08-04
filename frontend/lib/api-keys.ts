@@ -148,15 +148,13 @@ export interface APIKeyStatus {
   last_validation_check?: string
 }
 
+import { getApiUrl } from '@/lib/utils/environment'
+
 // API client functions
 // Get API base URL from environment variable with fallback to default
 const getAPIBaseURL = (): string => {
-  // For Next.js, use NEXT_PUBLIC_ prefix for client-side environment variables
-  const envApiBase = typeof window !== 'undefined' 
-    ? process.env.NEXT_PUBLIC_API_URL
-    : process.env.NEXT_PUBLIC_API_URL || process.env.API_URL
-  
-  return envApiBase || '/api/v1'
+  const apiUrl = getApiUrl()
+  return apiUrl ? `${apiUrl}/api/v1` : '/api/v1'
 }
 
 const API_BASE = getAPIBaseURL()
