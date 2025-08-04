@@ -17,8 +17,8 @@ langchain-google-genai==2.1.5
 langgraph
 
 # Torch (CPU version will be selected by --extra-index-url)
-torch
-torchvision
+torch==2.0.1
+torchvision==0.15.2
 
 # Database & Auth
 supabase>=2.0.0  # For Supabase integration
