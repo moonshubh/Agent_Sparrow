@@ -1,0 +1,104 @@
+# Railway deployment configuration for MB-Sparrow all-in-one deployment
+# This configuration deploys backend, frontend, Celery workers, Redis, and PostgreSQL
+
+[build]
+builder = "nixpacks"
+buildCommand = "npm run build:all"
+startCommand = "npm run start:prod"
+
+[deploy]
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 3
+healthcheckPath = "/api/health"
+healthcheckTimeout = 300
+
+[environments.production]
+# Backend service
+[environments.production.services.backend]
+startCommand = "uvicorn app.main:app --host 0.0.0.0 --port $PORT"
+healthcheckPath = "/api/health"
+healthcheckTimeout = 300
+
+# Frontend service
+[environments.production.services.frontend]
+startCommand = "npm run start:frontend"
+healthcheckPath = "/"
+healthcheckTimeout = 300
+
+# Celery worker
+[environments.production.services.celery]
+startCommand = "celery -A app.celery_app worker --loglevel=info --concurrency=2"
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 5
+
+# Celery beat scheduler
+[environments.production.services.celery-beat]
+startCommand = "celery -A app.celery_app beat --loglevel=info"
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 3
+
+# Redis service (managed by Railway)
+[environments.production.services.redis]
+image = "redis:7-alpine"
+ports = [6379]
+
+# PostgreSQL service (managed by Railway)
+[environments.production.services.postgres]
+image = "postgres:15-alpine"
+ports = [5432]
+environmentVariables = [
+  "POSTGRES_DB=${DATABASE_NAME}",
+  "POSTGRES_USER=${DATABASE_USER}",
+  "POSTGRES_PASSWORD=${DATABASE_PASSWORD}"
+]
+
+[variables]
+# Required environment variables for Railway
+DATABASE_URL = "postgresql://${DATABASE_USER}:${DATABASE_PASSWORD}@${DATABASE_HOST}:${DATABASE_PORT}/${DATABASE_NAME}"
+REDIS_URL = "redis://${REDIS_HOST}:${REDIS_PORT}"
+
+# API Keys (managed via Railway environment variables)
+GEMINI_API_KEY = "${GEMINI_API_KEY}"
+TAVILY_API_KEY = "${TAVILY_API_KEY}"
+FIRECRAWL_API_KEY = "${FIRECRAWL_API_KEY}"
+
+# Supabase configuration
+SUPABASE_URL = "${SUPABASE_URL}"
+SUPABASE_ANON_KEY = "${SUPABASE_ANON_KEY}"
+SUPABASE_SERVICE_KEY = "${SUPABASE_SERVICE_KEY}"
+
+# Security configuration
+API_KEY_ENCRYPTION_SECRET = "${API_KEY_ENCRYPTION_SECRET}"
+JWT_SECRET_KEY = "${JWT_SECRET_KEY}"
+JWT_ALGORITHM = "HS256"
+JWT_EXPIRATION_HOURS = 24
+
+# FeedMe configuration
+FEEDME_MAX_FILE_SIZE = 10485760  # 10MB
+FEEDME_ALLOWED_EXTENSIONS = "txt,pdf,doc,docx"
+FEEDME_PROCESSING_TIMEOUT = 300  # 5 minutes
+
+# Resource allocation
+[resources.backend]
+cpu = "1"
+memory = "2Gi"
+
+[resources.frontend]
+cpu = "0.5"
+memory = "1Gi"
+
+[resources.celery]
+cpu = "1"
+memory = "2Gi"
+
+[resources.celery-beat]
+cpu = "0.25"
+memory = "512Mi"
+
+[resources.redis]
+cpu = "0.5"
+memory = "512Mi"
+
+[resources.postgres]
+cpu = "1"
+memory = "2Gi"

@@ -1,0 +1,32 @@
+# Standardized error patterns for Mailbird Log Analysis Agent
+# Define at least 5 common errors with regex patterns and metadata
+
+- pattern_id: NullPointerException
+  regex: "NullReferenceException|NullPointerException"
+  severity_level_hint: High
+  component: Core
+  description: "A null reference caused the application to crash or misbehave."
+
+- pattern_id: DatabaseConnectionTimeout
+  regex: "(Database|DB) Connection (Timeout|Timed out)"
+  severity_level_hint: High
+  component: Database
+  description: "The application experienced time-outs when connecting to the database."
+
+- pattern_id: DiskSpaceFull
+  regex: "(Disk|Drive).* (full|Full)"
+  severity_level_hint: Medium
+  component: Storage
+  description: "The host machine is running out of available disk space."
+
+- pattern_id: IMAPAuthenticationFailed
+  regex: "AUTHENTICATE Invalid credentials|IMAP4rev1 Server logging out"
+  severity_level_hint: High
+  component: MailSync
+  description: "User authentication failed when connecting to IMAP server."
+
+- pattern_id: FailedShowingAds
+  regex: "Failed showing ads"
+  severity_level_hint: Low
+  component: Ads
+  description: "Ad rendering failed. May impact UX but not core functionality."

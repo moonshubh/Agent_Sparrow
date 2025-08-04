@@ -1,0 +1,514 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* FeedMe Navigation Polish */
+@import './feedme-navigation.css';
+
+@layer utilities {
+  .text-balance {
+    text-wrap: balance;
+  }
+  
+  /* Background grid pattern utility using CSS variables */
+  .bg-grid-pattern {
+    background-image: 
+      linear-gradient(hsl(var(--accent) / 0.1) 1px, transparent 1px),
+      linear-gradient(90deg, hsl(var(--accent) / 0.1) 1px, transparent 1px);
+    background-size: 32px 32px;
+  }
+  
+  /* Typewriter animation for streaming text */
+  .typewriter {
+    overflow: hidden;
+    white-space: nowrap;
+    animation: typing 2s steps(40, end);
+  }
+  
+  @keyframes typing {
+    from { width: 0 }
+    to { width: 100% }
+  }
+  
+  /* Smooth message entrance */
+  .message-enter {
+    animation: messageSlideIn 0.3s ease-out;
+  }
+  
+  @keyframes messageSlideIn {
+    from {
+      opacity: 0;
+      transform: translateY(10px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+  
+  /* Citation hover effects */
+  .citation-hover {
+    transition: all 0.2s ease;
+  }
+  
+  .citation-hover:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  }
+  
+  /* Screen reader only content */
+  .sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+  }
+  
+  /* Focus visible for better keyboard navigation */
+  .focus-visible {
+    outline: 2px solid hsl(var(--primary));
+    outline-offset: 2px;
+  }
+  
+  /* No scrollbar utility for horizontal scrolling elements */
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+  
+  .no-scrollbar {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+  
+  /* FeedMe Two-Panel Layout Styles */
+  .feedme-two-panel {
+    height: 100vh;
+    background: hsl(var(--background));
+    overflow: hidden;
+  }
+  
+  .feedme-left-panel {
+    background: hsl(var(--sidebar-background));
+    border-right: 1px solid hsl(var(--border));
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  
+  .feedme-right-panel {
+    background: hsl(var(--background));
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  
+  .feedme-sidebar-nav {
+    background: hsl(var(--sidebar-background));
+    border-color: hsl(var(--sidebar-border));
+  }
+  
+  .feedme-folder-pane {
+    background: hsl(var(--sidebar-background));
+  }
+  
+  .feedme-mobile-drawer {
+    background: hsl(var(--sidebar-background));
+  }
+  
+  /* Panel resize handle styling */
+  .feedme-panel-handle {
+    background: hsl(var(--border));
+    transition: background-color 0.2s ease;
+  }
+  
+  .feedme-panel-handle:hover {
+    background: hsl(var(--accent));
+  }
+  
+  /* Conversation card transitions */
+  .conversation-card {
+    transition: all 0.2s ease;
+  }
+  
+  .conversation-card:hover {
+    border-color: hsl(var(--accent) / 0.5);
+    box-shadow: 0 4px 12px rgba(0, 149, 255, 0.1);
+  }
+  
+  /* Mobile responsive adjustments */
+  @media (max-width: 768px) {
+    .feedme-two-panel {
+      display: block;
+    }
+    
+    .feedme-left-panel {
+      display: none;
+    }
+    
+    .feedme-mobile-drawer {
+      display: block;
+    }
+  }
+  
+  /* Responsive chat container utilities */
+  .chat-container-responsive {
+    width: 100%;
+    max-width: var(--container-max);
+    margin-left: auto;
+    margin-right: auto;
+  }
+  
+  @media (min-width: 768px) {
+    .chat-container-responsive {
+      width: var(--container-md);
+    }
+  }
+  
+  @media (min-width: 1024px) {
+    .chat-container-responsive {
+      width: var(--container-lg);
+    }
+  }
+  
+  @media (min-width: 1280px) {
+    .chat-container-responsive {
+      width: var(--container-xl);
+    }
+  }
+  
+  /* Enhanced log analysis container for full-width display */
+  .log-analysis-container {
+    width: 100%;
+    max-width: none;
+  }
+  
+  /* Content-aware message containers */
+  .message-container-primary {
+    width: 100%;
+    max-width: min(1200px, 90%);
+    margin-left: auto;
+    margin-right: auto;
+  }
+  
+  .message-container-log-analysis {
+    width: 100%;
+    max-width: min(1400px, 95%);
+    margin-left: auto;
+    margin-right: auto;
+  }
+  
+  /* Tiptap Editor Styles */
+  .ProseMirror {
+    outline: none;
+    padding: 8px 12px;
+    border-radius: 6px;
+    line-height: 1.5;
+  }
+  
+  .ProseMirror:focus {
+    outline: none;
+    box-shadow: none;
+  }
+  
+  .ProseMirror p {
+    margin: 0.5rem 0;
+  }
+  
+  .ProseMirror p:first-child {
+    margin-top: 0;
+  }
+  
+  .ProseMirror p:last-child {
+    margin-bottom: 0;
+  }
+  
+  .ProseMirror ul, .ProseMirror ol {
+    margin: 0.5rem 0;
+    padding-left: 1.5rem;
+  }
+  
+  .ProseMirror blockquote {
+    border-left: 3px solid hsl(var(--accent));
+    padding-left: 1rem;
+    margin: 0.5rem 0;
+    font-style: italic;
+    color: hsl(var(--muted-foreground));
+  }
+  
+  .ProseMirror strong {
+    font-weight: 600;
+  }
+  
+  .ProseMirror em {
+    font-style: italic;
+  }
+  
+  .ProseMirror .is-editor-empty:first-child::before {
+    color: hsl(var(--muted-foreground));
+    content: attr(data-placeholder);
+    float: left;
+    height: 0;
+    pointer-events: none;
+  }
+}
+
+@layer base {
+  :root {
+    /* Light theme colors */
+    --background: 0 0% 100%;
+    --foreground: 0 0% 3.9%;
+    --card: 0 0% 100%;
+    --card-foreground: 0 0% 3.9%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 0 0% 3.9%;
+    --primary: 262 83% 58%;
+    --primary-foreground: 0 0% 98%;
+    --secondary: 0 0% 96.1%;
+    --secondary-foreground: 0 0% 9%;
+    --muted: 0 0% 96.1%;
+    --muted-foreground: 0 0% 45.1%;
+    --accent: 204 100% 50%;    /* Mailbird blue #0095ff */
+    --accent-foreground: 0 0% 100%;  /* white */
+    --destructive: 0 84.2% 60.2%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 0 0% 89.8%;
+    --input: 0 0% 96.1%;
+    --ring: 262 83% 58%;
+    --radius: 0.75rem;
+    
+    /* Chat-specific colors */
+    --chat-background: 0 0% 100%;
+    --chat-user-bg: 262 83% 58%;
+    --chat-user-text: 0 0% 98%;
+    --chat-agent-bg: 0 0% 96.1%;
+    --chat-agent-text: 0 0% 3.9%;
+    --chat-input-bg: 0 0% 96.1%;
+    --chat-input-text: 0 0% 3.9%;
+    --chat-metadata: 0 0% 45.1%;
+    
+    /* Responsive container widths */
+    --container-sm: 100%;
+    --container-md: 90%;
+    --container-lg: 85%;
+    --container-xl: 80%;
+    --container-max: 1400px;
+    
+    /* Sidebar colors */
+    --sidebar-background: 0 0% 98%;
+    --sidebar-foreground: 240 5.3% 26.1%;
+    --sidebar-primary: 240 5.9% 10%;
+    --sidebar-primary-foreground: 0 0% 98%;
+    --sidebar-accent: 240 4.8% 95.9%;
+    --sidebar-accent-foreground: 240 5.9% 10%;
+    --sidebar-border: 220 13% 91%;
+    --sidebar-ring: 217.2 91.2% 59.8%;
+    
+    /* Zen neutral base colors */
+    --neutral-base: 240 5.9% 10%; /* zinc-900 equivalent */
+    --neutral-card: 240 3.7% 15.9%; /* zinc-800 equivalent */
+    
+    /* Severity colors with WCAG AA contrast */
+    --critical: 0 84.2% 60.2%; /* red-500 */
+    --high: 45 93.4% 47.5%; /* yellow-500 */
+    --medium: 142.1 76.2% 36.3%; /* green-500 */
+    
+    /* Mailbird Blue-300 for hover states */
+    --mb-blue-300: 211.7 96.4% 78.4%;
+  }
+  
+  .dark {
+    /* Dark theme colors - matching reference images */
+    --background: 0 0% 10.2%;
+    --foreground: 0 0% 96.1%;
+    --card: 0 0% 16.5%;
+    --card-foreground: 0 0% 96.1%;
+    --popover: 0 0% 16.5%;
+    --popover-foreground: 0 0% 96.1%;
+    --primary: 262 83% 58%;
+    --primary-foreground: 0 0% 98%;
+    --secondary: 0 0% 21.6%;
+    --secondary-foreground: 0 0% 96.1%;
+    --muted: 0 0% 21.6%;
+    --muted-foreground: 0 0% 62.8%;
+    --accent: 203 100% 60%;    /* Lighter Mailbird blue #38b6ff for dark theme */
+    --accent-foreground: 0 0% 0%;  /* black with transparency */
+    --destructive: 0 62.8% 30.6%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 0 0% 21.6%;
+    --input: 0 0% 21.6%;
+    --ring: 262 83% 58%;
+    
+    /* Dark chat-specific colors - matching reference */
+    --chat-background: 0 0% 10.2%;
+    --chat-user-bg: 262 83% 58%;
+    --chat-user-text: 0 0% 98%;
+    --chat-agent-bg: 0 0% 16.5%;
+    --chat-agent-text: 0 0% 96.1%;
+    --chat-input-bg: 0 0% 16.5%;
+    --chat-input-text: 0 0% 96.1%;
+    --chat-metadata: 0 0% 62.8%;
+    
+    /* Responsive container widths (same as light theme) */
+    --container-sm: 100%;
+    --container-md: 90%;
+    --container-lg: 85%;
+    --container-xl: 80%;
+    --container-max: 1400px;
+    
+    /* Dark sidebar colors */
+    --sidebar-background: 240 5.9% 10%;
+    --sidebar-foreground: 240 4.8% 95.9%;
+    --sidebar-primary: 224.3 76.3% 48%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 240 3.7% 15.9%;
+    --sidebar-accent-foreground: 240 4.8% 95.9%;
+    --sidebar-border: 240 3.7% 15.9%;
+    --sidebar-ring: 217.2 91.2% 59.8%;
+    
+    /* Zen neutral base colors - dark theme */
+    --neutral-base: 240 5.9% 10%; /* zinc-900 */
+    --neutral-card: 240 3.7% 15.9%; /* zinc-800 */
+    
+    /* Severity colors with enhanced contrast for dark theme */
+    --critical: 0 72% 51%; /* red-500 adjusted for dark */
+    --high: 48 96% 53%; /* yellow-500 adjusted for dark */
+    --medium: 142 71% 45%; /* green-500 adjusted for dark */
+    
+    /* Mailbird Blue-300 for hover states (dark theme) */
+    --mb-blue-300: 211.7 96.4% 78.4%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  
+  body {
+    @apply bg-background text-foreground font-sans;
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', 'Cantarell', sans-serif;
+    line-height: 1.6;
+    letter-spacing: -0.01em;
+  }
+  
+  /* Enhanced typography */
+  h1, h2, h3, h4, h5, h6 {
+    font-weight: 600;
+    line-height: 1.4;
+    letter-spacing: -0.02em;
+  }
+  
+  /* Chat-specific styles */
+  .chat-container {
+    background: hsl(var(--chat-background));
+  }
+  
+  .chat-message-user {
+    background: hsl(var(--chat-user-bg));
+    color: hsl(var(--chat-user-text));
+  }
+  
+  .chat-message-agent {
+    background: hsl(var(--chat-agent-bg));
+    color: hsl(var(--chat-agent-text));
+  }
+  
+  .chat-input {
+    background: hsl(var(--chat-input-bg));
+    color: hsl(var(--chat-input-text));
+  }
+  
+  .chat-metadata {
+    color: hsl(var(--chat-metadata));
+  }
+  
+  /* Scrollbar styling for dark theme */
+  .dark ::-webkit-scrollbar {
+    width: 8px;
+  }
+  
+  .dark ::-webkit-scrollbar-track {
+    background: hsl(var(--muted));
+  }
+  
+  .dark ::-webkit-scrollbar-thumb {
+    background: hsl(var(--muted-foreground));
+    border-radius: 4px;
+  }
+  
+  .dark ::-webkit-scrollbar-thumb:hover {
+    background: hsl(var(--accent));
+  }
+  
+  /* FeedMe custom scrollbar styling */
+  .feedme-scrollbar::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  
+  .feedme-scrollbar::-webkit-scrollbar-track {
+    background: hsl(var(--background));
+    border-radius: 3px;
+  }
+  
+  .feedme-scrollbar::-webkit-scrollbar-thumb {
+    background: hsl(var(--accent) / 0.3);
+    border-radius: 3px;
+    transition: background-color 0.2s ease;
+  }
+  
+  .feedme-scrollbar::-webkit-scrollbar-thumb:hover {
+    background: hsl(var(--accent) / 0.6);
+  }
+  
+  .feedme-scrollbar::-webkit-scrollbar-corner {
+    background: hsl(var(--background));
+  }
+  
+  /* Animation utilities removed - use Tailwind's delay-1000, delay-2000 instead */
+
+  /* Enhanced pulse animation for login elements */
+  @keyframes enhanced-pulse {
+    0%, 100% {
+      opacity: 1;
+      transform: scale(1);
+    }
+    50% {
+      opacity: 0.7;
+      transform: scale(1.02);
+    }
+  }
+
+  .animate-enhanced-pulse {
+    animation: enhanced-pulse 3s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+    will-change: transform, opacity;
+  }
+
+  /* Floating animation for background orbs */
+  @keyframes float {
+    0%, 100% {
+      transform: translateY(0px) rotate(0deg);
+    }
+    33% {
+      transform: translateY(-10px) rotate(1deg);
+    }
+    66% {
+      transform: translateY(5px) rotate(-1deg);
+    }
+  }
+
+  .animate-float {
+    --float-duration: 6s;
+    --float-delay: 0s;
+    animation: float var(--float-duration, 6s) ease-in-out infinite;
+    animation-delay: var(--float-delay, 0s);
+    will-change: transform;
+  }
+}

@@ -1,0 +1,15 @@
+Customer: Hi, I'm having trouble with my email sync in Mailbird.
+
+Support Agent: I'd be happy to help you with that! Can you tell me what specific issue you're experiencing with email sync?
+
+Customer: My emails aren't updating automatically. I have to manually refresh each time.
+
+Support Agent: I understand. Let's troubleshoot this together. First, can you check if you have auto-sync enabled in Settings > Accounts?
+
+Customer: Yes, it's enabled but still not working.
+
+Support Agent: Thank you for checking. Let's try clearing the cache. Go to Settings > Advanced > Clear Cache and restart Mailbird.
+
+Customer: That worked! My emails are syncing automatically now. Thank you!
+
+Support Agent: Great! I'm glad that resolved the issue. Is there anything else I can help you with today?

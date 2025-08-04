@@ -1,0 +1,50 @@
+/* Executive Summary Typography Overrides */
+/* Applied after Tailwind's layer utilities to override typography plugin defaults */
+
+.exec-summary h2,
+.exec-summary h3 {
+  @apply mb-2 mt-6 text-accent font-semibold tracking-tight;
+}
+
+.exec-summary h4 {
+  @apply mb-1 mt-4 text-accent/90 font-medium;
+}
+
+.exec-summary p,
+.exec-summary ul,
+.exec-summary ol,
+.exec-summary table {
+  @apply mt-0; /* kill extra top-margin */
+}
+
+.exec-summary strong {
+  @apply text-accent;
+}
+
+/* Additional refinements for visual hierarchy */
+.exec-summary h2:first-child,
+.exec-summary h3:first-child {
+  @apply mt-0; /* No top margin for first heading */
+}
+
+.exec-summary ul,
+.exec-summary ol {
+  @apply mb-4; /* Consistent bottom spacing for lists */
+}
+
+.exec-summary table {
+  @apply mb-4; /* Consistent bottom spacing for tables */
+}
+
+/* Ensure proper spacing between consecutive elements */
+.exec-summary h2 + p,
+.exec-summary h3 + p,
+.exec-summary h4 + p {
+  @apply mt-2; /* Slight top margin after headings */
+}
+
+.exec-summary p + ul,
+.exec-summary p + ol,
+.exec-summary p + table {
+  @apply mt-3; /* Spacing between paragraphs and structured content */
+}

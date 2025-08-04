@@ -1,0 +1,27 @@
+#!/bin/sh
+
+# This hook runs after a successful git checkout
+
+# Get the previous and new HEAD refs
+previous_head="$1"
+new_head="$2"
+
+# Only run if this is a branch checkout (not a file checkout)
+if [ "$previous_head" != "$new_head" ] && [ "$(git rev-parse --is-inside-work-tree 2>/dev/null)" = "true" ]; then
+    # Get the current branch name
+    branch_name=$(git symbolic-ref --short HEAD 2>/dev/null)
+    
+    # If we're on a branch
+    if [ -n "$branch_name" ]; then
+        # Check if this branch is tracking a remote branch
+        upstream=$(git rev-parse --abbrev-ref --symbolic-full-name @{u} 2>/dev/null)
+        
+        # If not tracking a remote branch, set it up
+        if [ $? -ne 0 ]; then
+            echo "Setting up tracking for branch '$branch_name'..."
+            git branch --set-upstream-to=origin/"$branch_name" "$branch_name"
+        fi
+    fi
+fi
+
+exit 0
