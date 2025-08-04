@@ -5,7 +5,7 @@
 [build]
 builder = "nixpacks"
 buildCommand = "npm run build:all"
-startCommand = "npm run start:prod"
+
 
 [deploy]
 restartPolicyType = "ON_FAILURE"
