@@ -33,7 +33,7 @@ class RateLimitMetadata(BaseModel):
     safety_margin: float = Field(default=0.2, description="Safety margin applied")
     
     class Config:
-        orm_mode = True
+        from_attributes = True
 
 
 class RateLimitResult(BaseModel):
@@ -45,7 +45,7 @@ class RateLimitResult(BaseModel):
     blocked_by: Optional[str] = Field(default=None, description="Which limit blocked the request")
     
     class Config:
-        orm_mode = True
+        from_attributes = True
 
 
 class CircuitBreakerStatus(BaseModel):
@@ -58,7 +58,7 @@ class CircuitBreakerStatus(BaseModel):
     next_attempt_time: Optional[datetime] = Field(default=None, description="When next attempt is allowed")
     
     class Config:
-        orm_mode = True
+        from_attributes = True
     
     
 class UsageStats(BaseModel):
@@ -77,4 +77,4 @@ class UsageStats(BaseModel):
     last_updated: datetime = Field(default_factory=datetime.utcnow, description="When stats were last updated")
 
     class Config:
-        orm_mode = True
+        from_attributes = True

@@ -15,7 +15,7 @@ from app.api_keys.schemas import (
     APIKeyType, APIKeyCreateRequest, APIKeyUpdateRequest,
     APIKeyListResponse, APIKeyCreateResponse, APIKeyUpdateResponse,
     APIKeyDeleteResponse, APIKeyValidateRequest, APIKeyValidateResponse,
-    APIKeyStatus
+    APIKeyTestResponse, APIKeyStatus
 )
 from app.core.settings import settings
 from app.core.encryption import encryption_service
