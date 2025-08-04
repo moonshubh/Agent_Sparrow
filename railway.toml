@@ -13,32 +13,36 @@ restartPolicyMaxRetries = 3
 healthcheckPath = "/api/health"
 healthcheckTimeout = 300
 
-# Backend service
-[services.backend]
-startCommand = "uvicorn app.main:app --host 0.0.0.0 --port $PORT"
+[[services]]
+name = "backend"
+root = "."
+start = "uvicorn app.main:app --host 0.0.0.0 --port $PORT"
 healthcheckPath = "/api/health"
 healthcheckTimeout = 300
 
-# Frontend service
-[services.frontend]
-startCommand = "npm run start:frontend"
+[[services]]
+name = "frontend"
+root = "frontend"
+start = "npm run start:frontend"
 healthcheckPath = "/"
 healthcheckTimeout = 300
 
-# Celery worker
-[services.celery]
-startCommand = "celery -A app.celery_app worker --loglevel=info --concurrency=2"
+[[services]]
+name = "celery"
+root = "."
+start = "celery -A app.celery_app worker --loglevel=info --concurrency=2"
 restartPolicyType = "ON_FAILURE"
 restartPolicyMaxRetries = 5
 
-# Celery beat scheduler
-[services.celery-beat]
-startCommand = "celery -A app.celery_app beat --loglevel=info"
+[[services]]
+name = "celery-beat"
+root = "."
+start = "celery -A app.celery_app beat --loglevel=info"
 restartPolicyType = "ON_FAILURE"
 restartPolicyMaxRetries = 3
 
-# Redis service (managed by Railway)
-[services.redis]
+[[services]]
+name = "redis"
 image = "redis:7-alpine"
 ports = [6379]
 
