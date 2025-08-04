@@ -40,7 +40,7 @@ const nextConfig = {
           {
             key: 'Content-Security-Policy',
             value: isProduction 
-              ? "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://accounts.google.com https://apis.google.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: blob: https:; connect-src 'self' wss: ws: https://*.supabase.co https://accounts.google.com https://api.github.com; font-src 'self' https://fonts.gstatic.com data:; frame-src https://accounts.google.com https://github.com https://*.supabase.co; object-src 'none'; base-uri 'self';"
+              ? "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://accounts.google.com https://apis.google.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: blob: https:; connect-src 'self' wss: ws: https://*.supabase.co https://accounts.google.com https://api.github.com https://agentsparrow-production.up.railway.app https://*.railway.app; font-src 'self' https://fonts.gstatic.com data:; frame-src https://accounts.google.com https://github.com https://*.supabase.co; object-src 'none'; base-uri 'self';"
               : "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://accounts.google.com https://apis.google.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: blob: https:; connect-src 'self' wss: ws: http://localhost:8000 https://*.supabase.co https://accounts.google.com https://api.github.com; font-src 'self' https://fonts.gstatic.com data:; frame-src https://accounts.google.com https://github.com https://*.supabase.co; object-src 'none'; base-uri 'self';"
           },
           // Only add HSTS in production
