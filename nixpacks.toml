@@ -1,0 +1,14 @@
+# Nixpacks configuration for MB-Sparrow backend
+# Includes Rust compiler for building tiktoken from source
+
+[phases.setup]
+nixPkgs = ["python311", "rustc", "cargo", "gcc", "pkg-config", "openssl"]
+
+[phases.install]
+cmds = [
+    "pip install --upgrade pip wheel setuptools",
+    "pip install -r requirements.txt"
+]
+
+[start]
+cmd = "uvicorn app.main:app --host 0.0.0.0 --port $PORT"
