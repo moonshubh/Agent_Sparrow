@@ -2,9 +2,6 @@
 # This configuration deploys backend, frontend, Celery workers, and Redis only
 # All database operations use Supabase PostgreSQL
 
-[build]
-builder = "nixpacks"
-buildCommand = "npm run build:all"
 
 
 [deploy]
