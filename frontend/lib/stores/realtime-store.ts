@@ -193,6 +193,20 @@ export const useRealtimeStore = create<RealtimeStore>()(
             return
           }
           
+          // Skip WebSocket connections on pages that don't need them
+          if (typeof window !== 'undefined') {
+            const currentPath = window.location.pathname
+            const noWebSocketPaths = ['/api-keys', '/login', '/settings', '/profile']
+            if (noWebSocketPaths.some(path => currentPath.startsWith(path))) {
+              console.log(`WebSocket connections disabled on ${currentPath}`)
+              set({
+                connectionStatus: 'disconnected',
+                isConnected: false
+              })
+              return
+            }
+          }
+          
           // Clean up existing connection
           if (state.websocket) {
             state.actions.disconnect()
