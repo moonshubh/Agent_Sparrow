@@ -12,6 +12,7 @@ import { Button } from '@/components/ui/button'
 import { LogIn, Loader2 } from 'lucide-react'
 import { useRouter } from 'next/navigation'
 import { toast } from 'sonner'
+import Image from 'next/image'
 
 export function Header() {
   const { user, isAuthenticated, logout } = useAuth()
@@ -51,8 +52,15 @@ export function Header() {
       className="sticky top-0 z-30 flex h-14 items-center justify-between px-4 bg-background/70 backdrop-blur border-b border-border/30"
       role="banner"
     >
-      <div className="flex items-center gap-2 text-base font-semibold text-accent">
-        <span>MB-Sparrow</span>
+      <div className="flex items-center gap-2">
+        <Image
+          src="/agent-sparrow-logo.png"
+          alt="Agent Sparrow"
+          width={32}
+          height={32}
+          className="object-contain"
+        />
+        <span className="text-base font-semibold text-accent">Agent Sparrow</span>
       </div>
       <div className="flex items-center gap-3">
         <RateLimitDropdown 

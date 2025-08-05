@@ -14,7 +14,7 @@ export const AgentAvatar = ({ size, className }: AgentAvatarProps) => (
     )}
     style={size ? { width: `${size}px`, height: `${size}px` } : undefined}
   >
-    <AvatarImage src="/agent-sparrow.png" alt="Agent Sparrow" />
+    <AvatarImage src="/agent-sparrow-logo.png" alt="Agent Sparrow" />
     <AvatarFallback className="bg-accent/10 text-accent font-semibold">AS</AvatarFallback>
   </Avatar>
 )
