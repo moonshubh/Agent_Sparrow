@@ -179,6 +179,13 @@ async def primary_agent_stream_generator(query: str, user_id: str, message_histo
                 if hasattr(chunk, 'content') and chunk.content is not None:
                     role = getattr(chunk, 'role', 'assistant') or 'assistant'
                     json_payload = json.dumps({"role": role, "content": chunk.content}, ensure_ascii=False)
+                elif hasattr(chunk, 'additional_kwargs') and chunk.additional_kwargs.get('metadata'):
+                    # Send metadata (including follow-up questions) as a separate event
+                    metadata = chunk.additional_kwargs['metadata']
+                    json_payload = json.dumps({
+                        "role": "metadata", 
+                        "metadata": metadata
+                    }, ensure_ascii=False)
                 
                 if json_payload:
                     yield f"data: {json_payload}\n\n"

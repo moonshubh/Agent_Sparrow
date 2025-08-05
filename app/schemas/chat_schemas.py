@@ -48,7 +48,7 @@ class ChatMessageBase(BaseModel):
     content: str = Field(..., min_length=1, description="Message content")
     message_type: MessageType = Field(default=MessageType.USER, description="Type of message")
     agent_type: Optional[AgentType] = Field(None, description="Agent that generated assistant messages")
-    metadata: Dict[str, Any] = Field(default_factory=dict, description="Additional metadata")
+    metadata: Dict[str, Any] = Field(default_factory=dict, description="Additional metadata including follow-up questions")
 
     @validator('content')
     def validate_content(cls, v):

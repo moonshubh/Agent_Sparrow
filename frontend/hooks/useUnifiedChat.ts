@@ -20,6 +20,8 @@ export interface UnifiedMessage {
     researchSteps?: any[]
     isError?: boolean
     errorType?: string
+    followUpQuestions?: string[] // Array of follow-up questions
+    followUpQuestionsUsed?: number // Track how many have been used in this session
   }
 }
 
@@ -425,6 +427,24 @@ export function useUnifiedChat(): UseUnifiedChatReturn {
                 ]
 
                 return { ...prev, messages: newMessages }
+              })
+            } else if (event.role === 'metadata' && event.metadata) {
+              // Handle metadata event with follow-up questions
+              setState(prev => {
+                // Find the last agent message and update its metadata
+                const lastAgentMessageIndex = prev.messages.findLastIndex(m => m.type === 'agent' && m.id === messageId)
+                if (lastAgentMessageIndex >= 0) {
+                  const updatedMessages = [...prev.messages]
+                  updatedMessages[lastAgentMessageIndex] = {
+                    ...updatedMessages[lastAgentMessageIndex],
+                    metadata: {
+                      ...updatedMessages[lastAgentMessageIndex].metadata,
+                      ...event.metadata
+                    }
+                  }
+                  return { ...prev, messages: updatedMessages }
+                }
+                return prev
               })
             }
           } catch (e) {

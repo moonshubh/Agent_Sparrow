@@ -232,12 +232,37 @@ async def run_primary_agent(state: PrimaryAgentState) -> AsyncIterator[AIMessage
                 yield AIMessageChunk(content="I'm sorry, I was unable to generate a response. Please try again.", role="assistant")
                 return
 
+            # Generate follow-up questions based on the response
+            follow_up_questions = []
+            if reasoning_state and reasoning_state.query_analysis:
+                from .prompts.response_formatter import ResponseFormatter
+                follow_up_questions = ResponseFormatter.generate_follow_up_questions(
+                    issue=user_query,
+                    emotion=reasoning_state.query_analysis.emotional_state,
+                    solution_provided=final_response
+                )
+            
             # Stream the final, cleaned response chunk by chunk to the client.
             chunk_size = 200  # Increased for better performance
             for i in range(0, len(final_response), chunk_size):
                 chunk_content = final_response[i:i+chunk_size]
                 yield AIMessageChunk(content=chunk_content, role="assistant")
                 await anyio.sleep(0.005)  # Reduced delay for smoother streaming
+            
+            # After streaming the response, send follow-up questions as metadata
+            if follow_up_questions:
+                # Create a special message chunk with metadata
+                metadata_chunk = AIMessageChunk(
+                    content="",
+                    role="assistant",
+                    additional_kwargs={
+                        "metadata": {
+                            "followUpQuestions": follow_up_questions[:5],  # Limit to 5 questions
+                            "followUpQuestionsUsed": 0
+                        }
+                    }
+                )
+                yield metadata_chunk
 
             parent_span.set_status(Status(StatusCode.OK))
 

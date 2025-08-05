@@ -28,6 +28,7 @@ import { ChatSidebar } from './ChatSidebar'
 import { RateLimitWarning } from '@/components/rate-limiting'
 import { UserPanel } from '@/components/layout/UserPanel'
 import { useAuth } from '@/hooks/useAuth'
+import { FollowUpQuestions } from './FollowUpQuestions'
 
 interface AgentStatusProps {
   currentAgent: "primary" | "log_analyst" | "researcher" | null
@@ -480,6 +481,19 @@ export default function UnifiedChatInterface() {
           {/* Fixed Input Area at Bottom Center */}
           <div className="absolute bottom-0 left-0 right-0 bg-background/80 backdrop-blur-sm">
             <div className="w-full max-w-4xl mx-auto px-4 md:px-6 lg:px-8 py-4">
+              {/* Follow-up Questions - Show above input when available */}
+              {hasMessages && !state.isProcessing && (
+                <FollowUpQuestions
+                  messages={state.messages}
+                  onQuestionClick={(question) => {
+                    setInputValue(question)
+                    handleSendMessage()
+                  }}
+                  isProcessing={state.isProcessing}
+                  className="mb-3"
+                />
+              )}
+              
               <InputSystem
                 value={inputValue}
                 onChange={setInputValue}

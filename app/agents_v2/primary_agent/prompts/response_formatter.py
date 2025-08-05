@@ -585,3 +585,90 @@ class ResponseFormatter:
 
         # Apply formatting rules
         return cls.apply_mandatory_formatting(enhanced_response)
+    
+    @classmethod
+    def generate_follow_up_questions(cls, issue: str, emotion: EmotionalState, solution_provided: str) -> List[str]:
+        """Generate contextual follow-up questions based on the issue, emotion, and solution provided.
+        
+        Args:
+            issue: The specific issue being addressed
+            emotion: Detected customer emotional state
+            solution_provided: The solution content that was provided
+            
+        Returns:
+            List of 3-5 follow-up questions
+        """
+        follow_up_questions = []
+        issue_lower = issue.lower()
+        
+        # Common follow-up patterns
+        if any(term in issue_lower for term in ['sync', 'email', 'connection']):
+            follow_up_questions.extend([
+                "Is the sync issue happening with all email accounts or just specific ones?",
+                "Have you tried removing and re-adding the email account?",
+                "Are you experiencing this issue on other devices as well?",
+                "Would you like help configuring sync settings for better performance?",
+                "Do you need assistance with backing up your emails before troubleshooting?"
+            ])
+        elif any(term in issue_lower for term in ['slow', 'performance', 'crash']):
+            follow_up_questions.extend([
+                "How long has Mailbird been running slowly on your system?",
+                "Are other applications also running slowly, or just Mailbird?",
+                "Would you like help optimizing Mailbird's performance settings?",
+                "Have you noticed if the slowdown happens at specific times?",
+                "Do you want to learn about reducing memory usage in Mailbird?"
+            ])
+        elif any(term in issue_lower for term in ['setup', 'configure', 'install']):
+            follow_up_questions.extend([
+                "Do you need help importing your existing emails from another client?",
+                "Would you like assistance setting up additional email accounts?",
+                "Are there specific features you'd like help configuring?",
+                "Do you want to learn about Mailbird's advanced customization options?",
+                "Would you like tips on organizing your inbox effectively?"
+            ])
+        elif any(term in issue_lower for term in ['password', 'login', 'authentication']):
+            follow_up_questions.extend([
+                "Are you using app-specific passwords for your email provider?",
+                "Would you like help setting up two-factor authentication?",
+                "Do you need assistance recovering your email account password?",
+                "Have you recently changed your email password?",
+                "Would you like to learn about Mailbird's security features?"
+            ])
+        else:
+            # Generic follow-up questions
+            follow_up_questions.extend([
+                "Is there anything specific about this solution you'd like me to clarify?",
+                "Would you like to know about related features in Mailbird?",
+                "Do you have any other Mailbird questions I can help with?",
+                "Would you like tips on preventing this issue in the future?",
+                "Are there other email management tasks you need help with?"
+            ])
+        
+        # Emotion-specific follow-ups
+        if emotion == EmotionalState.FRUSTRATED:
+            follow_up_questions.append("Is there anything else causing frustration that I can help resolve?")
+        elif emotion == EmotionalState.CONFUSED:
+            follow_up_questions.append("Would you like me to break down any of these steps in more detail?")
+        elif emotion == EmotionalState.ANXIOUS:
+            follow_up_questions.append("Do you have any concerns about data safety I can address?")
+        elif emotion == EmotionalState.URGENT:
+            follow_up_questions.append("Is there a specific deadline you're working against?")
+        
+        # Remove duplicates and select 5 most relevant
+        unique_questions = list(dict.fromkeys(follow_up_questions))
+        
+        # Prioritize questions based on issue relevance
+        scored_questions = []
+        for question in unique_questions:
+            score = 0
+            # Higher score for questions containing issue keywords
+            if any(keyword in question.lower() for keyword in issue_lower.split()):
+                score += 2
+            # Higher score for emotion-appropriate questions
+            if emotion.value.lower() in question.lower():
+                score += 1
+            scored_questions.append((score, question))
+        
+        # Sort by score and return top 5
+        scored_questions.sort(key=lambda x: x[0], reverse=True)
+        return [q[1] for q in scored_questions[:5]]
