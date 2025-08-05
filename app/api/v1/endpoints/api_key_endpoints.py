@@ -267,6 +267,8 @@ async def test_api_key_connectivity(
 # -----------------------------------------------------------------------------
 
 
+@router.get("/status", response_model=APIKeyStatus)
+@limiter.limit("60/minute")
 async def get_api_key_status(
     request: Request,
     user_id: str = Depends(get_current_user_id),
