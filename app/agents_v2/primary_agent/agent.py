@@ -180,12 +180,19 @@ async def run_primary_agent(state: PrimaryAgentState) -> AsyncIterator[AIMessage
             )
             reasoning_engine = ReasoningEngine(model=model_with_tools, config=reasoning_config)
 
-            # Perform comprehensive reasoning. This is a single, blocking call that includes self-critique.
+            # Perform comprehensive reasoning with optimized LLM calls
             reasoning_state = await reasoning_engine.reason_about_query(
                 query=user_query,
                 context={"messages": state.messages},
                 session_id=getattr(state, 'session_id', 'default')
             )
+            
+            # Generate enhanced response with thinking budget (2nd LLM call)
+            if reasoning_state and reasoning_state.query_analysis:
+                await reasoning_engine.generate_enhanced_response(reasoning_state)
+                
+                # Optional: Refine response if confidence is low (3rd LLM call)
+                await reasoning_engine.refine_response_if_needed(reasoning_state)
 
             # Log key reasoning results for observability
             parent_span.set_attribute("reasoning.confidence", reasoning_state.overall_confidence)

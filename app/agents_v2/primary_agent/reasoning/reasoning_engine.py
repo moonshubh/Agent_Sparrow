@@ -16,6 +16,8 @@ import re
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 from opentelemetry import trace
 
+from app.core.model_client import ModelClient
+from app.core.settings import settings
 from app.agents_v2.primary_agent.prompts.agent_sparrow_v9_prompts import AgentSparrowV9Prompts, PromptV9Config
 from .schemas import (
     ReasoningState, ReasoningStep, ReasoningPhase, QueryAnalysis,
@@ -58,6 +60,248 @@ class ReasoningEngine:
         self.problem_solver = ProblemSolvingFramework(self.config)
         self.tool_intelligence = ToolIntelligence(self.config)
         
+        # Initialize model client for unified analysis
+        self.model_client = ModelClient(
+            provider="google",
+            model=settings.PRIMARY_AGENT_MODEL,
+            temperature=0.7
+        )
+        
+    def get_thinking_budget(self, complexity: str) -> int:
+        """Determine thinking budget based on query complexity."""
+        budgets = {
+            "simple": 1024,    # Quick questions
+            "medium": 2048,    # Standard support
+            "complex": 4096    # Technical issues
+        }
+        return budgets.get(complexity, 2048)
+        
+    async def _unified_comprehensive_analysis(
+        self,
+        query: str,
+        reasoning_state: ReasoningState,
+        context: Optional[Dict[str, Any]] = None
+    ) -> None:
+        """
+        Performs unified comprehensive analysis combining query analysis, solution mapping,
+        and tool assessment into a single LLM call to reduce API usage.
+        """
+        with tracer.start_as_current_span("reasoning_engine.unified_analysis") as span:
+            try:
+                # Prepare unified analysis prompt
+                unified_prompt = f"""Analyze this customer support query comprehensively in one pass:
+
+**Query**: {query}
+**Context**: {json.dumps(context) if context else "No previous context"}
+
+Provide a complete analysis in the following structured format:
+
+## 1. QUERY UNDERSTANDING
+- Surface Meaning: What is the literal question/issue?
+- Emotional State: Detect the customer's emotion (frustrated/confused/anxious/professional/excited/urgent/disappointed/neutral)
+- Emotional Confidence: Rate confidence in emotion detection (0.0-1.0)
+- Urgency Level: Rate 1-5 (1=low, 5=critical)
+
+## 2. PROBLEM CLASSIFICATION
+- Problem Category: (technical_issue/account_setup/feature_education/billing_inquiry/general_support)
+- Category Confidence: Rate confidence (0.0-1.0)
+- Technical Complexity: Rate 1-10
+- Key Entities: List important entities mentioned (email provider, specific features, error messages)
+
+## 3. SOLUTION ARCHITECTURE
+- Primary Solution: Brief summary of the main approach
+- Detailed Steps: List specific actions needed (be thorough)
+- Alternative Approaches: 1-2 backup solutions if primary fails
+- Preventive Measures: How to avoid this issue in future
+- Success Likelihood: Rate 0.0-1.0
+
+## 4. TOOL REQUIREMENTS
+- Knowledge Base Needed: yes/no (for Mailbird-specific information)
+- Web Search Needed: yes/no (for provider updates, general troubleshooting)
+- Reasoning: Explain why these tools are/aren't needed
+- Tool Confidence: Rate 0.0-1.0
+
+## 5. OVERALL ASSESSMENT
+- Complexity: simple/medium/complex
+- Confidence in Analysis: Rate 0.0-1.0
+- Special Considerations: Any edge cases or warnings
+
+Think step by step and be thorough but concise."""
+
+                # Single LLM call for comprehensive analysis
+                messages = [
+                    SystemMessage(content="You are an expert customer support analyst. Provide structured, accurate analysis."),
+                    HumanMessage(content=unified_prompt)
+                ]
+                
+                response = await self.model.ainvoke(messages)
+                analysis_text = response.content
+                
+                # Parse the unified response
+                self._parse_unified_analysis(analysis_text, reasoning_state, query)
+                
+                span.set_attribute("analysis_length", len(analysis_text))
+                span.set_attribute("unified_analysis_complete", True)
+                
+            except Exception as e:
+                logger.error(f"Error in unified analysis: {e}")
+                span.record_exception(e)
+                # Fallback to basic analysis
+                reasoning_state.query_analysis = QueryAnalysis(
+                    query_text=query,
+                    surface_meaning=query,
+                    latent_intent="Unable to analyze",
+                    emotional_state=EmotionalState.NEUTRAL,
+                    emotion_confidence=0.1,
+                    problem_category=ProblemCategory.GENERAL_SUPPORT,
+                    category_confidence=0.1,
+                    key_entities={},
+                    complexity_score=0.5,
+                    urgency_level=3
+                )
+
+    def _parse_unified_analysis(self, analysis_text: str, reasoning_state: ReasoningState, original_query: str) -> None:
+        """Parse the unified analysis response into structured components."""
+        try:
+            # Extract sections using regex patterns
+            import re
+            
+            # Extract emotional state
+            emotion_match = re.search(r'Emotional State:\s*(\w+)', analysis_text, re.IGNORECASE)
+            emotion_confidence_match = re.search(r'Emotional Confidence:\s*([\d.]+)', analysis_text)
+            urgency_match = re.search(r'Urgency Level:\s*(\d)', analysis_text)
+            
+            # Extract problem classification
+            category_match = re.search(r'Problem Category:\s*\(?(\w+)', analysis_text, re.IGNORECASE)
+            category_confidence_match = re.search(r'Category Confidence:\s*([\d.]+)', analysis_text)
+            complexity_match = re.search(r'Technical Complexity:\s*(\d+)', analysis_text)
+            
+            # Extract solution details
+            primary_solution_match = re.search(r'Primary Solution:\s*(.+?)(?=\n|Detailed Steps:|$)', analysis_text, re.DOTALL)
+            steps_match = re.search(r'Detailed Steps:\s*(.+?)(?=Alternative Approaches:|Preventive Measures:|$)', analysis_text, re.DOTALL)
+            preventive_match = re.search(r'Preventive Measures:\s*(.+?)(?=Success Likelihood:|$)', analysis_text, re.DOTALL)
+            
+            # Extract tool requirements
+            kb_needed_match = re.search(r'Knowledge Base Needed:\s*(yes|no)', analysis_text, re.IGNORECASE)
+            web_needed_match = re.search(r'Web Search Needed:\s*(yes|no)', analysis_text, re.IGNORECASE)
+            
+            # Extract overall assessment
+            complexity_assessment_match = re.search(r'Complexity:\s*(simple|medium|complex)', analysis_text, re.IGNORECASE)
+            overall_confidence_match = re.search(r'Confidence in Analysis:\s*([\d.]+)', analysis_text)
+            
+            # Map emotional state
+            emotion_str = emotion_match.group(1).lower() if emotion_match else 'neutral'
+            emotion_map = {
+                'frustrated': EmotionalState.FRUSTRATED,
+                'confused': EmotionalState.CONFUSED,
+                'anxious': EmotionalState.ANXIOUS,
+                'professional': EmotionalState.PROFESSIONAL,
+                'excited': EmotionalState.EXCITED,
+                'urgent': EmotionalState.URGENT,
+                'disappointed': EmotionalState.DISAPPOINTED,
+                'neutral': EmotionalState.NEUTRAL
+            }
+            emotion = emotion_map.get(emotion_str, EmotionalState.NEUTRAL)
+            
+            # Map problem category
+            category_str = category_match.group(1).lower() if category_match else 'general_support'
+            category_map = {
+                'technical_issue': ProblemCategory.TECHNICAL_ISSUE,
+                'account_setup': ProblemCategory.ACCOUNT_SETUP,
+                'feature_education': ProblemCategory.FEATURE_EDUCATION,
+                'billing_inquiry': ProblemCategory.BILLING_INQUIRY,
+                'general_support': ProblemCategory.GENERAL_SUPPORT
+            }
+            category = category_map.get(category_str, ProblemCategory.GENERAL_SUPPORT)
+            
+            # Create query analysis
+            reasoning_state.query_analysis = QueryAnalysis(
+                query_text=original_query,
+                surface_meaning=original_query,
+                latent_intent=primary_solution_match.group(1).strip() if primary_solution_match else "Support needed",
+                emotional_state=emotion,
+                emotion_confidence=float(emotion_confidence_match.group(1)) if emotion_confidence_match else 0.7,
+                problem_category=category,
+                category_confidence=float(category_confidence_match.group(1)) if category_confidence_match else 0.7,
+                key_entities=self._extract_entities(original_query),
+                complexity_score=int(complexity_match.group(1))/10.0 if complexity_match else 0.5,
+                urgency_level=int(urgency_match.group(1)) if urgency_match else 3,
+                situational_analysis=SituationalAnalysis(
+                    technical_complexity=int(complexity_match.group(1)) if complexity_match else 5,
+                    emotional_intensity=int(urgency_match.group(1)) * 2 if urgency_match else 6,
+                    business_impact=BusinessImpact.MEDIUM,
+                    time_sensitivity=TimeSensitivity.IMMEDIATE if urgency_match and int(urgency_match.group(1)) > 3 else TimeSensitivity.HOURS
+                )
+            )
+            
+            # Create solution architecture
+            if primary_solution_match:
+                steps = []
+                if steps_match:
+                    # Extract bullet points or numbered items
+                    steps_text = steps_match.group(1).strip()
+                    steps = [s.strip() for s in re.split(r'[\n•\-\d\.]+', steps_text) if s.strip()]
+                
+                primary_solution = PrimarySolution(
+                    solution_id="primary",
+                    solution_type=SolutionType.TECHNICAL_FIX,
+                    solution_summary=primary_solution_match.group(1).strip(),
+                    detailed_steps=steps[:5] if steps else ["Follow standard troubleshooting procedure"],
+                    confidence_score=float(overall_confidence_match.group(1)) if overall_confidence_match else 0.8,
+                    estimated_time="5-10 minutes",
+                    required_tools=["Mailbird application"],
+                    preventive_measures=[preventive_match.group(1).strip()] if preventive_match else ["Regular maintenance recommended"]
+                )
+                
+                reasoning_state.solution_architecture = SolutionArchitecture(
+                    primary_pathway=primary_solution,
+                    alternative_routes=[],
+                    enhancement_opportunities=["Consider exploring advanced features"]
+                )
+            
+            # Create tool reasoning
+            kb_needed = kb_needed_match and kb_needed_match.group(1).lower() == 'yes'
+            web_needed = web_needed_match and web_needed_match.group(1).lower() == 'yes'
+            
+            if kb_needed and web_needed:
+                decision = ToolDecisionType.BOTH_SOURCES_NEEDED
+            elif kb_needed:
+                decision = ToolDecisionType.INTERNAL_KB_ONLY
+            elif web_needed:
+                decision = ToolDecisionType.WEB_SEARCH_REQUIRED
+            else:
+                decision = ToolDecisionType.NO_TOOLS_NEEDED
+            
+            reasoning_state.tool_reasoning = ToolDecision(
+                decision_type=decision,
+                reasoning="Based on unified analysis",
+                confidence=float(overall_confidence_match.group(1)) if overall_confidence_match else 0.8,
+                required_information=[]
+            )
+            
+            # Set complexity for thinking budget
+            if complexity_assessment_match:
+                reasoning_state.query_complexity = complexity_assessment_match.group(1).lower()
+            else:
+                reasoning_state.query_complexity = "medium"
+                
+        except Exception as e:
+            logger.error(f"Error parsing unified analysis: {e}")
+            # Ensure we have at least basic analysis
+            if not reasoning_state.query_analysis:
+                reasoning_state.query_analysis = QueryAnalysis(
+                    query_text=original_query,
+                    surface_meaning=original_query,
+                    latent_intent="Support needed",
+                    emotional_state=EmotionalState.NEUTRAL,
+                    emotion_confidence=0.5,
+                    problem_category=ProblemCategory.GENERAL_SUPPORT,
+                    category_confidence=0.5,
+                    key_entities={},
+                    complexity_score=0.5,
+                    urgency_level=3
+                )
+        
     async def reason_about_query(
         self, 
         query: str, 
@@ -92,45 +336,25 @@ class ReasoningEngine:
                        f"self_critique={self.config.enable_self_critique}")
             
             try:
-                # Phase 1: V9 Query Deconstruction & Situational Analysis
-                if self.config.enable_chain_of_thought:
-                    logger.info("Starting Phase 1: Query Analysis")
-                    await self._analyze_query_v9(query, reasoning_state, context)
-                    if reasoning_state.query_analysis:
-                        span.set_attribute("emotion_detected", reasoning_state.query_analysis.emotional_state.value)
-                        span.set_attribute("problem_category", reasoning_state.query_analysis.problem_category.value)
-                        logger.info(f"Phase 1 complete: emotion={reasoning_state.query_analysis.emotional_state.value}")
-                    else:
-                        logger.warning("Phase 1: query_analysis is None after _analyze_query_v9")
-
-                # Phase 2: Predictive Intelligence
-                if self.config.enable_chain_of_thought: 
-                    await self._apply_predictive_intelligence(reasoning_state)
-
-                # Phase 3: V9 Solution Architecture
-                if self.config.enable_problem_solving_framework:
-                    await self._map_solutions_v9(reasoning_state)
+                # Unified Comprehensive Analysis (combines 4 phases)
+                logger.info("Starting unified comprehensive analysis")
+                unified_result = await self._unified_comprehensive_analysis(query, context)
                 
-                # Phase 4: Tool Assessment (remains largely the same)
-                if self.config.enable_tool_intelligence:
-                    await self._assess_tool_needs(reasoning_state)
+                # Parse and populate reasoning state from unified analysis
+                await self._parse_unified_analysis(unified_result, reasoning_state, query)
                 
-                # Phase 5: V9 Response Orchestration
-                if self.config.enable_chain_of_thought:
-                    logger.info("Starting Phase 5: Response Orchestration")
-                    await self._develop_response_strategy_v9(reasoning_state)
-                    if reasoning_state.response_orchestration:
-                        logger.info("Phase 5 complete: Response orchestration created")
-                    else:
-                        logger.warning("Phase 5: response_orchestration is None after _develop_response_strategy_v9")
+                # Log key findings
+                if reasoning_state.query_analysis:
+                    span.set_attribute("emotion_detected", reasoning_state.query_analysis.emotional_state.value)
+                    span.set_attribute("problem_category", reasoning_state.query_analysis.problem_category.value)
+                    logger.info(f"Unified analysis complete: emotion={reasoning_state.query_analysis.emotional_state.value}, "
+                               f"problem={reasoning_state.query_analysis.problem_category.value}")
                 
-                # Phase 5: Self-Critique
-                if self.config.enable_self_critique:
-                    await self._perform_self_critique_v9(reasoning_state)
-
-                # Phase 6: Quality Assessment
-                if self.config.enable_quality_assessment:
-                    await self._assess_quality(reasoning_state)
+                # Quality Assessment (if confidence is low)
+                if reasoning_state.overall_confidence < 0.7:
+                    logger.info("Low confidence detected, performing quality assessment")
+                    if self.config.enable_quality_assessment:
+                        await self._assess_quality(reasoning_state)
 
             except Exception as e:
                 import traceback
@@ -1019,3 +1243,436 @@ Now, create a response that feels like it's from Agent Sparrow - your email-savv
                 reasoning=summary,
                 confidence=0.8  # HIGH confidence
             ))
+    
+    async def _unified_comprehensive_analysis(self, query: str, context: Optional[Dict[str, Any]]) -> str:
+        """
+        Perform unified comprehensive analysis combining query analysis, solution mapping,
+        and tool assessment in a single LLM call.
+        
+        This method reduces LLM calls from 4 separate phases to 1 unified analysis.
+        """
+        with tracer.start_as_current_span("reasoning_engine.unified_analysis") as span:
+            # Determine query complexity for thinking budget
+            complexity = self._assess_initial_complexity(query)
+            thinking_budget = self.get_thinking_budget(complexity)
+            
+            span.set_attribute("complexity", complexity)
+            span.set_attribute("thinking_budget", thinking_budget)
+            
+            # Create comprehensive analysis prompt
+            system_prompt = f"""You are Agent Sparrow, an advanced AI customer success expert for Mailbird email client.
+
+## Your Task: Comprehensive Query Analysis
+
+Analyze the customer query and provide a comprehensive assessment covering:
+
+1. **Emotional & Query Analysis**:
+   - Detect emotional state (frustrated, confused, anxious, professional, excited, urgent, disappointed, neutral)
+   - Identify problem category (technical_issue, account_setup, feature_education, billing_inquiry, general_question)
+   - Assess urgency level (1-5 scale)
+   - Extract key entities and intent
+
+2. **Solution Mapping**:
+   - Identify 2-3 potential solutions with confidence scores
+   - Map to specific Mailbird features or settings
+   - Consider platform-specific solutions (Windows/Mac)
+   - Include step-by-step resolution paths
+
+3. **Tool Assessment**:
+   - Decide if tools are needed (NO_TOOLS_NEEDED, INTERNAL_KB_ONLY, WEB_SEARCH_REQUIRED, BOTH_SOURCES_NEEDED)
+   - Provide reasoning for tool decision
+   - Suggest specific search queries if needed
+
+4. **Response Strategy**:
+   - Recommend tone (empathetic, educational, direct, reassuring)
+   - Suggest response structure (problem acknowledgment → solution → verification)
+   - Include any escalation indicators
+
+<thinking_mode>
+You have {thinking_budget} tokens for reasoning. Use them to:
+- Analyze the query deeply
+- Consider multiple interpretations
+- Evaluate solution confidence
+- Plan the optimal response approach
+</thinking_mode>
+
+Provide your analysis in a structured format with clear sections."""
+
+            user_prompt = f"""Customer Query: {query}
+
+Context: {context if context else 'No previous context'}
+
+Provide comprehensive analysis following the structure outlined in your instructions."""
+
+            # Make single LLM call for unified analysis
+            messages = [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
+            ]
+            
+            try:
+                response = await self.model_client.acomplete(
+                    messages=messages,
+                    thinking_mode=True
+                )
+                
+                span.set_attribute("response_length", len(response))
+                return response
+                
+            except Exception as e:
+                logger.error(f"Error in unified analysis: {e}")
+                span.record_exception(e)
+                raise
+    
+    async def _parse_unified_analysis(self, analysis_text: str, reasoning_state: ReasoningState, query: str = "") -> None:
+        """
+        Parse the unified analysis response and populate the reasoning state.
+        """
+        with tracer.start_as_current_span("reasoning_engine.parse_unified_analysis"):
+            # Ensure query_text is set
+            if not reasoning_state.query_text:
+                reasoning_state.query_text = query
+            try:
+                # Extract emotional state
+                emotion_match = re.search(r"emotional state[:\s]+(\w+)", analysis_text.lower())
+                if emotion_match:
+                    emotion_str = emotion_match.group(1)
+                    emotion_map = {
+                        "frustrated": EmotionalState.FRUSTRATED,
+                        "confused": EmotionalState.CONFUSED,
+                        "anxious": EmotionalState.ANXIOUS,
+                        "professional": EmotionalState.PROFESSIONAL,
+                        "excited": EmotionalState.EXCITED,
+                        "urgent": EmotionalState.URGENT,
+                        "disappointed": EmotionalState.DISAPPOINTED,
+                        "neutral": EmotionalState.NEUTRAL
+                    }
+                    emotion = emotion_map.get(emotion_str, EmotionalState.NEUTRAL)
+                else:
+                    emotion = EmotionalState.NEUTRAL
+                
+                # Extract problem category
+                category_match = re.search(r"problem category[:\s]+(\w+)", analysis_text.lower())
+                if category_match:
+                    category_str = category_match.group(1)
+                    category_map = {
+                        "technical": ProblemCategory.TECHNICAL_ISSUE,
+                        "account": ProblemCategory.ACCOUNT_SETUP,
+                        "feature": ProblemCategory.FEATURE_EDUCATION,
+                        "billing": ProblemCategory.BILLING_INQUIRY,
+                        "general": ProblemCategory.GENERAL_QUESTION
+                    }
+                    category = category_map.get(category_str, ProblemCategory.GENERAL_QUESTION)
+                else:
+                    category = ProblemCategory.GENERAL_QUESTION
+                
+                # Extract urgency level
+                urgency_match = re.search(r"urgency level[:\s]+(\d)", analysis_text)
+                urgency = int(urgency_match.group(1)) if urgency_match else 3
+                
+                # Extract tool decision
+                tool_decision = ToolDecisionType.NO_TOOLS_NEEDED
+                if "WEB_SEARCH_REQUIRED" in analysis_text:
+                    tool_decision = ToolDecisionType.WEB_SEARCH_REQUIRED
+                elif "INTERNAL_KB_ONLY" in analysis_text:
+                    tool_decision = ToolDecisionType.INTERNAL_KB_ONLY
+                elif "BOTH_SOURCES_NEEDED" in analysis_text:
+                    tool_decision = ToolDecisionType.BOTH_SOURCES_NEEDED
+                
+                # Create query analysis
+                reasoning_state.query_analysis = QueryAnalysis(
+                    query_text=reasoning_state.query_text or "",
+                    surface_meaning=reasoning_state.query_text or "",
+                    latent_intent="Extracted from unified analysis",
+                    emotional_subtext=f"Detected emotion: {emotion.value}",
+                    historical_context="From current session",
+                    emotional_state=emotion,
+                    emotion_confidence=0.8,  # Default confidence
+                    problem_category=category,
+                    category_confidence=0.8,
+                    key_entities=[],
+                    complexity_score=0.5,
+                    urgency_level=urgency / 5.0,
+                    situational_analysis=SituationalAnalysis(
+                        technical_complexity=5,
+                        emotional_intensity=urgency,
+                        business_impact=BusinessImpact.MEDIUM,
+                        time_sensitivity=TimeSensitivity.IMMEDIATE if urgency > 3 else TimeSensitivity.FLEXIBLE
+                    )
+                )
+                
+                # Set tool decision
+                reasoning_state.tool_reasoning = ToolDecisionReasoning(
+                    decision_type=tool_decision,
+                    reasoning="Based on unified analysis",
+                    confidence_score=0.8,
+                    search_queries=[]
+                )
+                
+                # Set confidence score
+                confidence_match = re.search(r"confidence[:\s]+(\d+\.?\d*)", analysis_text)
+                if confidence_match:
+                    reasoning_state.overall_confidence = float(confidence_match.group(1))
+                else:
+                    reasoning_state.overall_confidence = 0.8
+                
+                # Add reasoning step
+                reasoning_state.add_reasoning_step(ReasoningStep(
+                    phase=ReasoningPhase.QUERY_ANALYSIS,
+                    description="Unified comprehensive analysis completed",
+                    reasoning=f"Detected {emotion.value} emotion, {category.value} problem, urgency {urgency}/5",
+                    confidence=reasoning_state.overall_confidence
+                ))
+                
+            except Exception as e:
+                logger.error(f"Error parsing unified analysis: {e}")
+                # Set defaults on error
+                reasoning_state.query_analysis = QueryAnalysis(
+                    query_text=reasoning_state.query_text or "",
+                    surface_meaning=reasoning_state.query_text or "",
+                    latent_intent="Error in analysis",
+                    emotional_subtext="Unable to detect",
+                    historical_context="Error",
+                    emotional_state=EmotionalState.NEUTRAL,
+                    emotion_confidence=0.5,
+                    problem_category=ProblemCategory.GENERAL_QUESTION,
+                    category_confidence=0.5,
+                    key_entities=[],
+                    complexity_score=0.5,
+                    urgency_level=0.5,
+                    situational_analysis=SituationalAnalysis(
+                        technical_complexity=5,
+                        emotional_intensity=5,
+                        business_impact=BusinessImpact.MEDIUM,
+                        time_sensitivity=TimeSensitivity.FLEXIBLE
+                    )
+                )
+    
+    def _assess_initial_complexity(self, query: str) -> str:
+        """Quick assessment of query complexity for thinking budget."""
+        query_lower = query.lower()
+        
+        # Complex indicators
+        complex_indicators = [
+            "not working", "error", "crash", "fail", "broken",
+            "sync", "imap", "smtp", "oauth", "certificate",
+            "multiple accounts", "migration", "import"
+        ]
+        
+        # Simple indicators  
+        simple_indicators = [
+            "how to", "where is", "what is", "password",
+            "price", "cost", "feature", "setting"
+        ]
+        
+        complex_count = sum(1 for ind in complex_indicators if ind in query_lower)
+        simple_count = sum(1 for ind in simple_indicators if ind in query_lower)
+        
+        if complex_count >= 2 or len(query) > 200:
+            return "complex"
+        elif simple_count >= 2 or len(query) < 50:
+            return "simple"
+        else:
+            return "medium"
+    
+    async def generate_enhanced_response(
+        self, 
+        reasoning_state: ReasoningState,
+        thinking_budget: Optional[int] = None
+    ) -> str:
+        """
+        Generate an enhanced response with thinking budget and conversational style.
+        
+        This is the second major LLM call that generates the final response.
+        """
+        with tracer.start_as_current_span("reasoning_engine.generate_enhanced_response") as span:
+            if not reasoning_state.query_analysis:
+                return "I apologize, but I wasn't able to properly analyze your query. Could you please rephrase it?"
+            
+            # Use provided thinking budget or determine based on complexity
+            if thinking_budget is None:
+                complexity = self._assess_initial_complexity(reasoning_state.query_text or "")
+                thinking_budget = self.get_thinking_budget(complexity)
+            
+            span.set_attribute("thinking_budget", thinking_budget)
+            
+            # Build context from reasoning state
+            context_summary = self._build_context_summary(reasoning_state)
+            
+            # Create enhanced response prompt
+            system_prompt = f"""You are Agent Sparrow, Mailbird's friendly and knowledgeable AI customer support expert.
+
+## Your Task: Generate a Helpful Response
+
+Based on the analysis provided, craft a response that:
+1. Acknowledges the customer's emotional state appropriately
+2. Provides clear, actionable solutions
+3. Uses a warm, conversational tone
+4. Includes specific Mailbird features or settings when relevant
+
+<thinking_mode>
+You have {thinking_budget} tokens for reasoning. Use them to:
+- Plan your response structure
+- Consider the best way to explain technical concepts
+- Think about follow-up questions that might help
+- Ensure your response is complete and helpful
+</thinking_mode>
+
+## Response Guidelines:
+- Be conversational and friendly, like talking to a colleague
+- Use "I" statements ("I understand...", "I can help...")
+- Break complex solutions into numbered steps
+- Include relevant Mailbird menu paths (Settings → Accounts → ...)
+- Offer alternative solutions when available
+- End with a helpful follow-up question if appropriate
+
+Remember: Quality over speed. Take time to craft a thoughtful response."""
+
+            user_prompt = f"""Customer Query: {reasoning_state.query_text}
+
+Analysis Summary:
+{context_summary}
+
+Generate a helpful, conversational response that addresses the customer's needs."""
+
+            try:
+                messages = [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt}
+                ]
+                
+                response = await self.model_client.acomplete(
+                    messages=messages,
+                    thinking_mode=True
+                )
+                
+                span.set_attribute("response_length", len(response))
+                
+                # Update reasoning state with the response
+                if reasoning_state.response_orchestration:
+                    reasoning_state.response_orchestration.final_response_preview = response
+                else:
+                    # Create minimal orchestration if it doesn't exist
+                    reasoning_state.response_orchestration = ResponseOrchestration(
+                        emotional_acknowledgment_strategy="Acknowledged in response",
+                        technical_solution_delivery_method="Clear step-by-step guidance",
+                        relationship_strengthening_elements=[],
+                        delight_injection_points=[],
+                        final_response_preview=response
+                    )
+                
+                # Add reasoning step
+                reasoning_state.add_reasoning_step(ReasoningStep(
+                    phase=ReasoningPhase.RESPONSE_STRATEGY,
+                    description="Generated enhanced conversational response",
+                    reasoning=f"Created response with {thinking_budget} token thinking budget",
+                    confidence=0.9
+                ))
+                
+                return response
+                
+            except Exception as e:
+                logger.error(f"Error generating enhanced response: {e}")
+                span.record_exception(e)
+                return "I apologize, but I encountered an error while preparing my response. Please try again."
+    
+    def _build_context_summary(self, reasoning_state: ReasoningState) -> str:
+        """Build a context summary from the reasoning state for response generation."""
+        parts = []
+        
+        if reasoning_state.query_analysis:
+            qa = reasoning_state.query_analysis
+            parts.append(f"- Emotional State: {qa.emotional_state.value} (confidence: {qa.emotion_confidence:.1f})")
+            parts.append(f"- Problem Type: {qa.problem_category.value}")
+            parts.append(f"- Urgency: {qa.urgency_level:.1f}/1.0")
+        
+        if reasoning_state.tool_reasoning:
+            tr = reasoning_state.tool_reasoning
+            parts.append(f"- Tool Decision: {tr.decision_type.value}")
+            if tr.search_queries:
+                parts.append(f"- Suggested Searches: {', '.join(tr.search_queries[:2])}")
+        
+        if reasoning_state.predictive_insights:
+            parts.append(f"- Key Insights: {len(reasoning_state.predictive_insights)} identified")
+        
+        return "\n".join(parts) if parts else "No detailed analysis available"
+    
+    async def refine_response_if_needed(
+        self,
+        reasoning_state: ReasoningState,
+        confidence_threshold: float = 0.6
+    ) -> Optional[str]:
+        """
+        Optional 3rd LLM call: Refine response if confidence is low.
+        
+        Returns refined response or None if refinement not needed.
+        """
+        with tracer.start_as_current_span("reasoning_engine.refine_response") as span:
+            # Check if refinement is needed
+            if reasoning_state.overall_confidence >= confidence_threshold:
+                span.set_attribute("refinement_needed", False)
+                return None
+            
+            if not reasoning_state.response_orchestration or not reasoning_state.response_orchestration.final_response_preview:
+                return None
+            
+            span.set_attribute("refinement_needed", True)
+            span.set_attribute("original_confidence", reasoning_state.overall_confidence)
+            
+            current_response = reasoning_state.response_orchestration.final_response_preview
+            
+            # Create refinement prompt
+            system_prompt = """You are Agent Sparrow, tasked with improving a response that has low confidence.
+
+## Your Task: Refine the Response
+
+Review the current response and the analysis context, then improve it by:
+1. Adding more specific details or examples
+2. Clarifying any ambiguous points
+3. Ensuring all aspects of the query are addressed
+4. Maintaining a warm, helpful tone
+
+Focus on accuracy and completeness while keeping the conversational style."""
+
+            user_prompt = f"""Original Query: {reasoning_state.query_text}
+
+Current Response (confidence: {reasoning_state.overall_confidence:.1f}):
+{current_response}
+
+Issues to address:
+- Low confidence in analysis or response
+- Possible missing information
+- May need more specific Mailbird guidance
+
+Please provide an improved version of this response."""
+
+            try:
+                messages = [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt}
+                ]
+                
+                refined_response = await self.model_client.acomplete(
+                    messages=messages,
+                    thinking_mode=False  # Quick refinement without extensive thinking
+                )
+                
+                # Update reasoning state
+                reasoning_state.response_orchestration.final_response_preview = refined_response
+                reasoning_state.overall_confidence = min(reasoning_state.overall_confidence + 0.1, 0.8)
+                
+                # Add reasoning step
+                reasoning_state.add_reasoning_step(ReasoningStep(
+                    phase=ReasoningPhase.QUALITY_ASSESSMENT,
+                    description="Refined response due to low confidence",
+                    reasoning=f"Improved response quality from {reasoning_state.overall_confidence - 0.1:.1f} to {reasoning_state.overall_confidence:.1f}",
+                    confidence=reasoning_state.overall_confidence
+                ))
+                
+                span.set_attribute("refined_confidence", reasoning_state.overall_confidence)
+                return refined_response
+                
+            except Exception as e:
+                logger.error(f"Error refining response: {e}")
+                span.record_exception(e)
+                return None
