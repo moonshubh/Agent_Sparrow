@@ -39,8 +39,13 @@ export default function APIKeysPage() {
       setAPIKeys(keysResult.api_keys)
       setAPIKeyStatus(statusResult)
     } catch (err: unknown) {
-      const errorMessage = err instanceof Error ? err.message : 'Failed to load API keys'
-      setError(errorMessage)
+      // Check if it's a 404 error
+      if (err instanceof Error && err.message.includes('404')) {
+        setError('API key management is not available on this deployment. This feature may not be configured on the backend server.')
+      } else {
+        const errorMessage = err instanceof Error ? err.message : 'Failed to load API keys'
+        setError(errorMessage)
+      }
       console.error('API Keys loading error:', err)
     } finally {
       setIsLoading(false)
@@ -91,9 +96,49 @@ export default function APIKeysPage() {
 
         {/* Error State */}
         {error && !isLoading && (
-          <Alert variant="destructive" className="mb-6">
-            <AlertDescription>{error}</AlertDescription>
-          </Alert>
+          <>
+            <Alert variant={error.includes('not available') ? 'default' : 'destructive'} className="mb-6">
+              <AlertDescription>{error}</AlertDescription>
+            </Alert>
+            
+            {/* Show instructions when API is not available */}
+            {error.includes('not available') && (
+              <Card>
+                <CardHeader>
+                  <CardTitle>API Key Configuration</CardTitle>
+                  <CardDescription>
+                    Manual configuration required
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  <p className="text-sm text-muted-foreground">
+                    The API key management endpoints are not available on this deployment. 
+                    You may need to configure API keys through environment variables or contact your administrator.
+                  </p>
+                  <div className="space-y-3">
+                    <div className="p-3 bg-muted/50 rounded-lg">
+                      <h4 className="text-sm font-medium mb-1">Google Gemini API Key</h4>
+                      <p className="text-xs text-muted-foreground">
+                        Required for AI-powered responses. Set as GEMINI_API_KEY environment variable.
+                      </p>
+                    </div>
+                    <div className="p-3 bg-muted/50 rounded-lg">
+                      <h4 className="text-sm font-medium mb-1">Tavily Search API Key</h4>
+                      <p className="text-xs text-muted-foreground">
+                        Optional for web search. Set as TAVILY_API_KEY environment variable.
+                      </p>
+                    </div>
+                    <div className="p-3 bg-muted/50 rounded-lg">
+                      <h4 className="text-sm font-medium mb-1">Firecrawl API Key</h4>
+                      <p className="text-xs text-muted-foreground">
+                        Optional for web scraping. Set as FIRECRAWL_API_KEY environment variable.
+                      </p>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+            )}
+          </>
         )}
 
         {/* Main Content */}
