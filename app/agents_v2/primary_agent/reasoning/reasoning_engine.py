@@ -16,7 +16,6 @@ import re
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 from opentelemetry import trace
 
-from app.core.model_client import ModelClient
 from app.core.settings import settings
 from app.agents_v2.primary_agent.prompts.agent_sparrow_v9_prompts import AgentSparrowV9Prompts, PromptV9Config
 from .schemas import (
@@ -60,21 +59,22 @@ class ReasoningEngine:
         self.problem_solver = ProblemSolvingFramework(self.config)
         self.tool_intelligence = ToolIntelligence(self.config)
         
-        # Initialize model client for unified analysis
-        self.model_client = ModelClient(
-            provider="google",
-            model=settings.PRIMARY_AGENT_MODEL,
-            temperature=0.7
-        )
-        
     def get_thinking_budget(self, complexity: str) -> int:
-        """Determine thinking budget based on query complexity."""
+        """
+        Determine thinking budget based on query complexity.
+        
+        Based on Google's recommendations:
+        - Range: 0 to 24,576 tokens for Gemini 2.5 Flash
+        - Use -1 for dynamic allocation (model decides)
+        - Higher budgets for complex reasoning tasks
+        """
         budgets = {
-            "simple": 1024,    # Quick questions
-            "medium": 2048,    # Standard support
-            "complex": 4096    # Technical issues
+            "simple": 2048,     # Quick questions - minimal reasoning
+            "medium": 8192,     # Standard support - moderate reasoning
+            "complex": 16384,   # Technical issues - extensive reasoning
+            "dynamic": -1       # Let model decide based on task
         }
-        return budgets.get(complexity, 2048)
+        return budgets.get(complexity, 8192)
         
     async def _unified_comprehensive_analysis(
         self,
@@ -1288,13 +1288,16 @@ Analyze the customer query and provide a comprehensive assessment covering:
    - Suggest response structure (problem acknowledgment → solution → verification)
    - Include any escalation indicators
 
-<thinking_mode>
-You have {thinking_budget} tokens for reasoning. Use them to:
-- Analyze the query deeply
-- Consider multiple interpretations
-- Evaluate solution confidence
-- Plan the optimal response approach
-</thinking_mode>
+<thinking>
+You have a thinking budget of {thinking_budget} tokens. Use this internal reasoning space to:
+- Deeply analyze the customer's query and emotional state
+- Consider multiple interpretations of their problem
+- Evaluate different solution approaches and their confidence levels
+- Plan the optimal response structure and tone
+- Think through edge cases and potential follow-up questions
+
+This is your private thinking space - the customer won't see this reasoning process.
+</thinking>
 
 Provide your analysis in a structured format with clear sections."""
 
@@ -1311,13 +1314,13 @@ Provide comprehensive analysis following the structure outlined in your instruct
             ]
             
             try:
-                response = await self.model_client.acomplete(
-                    messages=messages,
-                    thinking_mode=True
-                )
+                # Use the model's ainvoke with thinking budget
+                # Note: For Gemini 2.5 Flash, we need to configure thinking budget properly
+                response = await self.model.ainvoke(messages)
+                response_content = response.content if hasattr(response, 'content') else str(response)
                 
-                span.set_attribute("response_length", len(response))
-                return response
+                span.set_attribute("response_length", len(response_content))
+                return response_content
                 
             except Exception as e:
                 logger.error(f"Error in unified analysis: {e}")
@@ -1510,13 +1513,16 @@ Based on the analysis provided, craft a response that:
 3. Uses a warm, conversational tone
 4. Includes specific Mailbird features or settings when relevant
 
-<thinking_mode>
-You have {thinking_budget} tokens for reasoning. Use them to:
-- Plan your response structure
-- Consider the best way to explain technical concepts
-- Think about follow-up questions that might help
-- Ensure your response is complete and helpful
-</thinking_mode>
+<thinking>
+You have a thinking budget of {thinking_budget} tokens. Use this internal reasoning space to:
+- Plan your response structure for maximum clarity and helpfulness
+- Consider the best way to explain technical concepts to this specific customer
+- Think about follow-up questions that could help clarify or resolve remaining issues
+- Ensure your response is complete, accurate, and addresses all aspects of their query
+- Review your response for tone and emotional appropriateness
+
+This thinking process helps you craft a better response but won't be shown to the customer.
+</thinking>
 
 ## Response Guidelines:
 - Be conversational and friendly, like talking to a colleague
@@ -1541,16 +1547,15 @@ Generate a helpful, conversational response that addresses the customer's needs.
                     {"role": "user", "content": user_prompt}
                 ]
                 
-                response = await self.model_client.acomplete(
-                    messages=messages,
-                    thinking_mode=True
-                )
+                # Use the model's ainvoke for response generation
+                response = await self.model.ainvoke(messages)
+                response_content = response.content if hasattr(response, 'content') else str(response)
                 
-                span.set_attribute("response_length", len(response))
+                span.set_attribute("response_length", len(response_content))
                 
                 # Update reasoning state with the response
                 if reasoning_state.response_orchestration:
-                    reasoning_state.response_orchestration.final_response_preview = response
+                    reasoning_state.response_orchestration.final_response_preview = response_content
                 else:
                     # Create minimal orchestration if it doesn't exist
                     reasoning_state.response_orchestration = ResponseOrchestration(
@@ -1558,7 +1563,7 @@ Generate a helpful, conversational response that addresses the customer's needs.
                         technical_solution_delivery_method="Clear step-by-step guidance",
                         relationship_strengthening_elements=[],
                         delight_injection_points=[],
-                        final_response_preview=response
+                        final_response_preview=response_content
                     )
                 
                 # Add reasoning step
@@ -1569,7 +1574,7 @@ Generate a helpful, conversational response that addresses the customer's needs.
                     confidence=0.9
                 ))
                 
-                return response
+                return response_content
                 
             except Exception as e:
                 logger.error(f"Error generating enhanced response: {e}")
@@ -1652,10 +1657,9 @@ Please provide an improved version of this response."""
                     {"role": "user", "content": user_prompt}
                 ]
                 
-                refined_response = await self.model_client.acomplete(
-                    messages=messages,
-                    thinking_mode=False  # Quick refinement without extensive thinking
-                )
+                # Use the model's ainvoke for refinement
+                response = await self.model.ainvoke(messages)
+                refined_response = response.content if hasattr(response, 'content') else str(response)
                 
                 # Update reasoning state
                 reasoning_state.response_orchestration.final_response_preview = refined_response

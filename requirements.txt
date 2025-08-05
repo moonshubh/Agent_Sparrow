@@ -14,7 +14,7 @@ python-dotenv
 langchain==0.3.25
 langchain-core==0.3.65
 langchain-community==0.3.25
-langchain-google-genai==2.0.0  # Downgraded to avoid dependency conflicts
+langchain-google-genai==2.1.9  # Updated for thinking_budget support
 langgraph
 
 # Torch (CPU version will be selected by --extra-index-url)

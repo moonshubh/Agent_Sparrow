@@ -55,27 +55,32 @@ def _get_model_config() -> str:
     from app.core.settings import settings
     return settings.primary_agent_model
 
-def create_user_specific_model(api_key: str) -> ChatGoogleGenerativeAI:
-    """Create a user-specific Gemini model with their API key.
+def create_user_specific_model(api_key: str, thinking_budget: Optional[int] = None) -> ChatGoogleGenerativeAI:
+    """Create a user-specific Gemini model with their API key and thinking budget.
     
     Features:
     - API key format validation
     - Configurable model name from settings
     - Caching mechanism to reuse models
     - Comprehensive error handling
+    - Thinking budget support for Gemini 2.5 Flash
+    
+    Args:
+        api_key: User's Google API key
+        thinking_budget: Token budget for thinking mode (0-24576, or -1 for dynamic)
     """
     if not _validate_api_key(api_key):
         raise ValueError("Invalid API key format. Expected Google API key starting with 'AIza' and 39 characters long.")
     
     # Check cache first (using a hash of the API key for security)
-    cache_key = f"{hash(api_key)}_{_get_model_config()}"
+    cache_key = f"{hash(api_key)}_{_get_model_config()}_{thinking_budget}"
     if cache_key in _model_cache:
-        logger.debug("Returning cached model for user")
+        logger.debug(f"Returning cached model for user with thinking_budget: {thinking_budget}")
         return _model_cache[cache_key]
     
     try:
         model_name = _get_model_config()
-        logger.info(f"Creating new user-specific model with {model_name}")
+        logger.info(f"Creating new user-specific model with {model_name}, thinking_budget: {thinking_budget}")
         
         safety_settings = {
             HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
@@ -84,13 +89,21 @@ def create_user_specific_model(api_key: str) -> ChatGoogleGenerativeAI:
             HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
         }
         
-        model_base = ChatGoogleGenerativeAI(
-            model=model_name,
-            temperature=0,
-            google_api_key=api_key,
-            safety_settings=safety_settings,
-            convert_system_message_to_human=True
-        )
+        # Create model configuration
+        model_kwargs = {
+            "model": model_name,
+            "temperature": 0,
+            "google_api_key": api_key,
+            "safety_settings": safety_settings,
+            "convert_system_message_to_human": True
+        }
+        
+        # Add thinking budget for Gemini 2.5 Flash models
+        if "2.5-flash" in model_name.lower() and thinking_budget is not None:
+            model_kwargs["thinking_budget"] = thinking_budget
+            logger.info(f"Using thinking budget: {thinking_budget} tokens")
+        
+        model_base = ChatGoogleGenerativeAI(**model_kwargs)
         
         # Bind tools and then wrap for rate limiting
         model_with_tools_base = model_base.bind_tools([mailbird_kb_search, tavily_web_search])
@@ -161,7 +174,7 @@ async def run_primary_agent(state: PrimaryAgentState) -> AsyncIterator[AIMessage
                 yield AIMessageChunk(content=detailed_guidance, role="error")
                 return
             
-            # Create user-specific model
+            # Create user-specific model (will determine thinking budget later)
             model_with_tools = create_user_specific_model(gemini_api_key)
 
             parent_span.set_attribute("input.query", user_query)
