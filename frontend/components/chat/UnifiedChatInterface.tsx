@@ -1,6 +1,7 @@
 "use client"
 
 import React, { useState, useRef, useEffect, useCallback } from 'react'
+import Image from 'next/image'
 import { Button } from '@/components/ui/button'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Badge } from '@/components/ui/badge'
@@ -85,8 +86,14 @@ function LoadingIndicator({ agentType }: { agentType?: "primary" | "log_analyst"
   
   return (
     <div className="flex justify-center mb-4">
-      <div className="flex items-center gap-2 text-xs text-chat-metadata bg-background/50 backdrop-blur-sm rounded-full px-3 py-1.5 border border-border/30">
-        <Loader2 className="w-3 h-3 animate-spin text-primary" />
+      <div className="flex items-center gap-3 text-sm text-chat-metadata bg-background/50 backdrop-blur-sm rounded-full px-4 py-2 border border-border/30">
+        <Image 
+          src="/agent-thinking.webp"
+          alt="Agent thinking"
+          width={32}
+          height={32}
+          className="animate-pulse"
+        />
         <span>{getLoadingMessage()}</span>
       </div>
     </div>

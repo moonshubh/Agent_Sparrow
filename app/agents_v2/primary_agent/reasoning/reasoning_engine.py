@@ -404,8 +404,18 @@ class ReasoningEngine:
 
 Please generate a well-structured response that follows these guidelines and addresses the customer's needs directly."""
 
+                # Use the full Agent Sparrow V9 prompts for proper response generation
+                from app.agents_v2.primary_agent.prompts import AgentSparrowV9Prompts
+                
+                prompt_config = AgentSparrowV9Prompts.PromptV9Config(
+                    include_self_critique=False,  # Don't include critique in response generation
+                    include_troubleshooting=True,
+                    debug_mode=self.config.debug_mode
+                )
+                system_prompt = AgentSparrowV9Prompts.build_system_prompt(config=prompt_config)
+                
                 messages = [
-                    SystemMessage(content="You are Agent Sparrow, an expert customer support assistant for Mailbird. Generate helpful, professional responses."),
+                    SystemMessage(content=system_prompt),
                     HumanMessage(content=response_prompt)
                 ]
 

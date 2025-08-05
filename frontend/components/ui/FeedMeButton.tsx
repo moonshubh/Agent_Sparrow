@@ -64,8 +64,8 @@ export function FeedMeButton({ onClick, mode = 'navigate' }: FeedMeButtonProps) 
                 <Image 
                   src="/feedme-icon.png"
                   alt="FeedMe"
-                  width={16}
-                  height={16}
+                  width={20}
+                  height={20}
                   className={`transition-opacity ${
                     isHovered ? 'opacity-100' : 'opacity-70'
                   }`}

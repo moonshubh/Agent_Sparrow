@@ -163,9 +163,9 @@ export function ChatSidebar({
                       <Image 
                         src="/primary-agent-icon.png" 
                         alt="Primary Agent" 
-                        width={16} 
-                        height={16}
-                        className="w-4 h-4"
+                        width={24} 
+                        height={24}
+                        className="w-6 h-6"
                       />
                       {!isCollapsed && <span>Primary Agent</span>}
                     </div>
@@ -210,9 +210,9 @@ export function ChatSidebar({
                       <Image 
                         src="/log-analysis-icon.png" 
                         alt="Log Analysis" 
-                        width={16} 
-                        height={16}
-                        className="w-4 h-4"
+                        width={24} 
+                        height={24}
+                        className="w-6 h-6"
                       />
                       {!isCollapsed && <span>Log Analysis</span>}
                     </div>
@@ -255,11 +255,11 @@ export function ChatSidebar({
                   >
                     <div className="flex items-center gap-2">
                       <Image 
-                        src="/agent-sparrow-logo.png" 
+                        src="/research-agent-icon.png" 
                         alt="Research" 
-                        width={16} 
-                        height={16}
-                        className="w-4 h-4"
+                        width={24} 
+                        height={24}
+                        className="w-6 h-6"
                       />
                       {!isCollapsed && <span>Research</span>}
                     </div>
