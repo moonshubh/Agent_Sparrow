@@ -21,7 +21,13 @@ interface ChatHistoryState {
 }
 
 const STORAGE_KEY = 'mb-sparrow-chat-history'
-const MAX_SESSIONS_PER_AGENT = 5
+
+// Agent-specific session limits
+const MAX_SESSIONS_BY_AGENT_TYPE = {
+  primary: 5,
+  log_analysis: 3,
+  research: 5
+}
 
 export function useChatHistory() {
   const [state, setState] = useState<ChatHistoryState>({
@@ -182,11 +188,15 @@ export function useChatHistory() {
       // Sort existing sessions by lastMessageAt (newest first)
       agentSessions.sort((a, b) => b.lastMessageAt.getTime() - a.lastMessageAt.getTime())
 
+      // Get the max sessions for this agent type
+      const maxSessions = MAX_SESSIONS_BY_AGENT_TYPE[agentType] || 5
+
       // Add new session at the beginning and enforce limit
       let updatedAgentSessions = [newSession, ...agentSessions]
-      if (updatedAgentSessions.length > MAX_SESSIONS_PER_AGENT) {
-        updatedAgentSessions = updatedAgentSessions.slice(0, MAX_SESSIONS_PER_AGENT)
-        console.log(`Removed ${updatedAgentSessions.length - MAX_SESSIONS_PER_AGENT} old ${agentType} sessions due to limit`)
+      if (updatedAgentSessions.length > maxSessions) {
+        const removedCount = updatedAgentSessions.length - maxSessions
+        updatedAgentSessions = updatedAgentSessions.slice(0, maxSessions)
+        console.log(`Removed ${removedCount} old ${agentType} sessions due to limit of ${maxSessions}`)
       }
 
       // Sort all sessions by lastMessageAt for consistent display

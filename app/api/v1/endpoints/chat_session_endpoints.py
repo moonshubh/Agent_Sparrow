@@ -79,6 +79,26 @@ async def get_chat_session_by_id(conn, session_id: int, user_id: str) -> Optiona
 def create_chat_session_in_db(conn, session_data: ChatSessionCreate, user_id: str) -> Dict[str, Any]:
     """Create a new chat session in the database"""
     with conn.cursor() as cur:
+        # Get agent-specific configuration
+        cur.execute("""
+            SELECT max_active_sessions 
+            FROM agent_configuration 
+            WHERE agent_type = %s
+        """, (session_data.agent_type.value,))
+        
+        config_row = cur.fetchone()
+        if config_row:
+            max_sessions = config_row['max_active_sessions']
+        else:
+            # Fallback to agent-specific defaults
+            agent_limits = {
+                'primary': 5,
+                'log_analysis': 3,
+                'research': 5,
+                'router': 10
+            }
+            max_sessions = agent_limits.get(session_data.agent_type.value, 5)
+        
         # Check if user has too many active sessions for this agent type
         cur.execute("""
             SELECT COUNT(*) as active_count
@@ -87,7 +107,7 @@ def create_chat_session_in_db(conn, session_data: ChatSessionCreate, user_id: st
         """, (user_id, session_data.agent_type.value))
         
         active_count = cur.fetchone()['active_count']
-        if active_count >= settings.max_sessions_per_agent:
+        if active_count >= max_sessions:
             # Deactivate the oldest active session
             cur.execute("""
                 UPDATE chat_sessions 

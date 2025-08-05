@@ -60,21 +60,28 @@ export function ChatSidebar({
   const [editingSessionId, setEditingSessionId] = useState<string | null>(null)
   const [editingTitle, setEditingTitle] = useState('')
 
+  // Agent-specific session limits
+  const SESSION_LIMITS = {
+    primary: 5,
+    log_analysis: 3,
+    research: 5
+  }
+
   // Sort sessions by lastMessageAt (newest first) and enforce limits
   const primarySessions = sessions
     .filter(s => s.agentType === 'primary')
     .sort((a, b) => b.lastMessageAt.getTime() - a.lastMessageAt.getTime())
-    .slice(0, 5)
+    .slice(0, SESSION_LIMITS.primary)
   
   const logAnalysisSessions = sessions
     .filter(s => s.agentType === 'log_analysis')
     .sort((a, b) => b.lastMessageAt.getTime() - a.lastMessageAt.getTime())
-    .slice(0, 5)
+    .slice(0, SESSION_LIMITS.log_analysis)
     
   const researchSessions = sessions
     .filter(s => s.agentType === 'research')
     .sort((a, b) => b.lastMessageAt.getTime() - a.lastMessageAt.getTime())
-    .slice(0, 5)
+    .slice(0, SESSION_LIMITS.research)
 
   const handleRename = useCallback((sessionId: string, currentTitle: string) => {
     setEditingSessionId(sessionId)
@@ -167,7 +174,12 @@ export function ChatSidebar({
                         height={24}
                         className="w-6 h-6"
                       />
-                      {!isCollapsed && <span>Primary Agent</span>}
+                      {!isCollapsed && (
+                        <span className="flex items-center gap-2">
+                          Primary Agent
+                          <span className="text-xs text-muted-foreground">({primarySessions.length}/{SESSION_LIMITS.primary})</span>
+                        </span>
+                      )}
                     </div>
                     {!isCollapsed && (
                       primaryExpanded ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />
@@ -214,7 +226,12 @@ export function ChatSidebar({
                         height={24}
                         className="w-6 h-6"
                       />
-                      {!isCollapsed && <span>Log Analysis</span>}
+                      {!isCollapsed && (
+                        <span className="flex items-center gap-2">
+                          Log Analysis
+                          <span className="text-xs text-muted-foreground">({logAnalysisSessions.length}/{SESSION_LIMITS.log_analysis})</span>
+                        </span>
+                      )}
                     </div>
                     {!isCollapsed && (
                       logAnalysisExpanded ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />
@@ -261,7 +278,12 @@ export function ChatSidebar({
                         height={24}
                         className="w-6 h-6"
                       />
-                      {!isCollapsed && <span>Research</span>}
+                      {!isCollapsed && (
+                        <span className="flex items-center gap-2">
+                          Research
+                          <span className="text-xs text-muted-foreground">({researchSessions.length}/{SESSION_LIMITS.research})</span>
+                        </span>
+                      )}
                     </div>
                     {!isCollapsed && (
                       researchExpanded ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />
