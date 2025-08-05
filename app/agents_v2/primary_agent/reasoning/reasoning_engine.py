@@ -1367,11 +1367,11 @@ Provide comprehensive analysis following the structure outlined in your instruct
                         "account": ProblemCategory.ACCOUNT_SETUP,
                         "feature": ProblemCategory.FEATURE_EDUCATION,
                         "billing": ProblemCategory.BILLING_INQUIRY,
-                        "general": ProblemCategory.GENERAL_QUESTION
+                        "general": ProblemCategory.GENERAL_SUPPORT
                     }
-                    category = category_map.get(category_str, ProblemCategory.GENERAL_QUESTION)
+                    category = category_map.get(category_str, ProblemCategory.GENERAL_SUPPORT)
                 else:
-                    category = ProblemCategory.GENERAL_QUESTION
+                    category = ProblemCategory.GENERAL_SUPPORT
                 
                 # Extract urgency level
                 urgency_match = re.search(r"urgency level[:\s]+(\d)", analysis_text)
@@ -1442,7 +1442,7 @@ Provide comprehensive analysis following the structure outlined in your instruct
                     historical_context="Error",
                     emotional_state=EmotionalState.NEUTRAL,
                     emotion_confidence=0.5,
-                    problem_category=ProblemCategory.GENERAL_QUESTION,
+                    problem_category=ProblemCategory.GENERAL_SUPPORT,
                     category_confidence=0.5,
                     key_entities=[],
                     complexity_score=0.5,
