@@ -16,6 +16,7 @@ import re
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 from opentelemetry import trace
 
+from app.agents_v2.primary_agent.prompts.agent_sparrow_v9_prompts import AgentSparrowV9Prompts, PromptV9Config
 from .schemas import (
     ReasoningState, ReasoningStep, ReasoningPhase, QueryAnalysis,
     ToolDecisionReasoning, QualityAssessment, ProblemCategory, ToolDecisionType,
@@ -405,12 +406,16 @@ class ReasoningEngine:
 Please generate a well-structured response that follows these guidelines and addresses the customer's needs directly."""
 
                 # Use the full Agent Sparrow V9 prompts for proper response generation
-                from app.agents_v2.primary_agent.prompts import AgentSparrowV9Prompts
-                
-                prompt_config = AgentSparrowV9Prompts.PromptV9Config(
+                prompt_config = PromptV9Config(
                     include_self_critique=False,  # Don't include critique in response generation
-                    include_troubleshooting=True,
-                    debug_mode=self.config.debug_mode
+                    include_reasoning=True,
+                    include_emotional_resonance=True,
+                    include_technical_excellence=True,
+                    include_conversational_excellence=True,
+                    include_solution_delivery=True,
+                    include_knowledge_integration=True,
+                    include_premium_elements=True,
+                    include_success_directives=True
                 )
                 system_prompt = AgentSparrowV9Prompts.build_system_prompt(config=prompt_config)
                 
@@ -912,7 +917,7 @@ Please generate a well-structured response that follows these guidelines and add
                 confidence=0.8  # HIGH confidence
             ))
 
-            prompt_config = AgentSparrowV9Prompts.PromptV9Config(include_self_critique=True)
+            prompt_config = PromptV9Config(include_self_critique=True)
             system_prompt = AgentSparrowV9Prompts.build_system_prompt(config=prompt_config)
             
             critique_request_prompt = f"Here is the response I have drafted. Please provide your internal self-critique based on the framework provided in your system instructions:\n\n<draft_response>\n{draft_response}\n</draft_response>"
