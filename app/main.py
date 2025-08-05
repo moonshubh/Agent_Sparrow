@@ -327,6 +327,15 @@ async def security_status():
     Security configuration status endpoint for debugging and validation.
     Shows current security feature states.
     """
+    # Get list of all registered routes
+    routes = []
+    for route in app.routes:
+        if hasattr(route, 'path') and hasattr(route, 'methods'):
+            routes.append({
+                "path": route.path,
+                "methods": list(route.methods) if route.methods else []
+            })
+    
     return {
         "production_mode": settings.is_production_mode(),
         "authentication_endpoints": {
@@ -346,8 +355,12 @@ async def security_status():
         },
         "environment_indicators": {
             "supabase_configured": bool(settings.supabase_url),
-            "internal_api_token_configured": bool(settings.internal_api_token)
-        }
+            "internal_api_token_configured": bool(settings.internal_api_token),
+            "encryption_secret_configured": bool(getattr(settings, 'api_key_encryption_secret', None))
+        },
+        "registered_routes": routes,
+        "api_key_routes_registered": any("/api-keys" in r["path"] for r in routes),
+        "rate_limit_routes_registered": any("/rate-limits" in r["path"] for r in routes)
     }
 
 @app.post("/agent", response_model=AgentResponse, tags=["Agent"])

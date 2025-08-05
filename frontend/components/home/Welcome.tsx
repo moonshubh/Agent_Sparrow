@@ -14,7 +14,7 @@ export function Welcome({ hasMessages }: WelcomeProps) {
     }`}>
       {/* Avatar */}
       <Avatar className="size-20 bg-accent/10 ring-1 ring-accent/20 mx-auto mb-4">
-        <AvatarImage src="/agent-sparrow.png" alt="Agent Sparrow" />
+        <AvatarImage src="/agent-sparrow-logo.png" alt="Agent Sparrow" />
         <AvatarFallback>AS</AvatarFallback>
       </Avatar>
       

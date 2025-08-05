@@ -4,7 +4,8 @@ import React, { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { Button } from '@/components/ui/button'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
-import { FileText, Upload, ExternalLink } from 'lucide-react'
+import { Upload, ExternalLink } from 'lucide-react'
+import Image from 'next/image'
 import FeedMeConversationManager from '@/components/feedme/FeedMeConversationManager'
 import { EnhancedFeedMeModal } from '@/components/feedme/EnhancedFeedMeModal'
 import { ErrorBoundary } from '@/components/ui/ErrorBoundary'
@@ -39,7 +40,6 @@ export function FeedMeButton({ onClick, mode = 'navigate' }: FeedMeButtonProps) 
     console.log('Upload completed:', results)
   }
 
-  const Icon = mode === 'upload' ? Upload : mode === 'navigate' ? ExternalLink : FileText
   const tooltipText = mode === 'upload' 
     ? 'FeedMe - Upload transcripts' 
     : mode === 'navigate' 
@@ -61,9 +61,13 @@ export function FeedMeButton({ onClick, mode = 'navigate' }: FeedMeButtonProps) 
                 onClick={handleClick}
                 aria-label={tooltipText}
               >
-                <Icon 
-                  className={`h-4 w-4 transition-colors ${
-                    isHovered ? 'text-accent' : 'text-muted-foreground'
+                <Image 
+                  src="/feedme-icon.png"
+                  alt="FeedMe"
+                  width={16}
+                  height={16}
+                  className={`transition-opacity ${
+                    isHovered ? 'opacity-100' : 'opacity-70'
                   }`}
                 />
               </Button>

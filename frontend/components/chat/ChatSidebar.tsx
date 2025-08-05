@@ -111,22 +111,8 @@ export function ChatSidebar({
         "h-full bg-background border-r border-border flex flex-col transition-all duration-300",
         isCollapsed ? "w-16" : "w-80"
       )}>
-        {/* Header */}
-        <div className="flex items-center justify-between p-4 border-b border-border">
-          <div className="flex items-center gap-2">
-            {!isCollapsed && (
-              <>
-                <Image 
-                  src="/agent-sparrow.png" 
-                  alt="Agent Sparrow" 
-                  width={32} 
-                  height={32}
-                  className="rounded-full ring-1 ring-accent/30"
-                />
-                <span className="font-semibold text-foreground">Agent Sparrow</span>
-              </>
-            )}
-          </div>
+        {/* Collapse Toggle */}
+        <div className="flex items-center justify-end p-2 border-b border-border">
           <Button
             variant="ghost"
             size="icon"
@@ -174,7 +160,13 @@ export function ChatSidebar({
                     )}
                   >
                     <div className="flex items-center gap-2">
-                      <MessageCircle className="h-4 w-4 text-accent" />
+                      <Image 
+                        src="/primary-agent-icon.png" 
+                        alt="Primary Agent" 
+                        width={16} 
+                        height={16}
+                        className="w-4 h-4"
+                      />
                       {!isCollapsed && <span>Primary Agent</span>}
                     </div>
                     {!isCollapsed && (
@@ -215,7 +207,13 @@ export function ChatSidebar({
                     )}
                   >
                     <div className="flex items-center gap-2">
-                      <FileSearch className="h-4 w-4 text-accent" />
+                      <Image 
+                        src="/log-analysis-icon.png" 
+                        alt="Log Analysis" 
+                        width={16} 
+                        height={16}
+                        className="w-4 h-4"
+                      />
                       {!isCollapsed && <span>Log Analysis</span>}
                     </div>
                     {!isCollapsed && (
@@ -256,7 +254,13 @@ export function ChatSidebar({
                     )}
                   >
                     <div className="flex items-center gap-2">
-                      <Search className="h-4 w-4 text-accent" />
+                      <Image 
+                        src="/agent-sparrow-logo.png" 
+                        alt="Research" 
+                        width={16} 
+                        height={16}
+                        className="w-4 h-4"
+                      />
                       {!isCollapsed && <span>Research</span>}
                     </div>
                     {!isCollapsed && (

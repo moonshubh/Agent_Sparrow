@@ -45,9 +45,25 @@ export const RateLimitDropdown: React.FC<RateLimitDropdownProps> = ({
     try {
       setError(null);
       const data = await rateLimitApi.getStatus();
-      setStatus(data);
+      
+      // Don't show degraded status if Redis is not configured
+      // Check if the degraded status is due to Redis connection issues
+      if (data && data.status === 'degraded' && data.message && 
+          (data.message.includes('Redis') || data.message.includes('redis'))) {
+        // Rate limiting system not properly configured, don't show as degraded
+        setStatus(null);
+      } else {
+        setStatus(data);
+      }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to fetch rate limit status');
+      // Handle 404 gracefully - rate limit endpoints not available
+      if (err instanceof Error && (err.message.includes('404') || err.message.includes('Network error'))) {
+        setError(null); // Don't show error for missing endpoints
+        setStatus(null);
+      } else {
+        setError(err instanceof Error ? err.message : 'Failed to fetch rate limit status');
+        setStatus(null); // Clear status on error
+      }
     } finally {
       setLoading(false);
     }
@@ -93,8 +109,9 @@ export const RateLimitDropdown: React.FC<RateLimitDropdownProps> = ({
 
   const getStatusIcon = () => {
     if (loading) return <Activity className="h-4 w-4 animate-spin" />;
-    if (error) return <AlertTriangle className="h-4 w-4 text-red-500" />;
-    if (!status) return <BarChart3 className="h-4 w-4" />;
+    // Don't show error icon for missing rate limit functionality
+    if (error && !error.includes('rate limit')) return <AlertTriangle className="h-4 w-4 text-red-500" />;
+    if (!status) return <BarChart3 className="h-4 w-4 text-muted-foreground" />;
 
     const overallStatus = status.status;
     switch (overallStatus) {
@@ -173,7 +190,15 @@ export const RateLimitDropdown: React.FC<RateLimitDropdownProps> = ({
       return (
         <Card className="w-80">
           <CardContent className="p-4">
-            <span>No rate limit data available</span>
+            <div className="space-y-2">
+              <div className="flex items-center space-x-2">
+                <BarChart3 className="h-4 w-4 text-muted-foreground" />
+                <span className="text-sm font-medium">Rate Limiting</span>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Rate limit monitoring is not available on this deployment.
+              </p>
+            </div>
           </CardContent>
         </Card>
       );
@@ -305,7 +330,7 @@ export const RateLimitDropdown: React.FC<RateLimitDropdownProps> = ({
             </Button>
           </TooltipTrigger>
           <TooltipContent side="bottom">
-            <p>View Gemini API rate limits</p>
+            <p>{status ? 'View Gemini API rate limits' : 'Rate limiting info'}</p>
           </TooltipContent>
         </Tooltip>
       </TooltipProvider>
