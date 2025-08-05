@@ -325,7 +325,11 @@ Think step by step and be thorough but concise."""
             start_time = time.time()
             
             # Initialize reasoning state
-            reasoning_state = ReasoningState(session_id=session_id, start_time=datetime.now())
+            reasoning_state = ReasoningState(
+                session_id=session_id, 
+                start_time=datetime.now(),
+                query_text=query
+            )
             span.set_attribute("session_id", session_id)
             span.set_attribute("query_length", len(query))
             

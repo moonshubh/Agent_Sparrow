@@ -235,6 +235,9 @@ class ReasoningState:
     session_id: str = "default"
     start_time: datetime = field(default_factory=datetime.now)
     
+    # Query text
+    query_text: Optional[str] = None
+    
     # Input analysis
     query_analysis: Optional[QueryAnalysis] = None
     
