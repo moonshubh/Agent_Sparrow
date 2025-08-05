@@ -379,31 +379,84 @@ class ReasoningEngine:
                 qa = reasoning_state.query_analysis
                 solution = reasoning_state.solution_architecture.primary_pathway
                 
+                # Import emotion templates for better response crafting
+                from app.agents_v2.primary_agent.prompts.emotion_templates import EmotionTemplates
+                
+                # Get emotion-aware opening
+                empathy_opening = EmotionTemplates.get_empathy_template(
+                    qa.emotional_state, 
+                    qa.key_entities.get('issue', qa.query_text[:50])
+                )
+                
+                # Get response strategy for this emotion
+                response_strategy = EmotionTemplates.get_response_strategy(qa.emotional_state)
+                
                 # Build a comprehensive prompt for final response generation
-                response_prompt = f"""Based on my analysis, please generate a helpful, professional response to the customer's query.
+                response_prompt = f"""Generate a warm, human-like response that feels like talking to a knowledgeable friend who genuinely cares about solving email problems.
 
 **Customer Query**: {qa.query_text}
 
-**Analysis Results**:
-- Emotional State: {qa.emotional_state.value}
-- Problem Category: {qa.problem_category.value}
-- Technical Complexity: {qa.situational_analysis.technical_complexity}/10
-- Business Impact: {qa.situational_analysis.business_impact.value}
+**Emotional Context**: 
+- Primary emotion: {qa.emotional_state.value} (confidence: {qa.situational_analysis.emotional_intensity}/10)
+- Recommended tone: {response_strategy.get('tone', 'warm and professional')}
+- Communication style: {response_strategy.get('language', 'clear and accessible')}
 
-**Recommended Solution**:
-{solution.solution_summary}
+**Suggested Empathy Opening**:
+{empathy_opening}
 
-**Detailed Steps**:
-{chr(10).join(f"{i+1}. {step}" for i, step in enumerate(solution.detailed_steps))}
+**Solution Details**:
+Primary approach: {solution.solution_summary}
+Steps required: {len(solution.detailed_steps)}
 
-**Response Guidelines**:
-- Use a warm, professional tone
-- Acknowledge the customer's situation appropriately
-- Provide clear, actionable steps
-- Include preventive measures if relevant
-- Be concise but thorough
+**Critical Response Requirements**:
 
-Please generate a well-structured response that follows these guidelines and addresses the customer's needs directly."""
+1. **Human Touch Elements**:
+   - Start with genuine empathy using the suggested opening or similar
+   - Use natural language patterns (contractions like "I'll", "you're", "let's")
+   - Include conversational connectors ("Actually", "By the way", "Oh, and...")
+   - Add micro-acknowledgments ("I see", "Got it", "Makes sense")
+   - Use inclusive language ("Let's tackle this together", "We'll get this sorted")
+
+2. **Emotional Intelligence**:
+   - Mirror the customer's communication style (formal/casual)
+   - Validate their feelings without being patronizing
+   - Show understanding of the impact on their workflow
+   - Celebrate small wins during troubleshooting ("Great! That's progress")
+   - Use appropriate enthusiasm or calmness based on their state
+
+3. **Conversational Flow**:
+   - Break solutions into digestible chunks with natural transitions
+   - Use analogies that relate to everyday experiences
+   - Add personality touches ("Here's a neat trick...", "Fun fact...")
+   - Include anticipatory guidance ("You might be wondering...")
+   - End with forward momentum ("Once this is set up, you'll love...")
+
+4. **Mailbird Accuracy** (NEVER make up settings):
+   - Only reference actual Mailbird settings from the knowledge base
+   - Use exact menu paths: Settings → General → Notifications
+   - If unsure about a setting location, say "Let me guide you to the right setting"
+   - Reference actual features: Unified Account, Snooze, Email Tracking, etc.
+   - Mention keyboard shortcuts only if certain (e.g., Ctrl+Shift+C for quick compose)
+
+5. **Solution Delivery**:
+   Structure: {response_strategy.get('structure', 'acknowledgment → solution → verification')}
+   Include: {', '.join(response_strategy.get('extras', ['clear next steps']))}
+
+**Example Natural Phrases to Use**:
+- "I totally get how frustrating that must be..."
+- "Let me walk you through this - it's actually pretty straightforward once you know where to look"
+- "Here's what's happening behind the scenes..."
+- "Quick tip while we're here..."
+- "You're almost there! Just one more step..."
+
+**Avoid**:
+- Robotic phrases ("I understand your concern")
+- Over-explaining simple concepts
+- Making up Mailbird features or settings
+- Being overly formal when they're casual
+- Generic responses that could apply to any email client
+
+Now, create a response that feels like it's from Agent Sparrow - your email-savvy friend who genuinely wants to help, knows Mailbird inside out, and can explain things in a way that just clicks."""
 
                 # Use the full Agent Sparrow V9 prompts for proper response generation
                 prompt_config = PromptV9Config(
