@@ -50,7 +50,7 @@ class SupabaseAPIKeyService:
             masked_key = encryption_service.mask_api_key(request.api_key)
             
             # Check if key already exists
-            existing_response = self.supabase.table("user_api_keys")\
+            existing_response = self.supabase.client.table("user_api_keys")\
                 .select("*")\
                 .eq("user_uuid", user_id)\
                 .eq("api_key_type", request.api_key_type)\
@@ -68,7 +68,7 @@ class SupabaseAPIKeyService:
                     "is_active": True
                 }
                 
-                response = self.supabase.table("user_api_keys")\
+                response = self.supabase.client.table("user_api_keys")\
                     .update(update_data)\
                     .eq("user_uuid", user_id)\
                     .eq("api_key_type", request.api_key_type)\
@@ -90,7 +90,7 @@ class SupabaseAPIKeyService:
                     "updated_at": current_time
                 }
                 
-                response = self.supabase.table("user_api_keys")\
+                response = self.supabase.client.table("user_api_keys")\
                     .insert(insert_data)\
                     .execute()
                 
@@ -134,7 +134,7 @@ class SupabaseAPIKeyService:
     async def get_user_api_keys(self, user_id: str) -> APIKeyListResponse:
         """Get all API keys for a user (masked for security)."""
         try:
-            response = self.supabase.table("user_api_keys")\
+            response = self.supabase.client.table("user_api_keys")\
                 .select("id, api_key_type, key_name, is_active, created_at, updated_at, last_used_at, encrypted_key, masked_key")\
                 .eq("user_uuid", user_id)\
                 .execute()
@@ -183,7 +183,7 @@ class SupabaseAPIKeyService:
         """
         try:
             # Try to get user-specific key first
-            response = self.supabase.table("user_api_keys")\
+            response = self.supabase.client.table("user_api_keys")\
                 .select("encrypted_key, is_active")\
                 .eq("user_uuid", user_id)\
                 .eq("api_key_type", api_key_type)\
@@ -216,7 +216,7 @@ class SupabaseAPIKeyService:
     ) -> APIKeyDeleteResponse:
         """Delete an API key."""
         try:
-            response = self.supabase.table("user_api_keys")\
+            response = self.supabase.client.table("user_api_keys")\
                 .delete()\
                 .eq("user_uuid", user_id)\
                 .eq("api_key_type", api_key_type)\
@@ -252,7 +252,7 @@ class SupabaseAPIKeyService:
     async def get_api_key_status(self, user_id: str) -> APIKeyStatus:
         """Get status of all API key types for a user."""
         try:
-            response = self.supabase.table("user_api_keys")\
+            response = self.supabase.client.table("user_api_keys")\
                 .select("api_key_type, is_active")\
                 .eq("user_uuid", user_id)\
                 .eq("is_active", True)\
@@ -294,7 +294,7 @@ class SupabaseAPIKeyService:
     async def _update_last_used(self, user_id: str, api_key_type: APIKeyType):
         """Update last used timestamp for an API key."""
         try:
-            self.supabase.table("user_api_keys")\
+            self.supabase.client.table("user_api_keys")\
                 .update({"last_used_at": datetime.now(timezone.utc).isoformat()})\
                 .eq("user_uuid", user_id)\
                 .eq("api_key_type", api_key_type)\
@@ -320,7 +320,7 @@ class SupabaseAPIKeyService:
             if additional_details:
                 operation_details.update(additional_details)
             
-            self.supabase.table("api_key_audit_log").insert({
+            self.supabase.client.table("api_key_audit_log").insert({
                 "user_uuid": user_id,
                 "api_key_type": api_key_type,
                 "operation": operation,
