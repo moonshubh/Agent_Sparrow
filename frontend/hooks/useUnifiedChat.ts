@@ -237,12 +237,22 @@ export function useUnifiedChat(): UseUnifiedChatReturn {
         agent_type: suggestedAgent === "primary" ? null : suggestedAgent
       })
       
+      // Prepare message history for the API
+      const messageHistory = state.messages
+        .filter(m => m.type !== 'system') // Exclude system messages
+        .map(m => ({
+          type: m.type,
+          role: m.type === 'agent' ? 'assistant' : m.type,
+          content: m.content
+        }))
+      
       const response = await fetch(`${apiBaseUrl}/api/v1/agent/unified/stream`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ 
           message: content,
-          agent_type: suggestedAgent === "primary" ? null : suggestedAgent
+          agent_type: suggestedAgent === "primary" ? null : suggestedAgent,
+          messages: messageHistory
         }),
         signal: abortController.signal
       })

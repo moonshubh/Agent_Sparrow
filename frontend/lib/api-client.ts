@@ -427,9 +427,11 @@ export const agentAPI = {
     message: string, 
     onMessage: (data: any) => void,
     onError?: (error: Error) => void,
-    onClose?: () => void
+    onClose?: () => void,
+    messages?: any[],
+    sessionId?: string
   ): Promise<EnhancedEventSource> =>
-    apiClient.stream('/api/v1/v2/agent/chat/stream', { message }, onMessage, { onError, onClose }),
+    apiClient.stream('/api/v1/v2/agent/chat/stream', { message, messages, session_id: sessionId }, onMessage, { onError, onClose }),
 
   analyzeLogs: (content: string): Promise<any> =>
     apiClient.post('/api/v1/agent/logs', { content }),

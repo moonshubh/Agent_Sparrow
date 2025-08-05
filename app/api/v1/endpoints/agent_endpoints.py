@@ -8,7 +8,7 @@ from app.agents_v2.primary_agent.agent import run_primary_agent
 from app.agents_v2.primary_agent.schemas import PrimaryAgentState # Import PrimaryAgentState
 from app.agents_v2.log_analysis_agent.schemas import LogAnalysisAgentState, StructuredLogAnalysisOutput
 from app.agents_v2.log_analysis_agent.enhanced_schemas import ComprehensiveLogAnalysisOutput
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import HumanMessage, AIMessage
 import json
 import re
 
@@ -133,9 +133,11 @@ class ResearchResponse(BaseModel):
 
 class ChatRequest(BaseModel):
     message: str
+    messages: list[dict] | None = None  # Full conversation history
+    session_id: str | None = None  # Session identifier for context
     # trace_id: str | None = None # Optional, if you plan to propagate trace IDs
 
-async def primary_agent_stream_generator(query: str, user_id: str) -> AsyncIterable[str]:
+async def primary_agent_stream_generator(query: str, user_id: str, message_history: list[dict] | None = None, session_id: str | None = None) -> AsyncIterable[str]:
     """Wraps the primary agent's streaming output with user-specific API configuration."""
     try:
         # Create user context
@@ -153,8 +155,23 @@ async def primary_agent_stream_generator(query: str, user_id: str) -> AsyncItera
         
         # Use user-specific context
         async with user_context_scope(user_context):
+            # Build message history
+            messages = []
+            
+            # Add conversation history if provided
+            if message_history:
+                for msg in message_history:
+                    if msg.get("type") == "user" or msg.get("role") == "user":
+                        messages.append(HumanMessage(content=msg.get("content", "")))
+                    elif msg.get("type") == "assistant" or msg.get("role") == "assistant":
+                        messages.append(AIMessage(content=msg.get("content", "")))
+            
+            # Add current query
+            messages.append(HumanMessage(content=query))
+            
             initial_state = PrimaryAgentState(
-                messages=[HumanMessage(content=query)]
+                messages=messages,
+                session_id=session_id
             )
             
             async for chunk in run_primary_agent(initial_state):
@@ -194,7 +211,12 @@ async def chat_stream_v1_legacy(
     
     # Use default configuration for unauthenticated requests
     return StreamingResponse(
-        primary_agent_stream_generator(request.message, user_id="anonymous"),
+        primary_agent_stream_generator(
+            request.message, 
+            user_id="anonymous",
+            message_history=request.messages,
+            session_id=request.session_id
+        ),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
@@ -223,7 +245,12 @@ async def chat_stream_v2_authenticated(
         raise HTTPException(status_code=400, detail="Message cannot be empty")
     
     return StreamingResponse(
-        primary_agent_stream_generator(request.message, user_id),
+        primary_agent_stream_generator(
+            request.message, 
+            user_id,
+            message_history=request.messages,
+            session_id=request.session_id
+        ),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
@@ -420,6 +447,8 @@ class UnifiedAgentRequest(BaseModel):
     agent_type: str | None = None  # Optional: "primary", "log_analyst", "researcher", or None for auto-routing
     log_content: str | None = None  # For log analysis
     trace_id: str | None = None
+    messages: list[dict] | None = None  # Full conversation history
+    session_id: str | None = None  # Session identifier for context
 
 async def unified_agent_stream_generator(request: UnifiedAgentRequest) -> AsyncIterable[str]:
     """Unified agent endpoint with intelligent routing and fallback."""
@@ -554,8 +583,23 @@ async def unified_agent_stream_generator(request: UnifiedAgentRequest) -> AsyncI
             from app.agents_v2.primary_agent.agent import run_primary_agent
             from app.agents_v2.primary_agent.schemas import PrimaryAgentState
             
+            # Build message history
+            messages = []
+            
+            # Add conversation history if provided
+            if request.messages:
+                for msg in request.messages:
+                    if msg.get("type") == "user" or msg.get("role") == "user":
+                        messages.append(HumanMessage(content=msg.get("content", "")))
+                    elif msg.get("type") == "assistant" or msg.get("role") == "assistant" or msg.get("type") == "agent":
+                        messages.append(AIMessage(content=msg.get("content", "")))
+            
+            # Add current query
+            messages.append(HumanMessage(content=request.message))
+            
             initial_state = PrimaryAgentState(
-                messages=[HumanMessage(content=request.message)]
+                messages=messages,
+                session_id=request.session_id
             )
             
             # Stream the primary agent's response
