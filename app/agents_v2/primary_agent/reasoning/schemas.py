@@ -26,6 +26,7 @@ class ReasoningPhase(Enum):
     EXECUTION = "execution"
     VALIDATION = "validation"
     SELF_CRITIQUE = "self_critique"
+    QUALITY_ASSESSMENT = "quality_assessment"
 
 
 class ProblemCategory(Enum):
@@ -250,6 +251,7 @@ class ReasoningState:
     # Reasoning outputs
     predictive_insights: List[PredictiveInsight] = field(default_factory=list)
     solution_architecture: Optional[SolutionArchitecture] = None
+    selected_solution: Optional[SolutionCandidate] = None  # For compatibility
     tool_reasoning: Optional[ToolDecisionReasoning] = None
     response_orchestration: Optional[ResponseOrchestration] = None
     self_critique_result: Optional[SelfCritiqueResult] = None

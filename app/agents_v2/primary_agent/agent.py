@@ -55,7 +55,7 @@ def _get_model_config() -> str:
     from app.core.settings import settings
     return settings.primary_agent_model
 
-def create_user_specific_model(api_key: str, thinking_budget: Optional[int] = None) -> ChatGoogleGenerativeAI:
+def create_user_specific_model(api_key: str, thinking_budget: Optional[int] = None, bind_tools: bool = True) -> ChatGoogleGenerativeAI:
     """Create a user-specific Gemini model with their API key and thinking budget.
     
     Features:
@@ -68,14 +68,15 @@ def create_user_specific_model(api_key: str, thinking_budget: Optional[int] = No
     Args:
         api_key: User's Google API key
         thinking_budget: Token budget for thinking mode (0-24576, or -1 for dynamic)
+        bind_tools: Whether to bind tools to the model (default True)
     """
     if not _validate_api_key(api_key):
         raise ValueError("Invalid API key format. Expected Google API key starting with 'AIza' and 39 characters long.")
     
     # Check cache first (using a hash of the API key for security)
-    cache_key = f"{hash(api_key)}_{_get_model_config()}_{thinking_budget}"
+    cache_key = f"{hash(api_key)}_{_get_model_config()}_{thinking_budget}_{bind_tools}"
     if cache_key in _model_cache:
-        logger.debug(f"Returning cached model for user with thinking_budget: {thinking_budget}")
+        logger.debug(f"Returning cached model for user with thinking_budget: {thinking_budget}, bind_tools: {bind_tools}")
         return _model_cache[cache_key]
     
     try:
@@ -105,9 +106,12 @@ def create_user_specific_model(api_key: str, thinking_budget: Optional[int] = No
         
         model_base = ChatGoogleGenerativeAI(**model_kwargs)
         
-        # Bind tools and then wrap for rate limiting
-        model_with_tools_base = model_base.bind_tools([mailbird_kb_search, tavily_web_search])
-        wrapped_model = wrap_gemini_agent(model_with_tools_base, model_name)
+        # Bind tools if requested and then wrap for rate limiting
+        if bind_tools:
+            model_with_tools_base = model_base.bind_tools([mailbird_kb_search, tavily_web_search])
+            wrapped_model = wrap_gemini_agent(model_with_tools_base, model_name)
+        else:
+            wrapped_model = wrap_gemini_agent(model_base, model_name)
         
         # Cache the model (limit cache size to prevent memory issues)
         if len(_model_cache) >= 100:  # Simple cache eviction
@@ -192,6 +196,8 @@ async def run_primary_agent(state: PrimaryAgentState) -> AsyncIterator[AIMessage
                 debug_mode=settings.reasoning_debug_mode
             )
             reasoning_engine = ReasoningEngine(model=model_with_tools, config=reasoning_config)
+            # Store API key for creating models with thinking budgets
+            reasoning_engine._api_key = gemini_api_key
 
             # Perform comprehensive reasoning with optimized LLM calls
             reasoning_state = await reasoning_engine.reason_about_query(
@@ -201,11 +207,15 @@ async def run_primary_agent(state: PrimaryAgentState) -> AsyncIterator[AIMessage
             )
             
             # Generate enhanced response with thinking budget (2nd LLM call)
+            final_response = None
             if reasoning_state and reasoning_state.query_analysis:
-                await reasoning_engine.generate_enhanced_response(reasoning_state)
+                enhanced_response = await reasoning_engine.generate_enhanced_response(reasoning_state)
                 
                 # Optional: Refine response if confidence is low (3rd LLM call)
-                await reasoning_engine.refine_response_if_needed(reasoning_state)
+                refined_response = await reasoning_engine.refine_response_if_needed(reasoning_state)
+                
+                # Use refined response if available, otherwise use enhanced response
+                final_response = refined_response if refined_response else enhanced_response
 
             # Log key reasoning results for observability
             parent_span.set_attribute("reasoning.confidence", reasoning_state.overall_confidence)
@@ -217,14 +227,6 @@ async def run_primary_agent(state: PrimaryAgentState) -> AsyncIterator[AIMessage
                 parent_span.set_attribute("reasoning.critique_passed", reasoning_state.self_critique_result.passed_critique)
 
             # The final, critiqued response is now ready to be streamed.
-            if not reasoning_state.response_orchestration:
-                logger.error("Response orchestration is None in reasoning state")
-                logger.error(f"Reasoning state attributes: {vars(reasoning_state)}")
-                yield AIMessageChunk(content="I'm sorry, I was unable to generate a response. Please try again.", role="assistant")
-                return
-                
-            final_response = reasoning_state.response_orchestration.final_response_preview
-
             if not final_response:
                 logger.warning("Reasoning completed but no final response was generated.")
                 yield AIMessageChunk(content="I'm sorry, I was unable to generate a response. Please try again.", role="assistant")
