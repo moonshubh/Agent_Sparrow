@@ -249,7 +249,13 @@ export default function UnifiedChatInterface() {
   const handleSelectSession = async (sessionId: string) => {
     const session = sessions.find(s => s.id === sessionId)
     if (session) {
-      // Don't clear conversation, just load the session messages directly
+      // Clear conversation first to ensure clean state
+      clearConversation()
+      
+      // Small delay to ensure state is cleared before loading new messages
+      await new Promise(resolve => setTimeout(resolve, 50))
+      
+      // Select the session
       selectSession(sessionId)
       
       // If persistence is available, reload messages from API to ensure we have full content
@@ -426,13 +432,14 @@ export default function UnifiedChatInterface() {
                 {/* Use virtualized list for large conversations */}
                 {isClient && state.messages.length > 50 ? (
                   <VirtualizedMessageList
+                    key={currentSessionId || 'no-session'} // Force re-render on session change
                     messages={state.messages.slice(1)} // Skip welcome message
                     onRetry={retryLastMessage}
                     onRate={handleMessageRate}
                     containerHeight={windowHeight - 280}
                   />
                 ) : (
-                  <ScrollArea ref={scrollAreaRef} className="h-full">
+                  <ScrollArea ref={scrollAreaRef} className="h-full" key={currentSessionId || 'no-session'}>
                     <div className="w-full max-w-4xl mx-auto px-4 md:px-6 lg:px-8 py-6 space-y-6 pb-24">
                       {/* Messages */}
                       {state.messages.slice(1).map((message) => ( // Skip welcome message
