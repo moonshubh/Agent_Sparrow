@@ -31,6 +31,20 @@ security = HTTPBearer(auto_error=False)
 router = APIRouter()
 
 
+@router.get("/debug/jwt-config")
+async def debug_jwt_config():
+    """Debug endpoint to check JWT configuration (remove in production)."""
+    from app.core.settings import settings
+    return {
+        "jwt_secret_configured": bool(settings.supabase_jwt_secret),
+        "jwt_secret_is_default": settings.jwt_secret_key == "change-this-in-production",
+        "jwt_algorithm": settings.jwt_algorithm,
+        "skip_auth": settings.skip_auth,
+        "supabase_url_configured": bool(settings.supabase_url),
+        "supabase_anon_key_configured": bool(settings.supabase_anon_key)
+    }
+
+
 # Request/Response Models
 
 class SignUpRequest(BaseModel):
@@ -142,17 +156,26 @@ async def get_current_user_id(
     
     try:
         auth_client = get_auth_client()
+        logger.info(f"Attempting JWT verification for token starting with: {credentials.credentials[:20]}...")
         token_data = await auth_client.verify_jwt(credentials.credentials)
         
         if not token_data:
-            logger.error(f"JWT verification failed for token: {credentials.credentials[:20]}...")
+            logger.error(f"JWT verification returned None for token: {credentials.credentials[:20]}...")
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid or expired token - verification failed",
+                detail="Invalid or expired token - verification returned None",
                 headers={"WWW-Authenticate": "Bearer"},
             )
+        
+        logger.info(f"JWT verification successful, user_id: {token_data.get('sub', 'unknown')[:8]}...")
+        
+    except HTTPException:
+        # Re-raise HTTP exceptions as-is
+        raise
     except Exception as e:
-        logger.error(f"Error during JWT verification: {str(e)}")
+        logger.error(f"Unexpected error during JWT verification: {type(e).__name__}: {str(e)}")
+        import traceback
+        logger.error(f"Traceback: {traceback.format_exc()}")
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Token verification error: {str(e)}",
