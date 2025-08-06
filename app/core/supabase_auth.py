@@ -37,6 +37,14 @@ class SupabaseAuthClient:
         self.jwt_secret = settings.supabase_jwt_secret or settings.jwt_secret_key
         self.jwt_algorithm = settings.jwt_algorithm
         
+        # Log JWT secret configuration status
+        if settings.supabase_jwt_secret:
+            logger.info("SUPABASE_JWT_SECRET is configured from environment")
+        else:
+            logger.warning("SUPABASE_JWT_SECRET not found in environment, using fallback JWT_SECRET_KEY")
+            if self.jwt_secret == "change-this-in-production":
+                logger.error("CRITICAL: Using default JWT secret - this is insecure!")
+        
     async def sign_up(
         self, 
         email: str, 
@@ -378,33 +386,27 @@ class SupabaseAuthClient:
             Decoded token payload if valid, None otherwise
         """
         try:
-            # First, try to decode without verification to get user info
-            # This works in production when JWT secret is not configured
-            try:
-                # Decode without signature verification but check expiration
-                unverified_payload = jwt.decode(
-                    token,
-                    options={
-                        "verify_signature": False,  # Don't verify signature
-                        "verify_exp": True,  # But do check expiration
-                        "verify_aud": False  # Don't verify audience
-                    },
-                    algorithms=[self.jwt_algorithm]
-                )
-                
-                # Validate that it has required fields
-                if "sub" in unverified_payload:
-                    # Log that we're using unverified claims
-                    logger.info(f"Using JWT claims for user: {unverified_payload.get('sub')[:8]}...")
+            # Since SUPABASE_JWT_SECRET is configured on Railway, use it for secure verification
+            if self.jwt_secret and self.jwt_secret != "change-this-in-production":
+                try:
+                    # Properly verify JWT with the configured secret
+                    payload = jwt.decode(
+                        token,
+                        self.jwt_secret,
+                        algorithms=[self.jwt_algorithm],
+                        audience="authenticated",  # Supabase uses "authenticated" as audience
+                        options={"verify_exp": True}
+                    )
                     
-                    # Ensure we have the minimum required fields
-                    payload = {
-                        "sub": unverified_payload.get("sub"),
-                        "email": unverified_payload.get("email", ""),
-                        "aud": unverified_payload.get("aud", "authenticated"),
-                        "role": unverified_payload.get("role", "authenticated"),
-                        "user_metadata": unverified_payload.get("user_metadata", {})
-                    }
+                    # Check if session is revoked
+                    if check_revoked:
+                        try:
+                            is_revoked = await self._is_session_revoked(token)
+                            if is_revoked:
+                                logger.warning("Attempted to use revoked token")
+                                return None
+                        except Exception:
+                            pass  # Don't fail if revocation check fails
                     
                     # Update last activity
                     try:
@@ -412,32 +414,35 @@ class SupabaseAuthClient:
                     except Exception:
                         pass  # Don't fail if activity update fails
                     
+                    logger.debug(f"JWT verified successfully for user: {payload.get('sub')[:8]}...")
                     return payload
                     
-            except jwt.ExpiredSignatureError:
-                logger.debug("JWT token has expired")
-                return None
-            except Exception as e:
-                logger.debug(f"Failed to decode JWT: {e}")
-            
-            # If we have a proper JWT secret, try verified decode
-            if self.jwt_secret and self.jwt_secret != "change-this-in-production":
-                try:
-                    payload = jwt.decode(
-                        token,
-                        self.jwt_secret,
-                        algorithms=[self.jwt_algorithm],
-                        audience="authenticated",
-                        options={"verify_exp": True}
-                    )
-                    
-                    logger.info("JWT verified with secret")
-                    return payload
+                except jwt.ExpiredSignatureError:
+                    logger.debug("JWT token has expired")
+                    return None
+                except jwt.InvalidAudienceError as e:
+                    logger.debug(f"JWT audience validation failed: {e}")
+                    # Try without audience validation as Supabase might use different audience
+                    try:
+                        payload = jwt.decode(
+                            token,
+                            self.jwt_secret,
+                            algorithms=[self.jwt_algorithm],
+                            options={"verify_exp": True, "verify_aud": False}
+                        )
+                        logger.debug(f"JWT verified without audience check for user: {payload.get('sub')[:8]}...")
+                        return payload
+                    except Exception as e2:
+                        logger.debug(f"JWT verification without audience also failed: {e2}")
+                        return None
                 except jwt.InvalidTokenError as e:
-                    logger.debug(f"JWT verification with secret failed: {e}")
-            
-            logger.error("JWT verification failed: Unable to decode token")
-            return None
+                    logger.error(f"JWT verification failed: {e}")
+                    return None
+            else:
+                # This should not happen in production if SUPABASE_JWT_SECRET is set
+                logger.error("CRITICAL: JWT secret not configured properly! JWT_SECRET value: " + 
+                           ("not set" if not self.jwt_secret else "default value"))
+                return None
             
         except jwt.ExpiredSignatureError:
             logger.debug("JWT token expired")
