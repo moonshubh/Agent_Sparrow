@@ -219,6 +219,7 @@ def update_chat_session_in_db(conn, session_id: int, user_id: str, updates: Chat
 # @with_db_connection removed - using Supabase
 def create_chat_message_in_db(conn, message_data: ChatMessageCreate, user_id: str) -> Dict[str, Any]:
     """Create a new chat message in the database"""
+    import json
     with conn.cursor() as cur:
         # Verify session ownership
         cur.execute("""
@@ -229,17 +230,22 @@ def create_chat_message_in_db(conn, message_data: ChatMessageCreate, user_id: st
         if not cur.fetchone():
             raise HTTPException(status_code=404, detail="Chat session not found")
         
-        # Create the message
+        # Ensure metadata is properly serialized as JSON
+        metadata_json = None
+        if message_data.metadata:
+            metadata_json = json.dumps(message_data.metadata) if isinstance(message_data.metadata, dict) else message_data.metadata
+        
+        # Create the message - ensure full content is stored
         cur.execute("""
             INSERT INTO chat_messages (session_id, content, message_type, agent_type, metadata)
-            VALUES (%s, %s, %s, %s, %s)
+            VALUES (%s, %s, %s, %s, %s::jsonb)
             RETURNING *
         """, (
             message_data.session_id,
-            message_data.content,
+            message_data.content,  # Full content, no truncation
             message_data.message_type.value,
             message_data.agent_type.value if message_data.agent_type else None,
-            message_data.metadata
+            metadata_json
         ))
         
         conn.commit()
@@ -299,7 +305,7 @@ def get_chat_sessions_for_user(conn, user_id: str, request: ChatSessionListReque
 
 # @with_db_connection removed - using Supabase
 def get_chat_messages_for_session(conn, session_id: int, user_id: str, request: ChatMessageListRequest) -> Dict[str, Any]:
-    """Get chat messages for a session with pagination"""
+    """Get chat messages for a session with pagination - returns FULL message content"""
     with conn.cursor() as cur:
         # Verify session ownership
         cur.execute("""
@@ -328,24 +334,33 @@ def get_chat_messages_for_session(conn, session_id: int, user_id: str, request: 
         """, where_values)
         total_count = cur.fetchone()['total_count']
         
-        # Get paginated results
-        offset = (request.page - 1) * request.page_size
+        # Get ALL messages without pagination to ensure full conversation is loaded
+        # Frontend handles display pagination if needed
         cur.execute(f"""
-            SELECT * FROM chat_messages
+            SELECT id, session_id, content, message_type, agent_type, metadata, created_at, updated_at
+            FROM chat_messages
             WHERE {where_clause}
             ORDER BY created_at ASC
-            LIMIT %s OFFSET %s
-        """, where_values + [request.page_size, offset])
+        """, where_values)
         
-        messages = [dict(row) for row in cur.fetchall()]
+        messages = []
+        for row in cur.fetchall():
+            msg_dict = dict(row)
+            # Ensure full content is preserved
+            if msg_dict.get('content'):
+                # Log if content seems truncated (for debugging)
+                if len(msg_dict['content']) > 1000 and msg_dict['content'].endswith('...'):
+                    logger.warning(f"Message {msg_dict['id']} may be truncated: ends with '...'")
+            messages.append(msg_dict)
         
+        # Still return pagination info for compatibility, but send all messages
         return {
             "messages": messages,
             "total_count": total_count,
-            "page": request.page,
-            "page_size": request.page_size,
-            "has_next": offset + request.page_size < total_count,
-            "has_previous": request.page > 1
+            "page": 1,
+            "page_size": total_count,  # All messages
+            "has_next": False,
+            "has_previous": False
         }
 
 
@@ -391,14 +406,19 @@ async def list_chat_sessions(
     agent_type: Optional[AgentType] = Query(None, description="Filter by agent type"),
     is_active: Optional[bool] = Query(None, description="Filter by active status"),
     page: int = Query(1, ge=1, description="Page number"),
-    page_size: int = Query(10, ge=1, le=100, description="Number of sessions per page"),
+    page_size: int = Query(100, ge=1, le=100, description="Number of sessions per page"),
     search: Optional[str] = Query(None, description="Search in session titles"),
     current_user: TokenPayload = Depends(get_current_user)
 ):
-    """List chat sessions for the current user"""
+    """List chat sessions for the current user - returns active sessions respecting agent limits"""
     conn = None
     try:
         conn = get_db_connection()
+        
+        # Always fetch active sessions only by default unless explicitly requested otherwise
+        if is_active is None:
+            is_active = True
+            
         request = ChatSessionListRequest(
             agent_type=agent_type,
             is_active=is_active,
@@ -409,6 +429,9 @@ async def list_chat_sessions(
         
         result = get_chat_sessions_for_user(conn, current_user.sub, request)
         sessions = [ChatSession(**session) for session in result["sessions"]]
+        
+        # Log session counts for debugging
+        logger.info(f"Returning {len(sessions)} sessions for user {current_user.sub}, agent_type={agent_type}")
         
         return ChatSessionListResponse(
             sessions=sessions,
@@ -506,38 +529,63 @@ async def create_chat_message(
     message_data: ChatMessageCreate,
     current_user: TokenPayload = Depends(get_current_user)
 ):
-    """Add a message to a chat session"""
+    """Add a message to a chat session - stores FULL message content"""
+    conn = None
     try:
+        # Log message length for debugging
+        if message_data.content:
+            logger.info(f"Storing message for session {session_id}, content length: {len(message_data.content)}")
+            if len(message_data.content) > 5000:
+                logger.info(f"Storing large message ({len(message_data.content)} chars) for session {session_id}")
+        
         # Ensure session_id matches
         message_data.session_id = session_id
         
-        message_dict = create_chat_message_in_db(message_data, current_user.sub)
+        conn = get_db_connection()
+        message_dict = create_chat_message_in_db(conn, message_data, current_user.sub)
+        
+        # Verify full content was stored
+        if message_data.content and len(message_data.content) != len(message_dict.get('content', '')):
+            logger.error(f"Content length mismatch! Original: {len(message_data.content)}, Stored: {len(message_dict.get('content', ''))}")
+        
         return ChatMessage(**message_dict)
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Error creating chat message: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")
+    finally:
+        if conn:
+            conn.close()
 
 
 @router.get("/chat-sessions/{session_id}/messages", response_model=ChatMessageListResponse, tags=["Chat Messages"])
 async def list_chat_messages(
     session_id: int,
     page: int = Query(1, ge=1, description="Page number"),
-    page_size: int = Query(50, ge=1, le=200, description="Number of messages per page"),
+    page_size: int = Query(200, ge=1, le=1000, description="Number of messages per page"),
     message_type: Optional[MessageType] = Query(None, description="Filter by message type"),
     current_user: TokenPayload = Depends(get_current_user)
 ):
-    """List messages for a specific chat session"""
+    """List messages for a specific chat session - returns FULL message content"""
+    conn = None
     try:
+        conn = get_db_connection()
         request = ChatMessageListRequest(
             page=page,
-            page_size=page_size,
+            page_size=page_size,  # Increased default to ensure all messages are loaded
             message_type=message_type
         )
         
-        result = get_chat_messages_for_session(session_id, current_user.sub, request)
+        result = get_chat_messages_for_session(conn, session_id, current_user.sub, request)
         messages = [ChatMessage(**msg) for msg in result["messages"]]
+        
+        # Log if any messages seem truncated
+        for msg in messages:
+            if msg.content and len(msg.content) > 100 and msg.content.endswith('...'):
+                logger.warning(f"Message {msg.id} may be truncated in retrieval")
+        
+        logger.info(f"Retrieved {len(messages)} messages for session {session_id}")
         
         return ChatMessageListResponse(
             messages=messages,
@@ -552,6 +600,9 @@ async def list_chat_messages(
     except Exception as e:
         logger.error(f"Error listing chat messages: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")
+    finally:
+        if conn:
+            conn.close()
 
 
 @router.get("/chat-sessions/stats/user", response_model=UserChatStats, tags=["Chat Statistics"])

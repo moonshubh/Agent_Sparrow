@@ -389,7 +389,7 @@ function SessionItem({
           <TooltipTrigger asChild>
             <div
               className={cn(
-                "w-full h-9 pl-2 pr-1 text-sm font-normal group flex items-center overflow-hidden cursor-pointer",
+                "w-full h-9 pl-2 pr-1 text-sm font-normal group flex items-center cursor-pointer",
                 "rounded-md border border-transparent hover:bg-mb-blue-300 hover:bg-mb-blue-300-foreground",
                 "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
                 "transition-colors",
@@ -407,7 +407,7 @@ function SessionItem({
                 }
               }}
             >
-              <div className="flex-1 min-w-0 mr-1 overflow-hidden">
+              <div className="flex-1 min-w-0 overflow-hidden">
                 {isEditing ? (
                   <input
                     type="text"
@@ -428,13 +428,13 @@ function SessionItem({
                     onDoubleClick={(e) => e.stopPropagation()}
                   />
                 ) : (
-                  <span className="block truncate w-full">{session.title}</span>
+                  <span className="block truncate" title={session.title}>{session.title}</span>
                 )}
               </div>
               <Button
                 variant="ghost"
                 size="icon"
-                className="h-6 w-6 min-w-[24px] max-w-[24px] opacity-0 group-hover:opacity-100 hover:bg-destructive/10 hover:text-destructive transition-opacity flex-shrink-0"
+                className="h-6 w-6 min-w-[24px] opacity-0 group-hover:opacity-100 hover:bg-destructive/10 hover:text-destructive transition-opacity flex-shrink-0 ml-1"
                 onClick={(e) => {
                   e.stopPropagation()
                   onDelete()
