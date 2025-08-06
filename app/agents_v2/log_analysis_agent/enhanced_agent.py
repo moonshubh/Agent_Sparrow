@@ -39,6 +39,7 @@ from .advanced_parser import AdvancedMailbirdAnalyzer
 from .advanced_solution_engine import AdvancedSolutionEngine
 from .intelligent_analyzer import IntelligentLogAnalyzer
 from .optimized_analyzer import OptimizedLogAnalyzer
+from .mailbird_settings_knowledge import get_mailbird_settings_context
 
 # Load environment variables
 load_dotenv()
@@ -370,6 +371,9 @@ class EnhancedLogAnalysisAgent:
         
         for issue in detected_issues:
             try:
+                # Get Mailbird settings context
+                mailbird_settings_context = get_mailbird_settings_context()
+                
                 # Create detailed issue analysis prompt
                 analysis_prompt = f"""
 Analyze this Mailbird issue with expert-level reasoning:
@@ -385,11 +389,14 @@ SYSTEM CONTEXT:
 - Database Size: {system_profile.get('database_size_mb', 'Unknown')} MB
 - Account Count: {system_profile.get('account_count', 'Unknown')}
 
+{mailbird_settings_context}
+
 ANALYSIS REQUIREMENTS:
 1. Provide a confidence score (0.0-1.0) for issue detection accuracy
 2. Refine the root cause analysis with deeper technical reasoning
 3. Assess the true severity based on system context and frequency
 4. Provide enhanced user impact assessment
+5. When recommending settings changes, ONLY suggest settings that exist in the Valid Mailbird Settings Reference above
 
 Return a JSON object with:
 {{

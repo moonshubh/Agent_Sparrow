@@ -15,6 +15,7 @@ import re
 from langchain_google_genai import ChatGoogleGenerativeAI
 
 from app.core.settings import settings
+from .mailbird_settings_knowledge import get_mailbird_settings_context
 from langchain_core.prompts import PromptTemplate
 from pydantic import BaseModel, Field
 
@@ -137,14 +138,14 @@ class AdvancedSolutionEngine:
                         'step_number': 1,
                         'description': 'Disable IMAP push notifications for affected accounts',
                         'expected_outcome': 'Eliminates push listener failures',
-                        'specific_settings': {'setting': 'Account Settings > Advanced > Disable Push Notifications'},
+                        'specific_settings': {'setting': 'Settings > Advanced > Sync behavior > Download messages on demand'},
                         'estimated_time_minutes': 5
                     },
                     {
                         'step_number': 2,
                         'description': 'Configure polling interval to 5-10 minutes',
                         'expected_outcome': 'Stable connection with controlled polling',
-                        'specific_settings': {'setting': 'Check for mail every 5 minutes'},
+                        'specific_settings': {'setting': 'Manual email check - no automatic interval setting available'},
                         'estimated_time_minutes': 3
                     }
                 ]
@@ -183,7 +184,7 @@ class AdvancedSolutionEngine:
                         'step_number': 1,
                         'description': 'Enable large file handling in Mailbird settings',
                         'expected_outcome': 'Automatic compression for large attachments',
-                        'specific_settings': {'setting': 'Settings > Composing > Large File Handling'},
+                        'specific_settings': {'setting': 'Settings > Advanced > Sync behavior > Attachment auto-download limit'},
                         'estimated_time_minutes': 3
                     },
                     {
@@ -508,9 +509,74 @@ class AdvancedSolutionEngine:
 
     async def _generate_llm_solution(self, issue: Dict, system_metadata: Dict) -> AccountSpecificSolution:
         """Generate custom solution using LLM for unknown issue types."""
-        # This would use the existing LLM-based solution generation
-        # For now, return a basic fallback
-        return self._generate_fallback_solution(issue)
+        try:
+            # Get Mailbird settings context
+            mailbird_settings_context = get_mailbird_settings_context()
+            
+            # Create detailed prompt for solution generation
+            prompt = f"""
+You are a Mailbird technical specialist. Generate a comprehensive solution for this issue.
+
+{mailbird_settings_context}
+
+ISSUE DETAILS:
+- Category: {issue.get('category', 'Unknown')}
+- Severity: {issue.get('severity', 'Medium')}
+- Description: {issue.get('description', 'Unknown issue')}
+- Root Cause: {issue.get('root_cause', 'Unknown')}
+- Affected Accounts: {issue.get('affected_accounts', [])}
+
+SYSTEM CONTEXT:
+- Mailbird Version: {system_metadata.get('mailbird_version', 'Unknown')}
+- OS: {system_metadata.get('os_version', 'Windows')}
+- Account Count: {system_metadata.get('account_count', 0)}
+
+Provide a JSON response with:
+{{
+  "solution_summary": "Brief summary of the solution",
+  "confidence_level": "High/Medium/Low",
+  "priority": "Critical/High/Medium/Low",
+  "steps": [
+    {{
+      "step_number": 1,
+      "description": "Step description - ONLY use settings from the Valid Mailbird Settings Reference",
+      "expected_outcome": "What should happen",
+      "estimated_time_minutes": 5
+    }}
+  ],
+  "estimated_total_time_minutes": 30
+}}
+
+IMPORTANT: Only recommend settings that exist in the Valid Mailbird Settings Reference above.
+"""
+            
+            response = await self.primary_llm.ainvoke(prompt)
+            solution_data = json.loads(response.content)
+            
+            # Convert to AccountSpecificSolution
+            solution_steps = []
+            for step in solution_data.get('steps', []):
+                solution_steps.append(DetailedSolutionStep(
+                    step_number=step['step_number'],
+                    description=step['description'],
+                    expected_outcome=step['expected_outcome'],
+                    estimated_time_minutes=step.get('estimated_time_minutes', 5),
+                    risk_level=step.get('risk_level', 'Low')
+                ))
+            
+            return AccountSpecificSolution(
+                issue_id=issue.get('issue_id', 'unknown'),
+                affected_accounts=issue.get('affected_accounts', []),
+                solution_summary=solution_data.get('solution_summary', 'Custom solution generated'),
+                confidence_level=solution_data.get('confidence_level', 'Medium'),
+                priority=solution_data.get('priority', 'Medium'),
+                solution_steps=solution_steps,
+                estimated_total_time_minutes=solution_data.get('estimated_total_time_minutes', 30)
+            )
+            
+        except Exception as e:
+            print(f"LLM solution generation failed: {e}")
+            return self._generate_fallback_solution(issue)
 
     def _generate_fallback_solution(self, issue: Dict) -> AccountSpecificSolution:
         """Generate basic fallback solution."""
