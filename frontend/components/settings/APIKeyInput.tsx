@@ -111,8 +111,16 @@ export function APIKeyInput({
         </div>
       )}
 
-      {/* API Key Input */}
-      <div className="flex gap-2">
+      {/* API Key Input - Wrapped in form to prevent browser warnings */}
+      <form 
+        onSubmit={(e) => {
+          e.preventDefault()
+          if (apiKey.trim()) {
+            handleSave()
+          }
+        }}
+        className="flex gap-2"
+      >
         <div className="relative flex-1">
           <Input
             type={showKey ? "text" : "password"}
@@ -120,11 +128,9 @@ export function APIKeyInput({
             onChange={(e) => setAPIKey(e.target.value)}
             placeholder={existingKey ? "Enter new API key" : "Enter API key"}
             disabled={isSaving}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && apiKey.trim()) {
-                handleSave()
-              }
-            }}
+            autoComplete="off"
+            name={`api-key-${type}`}
+            aria-label={`API key for ${type}`}
           />
           <Button
             type="button"
@@ -142,7 +148,7 @@ export function APIKeyInput({
           </Button>
         </div>
         <Button
-          onClick={handleSave}
+          type="submit"
           disabled={!apiKey.trim() || isSaving}
         >
           {isSaving ? (
@@ -154,7 +160,7 @@ export function APIKeyInput({
             </>
           )}
         </Button>
-      </div>
+      </form>
 
       {/* Error Message */}
       {error && (
