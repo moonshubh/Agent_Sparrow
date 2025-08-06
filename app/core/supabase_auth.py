@@ -380,19 +380,19 @@ class SupabaseAuthClient:
         try:
             # Try using Supabase's built-in verification first
             try:
-                # Set the session with the token
-                self.client.auth.set_session(token, None)
-                # Get the user - this will verify the token with Supabase
-                user = self.client.auth.get_user(token)
+                # First set the session with the token
+                self.client.auth.set_session(access_token=token, refresh_token="")
+                # Then get the user - this will verify the token with Supabase
+                user_response = self.client.auth.get_user()
                 
-                if user and user.user:
+                if user_response and user_response.user:
                     # Convert user object to payload format
                     payload = {
-                        "sub": user.user.id,
-                        "email": user.user.email,
+                        "sub": user_response.user.id,
+                        "email": user_response.user.email,
                         "aud": "authenticated",
                         "role": "authenticated",
-                        "user_metadata": user.user.user_metadata
+                        "user_metadata": user_response.user.user_metadata
                     }
                     
                     # Update last activity

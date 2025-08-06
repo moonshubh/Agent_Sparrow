@@ -133,20 +133,29 @@ async def get_current_user_id(
         return getattr(settings, 'development_user_id', 'dev-user-id')
         
     if not credentials:
+        logger.error("No credentials provided in request")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Authentication required",
+            detail="Authentication required - no credentials provided",
             headers={"WWW-Authenticate": "Bearer"},
         )
     
-    auth_client = get_auth_client()
-    token_data = await auth_client.verify_jwt(credentials.credentials)
-    
-    if not token_data:
+    try:
+        auth_client = get_auth_client()
+        token_data = await auth_client.verify_jwt(credentials.credentials)
+        
+        if not token_data:
+            logger.error(f"JWT verification failed for token: {credentials.credentials[:20]}...")
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid or expired token - verification failed",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+    except Exception as e:
+        logger.error(f"Error during JWT verification: {str(e)}")
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid or expired token",
-            headers={"WWW-Authenticate": "Bearer"},
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Token verification error: {str(e)}",
         )
     
     user_id = token_data.get("sub")
