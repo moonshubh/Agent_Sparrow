@@ -142,7 +142,8 @@ class Settings(BaseSettings):
     
     # Authentication
     skip_auth: bool = Field(default=False, alias="SKIP_AUTH")
-    development_user_id: str = Field(default="dev-user-id", alias="DEVELOPMENT_USER_ID")
+    # Use a valid UUID for development (this is a v4 UUID)
+    development_user_id: str = Field(default="00000000-0000-0000-0000-000000000000", alias="DEVELOPMENT_USER_ID")
     
     # Security Feature Toggles
     enable_auth_endpoints: bool = Field(default=True, alias="ENABLE_AUTH_ENDPOINTS")
