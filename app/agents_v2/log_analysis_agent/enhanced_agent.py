@@ -39,7 +39,6 @@ from .advanced_parser import AdvancedMailbirdAnalyzer
 from .advanced_solution_engine import AdvancedSolutionEngine
 from .intelligent_analyzer import IntelligentLogAnalyzer
 from .optimized_analyzer import OptimizedLogAnalyzer
-from .mailbird_settings_knowledge import get_mailbird_settings_context
 
 # Load environment variables
 load_dotenv()
@@ -371,7 +370,8 @@ class EnhancedLogAnalysisAgent:
         
         for issue in detected_issues:
             try:
-                # Get Mailbird settings context
+                # Get Mailbird settings context - import here to avoid circular dependency
+                from .mailbird_settings_knowledge import get_mailbird_settings_context
                 mailbird_settings_context = get_mailbird_settings_context()
                 
                 # Create detailed issue analysis prompt

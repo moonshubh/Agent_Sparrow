@@ -15,7 +15,6 @@ import re
 from langchain_google_genai import ChatGoogleGenerativeAI
 
 from app.core.settings import settings
-from .mailbird_settings_knowledge import get_mailbird_settings_context
 from langchain_core.prompts import PromptTemplate
 from pydantic import BaseModel, Field
 
@@ -510,7 +509,8 @@ class AdvancedSolutionEngine:
     async def _generate_llm_solution(self, issue: Dict, system_metadata: Dict) -> AccountSpecificSolution:
         """Generate custom solution using LLM for unknown issue types."""
         try:
-            # Get Mailbird settings context
+            # Get Mailbird settings context - import here to avoid circular dependency
+            from .mailbird_settings_knowledge import get_mailbird_settings_context
             mailbird_settings_context = get_mailbird_settings_context()
             
             # Create detailed prompt for solution generation
