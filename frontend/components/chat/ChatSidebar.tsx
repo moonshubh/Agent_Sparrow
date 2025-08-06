@@ -385,69 +385,69 @@ function SessionItem({
   return (
     <ContextMenu>
       <ContextMenuTrigger asChild>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <div
-              className={cn(
-                "w-full h-9 pl-2 pr-1 text-sm font-normal group flex items-center cursor-pointer",
-                "rounded-md border border-transparent hover:bg-mb-blue-300 hover:bg-mb-blue-300-foreground",
-                "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
-                "transition-colors",
-                isActive ? "bg-secondary text-secondary-foreground" : "hover:bg-mb-blue-300",
-                isActive && "bg-accent/20 text-accent border-l-2 border-accent shadow-sm"
-              )}
-              onClick={onSelect}
-              onDoubleClick={onRename}
-              role="button"
-              tabIndex={0}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' || e.key === ' ') {
-                  e.preventDefault()
-                  onSelect()
-                }
-              }}
-            >
-              <div className="flex-1 min-w-0 overflow-hidden">
-                {isEditing ? (
-                  <input
-                    type="text"
-                    value={editingTitle}
-                    onChange={(e) => onEditingTitleChange(e.target.value)}
-                    onBlur={onRenameSubmit}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') {
-                        onRenameSubmit()
-                      } else if (e.key === 'Escape') {
-                        onEditingTitleChange(session.title)
-                        onRenameSubmit()
-                      }
-                    }}
-                    className="bg-transparent outline-none w-full text-ellipsis"
-                    autoFocus
-                    onClick={(e) => e.stopPropagation()}
-                    onDoubleClick={(e) => e.stopPropagation()}
-                  />
-                ) : (
-                  <span className="block truncate" title={session.title}>{session.title}</span>
-                )}
-              </div>
-              <Button
-                variant="ghost"
-                size="icon"
-                className="h-6 w-6 min-w-[24px] opacity-0 group-hover:opacity-100 hover:bg-destructive/10 hover:text-destructive transition-opacity flex-shrink-0 ml-1"
-                onClick={(e) => {
-                  e.stopPropagation()
-                  onDelete()
+        <div
+          className={cn(
+            "w-full h-9 pl-2 pr-1 text-sm font-normal group relative flex items-center cursor-pointer",
+            "rounded-md border border-transparent",
+            "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
+            "transition-colors",
+            isActive ? "bg-accent/20 text-accent border-l-2 border-accent shadow-sm" : "hover:bg-accent/10"
+          )}
+          onClick={onSelect}
+          onDoubleClick={onRename}
+          role="button"
+          tabIndex={0}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault()
+              onSelect()
+            }
+          }}
+        >
+          <div className="flex-1 min-w-0 pr-8">
+            {isEditing ? (
+              <input
+                type="text"
+                value={editingTitle}
+                onChange={(e) => onEditingTitleChange(e.target.value)}
+                onBlur={onRenameSubmit}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    onRenameSubmit()
+                  } else if (e.key === 'Escape') {
+                    onEditingTitleChange(session.title)
+                    onRenameSubmit()
+                  }
                 }}
-              >
-                <Trash2 className="h-3 w-3" />
-              </Button>
-            </div>
-          </TooltipTrigger>
-          <TooltipContent side="right">
-            <p className="text-xs">{formatDate(session.lastMessageAt)}</p>
-          </TooltipContent>
-        </Tooltip>
+                className="bg-transparent outline-none w-full"
+                autoFocus
+                onClick={(e) => e.stopPropagation()}
+                onDoubleClick={(e) => e.stopPropagation()}
+              />
+            ) : (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span className="block truncate">{session.title}</span>
+                </TooltipTrigger>
+                <TooltipContent side="right" className="max-w-xs">
+                  <p className="text-xs break-words">{session.title}</p>
+                  <p className="text-xs text-muted-foreground mt-1">{formatDate(session.lastMessageAt)}</p>
+                </TooltipContent>
+              </Tooltip>
+            )}
+          </div>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-6 w-6 absolute right-1 opacity-0 group-hover:opacity-100 hover:bg-destructive/10 hover:text-destructive transition-opacity"
+            onClick={(e) => {
+              e.stopPropagation()
+              onDelete()
+            }}
+          >
+            <Trash2 className="h-3 w-3" />
+          </Button>
+        </div>
       </ContextMenuTrigger>
       <ContextMenuContent>
         <ContextMenuItem onClick={onRename}>

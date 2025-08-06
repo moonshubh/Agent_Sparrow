@@ -28,6 +28,7 @@ import { ChatSidebar } from './ChatSidebar'
 import { RateLimitWarning } from '@/components/rate-limiting'
 import { UserPanel } from '@/components/layout/UserPanel'
 import { useAuth } from '@/hooks/useAuth'
+import { chatAPI, ChatAPI } from '@/lib/api/chat'
 import { FollowUpQuestions } from './FollowUpQuestions'
 
 interface AgentStatusProps {
@@ -245,14 +246,37 @@ export default function UnifiedChatInterface() {
     selectSession(sessionId)
   }
   
-  const handleSelectSession = (sessionId: string) => {
+  const handleSelectSession = async (sessionId: string) => {
     const session = sessions.find(s => s.id === sessionId)
     if (session) {
       // Don't clear conversation, just load the session messages directly
       selectSession(sessionId)
       
-      // Load session messages into the chat state
-      loadSessionMessages(session.messages || [], session.agentType)
+      // If persistence is available, reload messages from API to ensure we have full content
+      if (isPersistenceAvailable) {
+        try {
+          const sessionIdNumber = parseInt(sessionId)
+          if (!isNaN(sessionIdNumber)) {
+            const fullSession = await chatAPI.getSession(sessionIdNumber, true)
+            const fullMessages = fullSession.messages.map(ChatAPI.messageToFrontend)
+            // Load full messages into the chat state
+            loadSessionMessages(fullMessages, session.agentType)
+            
+            // Update the session in history with full messages
+            updateSession(sessionId, { messages: fullMessages })
+          } else {
+            // Fallback to local messages
+            loadSessionMessages(session.messages || [], session.agentType)
+          }
+        } catch (error) {
+          console.error('Failed to load full session messages:', error)
+          // Fallback to local messages
+          loadSessionMessages(session.messages || [], session.agentType)
+        }
+      } else {
+        // Load session messages from local state
+        loadSessionMessages(session.messages || [], session.agentType)
+      }
     }
   }
   
