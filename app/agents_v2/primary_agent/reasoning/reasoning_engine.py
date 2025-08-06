@@ -24,7 +24,7 @@ from .schemas import (
     ToolDecisionReasoning, QualityAssessment, ProblemCategory, ToolDecisionType,
     ConfidenceLevel, ReasoningConfig, BusinessImpact, TimeSensitivity,
     SituationalAnalysis, SolutionArchitecture, SolutionCandidate, PredictiveInsight,
-    ResponseOrchestration, SelfCritiqueResult, PrimarySolution, SolutionType
+    ResponseOrchestration, SelfCritiqueResult
 )
 from .problem_solver import ProblemSolvingFramework
 from .tool_intelligence import ToolIntelligence
