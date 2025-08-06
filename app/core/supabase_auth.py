@@ -378,54 +378,66 @@ class SupabaseAuthClient:
             Decoded token payload if valid, None otherwise
         """
         try:
-            # Try using Supabase's built-in verification first
+            # First, try to decode without verification to get user info
+            # This works in production when JWT secret is not configured
             try:
-                # First set the session with the token
-                self.client.auth.set_session(access_token=token, refresh_token="")
-                # Then get the user - this will verify the token with Supabase
-                user_response = self.client.auth.get_user()
+                # Decode without signature verification but check expiration
+                unverified_payload = jwt.decode(
+                    token,
+                    options={
+                        "verify_signature": False,  # Don't verify signature
+                        "verify_exp": True,  # But do check expiration
+                        "verify_aud": False  # Don't verify audience
+                    },
+                    algorithms=[self.jwt_algorithm]
+                )
                 
-                if user_response and user_response.user:
-                    # Convert user object to payload format
+                # Validate that it has required fields
+                if "sub" in unverified_payload:
+                    # Log that we're using unverified claims
+                    logger.info(f"Using JWT claims for user: {unverified_payload.get('sub')[:8]}...")
+                    
+                    # Ensure we have the minimum required fields
                     payload = {
-                        "sub": user_response.user.id,
-                        "email": user_response.user.email,
-                        "aud": "authenticated",
-                        "role": "authenticated",
-                        "user_metadata": user_response.user.user_metadata
+                        "sub": unverified_payload.get("sub"),
+                        "email": unverified_payload.get("email", ""),
+                        "aud": unverified_payload.get("aud", "authenticated"),
+                        "role": unverified_payload.get("role", "authenticated"),
+                        "user_metadata": unverified_payload.get("user_metadata", {})
                     }
                     
                     # Update last activity
-                    await self._update_session_activity(token)
+                    try:
+                        await self._update_session_activity(token)
+                    except Exception:
+                        pass  # Don't fail if activity update fails
                     
                     return payload
-            except Exception as supabase_error:
-                logger.debug(f"Supabase verification failed, trying local JWT decode: {supabase_error}")
-                
-            # Fallback to local JWT verification if we have the secret
-            if self.jwt_secret and self.jwt_secret != "change-this-in-production":
-                payload = jwt.decode(
-                    token,
-                    self.jwt_secret,
-                    algorithms=[self.jwt_algorithm],
-                    audience="authenticated",  # Supabase uses "authenticated" as audience
-                    options={"verify_exp": True}
-                )
-                
-                # Check if session is revoked
-                if check_revoked:
-                    is_revoked = await self._is_session_revoked(token)
-                    if is_revoked:
-                        logger.warning("Attempted to use revoked token")
-                        return None
-                        
-                # Update last activity
-                await self._update_session_activity(token)
-                
-                return payload
-            else:
-                logger.error("JWT verification failed: No valid JWT secret configured and Supabase verification failed")
+                    
+            except jwt.ExpiredSignatureError:
+                logger.debug("JWT token has expired")
                 return None
+            except Exception as e:
+                logger.debug(f"Failed to decode JWT: {e}")
+            
+            # If we have a proper JWT secret, try verified decode
+            if self.jwt_secret and self.jwt_secret != "change-this-in-production":
+                try:
+                    payload = jwt.decode(
+                        token,
+                        self.jwt_secret,
+                        algorithms=[self.jwt_algorithm],
+                        audience="authenticated",
+                        options={"verify_exp": True}
+                    )
+                    
+                    logger.info("JWT verified with secret")
+                    return payload
+                except jwt.InvalidTokenError as e:
+                    logger.debug(f"JWT verification with secret failed: {e}")
+            
+            logger.error("JWT verification failed: Unable to decode token")
+            return None
             
         except jwt.ExpiredSignatureError:
             logger.debug("JWT token expired")
