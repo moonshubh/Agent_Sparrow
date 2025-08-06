@@ -378,25 +378,54 @@ class SupabaseAuthClient:
             Decoded token payload if valid, None otherwise
         """
         try:
-            # First try to decode with the configured secret
-            payload = jwt.decode(
-                token,
-                self.jwt_secret,
-                algorithms=[self.jwt_algorithm],
-                options={"verify_exp": True}
-            )
-            
-            # Check if session is revoked
-            if check_revoked:
-                is_revoked = await self._is_session_revoked(token)
-                if is_revoked:
-                    logger.warning("Attempted to use revoked token")
-                    return None
+            # Try using Supabase's built-in verification first
+            try:
+                # Set the session with the token
+                self.client.auth.set_session(token, None)
+                # Get the user - this will verify the token with Supabase
+                user = self.client.auth.get_user(token)
+                
+                if user and user.user:
+                    # Convert user object to payload format
+                    payload = {
+                        "sub": user.user.id,
+                        "email": user.user.email,
+                        "aud": "authenticated",
+                        "role": "authenticated",
+                        "user_metadata": user.user.user_metadata
+                    }
                     
-            # Update last activity
-            await self._update_session_activity(token)
-            
-            return payload
+                    # Update last activity
+                    await self._update_session_activity(token)
+                    
+                    return payload
+            except Exception as supabase_error:
+                logger.debug(f"Supabase verification failed, trying local JWT decode: {supabase_error}")
+                
+            # Fallback to local JWT verification if we have the secret
+            if self.jwt_secret and self.jwt_secret != "change-this-in-production":
+                payload = jwt.decode(
+                    token,
+                    self.jwt_secret,
+                    algorithms=[self.jwt_algorithm],
+                    audience="authenticated",  # Supabase uses "authenticated" as audience
+                    options={"verify_exp": True}
+                )
+                
+                # Check if session is revoked
+                if check_revoked:
+                    is_revoked = await self._is_session_revoked(token)
+                    if is_revoked:
+                        logger.warning("Attempted to use revoked token")
+                        return None
+                        
+                # Update last activity
+                await self._update_session_activity(token)
+                
+                return payload
+            else:
+                logger.error("JWT verification failed: No valid JWT secret configured and Supabase verification failed")
+                return None
             
         except jwt.ExpiredSignatureError:
             logger.debug("JWT token expired")
