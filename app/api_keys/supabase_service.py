@@ -260,20 +260,28 @@ class SupabaseAPIKeyService:
             
             configured_types = {item["api_key_type"] for item in response.data}
             
+            gemini_configured = APIKeyType.GEMINI in configured_types
+            tavily_configured = APIKeyType.TAVILY in configured_types
+            firecrawl_configured = APIKeyType.FIRECRAWL in configured_types
+            
             return APIKeyStatus(
-                gemini_configured=APIKeyType.GEMINI in configured_types,
-                tavily_configured=APIKeyType.TAVILY in configured_types,
-                firecrawl_configured=APIKeyType.FIRECRAWL in configured_types,
-                total_configured=len(configured_types)
+                user_id=user_id,
+                gemini_configured=gemini_configured,
+                tavily_configured=tavily_configured,
+                firecrawl_configured=firecrawl_configured,
+                all_required_configured=gemini_configured,  # Only Gemini is required
+                last_validation_check=None
             )
             
         except Exception as e:
             logger.error(f"Error getting API key status for user {user_id}: {str(e)}")
             return APIKeyStatus(
+                user_id=user_id,
                 gemini_configured=False,
                 tavily_configured=False,
                 firecrawl_configured=False,
-                total_configured=0
+                all_required_configured=False,
+                last_validation_check=None
             )
     
     def validate_api_key_format(
