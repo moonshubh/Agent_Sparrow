@@ -14,12 +14,12 @@ python-dotenv
 langchain==0.3.25
 langchain-core==0.3.68
 langchain-community==0.3.25
-langchain-google-genai==2.1.9  # Updated for thinking_budget support
+langchain-google-genai>=2.0.0  # Updated for thinking_budget support, let pip resolve exact version
 langgraph
 
 # Google AI SDK (explicitly required for FeedMe modules)
-# Version must match langchain-google-genai requirements
-google-generativeai==0.8.0
+# Let pip resolve the correct version for compatibility with langchain-google-genai
+google-generativeai>=0.8.0
 
 # Torch (CPU version will be selected by --extra-index-url)
 torch==2.0.1
