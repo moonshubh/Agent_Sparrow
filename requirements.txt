@@ -17,6 +17,9 @@ langchain-community==0.3.25
 langchain-google-genai==2.1.9  # Updated for thinking_budget support
 langgraph
 
+# Google AI SDK (explicitly required for FeedMe modules)
+google-generativeai>=0.3.0
+
 # Torch (CPU version will be selected by --extra-index-url)
 torch==2.0.1
 torchvision==0.15.2
@@ -63,7 +66,6 @@ sentence-transformers
 typing-extensions
 
 # LLM Dependencies
-# google-generativeai is installed automatically by langchain-google-genai
 httpx>=0.25.0
 aiohttp
 openai  # Required by langchain
