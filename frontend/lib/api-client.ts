@@ -1,4 +1,5 @@
 import { supabase } from './supabase'
+import { ChatMessage } from '@/types/chat'
 
 // URL validation with proper error handling
 const validateApiBaseUrl = (url: string): string => {
@@ -423,12 +424,22 @@ export const apiKeyAPI = {
 }
 
 export const agentAPI = {
+  /**
+   * Sends a chat message to the agent API with streaming response
+   * @param message - The message to send to the agent
+   * @param onMessage - Callback function for handling streaming messages
+   * @param onError - Optional callback for handling errors
+   * @param onClose - Optional callback when the stream closes
+   * @param messages - Optional array of previous message objects in the conversation history
+   * @param sessionId - Optional string representing the session identifier for maintaining context
+   * @returns Promise resolving to an EnhancedEventSource for managing the stream
+   */
   chat: (
     message: string, 
     onMessage: (data: any) => void,
     onError?: (error: Error) => void,
     onClose?: () => void,
-    messages?: any[],
+    messages?: ChatMessage[],
     sessionId?: string
   ): Promise<EnhancedEventSource> =>
     apiClient.stream('/api/v1/v2/agent/chat/stream', { message, messages, session_id: sessionId }, onMessage, { onError, onClose }),

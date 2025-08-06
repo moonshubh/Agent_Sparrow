@@ -1,15 +1,14 @@
--- Migration 019: Update Chat Session Limits per Agent Type (IMPROVED VERSION)
+-- Migration 019: Update Chat Session Limits per Agent Type (FIXED VERSION)
 -- This migration updates the chat session limits to enforce different limits for different agent types
 -- Primary agent: 5 sessions max
 -- Log analysis agent: 3 sessions max
 -- Research agent: 5 sessions max
 -- 
--- IMPROVEMENTS APPLIED:
+-- FIXES APPLIED:
 -- 1. Removed SET search_path = '' to avoid table resolution errors
 -- 2. Changed trigger from BEFORE to AFTER to prevent recursion
 -- 3. Added updated_at trigger for agent_configuration table
 -- 4. Fixed metadata key from 'auto_activated_at' to 'auto_deactivated_at'
--- 5. Fixed data types to match actual table structure (VARCHAR instead of UUID)
 
 -- 1. Drop the existing constraint that enforces a single limit for all agent types
 DROP INDEX IF EXISTS idx_chat_sessions_user_agent_active_limit;
@@ -57,7 +56,7 @@ ON CONFLICT (agent_type) DO UPDATE SET
 
 -- 6. Create function to deactivate oldest session (separate from trigger to avoid recursion)
 CREATE OR REPLACE FUNCTION deactivate_oldest_session(
-    p_user_id VARCHAR(255),  -- Using VARCHAR to match actual table structure
+    p_user_id UUID,
     p_agent_type VARCHAR(50)
 ) RETURNS VOID AS $$
 BEGIN
@@ -84,7 +83,7 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
 
--- 7. Create AFTER trigger function to enforce session limits (prevents recursion)
+-- 7. Create AFTER trigger to enforce session limits (prevents recursion)
 CREATE OR REPLACE FUNCTION enforce_chat_session_limits_after()
 RETURNS TRIGGER AS $$
 DECLARE
@@ -110,7 +109,7 @@ BEGIN
             END CASE;
         END IF;
         
-        -- Count current active sessions for this user and agent type (including the new one)
+        -- Count current active sessions for this user and agent type (excluding the new one)
         SELECT COUNT(*) INTO active_count
         FROM chat_sessions
         WHERE user_id = NEW.user_id 
@@ -170,7 +169,7 @@ COMMENT ON TABLE agent_configuration IS 'Configuration settings for different ag
 COMMENT ON COLUMN agent_configuration.max_active_sessions IS 'Maximum number of active sessions allowed per user for this agent type';
 COMMENT ON COLUMN agent_configuration.max_message_length IS 'Maximum length of a single message for this agent type';
 COMMENT ON COLUMN agent_configuration.session_timeout_hours IS 'Hours of inactivity before a session is considered stale';
-COMMENT ON FUNCTION deactivate_oldest_session(VARCHAR, VARCHAR) IS 'Deactivates the oldest active session for a user and agent type when limit is exceeded';
+COMMENT ON FUNCTION deactivate_oldest_session(UUID, VARCHAR) IS 'Deactivates the oldest active session for a user and agent type when limit is exceeded';
 COMMENT ON FUNCTION enforce_chat_session_limits_after() IS 'AFTER trigger function to enforce session limits without recursion';
 
 -- 11. Create index for performance
@@ -241,7 +240,7 @@ END $$;
 CREATE OR REPLACE FUNCTION check_session_limits_health()
 RETURNS TABLE (
     agent_type VARCHAR(50),
-    user_id VARCHAR(255),  -- Using VARCHAR to match actual table structure
+    user_id UUID,
     active_sessions_count INTEGER,
     max_allowed INTEGER,
     status TEXT

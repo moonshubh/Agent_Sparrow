@@ -321,6 +321,10 @@
     
     /* Mailbird Blue-300 for hover states */
     --mb-blue-300: 211.7 96.4% 78.4%;
+    
+    /* Mailbird Blue CSS Variables for follow-up questions */
+    --mailbird-blue-light: #0095ff;  /* Light mode Mailbird blue */
+    --mailbird-blue-dark: #38b6ff;   /* Dark mode Mailbird blue */
   }
   
   .dark {
@@ -383,6 +387,10 @@
     
     /* Mailbird Blue-300 for hover states (dark theme) */
     --mb-blue-300: 211.7 96.4% 78.4%;
+    
+    /* Mailbird Blue CSS Variables for follow-up questions (dark mode) */
+    --mailbird-blue-light: #38b6ff;  /* Dark mode uses lighter blue */
+    --mailbird-blue-dark: #38b6ff;   /* Consistent in dark mode */
   }
 }
 

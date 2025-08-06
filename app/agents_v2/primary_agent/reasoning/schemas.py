@@ -231,15 +231,16 @@ class QualityAssessment:
 
 @dataclass
 class ReasoningState:
-    """Complete state of the reasoning process"""
+    """Complete state of the reasoning process
+    
+    Note: query_text is derived from query_analysis.query_text for consistency.
+    Direct access to query_text is maintained for backward compatibility.
+    """
     reasoning_id: str = field(default_factory=lambda: str(uuid.uuid4()))
     session_id: str = "default"
     start_time: datetime = field(default_factory=datetime.now)
     
-    # Query text
-    query_text: Optional[str] = None
-    
-    # Input analysis
+    # Input analysis (query_text is accessed via query_analysis.query_text)
     query_analysis: Optional[QueryAnalysis] = None
     
     # Reasoning steps
@@ -251,11 +252,33 @@ class ReasoningState:
     # Reasoning outputs
     predictive_insights: List[PredictiveInsight] = field(default_factory=list)
     solution_architecture: Optional[SolutionArchitecture] = None
-    selected_solution: Optional[SolutionCandidate] = None  # For compatibility
+    selected_solution: Optional[SolutionCandidate] = None  # Deprecated: Use solution_architecture.primary_pathway
     tool_reasoning: Optional[ToolDecisionReasoning] = None
     response_orchestration: Optional[ResponseOrchestration] = None
     self_critique_result: Optional[SelfCritiqueResult] = None
     quality_assessment: Optional[QualityAssessment] = None
+    
+    @property
+    def query_text(self) -> Optional[str]:
+        """Read-only property that returns query text from query_analysis.
+        
+        Returns:
+            The query text from query_analysis if available, None otherwise.
+        """
+        return self.query_analysis.query_text if self.query_analysis else None
+    
+    def __post_init__(self):
+        """Post-initialization to sync selected_solution with solution_architecture."""
+        # Sync selected_solution with solution_architecture.primary_pathway
+        if self.solution_architecture and self.solution_architecture.primary_pathway:
+            self.selected_solution = self.solution_architecture.primary_pathway
+        elif self.selected_solution and not self.solution_architecture:
+            # If only selected_solution is set, create solution_architecture
+            self.solution_architecture = SolutionArchitecture(
+                primary_pathway=self.selected_solution,
+                alternative_pathways=[],
+                contingency_plans=[]
+            )
     
     # Final outputs
     response_strategy: str = ""

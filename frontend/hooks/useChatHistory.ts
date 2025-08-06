@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { v4 as uuidv4 } from 'uuid'
 import { UnifiedMessage } from './useUnifiedChat'
 import { chatAPI, ChatAPI, isChatPersistenceAvailable } from '@/lib/api/chat'
+import { AgentSessionLimits, AgentType, DEFAULT_SESSION_LIMIT } from '@/types/chat'
 
 export interface ChatSession {
   id: string
@@ -22,12 +23,15 @@ interface ChatHistoryState {
 
 const STORAGE_KEY = 'mb-sparrow-chat-history'
 
-// Agent-specific session limits
-const MAX_SESSIONS_BY_AGENT_TYPE = {
+// Default fallback for session limits
+const DEFAULT_MAX_SESSIONS = DEFAULT_SESSION_LIMIT
+
+// Agent-specific session limits with explicit typing
+const MAX_SESSIONS_BY_AGENT_TYPE: Partial<AgentSessionLimits> = {
   primary: 5,
   log_analysis: 3,
   research: 5
-}
+} as const
 
 export function useChatHistory() {
   const [state, setState] = useState<ChatHistoryState>({
@@ -189,7 +193,7 @@ export function useChatHistory() {
       agentSessions.sort((a, b) => b.lastMessageAt.getTime() - a.lastMessageAt.getTime())
 
       // Get the max sessions for this agent type
-      const maxSessions = MAX_SESSIONS_BY_AGENT_TYPE[agentType] || 5
+      const maxSessions = MAX_SESSIONS_BY_AGENT_TYPE[agentType as keyof typeof MAX_SESSIONS_BY_AGENT_TYPE] || DEFAULT_MAX_SESSIONS
 
       // Add new session at the beginning and enforce limit
       let updatedAgentSessions = [newSession, ...agentSessions]

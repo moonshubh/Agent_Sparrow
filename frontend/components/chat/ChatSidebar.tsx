@@ -7,6 +7,7 @@ import { ScrollArea } from '@/components/ui/scroll-area'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } from '@/components/ui/context-menu'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
+import { AgentSessionLimits } from '@/types/chat'
 import { 
   ChevronLeft, 
   ChevronRight,
@@ -60,12 +61,12 @@ export function ChatSidebar({
   const [editingSessionId, setEditingSessionId] = useState<string | null>(null)
   const [editingTitle, setEditingTitle] = useState('')
 
-  // Agent-specific session limits
-  const SESSION_LIMITS = {
+  // Agent-specific session limits with explicit typing
+  const SESSION_LIMITS: Readonly<Partial<AgentSessionLimits>> = {
     primary: 5,
     log_analysis: 3,
     research: 5
-  }
+  } as const
 
   // Sort sessions by lastMessageAt (newest first) and enforce limits
   const primarySessions = sessions
@@ -177,7 +178,12 @@ export function ChatSidebar({
                       {!isCollapsed && (
                         <span className="flex items-center gap-2">
                           Primary Agent
-                          <span className="text-xs text-muted-foreground">({primarySessions.length}/{SESSION_LIMITS.primary})</span>
+                          <span 
+                            className="text-xs text-muted-foreground"
+                            aria-label={`Primary sessions count: ${primarySessions.length} out of ${SESSION_LIMITS.primary}`}
+                          >
+                            ({primarySessions.length}/{SESSION_LIMITS.primary})
+                          </span>
                         </span>
                       )}
                     </div>
@@ -229,7 +235,13 @@ export function ChatSidebar({
                       {!isCollapsed && (
                         <span className="flex items-center gap-2">
                           Log Analysis
-                          <span className="text-xs text-muted-foreground">({logAnalysisSessions.length}/{SESSION_LIMITS.log_analysis})</span>
+                          <span 
+                            className="text-xs text-muted-foreground"
+                            aria-label={`Log Analysis sessions count: ${logAnalysisSessions.length} out of ${SESSION_LIMITS.log_analysis}`}
+                            role="status"
+                          >
+                            ({logAnalysisSessions.length}/{SESSION_LIMITS.log_analysis})
+                          </span>
                         </span>
                       )}
                     </div>
@@ -281,7 +293,13 @@ export function ChatSidebar({
                       {!isCollapsed && (
                         <span className="flex items-center gap-2">
                           Research
-                          <span className="text-xs text-muted-foreground">({researchSessions.length}/{SESSION_LIMITS.research})</span>
+                          <span 
+                            className="text-xs text-muted-foreground"
+                            aria-label={`Research sessions count: ${researchSessions.length} out of ${SESSION_LIMITS.research}`}
+                            role="status"
+                          >
+                            ({researchSessions.length}/{SESSION_LIMITS.research})
+                          </span>
                         </span>
                       )}
                     </div>

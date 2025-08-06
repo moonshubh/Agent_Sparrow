@@ -6,11 +6,12 @@ to ensure all Agent Sparrow responses meet the mandatory structure and
 quality standards defined in the enhancement specification.
 """
 
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Union
 from dataclasses import dataclass
 from enum import Enum
 import re
 import logging
+from functools import lru_cache
 
 from .emotion_templates import EmotionalState, EmotionDetectionResult
 
@@ -582,60 +583,104 @@ class ResponseFormatter:
         
         # Format as markdown bullet points
         return '\n'.join(f"- {tip}" for tip in all_tips[:3])  # Return up to 3 tips
-
-        # Apply formatting rules
-        return cls.apply_mandatory_formatting(enhanced_response)
     
     @classmethod
-    def generate_follow_up_questions(cls, issue: str, emotion: EmotionalState, solution_provided: str) -> List[str]:
+    def generate_follow_up_questions(
+        cls, 
+        issue: str, 
+        emotion: Union[EmotionalState, str], 
+        solution_provided: str = ""
+    ) -> List[str]:
         """Generate contextual follow-up questions based on the issue, emotion, and solution provided.
         
         Args:
-            issue: The specific issue being addressed
-            emotion: Detected customer emotional state
-            solution_provided: The solution content that was provided
+            issue: The specific issue being addressed (non-empty string)
+            emotion: Detected customer emotional state (EmotionalState enum or string)
+            solution_provided: The solution content that was provided (optional)
             
         Returns:
             List of 3-5 follow-up questions
+            
+        Raises:
+            ValueError: If issue is empty or None
+            TypeError: If emotion is not EmotionalState or string
         """
-        follow_up_questions = []
-        issue_lower = issue.lower()
+        # Input validation
+        if not issue or not isinstance(issue, str) or not issue.strip():
+            raise ValueError("Issue must be a non-empty string")
         
-        # Common follow-up patterns
-        if any(term in issue_lower for term in ['sync', 'email', 'connection']):
-            follow_up_questions.extend([
-                "Is the sync issue happening with all email accounts or just specific ones?",
-                "Have you tried removing and re-adding the email account?",
-                "Are you experiencing this issue on other devices as well?",
-                "Would you like help configuring sync settings for better performance?",
-                "Do you need assistance with backing up your emails before troubleshooting?"
-            ])
-        elif any(term in issue_lower for term in ['slow', 'performance', 'crash']):
-            follow_up_questions.extend([
-                "How long has Mailbird been running slowly on your system?",
-                "Are other applications also running slowly, or just Mailbird?",
-                "Would you like help optimizing Mailbird's performance settings?",
-                "Have you noticed if the slowdown happens at specific times?",
-                "Do you want to learn about reducing memory usage in Mailbird?"
-            ])
-        elif any(term in issue_lower for term in ['setup', 'configure', 'install']):
-            follow_up_questions.extend([
-                "Do you need help importing your existing emails from another client?",
-                "Would you like assistance setting up additional email accounts?",
-                "Are there specific features you'd like help configuring?",
-                "Do you want to learn about Mailbird's advanced customization options?",
-                "Would you like tips on organizing your inbox effectively?"
-            ])
-        elif any(term in issue_lower for term in ['password', 'login', 'authentication']):
-            follow_up_questions.extend([
-                "Are you using app-specific passwords for your email provider?",
-                "Would you like help setting up two-factor authentication?",
-                "Do you need assistance recovering your email account password?",
-                "Have you recently changed your email password?",
-                "Would you like to learn about Mailbird's security features?"
-            ])
-        else:
-            # Generic follow-up questions
+        # Handle emotion parameter
+        if isinstance(emotion, str):
+            try:
+                emotion = EmotionalState(emotion)
+            except ValueError:
+                # Default to NEUTRAL if invalid emotion string
+                emotion = EmotionalState.NEUTRAL
+        elif not isinstance(emotion, EmotionalState):
+            raise TypeError(f"Emotion must be EmotionalState or string, got {type(emotion)}")
+        
+        # Normalize inputs
+        issue_lower = issue.lower().strip()
+        solution_provided = solution_provided or ""
+        
+        # Extract keywords using better tokenization
+        issue_keywords = cls._extract_keywords(issue_lower)
+        
+        follow_up_questions = []
+        
+        # Structured mapping of keywords to question lists
+        question_categories = {
+            'sync_email': {
+                'keywords': ['sync', 'email', 'connection', 'synchronize', 'refresh'],
+                'questions': [
+                    "Is the sync issue happening with all email accounts or just specific ones?",
+                    "Have you tried removing and re-adding the email account?",
+                    "Are you experiencing this issue on other devices as well?",
+                    "Would you like help configuring sync settings for better performance?",
+                    "Do you need assistance with backing up your emails before troubleshooting?"
+                ]
+            },
+            'performance': {
+                'keywords': ['slow', 'performance', 'crash', 'freeze', 'lag', 'memory'],
+                'questions': [
+                    "How long has Mailbird been running slowly on your system?",
+                    "Are other applications also running slowly, or just Mailbird?",
+                    "Would you like help optimizing Mailbird's performance settings?",
+                    "Have you noticed if the slowdown happens at specific times?",
+                    "Do you want to learn about reducing memory usage in Mailbird?"
+                ]
+            },
+            'setup': {
+                'keywords': ['setup', 'configure', 'install', 'set up', 'configuration'],
+                'questions': [
+                    "Do you need help importing your existing emails from another client?",
+                    "Would you like assistance setting up additional email accounts?",
+                    "Are there specific features you'd like help configuring?",
+                    "Do you want to learn about Mailbird's advanced customization options?",
+                    "Would you like tips on organizing your inbox effectively?"
+                ]
+            },
+            'authentication': {
+                'keywords': ['password', 'login', 'authentication', 'sign in', 'credentials', 'access'],
+                'questions': [
+                    "Are you using app-specific passwords for your email provider?",
+                    "Would you like help setting up two-factor authentication?",
+                    "Do you need assistance recovering your email account password?",
+                    "Have you recently changed your email password?",
+                    "Would you like to learn about Mailbird's security features?"
+                ]
+            }
+        }
+        
+        # Find matching categories based on keywords
+        matched_categories = []
+        for category, data in question_categories.items():
+            if any(keyword in issue_keywords for keyword in data['keywords']):
+                matched_categories.append(category)
+                follow_up_questions.extend(data['questions'])
+        
+        # Add generic questions if no specific match or as fallback
+        if not matched_categories:
             follow_up_questions.extend([
                 "Is there anything specific about this solution you'd like me to clarify?",
                 "Would you like to know about related features in Mailbird?",
@@ -644,31 +689,91 @@ class ResponseFormatter:
                 "Are there other email management tasks you need help with?"
             ])
         
-        # Emotion-specific follow-ups
-        if emotion == EmotionalState.FRUSTRATED:
-            follow_up_questions.append("Is there anything else causing frustration that I can help resolve?")
-        elif emotion == EmotionalState.CONFUSED:
-            follow_up_questions.append("Would you like me to break down any of these steps in more detail?")
-        elif emotion == EmotionalState.ANXIOUS:
-            follow_up_questions.append("Do you have any concerns about data safety I can address?")
-        elif emotion == EmotionalState.URGENT:
-            follow_up_questions.append("Is there a specific deadline you're working against?")
+        # Emotion-specific follow-ups with safe handling
+        emotion_questions = {
+            EmotionalState.FRUSTRATED: "Is there anything else causing frustration that I can help resolve?",
+            EmotionalState.CONFUSED: "Would you like me to break down any of these steps in more detail?",
+            EmotionalState.ANXIOUS: "Do you have any concerns about data safety I can address?",
+            EmotionalState.URGENT: "Is there a specific deadline you're working against?"
+        }
         
-        # Remove duplicates and select 5 most relevant
+        if emotion in emotion_questions:
+            follow_up_questions.append(emotion_questions[emotion])
+        
+        # Safety check for empty questions list
+        if not follow_up_questions:
+            return [
+                "Is there anything specific about this issue you'd like me to clarify?",
+                "Would you like to know about related features in Mailbird?",
+                "Do you have any other questions I can help with?"
+            ]
+        
+        # Remove duplicates while preserving order
         unique_questions = list(dict.fromkeys(follow_up_questions))
         
-        # Prioritize questions based on issue relevance
+        # Enhanced scoring algorithm
         scored_questions = []
-        for question in unique_questions:
-            score = 0
-            # Higher score for questions containing issue keywords
-            if any(keyword in question.lower() for keyword in issue_lower.split()):
-                score += 2
-            # Higher score for emotion-appropriate questions
-            if emotion.value.lower() in question.lower():
-                score += 1
+        for idx, question in enumerate(unique_questions):
+            score = 0.0
+            question_lower = question.lower()
+            
+            # Score based on keyword matches (use extracted keywords, not split)
+            matching_keywords = sum(1 for keyword in issue_keywords if keyword in question_lower)
+            score += matching_keywords * 2.0
+            
+            # Score for emotion relevance
+            if emotion and hasattr(emotion, 'value'):
+                emotion_str = emotion.value.lower()
+                if emotion_str in question_lower:
+                    score += 1.5
+            
+            # Slight penalty for generic questions to prioritize specific ones
+            if any(generic in question_lower for generic in ['anything', 'other', 'else']):
+                score -= 0.5
+            
+            # Add small index bonus to handle ties consistently (prefer earlier questions)
+            score -= idx * 0.01
+            
             scored_questions.append((score, question))
         
-        # Sort by score and return top 5
-        scored_questions.sort(key=lambda x: x[0], reverse=True)
+        # Sort by score (descending) and return top 5
+        scored_questions.sort(key=lambda x: (-x[0], x[1]))  # Secondary sort by question text for consistency
         return [q[1] for q in scored_questions[:5]]
+    
+    @classmethod
+    @lru_cache(maxsize=128)
+    def _extract_keywords(cls, text: str) -> tuple:
+        """Extract meaningful keywords from text using improved tokenization.
+        
+        Args:
+            text: Input text to extract keywords from
+            
+        Returns:
+            Tuple of extracted keywords (tuple for hashability with lru_cache)
+        """
+        # Remove common stop words
+        stop_words = {
+            'the', 'is', 'at', 'which', 'on', 'a', 'an', 'as', 'are', 'was',
+            'were', 'been', 'be', 'have', 'has', 'had', 'do', 'does', 'did',
+            'will', 'would', 'could', 'should', 'may', 'might', 'must', 'can',
+            'this', 'that', 'these', 'those', 'i', 'me', 'my', 'we', 'you', 'your',
+            'it', 'its', 'they', 'them', 'their', 'what', 'where', 'when', 'how',
+            'why', 'all', 'any', 'each', 'few', 'more', 'most', 'other', 'some',
+            'such', 'only', 'own', 'same', 'so', 'than', 'too', 'very', 'just',
+            'and', 'or', 'but', 'if', 'while', 'with', 'for', 'to', 'from', 'of',
+            'in', 'out', 'up', 'down', 'about', 'into', 'through', 'during', 'before',
+            'after', 'above', 'below', 'between', 'under', 'again', 'further', 'then'
+        }
+        
+        # Use regex to extract words (handles punctuation better than split)
+        words = re.findall(r'\b[a-z]+\b', text.lower())
+        
+        # Filter out stop words and very short words
+        keywords = [word for word in words if word not in stop_words and len(word) > 2]
+        
+        # Also extract multi-word terms (e.g., "app-specific", "two-factor")
+        multi_word_patterns = re.findall(r'\b[a-z]+[-\s][a-z]+\b', text.lower())
+        keywords.extend(multi_word_patterns)
+        
+        # Return as tuple for hashability (required for lru_cache)
+        return tuple(set(keywords))

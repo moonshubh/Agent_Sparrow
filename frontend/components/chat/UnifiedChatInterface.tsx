@@ -487,7 +487,9 @@ export default function UnifiedChatInterface() {
                   messages={state.messages}
                   onQuestionClick={(question) => {
                     setInputValue(question)
-                    handleSendMessage()
+                    // Pass the question to handleSendMessage and clear input after
+                    handleSendMessage(question)
+                    setInputValue('') // Clear input after sending
                   }}
                   isProcessing={state.isProcessing}
                   className="mb-3"

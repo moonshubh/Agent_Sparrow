@@ -49,6 +49,8 @@ class ChatMessageBase(BaseModel):
     message_type: MessageType = Field(default=MessageType.USER, description="Type of message")
     agent_type: Optional[AgentType] = Field(None, description="Agent that generated assistant messages")
     metadata: Dict[str, Any] = Field(default_factory=dict, description="Additional metadata including follow-up questions")
+    environmental_context: Optional[Dict[str, Any]] = Field(default_factory=dict, description="Environmental context information for the message")
+    correlation_analysis: Optional[Dict[str, Any]] = Field(default_factory=dict, description="Correlation analysis data for message relationships")
 
     @validator('content')
     def validate_content(cls, v):

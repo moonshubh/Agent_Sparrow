@@ -433,7 +433,9 @@ export function useUnifiedChat(): UseUnifiedChatReturn {
               setState(prev => {
                 // Find the last agent message and update its metadata
                 const lastAgentMessageIndex = prev.messages.findLastIndex(m => m.type === 'agent' && m.id === messageId)
-                if (lastAgentMessageIndex >= 0) {
+                
+                // Add null-safety check and logging
+                if (lastAgentMessageIndex >= 0 && prev.messages[lastAgentMessageIndex]) {
                   const updatedMessages = [...prev.messages]
                   updatedMessages[lastAgentMessageIndex] = {
                     ...updatedMessages[lastAgentMessageIndex],
@@ -442,7 +444,14 @@ export function useUnifiedChat(): UseUnifiedChatReturn {
                       ...event.metadata
                     }
                   }
+                  console.log(`✅ Updated metadata for message ${messageId} at index ${lastAgentMessageIndex}`)
                   return { ...prev, messages: updatedMessages }
+                } else {
+                  // Log warning when message is not found
+                  console.warn(
+                    `⚠️ Could not find agent message with ID ${messageId} to update metadata. ` +
+                    `Total messages: ${prev.messages.length}, Last agent message index: ${lastAgentMessageIndex}`
+                  )
                 }
                 return prev
               })

@@ -1,11 +1,12 @@
 import { useState, useCallback } from "react";
 import { PrimaryAgentChatRequestBody, PrimaryAgentStreamEvent } from "@/lib/api";
 import { toast } from "sonner";
+import { ChatMessage } from "@/types/chat";
 
 interface UsePrimaryAgentStreamReturn {
   isStreaming: boolean;
   error: string | null;
-  sendMessage: (body: PrimaryAgentChatRequestBody, messages?: any[], sessionId?: string) => Promise<void>;
+  sendMessage: (body: PrimaryAgentChatRequestBody, messages?: ChatMessage[], sessionId?: string) => Promise<void>;
 }
 
 /**
@@ -17,15 +18,20 @@ export function usePrimaryAgentStream(): UsePrimaryAgentStreamReturn {
   const [isStreaming, setIsStreaming] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const sendMessage = useCallback(async (body: PrimaryAgentChatRequestBody, messages?: any[], sessionId?: string) => {
+  const sendMessage = useCallback(async (body: PrimaryAgentChatRequestBody, messages?: ChatMessage[], sessionId?: string) => {
     setIsStreaming(true);
     setError(null);
     try {
-      const requestBody = {
+      // Build request body, only including session_id if defined
+      const requestBody: any = {
         ...body,
-        messages: messages || [],
-        session_id: sessionId
+        messages: messages || []
       };
+      
+      // Only add session_id if it's defined to avoid sending undefined
+      if (sessionId !== undefined) {
+        requestBody.session_id = sessionId;
+      }
       
       const resp = await fetch(`${apiBaseUrl}/api/v1/agent/chat/stream`, {
         method: "POST",

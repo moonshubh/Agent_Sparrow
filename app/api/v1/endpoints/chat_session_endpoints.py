@@ -15,6 +15,8 @@ from psycopg2.extras import RealDictCursor
 import psycopg2
 import os
 
+from app.core.constants import AGENT_SESSION_LIMITS
+
 from app.core.settings import settings
 from app.core.security import get_current_user, TokenPayload
 from app.schemas.chat_schemas import (
@@ -77,68 +79,103 @@ async def get_chat_session_by_id(conn, session_id: int, user_id: str) -> Optiona
 
 # @with_db_connection removed - using Supabase
 def create_chat_session_in_db(conn, session_data: ChatSessionCreate, user_id: str) -> Dict[str, Any]:
-    """Create a new chat session in the database"""
-    with conn.cursor() as cur:
-        # Get agent-specific configuration
-        cur.execute("""
-            SELECT max_active_sessions 
-            FROM agent_configuration 
-            WHERE agent_type = %s
-        """, (session_data.agent_type.value,))
+    """Create a new chat session in the database
+    
+    Args:
+        conn: Database connection
+        session_data: Session creation data
+        user_id: User ID
         
-        config_row = cur.fetchone()
-        if config_row:
-            max_sessions = config_row['max_active_sessions']
-        else:
-            # Fallback to agent-specific defaults
-            agent_limits = {
-                'primary': 5,
-                'log_analysis': 3,
-                'research': 5,
-                'router': 10
-            }
-            max_sessions = agent_limits.get(session_data.agent_type.value, 5)
+    Returns:
+        Created session data
         
-        # Check if user has too many active sessions for this agent type
-        cur.execute("""
-            SELECT COUNT(*) as active_count
-            FROM chat_sessions 
-            WHERE user_id = %s AND agent_type = %s AND is_active = TRUE
-        """, (user_id, session_data.agent_type.value))
-        
-        active_count = cur.fetchone()['active_count']
-        if active_count >= max_sessions:
-            # Deactivate the oldest active session
+    Raises:
+        psycopg2.Error: Database errors
+    """
+    try:
+        with conn.cursor() as cur:
+            # Get agent-specific configuration with error handling
+            try:
+                cur.execute("""
+                    SELECT max_active_sessions 
+                    FROM agent_configuration 
+                    WHERE agent_type = %s
+                """, (session_data.agent_type.value,))
+                
+                config_row = cur.fetchone()
+                if config_row:
+                    max_sessions = config_row['max_active_sessions']
+                    logger.debug(f"Retrieved max_sessions={max_sessions} for agent_type={session_data.agent_type.value}")
+                else:
+                    # Fallback to centralized defaults
+                    max_sessions = AGENT_SESSION_LIMITS.get(session_data.agent_type.value, 5)
+                    logger.warning(
+                        f"No config found for agent_type={session_data.agent_type.value}, "
+                        f"using default limit={max_sessions}"
+                    )
+            except psycopg2.Error as e:
+                # Log error and use fallback
+                logger.error(f"Error fetching agent configuration: {e}")
+                max_sessions = AGENT_SESSION_LIMITS.get(session_data.agent_type.value, 5)
+                logger.info(f"Using fallback limit={max_sessions} for agent_type={session_data.agent_type.value}")
+            
+            # Check if user has too many active sessions for this agent type
             cur.execute("""
-                UPDATE chat_sessions 
-                SET is_active = FALSE 
+                SELECT COUNT(*) as active_count
+                FROM chat_sessions 
                 WHERE user_id = %s AND agent_type = %s AND is_active = TRUE
-                AND id = (
-                    SELECT id FROM chat_sessions 
+            """, (user_id, session_data.agent_type.value))
+            
+            active_count = cur.fetchone()['active_count']
+            if active_count >= max_sessions:
+                # Deactivate the oldest active session
+                cur.execute("""
+                    UPDATE chat_sessions 
+                    SET is_active = FALSE 
                     WHERE user_id = %s AND agent_type = %s AND is_active = TRUE
-                    ORDER BY last_message_at ASC 
-                    LIMIT 1
+                    AND id = (
+                        SELECT id FROM chat_sessions 
+                        WHERE user_id = %s AND agent_type = %s AND is_active = TRUE
+                        ORDER BY last_message_at ASC 
+                        LIMIT 1
+                    )
+                """, (user_id, session_data.agent_type.value, user_id, session_data.agent_type.value))
+                logger.info(
+                    f"Deactivated oldest session for user={user_id}, agent_type={session_data.agent_type.value} "
+                    f"(limit={max_sessions}, had={active_count})"
                 )
-            """, (user_id, session_data.agent_type.value, user_id, session_data.agent_type.value))
-        
-        # Create the new session
-        import json
-        metadata_json = json.dumps(session_data.metadata) if session_data.metadata else '{}'
-        
-        cur.execute("""
-            INSERT INTO chat_sessions (user_id, title, agent_type, metadata, is_active)
-            VALUES (%s, %s, %s, %s::jsonb, %s)
-            RETURNING *
-        """, (
-            user_id,
-            session_data.title,
-            session_data.agent_type.value,
-            metadata_json,
-            session_data.is_active
-        ))
-        
-        conn.commit()
-        return dict(cur.fetchone())
+            
+            # Create the new session
+            import json
+            metadata_json = json.dumps(session_data.metadata) if session_data.metadata else '{}'
+            
+            cur.execute("""
+                INSERT INTO chat_sessions (user_id, title, agent_type, metadata, is_active)
+                VALUES (%s, %s, %s, %s::jsonb, %s)
+                RETURNING *
+            """, (
+                user_id,
+                session_data.title,
+                session_data.agent_type.value,
+                metadata_json,
+                session_data.is_active
+            ))
+            
+            conn.commit()
+            session_dict = dict(cur.fetchone())
+            logger.info(
+                f"Created session id={session_dict.get('id')} for user={user_id}, "
+                f"agent_type={session_data.agent_type.value}"
+            )
+            return session_dict
+    except psycopg2.Error as e:
+        logger.error(f"Database error in create_chat_session_in_db: {e}")
+        conn.rollback()
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected error in create_chat_session_in_db: {e}")
+        conn.rollback()
+        raise
 
 
 # @with_db_connection removed - using Supabase
