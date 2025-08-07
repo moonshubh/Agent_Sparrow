@@ -7,7 +7,7 @@ from typing import Optional, List
 
 from dotenv import load_dotenv
 from pydantic_settings import BaseSettings
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, validator
 
 # Load environment variables from project root .env if present
 # Calculate the path safely with depth validation
@@ -144,6 +144,17 @@ class Settings(BaseSettings):
     skip_auth: bool = Field(default=False, alias="SKIP_AUTH")
     # Use a valid UUID for development (this is a v4 UUID)
     development_user_id: str = Field(default="00000000-0000-0000-0000-000000000000", alias="DEVELOPMENT_USER_ID")
+    
+    @validator('skip_auth', pre=True)
+    @classmethod
+    def parse_skip_auth(cls, v):
+        """Parse boolean from string environment variable."""
+        if isinstance(v, bool):
+            return v
+        if isinstance(v, str):
+            # Handle string values from environment
+            return v.lower() in ('true', '1', 'yes', 'on')
+        return False
     
     # Security Feature Toggles
     enable_auth_endpoints: bool = Field(default=True, alias="ENABLE_AUTH_ENDPOINTS")

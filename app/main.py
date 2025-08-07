@@ -150,11 +150,18 @@ async def startup_event():
     auth_enabled = settings.should_enable_auth_endpoints()
     api_key_enabled = settings.should_enable_api_key_endpoints()
     
+    # Debug environment variable loading
+    import os
+    skip_auth_env = os.getenv("SKIP_AUTH", "not_set")
+    
     logging.info("=== MB-Sparrow Security Configuration ===")
     logging.info(f"Production Mode: {is_production}")
     logging.info(f"Authentication Endpoints: {'ENABLED' if auth_enabled else 'DISABLED'}")
     logging.info(f"API Key Endpoints: {'ENABLED' if api_key_enabled else 'DISABLED'}")
-    logging.info(f"Skip Auth: {settings.skip_auth}")
+    logging.info(f"Skip Auth (settings): {settings.skip_auth}")
+    logging.info(f"Skip Auth (env raw): {skip_auth_env}")
+    logging.info(f"Development User ID: {settings.development_user_id}")
+    logging.info(f"JWT Secret Configured: {bool(settings.supabase_jwt_secret)}")
     
     if not is_production:
         logging.warning("Running in development mode - some security features may be disabled")
