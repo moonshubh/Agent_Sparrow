@@ -18,7 +18,7 @@ import os
 from app.core.constants import AGENT_SESSION_LIMITS
 
 from app.core.settings import settings
-from app.core.security import get_current_user, TokenPayload
+from app.core.security import get_current_user, get_optional_current_user, TokenPayload
 from app.schemas.chat_schemas import (
     ChatSession,
     ChatMessage,
@@ -375,24 +375,27 @@ async def test_endpoint():
 @router.post("/chat-sessions", response_model=ChatSession, tags=["Chat Sessions"])
 async def create_chat_session(
     session_data: ChatSessionCreate,
-    current_user: TokenPayload = Depends(get_current_user)
+    current_user: Optional[TokenPayload] = Depends(get_optional_current_user)
 ):
-    """Create a new chat session"""
+    """Create a new chat session (authentication optional)"""
     conn = None
     try:
-        logger.info(f"Creating chat session for user {current_user.sub} with data: {session_data}")
+        # Use authenticated user ID if available, otherwise use anonymous
+        user_id = current_user.sub if current_user else "anonymous"
+        logger.info(f"Creating chat session for user {user_id} with data: {session_data}")
+        
         conn = get_db_connection()
-        session_dict = create_chat_session_in_db(conn, session_data, current_user.sub)
-        logger.info(f"Successfully created chat session: {session_dict['id']}")
+        session_dict = create_chat_session_in_db(conn, session_data, user_id)
+        logger.info(f"Successfully created chat session: {session_dict['id']} for user: {user_id}")
         return ChatSession(**session_dict)
     except psycopg2.Error as e:
         logger.error(f"Database error creating chat session: {e}")
-        logger.error(f"Error details - User: {current_user.sub}, Data: {session_data}")
+        logger.error(f"Error details - User: {user_id if 'user_id' in locals() else 'unknown'}, Data: {session_data}")
         raise HTTPException(status_code=500, detail="Error creating chat session")
     except Exception as e:
         logger.error(f"Error creating chat session: {e}")
         logger.error(f"Error type: {type(e).__name__}")
-        logger.error(f"Error details - User: {current_user.sub}, Data: {session_data}")
+        logger.error(f"Error details - User: {user_id if 'user_id' in locals() else 'unknown'}, Data: {session_data}")
         import traceback
         logger.error(f"Traceback: {traceback.format_exc()}")
         raise HTTPException(status_code=500, detail="Error creating chat session")
@@ -408,11 +411,14 @@ async def list_chat_sessions(
     page: int = Query(1, ge=1, description="Page number"),
     page_size: int = Query(100, ge=1, le=100, description="Number of sessions per page"),
     search: Optional[str] = Query(None, description="Search in session titles"),
-    current_user: TokenPayload = Depends(get_current_user)
+    current_user: Optional[TokenPayload] = Depends(get_optional_current_user)
 ):
-    """List chat sessions for the current user - returns active sessions respecting agent limits"""
+    """List chat sessions (authentication optional)"""
     conn = None
     try:
+        # Use authenticated user ID if available, otherwise use anonymous
+        user_id = current_user.sub if current_user else "anonymous"
+        
         conn = get_db_connection()
         
         # Always fetch active sessions only by default unless explicitly requested otherwise
@@ -427,11 +433,11 @@ async def list_chat_sessions(
             search=search
         )
         
-        result = get_chat_sessions_for_user(conn, current_user.sub, request)
+        result = get_chat_sessions_for_user(conn, user_id, request)
         sessions = [ChatSession(**session) for session in result["sessions"]]
         
         # Log session counts for debugging
-        logger.info(f"Returning {len(sessions)} sessions for user {current_user.sub}, agent_type={agent_type}")
+        logger.info(f"Returning {len(sessions)} sessions for user {user_id}, agent_type={agent_type}")
         
         return ChatSessionListResponse(
             sessions=sessions,
@@ -527,36 +533,56 @@ async def delete_chat_session(
 async def create_chat_message(
     session_id: int,
     message_data: ChatMessageCreate,
-    current_user: TokenPayload = Depends(get_current_user)
+    current_user: Optional[TokenPayload] = Depends(get_optional_current_user)
 ):
-    """Add a message to a chat session - stores FULL message content"""
+    """Add a message to a chat session - stores FULL message content (authentication optional)"""
     conn = None
     try:
-        # Log message length for debugging
+        # Use authenticated user ID if available, otherwise use anonymous
+        user_id = current_user.sub if current_user else "anonymous"
+        
+        # Enhanced logging for debugging
+        logger.info(f"[MESSAGE SAVE] Received request to save message:")
+        logger.info(f"  - Session ID: {session_id}")
+        logger.info(f"  - User ID: {user_id}")
+        logger.info(f"  - Message Type: {message_data.message_type}")
+        logger.info(f"  - Agent Type: {message_data.agent_type}")
+        logger.info(f"  - Content Length: {len(message_data.content) if message_data.content else 0}")
+        
         if message_data.content:
-            logger.info(f"Storing message for session {session_id}, content length: {len(message_data.content)}")
+            logger.info(f"  - Content Preview: {message_data.content[:100]}...")
             if len(message_data.content) > 5000:
-                logger.info(f"Storing large message ({len(message_data.content)} chars) for session {session_id}")
+                logger.info(f"  - Large message detected: {len(message_data.content)} chars")
         
         # Ensure session_id matches
         message_data.session_id = session_id
         
         conn = get_db_connection()
-        message_dict = create_chat_message_in_db(conn, message_data, current_user.sub)
+        logger.info(f"[MESSAGE SAVE] Database connection established")
+        
+        message_dict = create_chat_message_in_db(conn, message_data, user_id)
+        logger.info(f"[MESSAGE SAVE] Message saved to database with ID: {message_dict.get('id')}")
         
         # Verify full content was stored
         if message_data.content and len(message_data.content) != len(message_dict.get('content', '')):
-            logger.error(f"Content length mismatch! Original: {len(message_data.content)}, Stored: {len(message_dict.get('content', ''))}")
+            logger.error(f"[MESSAGE SAVE] Content length mismatch! Original: {len(message_data.content)}, Stored: {len(message_dict.get('content', ''))}")
+        else:
+            logger.info(f"[MESSAGE SAVE] Content verification passed")
         
         return ChatMessage(**message_dict)
-    except HTTPException:
+    except HTTPException as e:
+        logger.error(f"[MESSAGE SAVE] HTTP Exception: {e.detail}")
         raise
     except Exception as e:
-        logger.error(f"Error creating chat message: {e}")
+        logger.error(f"[MESSAGE SAVE] Unexpected error: {e}")
+        logger.error(f"[MESSAGE SAVE] Error type: {type(e).__name__}")
+        import traceback
+        logger.error(f"[MESSAGE SAVE] Traceback: {traceback.format_exc()}")
         raise HTTPException(status_code=500, detail="Internal server error")
     finally:
         if conn:
             conn.close()
+            logger.info(f"[MESSAGE SAVE] Database connection closed")
 
 
 @router.get("/chat-sessions/{session_id}/messages", response_model=ChatMessageListResponse, tags=["Chat Messages"])
@@ -565,11 +591,14 @@ async def list_chat_messages(
     page: int = Query(1, ge=1, description="Page number"),
     page_size: int = Query(200, ge=1, le=1000, description="Number of messages per page"),
     message_type: Optional[MessageType] = Query(None, description="Filter by message type"),
-    current_user: TokenPayload = Depends(get_current_user)
+    current_user: Optional[TokenPayload] = Depends(get_optional_current_user)
 ):
-    """List messages for a specific chat session - returns FULL message content"""
+    """List messages for a specific chat session (authentication optional)"""
     conn = None
     try:
+        # Use authenticated user ID if available, otherwise use anonymous
+        user_id = current_user.sub if current_user else "anonymous"
+        
         conn = get_db_connection()
         request = ChatMessageListRequest(
             page=page,
@@ -577,7 +606,7 @@ async def list_chat_messages(
             message_type=message_type
         )
         
-        result = get_chat_messages_for_session(conn, session_id, current_user.sub, request)
+        result = get_chat_messages_for_session(conn, session_id, user_id, request)
         messages = [ChatMessage(**msg) for msg in result["messages"]]
         
         # Log if any messages seem truncated
@@ -585,7 +614,7 @@ async def list_chat_messages(
             if msg.content and len(msg.content) > 100 and msg.content.endswith('...'):
                 logger.warning(f"Message {msg.id} may be truncated in retrieval")
         
-        logger.info(f"Retrieved {len(messages)} messages for session {session_id}")
+        logger.info(f"Retrieved {len(messages)} messages for session {session_id} for user {user_id}")
         
         return ChatMessageListResponse(
             messages=messages,

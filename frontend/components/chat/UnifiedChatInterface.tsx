@@ -316,6 +316,15 @@ export default function UnifiedChatInterface() {
         if (lastMessage.id !== lastProcessedMessageId.current && lastMessage.id !== 'welcome') {
           lastProcessedMessageId.current = lastMessage.id
           
+          console.log('[MESSAGE SYNC] Attempting to save message to database:', {
+            sessionId: currentSessionId,
+            messageId: lastMessage.id,
+            messageType: lastMessage.type,
+            agentType: lastMessage.agentType,
+            contentLength: lastMessage.content.length,
+            isPersistenceAvailable: isPersistenceAvailable
+          })
+          
           // Update session's agent type based on actual agent response if needed
           const currentSession = sessions.find(s => s.id === currentSessionId)
           if (currentSession && lastMessage.agentType && lastMessage.type === 'agent') {
@@ -326,15 +335,20 @@ export default function UnifiedChatInterface() {
             }
           }
           
-          await addMessageToSession(currentSessionId, lastMessage)
+          try {
+            await addMessageToSession(currentSessionId, lastMessage)
+            console.log('[MESSAGE SYNC] Successfully saved message to database')
+          } catch (error) {
+            console.error('[MESSAGE SYNC] Failed to save message:', error)
+          }
         }
       }
     }
 
     syncMessage().catch(error => {
-      console.error('Failed to sync message to session:', error)
+      console.error('[MESSAGE SYNC] Critical error in sync process:', error)
     })
-  }, [state.messages.length, currentSessionId, addMessageToSession, sessions, updateSession]) // Added dependencies
+  }, [state.messages.length, currentSessionId, addMessageToSession, sessions, updateSession, isPersistenceAvailable]) // Added dependencies
   
   // Helper function to generate a title from the first message
   const generateSessionTitle = (message: string): string => {

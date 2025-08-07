@@ -49,11 +49,13 @@ class SupabaseAPIKeyService:
             encrypted_key = encryption_service.encrypt_api_key(user_id, request.api_key)
             masked_key = encryption_service.mask_api_key(request.api_key)
             
-            # Check if key already exists
+            # Check if key already exists (check both user_uuid and user_id for compatibility)
+            api_key_type_str = request.api_key_type.value if isinstance(request.api_key_type, APIKeyType) else request.api_key_type
+            
             existing_response = self.supabase.client.table("user_api_keys")\
                 .select("*")\
-                .eq("user_uuid", user_id)\
-                .eq("api_key_type", request.api_key_type)\
+                .or_(f"user_uuid.eq.{user_id},user_id.eq.{user_id}")\
+                .eq("api_key_type", api_key_type_str)\
                 .execute()
             
             current_time = datetime.now(timezone.utc).isoformat()
@@ -70,18 +72,19 @@ class SupabaseAPIKeyService:
                 
                 response = self.supabase.client.table("user_api_keys")\
                     .update(update_data)\
-                    .eq("user_uuid", user_id)\
-                    .eq("api_key_type", request.api_key_type)\
+                    .or_(f"user_uuid.eq.{user_id},user_id.eq.{user_id}")\
+                    .eq("api_key_type", api_key_type_str)\
                     .execute()
                 
                 operation = APIKeyOperation.UPDATE
                 api_key_data = existing_response.data[0]
                 api_key_data.update(update_data)
             else:
-                # Create new key
+                # Create new key (set both user_uuid and user_id for compatibility)
                 insert_data = {
                     "user_uuid": user_id,
-                    "api_key_type": request.api_key_type,
+                    "user_id": user_id,  # Also set user_id for backward compatibility
+                    "api_key_type": api_key_type_str,
                     "encrypted_key": encrypted_key,
                     "masked_key": masked_key,
                     "key_name": request.key_name,
@@ -100,7 +103,7 @@ class SupabaseAPIKeyService:
             # Log the operation
             await self._log_operation(
                 user_id=user_id,
-                api_key_type=request.api_key_type,
+                api_key_type=api_key_type_str,
                 operation=operation,
                 ip_address=ip_address,
                 user_agent=user_agent
@@ -109,7 +112,7 @@ class SupabaseAPIKeyService:
             # Return response with API key info
             api_key_info = APIKeyInfo(
                 id=api_key_data["id"],
-                api_key_type=api_key_data["api_key_type"],
+                api_key_type=APIKeyType(api_key_data["api_key_type"]),
                 key_name=api_key_data["key_name"],
                 is_active=api_key_data["is_active"],
                 created_at=self._parse_iso_datetime(api_key_data["created_at"]),
@@ -136,7 +139,7 @@ class SupabaseAPIKeyService:
         try:
             response = self.supabase.client.table("user_api_keys")\
                 .select("id, api_key_type, key_name, is_active, created_at, updated_at, last_used_at, encrypted_key, masked_key")\
-                .eq("user_uuid", user_id)\
+                .or_(f"user_uuid.eq.{user_id},user_id.eq.{user_id}")\
                 .execute()
             
             api_key_infos = []
@@ -182,13 +185,22 @@ class SupabaseAPIKeyService:
         Falls back to environment variable if user key not found and fallback is provided.
         """
         try:
-            # Try to get user-specific key first
+            # Log the user_id to debug the format
+            logger.info(f"Fetching API key for user_id: {user_id} (type: {type(user_id).__name__}, length: {len(str(user_id))})")
+            logger.info(f"API key type requested: {api_key_type}")
+            
+            # Try to get user-specific key first (check both user_uuid and user_id)
+            # Convert enum to string value for database query
+            api_key_type_str = api_key_type.value if isinstance(api_key_type, APIKeyType) else api_key_type
+            
             response = self.supabase.client.table("user_api_keys")\
                 .select("encrypted_key, is_active")\
-                .eq("user_uuid", user_id)\
-                .eq("api_key_type", api_key_type)\
+                .or_(f"user_uuid.eq.{user_id},user_id.eq.{user_id}")\
+                .eq("api_key_type", api_key_type_str)\
                 .eq("is_active", True)\
                 .execute()
+            
+            logger.info(f"Database query returned {len(response.data)} results")
             
             if response.data:
                 key_data = response.data[0]
@@ -196,9 +208,12 @@ class SupabaseAPIKeyService:
                 await self._update_last_used(user_id, api_key_type)
                 
                 # Decrypt and return
-                return encryption_service.decrypt_api_key(user_id, key_data["encrypted_key"])
+                decrypted_key = encryption_service.decrypt_api_key(user_id, key_data["encrypted_key"])
+                logger.info(f"Successfully retrieved user's {api_key_type} API key (preview: {decrypted_key[:8]}...{decrypted_key[-4:]})")
+                return decrypted_key
             
             # If no user key found, try fallback
+            logger.info(f"No user API key found for {api_key_type}, trying fallback: {fallback_env_var}")
             return self._get_fallback_env_key(user_id, api_key_type, fallback_env_var)
             
         except Exception as e:
@@ -216,10 +231,11 @@ class SupabaseAPIKeyService:
     ) -> APIKeyDeleteResponse:
         """Delete an API key."""
         try:
+            api_key_type_str = api_key_type.value if isinstance(api_key_type, APIKeyType) else api_key_type
             response = self.supabase.client.table("user_api_keys")\
                 .delete()\
-                .eq("user_uuid", user_id)\
-                .eq("api_key_type", api_key_type)\
+                .or_(f"user_uuid.eq.{user_id},user_id.eq.{user_id}")\
+                .eq("api_key_type", api_key_type_str)\
                 .execute()
             
             if not response.data:
@@ -254,7 +270,7 @@ class SupabaseAPIKeyService:
         try:
             response = self.supabase.client.table("user_api_keys")\
                 .select("api_key_type, is_active")\
-                .eq("user_uuid", user_id)\
+                .or_(f"user_uuid.eq.{user_id},user_id.eq.{user_id}")\
                 .eq("is_active", True)\
                 .execute()
             
@@ -302,10 +318,11 @@ class SupabaseAPIKeyService:
     async def _update_last_used(self, user_id: str, api_key_type: APIKeyType):
         """Update last used timestamp for an API key."""
         try:
+            api_key_type_str = api_key_type.value if isinstance(api_key_type, APIKeyType) else api_key_type
             self.supabase.client.table("user_api_keys")\
                 .update({"last_used_at": datetime.now(timezone.utc).isoformat()})\
-                .eq("user_uuid", user_id)\
-                .eq("api_key_type", api_key_type)\
+                .or_(f"user_uuid.eq.{user_id},user_id.eq.{user_id}")\
+                .eq("api_key_type", api_key_type_str)\
                 .execute()
         except Exception as e:
             logger.debug(f"Failed to update last_used timestamp: {e}")
@@ -321,17 +338,22 @@ class SupabaseAPIKeyService:
     ):
         """Log API key operation for audit trail."""
         try:
+            # Convert enums to strings for database storage
+            api_key_type_str = api_key_type.value if isinstance(api_key_type, APIKeyType) else api_key_type
+            operation_str = operation.value if isinstance(operation, APIKeyOperation) else operation
+            
             operation_details = {
-                "api_key_type": api_key_type,
-                "operation": operation,
+                "api_key_type": api_key_type_str,
+                "operation": operation_str,
             }
             if additional_details:
                 operation_details.update(additional_details)
             
             self.supabase.client.table("api_key_audit_log").insert({
                 "user_uuid": user_id,
-                "api_key_type": api_key_type,
-                "operation": operation,
+                "user_id": user_id,  # Also set user_id for backward compatibility
+                "api_key_type": api_key_type_str,
+                "operation": operation_str,
                 "operation_details": operation_details,
                 "ip_address": ip_address,
                 "user_agent": user_agent,
@@ -349,9 +371,12 @@ class SupabaseAPIKeyService:
     ):
         """Log when fallback environment variable is used."""
         try:
+            # Convert enum to string if needed
+            api_key_type_str = api_key_type.value if isinstance(api_key_type, APIKeyType) else api_key_type
+            
             await self._log_operation(
                 user_id=user_id,
-                api_key_type=api_key_type,
+                api_key_type=api_key_type_str,
                 operation=APIKeyOperation.USE,
                 additional_details={
                     "fallback": True,
@@ -386,9 +411,14 @@ class SupabaseAPIKeyService:
     ) -> Optional[str]:
         """Get fallback environment variable API key with optional usage logging."""
         if not fallback_env_var:
+            logger.info(f"No fallback env var specified for {api_key_type}")
             return None
             
         fallback_key = os.getenv(fallback_env_var)
+        if fallback_key:
+            logger.info(f"Using fallback {fallback_env_var} for {api_key_type} (preview: {fallback_key[:8]}...{fallback_key[-4:]})")
+        else:
+            logger.info(f"Fallback env var {fallback_env_var} is not set")
         if fallback_key and log_usage:
             # Log fallback usage for monitoring (fire and forget)
             try:
