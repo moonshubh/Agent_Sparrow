@@ -261,6 +261,13 @@ export function useChatHistory() {
   }, [])
 
   const addMessageToSession = useCallback(async (sessionId: string, message: UnifiedMessage) => {
+    console.log('[CHAT HISTORY] Adding message to session:', {
+      sessionId,
+      messageId: message.id,
+      messageType: message.type,
+      isPersistenceAvailable: state.isPersistenceAvailable
+    })
+    
     // Update local state immediately for responsive UI
     setState(prev => ({
       ...prev,
@@ -280,14 +287,23 @@ export function useChatHistory() {
     if (state.isPersistenceAvailable) {
       try {
         const sessionIdNumber = parseInt(sessionId)
+        console.log('[CHAT HISTORY] Parsing session ID:', { sessionId, sessionIdNumber, isNaN: isNaN(sessionIdNumber) })
+        
         if (!isNaN(sessionIdNumber)) {
           const backendMessage = ChatAPI.messageToBackend(message, sessionIdNumber)
-          await chatAPI.addMessage(sessionIdNumber, backendMessage)
+          console.log('[CHAT HISTORY] Sending message to backend:', backendMessage)
+          
+          const response = await chatAPI.addMessage(sessionIdNumber, backendMessage)
+          console.log('[CHAT HISTORY] Message saved successfully:', response)
+        } else {
+          console.error('[CHAT HISTORY] Invalid session ID - not a number:', sessionId)
         }
       } catch (error) {
-        console.warn('Failed to sync message to API:', error)
+        console.error('[CHAT HISTORY] Failed to sync message to API:', error)
         // Message is already added to local state, so we can continue
       }
+    } else {
+      console.log('[CHAT HISTORY] Persistence not available, skipping sync')
     }
   }, [state.isPersistenceAvailable])
 

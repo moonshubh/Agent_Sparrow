@@ -1,4 +1,5 @@
 import os
+import logging
 from datetime import datetime, timedelta, timezone
 from typing import Optional, Annotated
 
@@ -11,6 +12,8 @@ import httpx
 import json
 from jose import jwk
 from jose.utils import base64url_decode
+
+logger = logging.getLogger(__name__)
 
 load_dotenv()  # Load environment variables from .env file
 
@@ -145,26 +148,73 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -
 async def get_current_user(token: Annotated[str, Depends(oauth2_scheme)]) -> TokenPayload:
     if SKIP_AUTH:
         # Return a dummy user payload if authentication is skipped
+        logger.debug("[AUTH] Skipping authentication - SKIP_AUTH=true")
         return TokenPayload(sub="skipped_auth_user", exp=int((datetime.now(timezone.utc) + timedelta(hours=1)).timestamp()), roles=["admin"])
+    
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Could not validate credentials",
         headers={"WWW-Authenticate": "Bearer"},
     )
+    
+    # First, try Supabase JWT validation if configured
+    if SUPABASE_URL:
+        try:
+            logger.debug("[AUTH] Attempting Supabase JWT validation")
+            token_data = _verify_supabase_jwt(token)
+            logger.info(f"[AUTH] Supabase JWT validated successfully for user: {token_data.sub}")
+            return token_data
+        except HTTPException as e:
+            logger.warning(f"[AUTH] Supabase JWT validation failed: {e.detail}")
+            # Fall through to try local JWT validation
+        except Exception as e:
+            logger.error(f"[AUTH] Unexpected error in Supabase JWT validation: {e}")
+            # Fall through to try local JWT validation
+    
+    # Fallback to local JWT validation
     try:
+        logger.debug("[AUTH] Attempting local JWT validation")
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         token_data = TokenPayload(**payload)
         if token_data.sub is None or token_data.exp is None:
+            logger.warning("[AUTH] Token missing sub or exp claim")
             raise credentials_exception
         if datetime.fromtimestamp(token_data.exp, tz=timezone.utc) < datetime.now(timezone.utc):
+            logger.warning("[AUTH] Token has expired")
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Token has expired",
                 headers={"WWW-Authenticate": "Bearer"},
             )
-    except (JWTError, ValidationError):
+        logger.info(f"[AUTH] Local JWT validated successfully for user: {token_data.sub}")
+        return token_data
+    except (JWTError, ValidationError) as e:
+        logger.error(f"[AUTH] JWT validation error: {e}")
         raise credentials_exception
-    return token_data
+
+async def get_optional_current_user(token: Optional[str] = Depends(oauth2_scheme)) -> Optional[TokenPayload]:
+    """Get current user if token is provided, otherwise return None.
+    
+    This is useful for endpoints that should work both with and without authentication.
+    When authenticated, user-specific features are enabled.
+    When not authenticated, a default/anonymous experience is provided.
+    """
+    if SKIP_AUTH:
+        # Return a dummy user payload if authentication is skipped
+        logger.debug("[AUTH-OPTIONAL] Skipping authentication - SKIP_AUTH=true")
+        return TokenPayload(sub="skipped_auth_user", exp=int((datetime.now(timezone.utc) + timedelta(hours=1)).timestamp()), roles=["admin"])
+    
+    if not token:
+        logger.debug("[AUTH-OPTIONAL] No token provided, returning None")
+        return None
+    
+    try:
+        # Try to validate the token
+        return await get_current_user(token)
+    except HTTPException:
+        # If validation fails, return None instead of raising
+        logger.debug("[AUTH-OPTIONAL] Token validation failed, returning None")
+        return None
 
 # Example of how to protect an endpoint:
 # from fastapi import APIRouter
