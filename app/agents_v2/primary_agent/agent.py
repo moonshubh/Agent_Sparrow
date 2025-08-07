@@ -158,8 +158,21 @@ async def run_primary_agent(state: PrimaryAgentState) -> AsyncIterator[AIMessage
                 return
 
             # Get user-specific API key
-            from app.core.user_context import get_user_gemini_key
+            from app.core.user_context import get_user_gemini_key, get_current_user_context
             gemini_api_key = await get_user_gemini_key()
+            
+            # Log API key source for debugging
+            user_context = get_current_user_context()
+            if user_context and gemini_api_key:
+                # Check if this is a user key or fallback
+                import os
+                fallback_key = os.getenv("GEMINI_API_KEY")
+                is_fallback = (fallback_key and gemini_api_key == fallback_key)
+                
+                logger.info(f"API Key Source: {'FALLBACK (Railway env)' if is_fallback else 'USER (Frontend configured)'}")
+                logger.info(f"User ID: {user_context.user_id[:8]}...")
+                logger.info(f"API Key Preview: {gemini_api_key[:8]}...{gemini_api_key[-4:]}")
+                parent_span.set_attribute("api_key_source", "fallback" if is_fallback else "user")
             
             if not gemini_api_key:
                 error_msg = "No Gemini API key available for user"

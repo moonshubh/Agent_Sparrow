@@ -337,7 +337,7 @@ def get_chat_messages_for_session(conn, session_id: int, user_id: str, request: 
         # Get ALL messages without pagination to ensure full conversation is loaded
         # Frontend handles display pagination if needed
         cur.execute(f"""
-            SELECT id, session_id, content, message_type, agent_type, metadata, created_at, updated_at
+            SELECT id, session_id, content, message_type, agent_type, metadata, created_at
             FROM chat_messages
             WHERE {where_clause}
             ORDER BY created_at ASC

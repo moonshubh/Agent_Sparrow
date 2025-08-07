@@ -321,3 +321,72 @@ async def get_api_key_internal(
         )
     
     return {"api_key": api_key}
+
+
+@router.get("/debug-usage")
+@limiter.limit("10/minute")
+async def debug_api_key_usage(
+    request: Request,
+    user_id: str = Depends(get_current_user_id),
+    service: SupabaseAPIKeyService = Depends(get_api_key_service)
+):
+    """
+    Debug endpoint to check which API key will be used for the primary agent.
+    Shows whether user's frontend key or Railway fallback will be used.
+    """
+    import os
+    from app.core.user_context import create_user_context_from_user_id
+    
+    # Create user context
+    user_context = await create_user_context_from_user_id(user_id)
+    
+    # Get the Gemini key that would be used
+    gemini_key = await user_context.get_gemini_api_key()
+    
+    # Check if user has a stored key
+    try:
+        response = service.supabase.client.table("user_api_keys")\
+            .select("encrypted_key, is_active, created_at, last_used_at")\
+            .eq("user_uuid", user_id)\
+            .eq("api_key_type", "gemini")\
+            .eq("is_active", True)\
+            .execute()
+        
+        has_user_key = bool(response.data)
+        user_key_info = response.data[0] if has_user_key else None
+    except:
+        has_user_key = False
+        user_key_info = None
+    
+    # Check fallback
+    fallback_key = os.getenv("GEMINI_API_KEY")
+    has_fallback = bool(fallback_key)
+    
+    # Determine which is being used
+    using_user_key = has_user_key
+    using_fallback = not has_user_key and has_fallback
+    
+    # Mask keys for security
+    def mask_key(key: str) -> str:
+        if not key:
+            return "Not configured"
+        return f"{key[:8]}...{key[-4:]}" if len(key) > 12 else "***"
+    
+    return {
+        "user_id": user_id,
+        "api_key_source": "user" if using_user_key else ("fallback" if using_fallback else "none"),
+        "user_key_configured": has_user_key,
+        "user_key_details": {
+            "is_active": user_key_info.get("is_active") if user_key_info else None,
+            "created_at": user_key_info.get("created_at") if user_key_info else None,
+            "last_used_at": user_key_info.get("last_used_at") if user_key_info else None
+        } if user_key_info else None,
+        "fallback_configured": has_fallback,
+        "fallback_env_var": "GEMINI_API_KEY",
+        "actual_key_preview": mask_key(gemini_key) if gemini_key else "No key available",
+        "decision_logic": (
+            "Using user's frontend-configured API key" if using_user_key
+            else "Using Railway environment fallback key" if using_fallback
+            else "No API key available - queries will fail"
+        )
+    }
