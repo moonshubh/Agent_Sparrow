@@ -10,7 +10,7 @@ export interface UnifiedMessage {
   type: "user" | "agent" | "system"
   content: string
   timestamp: Date | string // Support both Date objects and string timestamps (from JSON deserialization)
-  agentType?: "primary" | "primary_agent" | "log_analyst" | "researcher"
+  agentType?: "primary" | "log_analyst" | "researcher"
   streaming?: boolean
   metadata?: {
     confidence?: number

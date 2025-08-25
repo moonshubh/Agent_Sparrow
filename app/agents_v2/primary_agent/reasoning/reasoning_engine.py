@@ -474,7 +474,7 @@ Now, create a response that feels like it's from Agent Sparrow - your email-savv
                 )
                 system_prompt = AgentSparrowV9Prompts.build_system_prompt(config=prompt_config)
                 
-                messages = [
+                messages: List[BaseMessage] = [
                     SystemMessage(content=system_prompt),
                     HumanMessage(content=response_prompt)
                 ]
@@ -977,7 +977,7 @@ Now, create a response that feels like it's from Agent Sparrow - your email-savv
             
             critique_request_prompt = f"Here is the response I have drafted. Please provide your internal self-critique based on the framework provided in your system instructions:\n\n<draft_response>\n{draft_response}\n</draft_response>"
 
-            messages = [
+            messages: List[BaseMessage] = [
                 SystemMessage(content=system_prompt),
                 HumanMessage(content=critique_request_prompt)
             ]
@@ -1086,9 +1086,9 @@ Context: {context if context else 'No previous context'}
 Provide comprehensive analysis following the structure outlined in your instructions."""
 
             # Make single LLM call for unified analysis
-            messages = [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt}
+            messages: List[BaseMessage] = [
+                SystemMessage(content=system_prompt),
+                HumanMessage(content=user_prompt)
             ]
             
             try:
@@ -1345,9 +1345,9 @@ Please think carefully about the best way to help this customer, considering the
 Note: You have a thinking budget of {thinking_budget} tokens available for internal reasoning."""
 
             try:
-                messages = [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt}
+                messages: List[BaseMessage] = [
+                    SystemMessage(content=system_prompt),
+                    HumanMessage(content=user_prompt)
                 ]
                 
                 # Use the model's ainvoke for response generation
@@ -1481,9 +1481,9 @@ Issues to address:
 Please provide an improved version of this response."""
 
             try:
-                messages = [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt}
+                messages: List[BaseMessage] = [
+                    SystemMessage(content=system_prompt),
+                    HumanMessage(content=user_prompt)
                 ]
                 
                 # Use the model's ainvoke for refinement

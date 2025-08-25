@@ -24,7 +24,21 @@ from app.db.supabase_client import get_supabase_client
 from app.feedme.transcript_parser import TranscriptParser
 from app.db.embedding_utils import get_embedding_model, generate_feedme_embeddings
 from app.feedme.schemas import ProcessingStatus
-from app.core.config import settings
+from app.core.settings import get_settings
+from functools import lru_cache
+
+# Use cached settings accessor for dynamic reload capability
+@lru_cache(maxsize=1)
+def get_cached_settings():
+    """Get cached settings instance. Clear cache to reload settings."""
+    return get_settings()
+
+# Helper to access current settings dynamically
+def current_settings():
+    """Get current settings, allows for dynamic reload without restart."""
+    # Clear cache and reload if needed (can be triggered externally)
+    return get_cached_settings()
+
 from app.core.user_context_sync import get_user_gemini_api_key_sync
 from app.feedme.ai_extraction_engine import GeminiExtractionEngine
 
@@ -366,10 +380,10 @@ def generate_embeddings(self, conversation_id: int) -> Dict[str, Any]:
     logger.info(f"Generating embeddings for conversation {conversation_id} (task: {task_id})")
     
     try:
-        # Generate embeddings using existing utility
+        # Generate embeddings using existing utility with dynamic settings
         embeddings_generated = generate_feedme_embeddings(
             conversation_id=conversation_id,
-            batch_size=settings.feedme_embedding_batch_size
+            batch_size=current_settings().feedme_embedding_batch_size
         )
         
         result = {

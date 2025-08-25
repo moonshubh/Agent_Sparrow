@@ -34,21 +34,24 @@ import { toast } from 'sonner'
 import { EnhancedLogAnalysisContainer } from '@/components/log-analysis/EnhancedLogAnalysisContainer'
 import { type LogAnalysisData, type EnhancedLogAnalysisData } from '@/lib/log-analysis-utils'
 import { ExecutiveSummaryRenderer } from '@/components/markdown/ExecutiveSummaryRenderer'
+import dynamic from 'next/dynamic'
+import { Skeleton } from '@/components/ui/skeleton'
 
-interface Source {
-  id: string
-  title: string
-  url: string
-  snippet?: string
-  type: 'web' | 'knowledge_base' | 'documentation'
-}
+// Dynamic import for ThinkingTraceDisplay to avoid SSR issues
+const ThinkingTraceDisplay = dynamic(
+  () => import('./ThinkingTraceDisplay').then(mod => mod.ThinkingTraceDisplay),
+  {
+    ssr: false,
+    loading: () => (
+      <div className="mt-2 p-3 bg-gray-50 rounded-lg">
+        <Skeleton className="h-4 w-32 mb-2" />
+        <Skeleton className="h-3 w-full" />
+      </div>
+    )
+  }
+)
 
-interface MessageMetadata {
-  confidence?: number
-  sources?: Source[]
-  analysisResults?: any
-  routingReason?: string
-}
+import type { Source, MessageMetadata, ThinkingTrace } from '@/types/chat'
 
 interface MessageBubbleProps {
   id: string
@@ -56,7 +59,10 @@ interface MessageBubbleProps {
   content: string
   timestamp: Date | string // Support both Date objects and string timestamps (from JSON)
   agentType?: "primary" | "log_analyst" | "researcher"
-  metadata?: MessageMetadata
+  metadata?: MessageMetadata & {
+    // Legacy field support - will be removed in future
+    followUpQuestionsUsed?: number
+  }
   streaming?: boolean
   onRetry?: () => void
   onRate?: (rating: 'up' | 'down') => void
@@ -600,6 +606,14 @@ export default function MessageBubble({
           {/* Citations */}
           {metadata?.sources && metadata.sources.length > 0 && (
             <CitationDisplay sources={metadata.sources} />
+          )}
+          
+          {/* Thinking Trace */}
+          {metadata?.thinking_trace && !isUser && (
+            <ThinkingTraceDisplay 
+              trace={metadata.thinking_trace} 
+              className="mt-3"
+            />
           )}
           
           {/* Message Footer */}

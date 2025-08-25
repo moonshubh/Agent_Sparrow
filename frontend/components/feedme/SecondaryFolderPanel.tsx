@@ -22,7 +22,7 @@ import {
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { FolderTreeView } from './FolderTreeViewSimple'
-import { FolderTreeItem } from './FolderTreeItem'
+// import { FolderTreeItem } from './FolderTreeItem' // Component not yet created
 import { useFolders, useFoldersActions } from '@/lib/stores/folders-store'
 import { useUISidebar, useUIActions } from '@/lib/stores/ui-store'
 import { useOutsideClick } from '@/hooks/useOutsideClick'
@@ -254,13 +254,23 @@ export function SecondaryFolderPanel({
               ) : (
                 <>
                   {/* Enhanced Folder Tree Items */}
+                  {/* FolderTreeItem component not yet created - using basic rendering */}
                   {filteredFolders.map((folder) => (
-                    <FolderTreeItem
+                    <div
                       key={folder.id}
-                      folder={folder}
-                      level={0}
-                      onFolderSelect={handleFolderSelect}
-                    />
+                      className="px-3 py-2 hover:bg-accent/50 cursor-pointer rounded-md"
+                      onClick={() => handleFolderSelect(folder.id)}
+                    >
+                      <div className="flex items-center gap-2">
+                        <FolderOpen className="h-4 w-4" />
+                        <span className="text-sm">{folder.name}</span>
+                        {folder.conversationCount && folder.conversationCount > 0 && (
+                          <span className="text-xs text-muted-foreground ml-auto">
+                            {folder.conversationCount}
+                          </span>
+                        )}
+                      </div>
+                    </div>
                   ))}
                 </>
               )}

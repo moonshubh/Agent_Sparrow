@@ -159,16 +159,10 @@ export function ApprovalQueue({
   const lastUpdateRef = useRef<Date>(new Date())
   
   // WebSocket connection for real-time updates
-  const { isConnected, lastMessage } = useWebSocket(
-    enableWebSocket ? '/ws/approval-queue' : null,
-    {
-      onMessage: (data) => {
-        if (data.type === 'conversation_update') {
-          handleRealtimeUpdate(data.payload)
-        }
-      }
-    }
-  )
+  const { isConnected } = useWebSocket({
+    autoConnect: enableWebSocket,
+    debug: false
+  })
 
   // Handle real-time updates
   const handleRealtimeUpdate = useCallback((payload: any) => {
@@ -248,14 +242,14 @@ export function ApprovalQueue({
     toggleSelectAll()
   }, { enableOnFormTags: false })
   
-  useHotkeys('cmd+shift+a, ctrl+shift+a', (e) => {
+  useHotkeys('cmd+shift+a, ctrl+shift+a', (e: KeyboardEvent) => {
     e.preventDefault()
     if (selectedConversations.size > 0 && !isProcessing) {
       handleBulkApproval('approve')
     }
   }, { enableOnFormTags: false })
   
-  useHotkeys('cmd+shift+r, ctrl+shift+r', (e) => {
+  useHotkeys('cmd+shift+r, ctrl+shift+r', (e: KeyboardEvent) => {
     e.preventDefault()
     if (selectedConversations.size > 0 && !isProcessing) {
       handleBulkApproval('reject')
@@ -555,10 +549,10 @@ export function ApprovalQueue({
 
   // Select all/none
   const toggleSelectAll = () => {
-    if (selectedConversations.size === filteredConversations.length) {
+    if (selectedConversations.size === filteredAndSortedConversations.length) {
       setSelectedConversations(new Set())
     } else {
-      setSelectedConversations(new Set(filteredConversations.map(c => c.id)))
+      setSelectedConversations(new Set(filteredAndSortedConversations.map(c => c.id)))
     }
   }
 
@@ -674,7 +668,7 @@ export function ApprovalQueue({
               Loading pending approvals...
             </CardContent>
           </Card>
-        ) : filteredConversations.length === 0 ? (
+        ) : filteredAndSortedConversations.length === 0 ? (
           <Card>
             <CardContent className="text-center py-8">
               <CheckCircle2 className="h-12 w-12 mx-auto mb-4 text-green-500 opacity-50" />
@@ -685,7 +679,7 @@ export function ApprovalQueue({
             </CardContent>
           </Card>
         ) : (
-          filteredConversations.map((conversation) => {
+          filteredAndSortedConversations.map((conversation: PendingConversation) => {
             const methodInfo = getProcessingMethodInfo(conversation.processing_method)
             const isSelected = selectedConversations.has(conversation.id)
 

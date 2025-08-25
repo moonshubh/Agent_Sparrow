@@ -89,7 +89,12 @@ export function ConversationEditor({ conversationId, isOpen, onClose }: Conversa
             
             // Set the conversation data
             setTitle(directConversation.title || '')
-            setContent(directConversation.parsed_content || directConversation.raw_transcript || '')
+            // Use metadata for content if available
+            const content = (directConversation as any).parsed_content || 
+                          (directConversation as any).raw_transcript || 
+                          directConversation.metadata?.content || 
+                          ''
+            setContent(content)
             setLoading(false)
             return
           }

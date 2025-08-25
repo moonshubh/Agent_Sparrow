@@ -332,7 +332,11 @@ export function EnhancedFeedMeModal({ isOpen, onClose, onUploadComplete }: Enhan
       let statusResponse: any = null
       while (true) {
         try {
-          statusResponse = await getProcessingStatus(uploadResponse.conversation_id || uploadResponse.id)
+          const conversationId = uploadResponse.conversation_id || uploadResponse.id
+          if (!conversationId) {
+            throw new Error('No conversation ID received from upload')
+          }
+          statusResponse = await getProcessingStatus(conversationId)
           setFiles(prev => prev.map(f => 
             f.id === fileState.id 
               ? { ...f, processingStatus: statusResponse.status }
@@ -360,11 +364,12 @@ export function EnhancedFeedMeModal({ isOpen, onClose, onUploadComplete }: Enhan
           : f
       ))
 
+      const resultId = uploadResponse.conversation_id || uploadResponse.id || 0
       setBatchUploadState(prev => ({
         ...prev,
         completedFiles: prev.completedFiles + 1,
         results: [...prev.results, {
-          id: uploadResponse.conversation_id || uploadResponse.id,
+          id: resultId,
           title: fileState.title,
           status: statusResponse?.status || 'completed',
           total_examples: uploadResponse.total_examples || 0
@@ -884,12 +889,13 @@ export function EnhancedFeedMeModal({ isOpen, onClose, onUploadComplete }: Enhan
                   true
                 )
                 
+                const uploadId = uploadResponse.conversation_id || uploadResponse.id || 0
                 setBatchUploadState(prev => ({
                   ...prev,
                   isUploading: false,
                   completedFiles: 1,
                   results: [{
-                    id: uploadResponse.conversation_id || uploadResponse.id,
+                    id: uploadId,
                     title: singleTitle,
                     status: uploadResponse.processing_status,
                     total_examples: uploadResponse.total_examples || 0

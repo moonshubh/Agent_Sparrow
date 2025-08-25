@@ -38,15 +38,17 @@ _model_cache: Dict[str, ChatGoogleGenerativeAI] = {}
 def _validate_api_key(api_key: str) -> bool:
     """Validate API key format for Google Generative AI."""
     if not api_key or not isinstance(api_key, str):
+        logger.warning(f"API key validation failed: empty or not string")
         return False
     # Google API keys typically start with 'AIza' and are 39 characters long
     if not api_key.startswith('AIza') or len(api_key) != 39:
-        logger.warning(f"API key format validation failed: expected format 'AIza...' with 39 characters, got {len(api_key)} characters")
+        logger.warning(f"API key format validation failed: expected format with specific prefix and length")
         return False
     # Additional validation for valid characters (alphanumeric, underscore, hyphen)
     if not re.match(r'^[A-Za-z0-9_-]+$', api_key):
-        logger.warning("API key contains invalid characters")
+        logger.warning(f"API key contains invalid characters")
         return False
+    logger.debug(f"API key validation successful")
     return True
 
 @lru_cache(maxsize=128)
@@ -169,9 +171,7 @@ async def run_primary_agent(state: PrimaryAgentState) -> AsyncIterator[AIMessage
                 fallback_key = os.getenv("GEMINI_API_KEY")
                 is_fallback = (fallback_key and gemini_api_key == fallback_key)
                 
-                logger.info(f"API Key Source: {'FALLBACK (Railway env)' if is_fallback else 'USER (Frontend configured)'}")
-                logger.info(f"User ID: {user_context.user_id[:8]}...")
-                logger.info(f"API Key Preview: {gemini_api_key[:8]}...{gemini_api_key[-4:]}")
+                logger.debug(f"API Key Source: {'FALLBACK (Railway env)' if is_fallback else 'USER (Frontend configured)'}")
                 parent_span.set_attribute("api_key_source", "fallback" if is_fallback else "user")
             
             if not gemini_api_key:
@@ -192,6 +192,7 @@ async def run_primary_agent(state: PrimaryAgentState) -> AsyncIterator[AIMessage
                 return
             
             # Create user-specific model (will determine thinking budget later)
+            logger.debug(f"Creating model with API key")
             model_with_tools = create_user_specific_model(gemini_api_key)
 
             parent_span.set_attribute("input.query", user_query)
@@ -262,17 +263,57 @@ async def run_primary_agent(state: PrimaryAgentState) -> AsyncIterator[AIMessage
                 yield AIMessageChunk(content=chunk_content, role="assistant")
                 await anyio.sleep(0.005)  # Reduced delay for smoother streaming
             
-            # After streaming the response, send follow-up questions as metadata
+            # After streaming the response, send metadata including thinking trace
+            metadata_to_send = {}
+            
+            # Add follow-up questions if available
             if follow_up_questions:
-                # Create a special message chunk with metadata
+                metadata_to_send["followUpQuestions"] = follow_up_questions[:5]  # Limit to 5 questions
+                metadata_to_send["followUpQuestionsUsed"] = 0
+            
+            # Add thinking trace if enabled
+            if settings.should_enable_thinking_trace() and reasoning_state:
+                thinking_trace = {
+                    "confidence": reasoning_state.overall_confidence,
+                    "thinking_steps": [],
+                    "tool_decision": None,
+                    "knowledge_gaps": []
+                }
+                
+                # Extract thinking steps from reasoning steps
+                for step in reasoning_state.reasoning_steps:
+                    thinking_trace["thinking_steps"].append({
+                        "phase": step.phase.value,
+                        "thought": step.reasoning,
+                        "confidence": step.confidence
+                    })
+                
+                # Add query analysis details
+                if reasoning_state.query_analysis:
+                    thinking_trace["emotional_state"] = reasoning_state.query_analysis.emotional_state.value
+                    thinking_trace["problem_category"] = reasoning_state.query_analysis.problem_category.value
+                    thinking_trace["complexity"] = reasoning_state.query_analysis.complexity_score
+                
+                # Add tool decision reasoning
+                if reasoning_state.tool_reasoning:
+                    thinking_trace["tool_decision"] = reasoning_state.tool_reasoning.decision_type.value
+                    thinking_trace["tool_confidence"] = reasoning_state.tool_reasoning.confidence
+                    thinking_trace["knowledge_gaps"] = reasoning_state.tool_reasoning.knowledge_gaps
+                
+                # Add self-critique results if available
+                if reasoning_state.self_critique_result:
+                    thinking_trace["critique_score"] = reasoning_state.self_critique_result.critique_score
+                    thinking_trace["passed_critique"] = reasoning_state.self_critique_result.passed_critique
+                
+                metadata_to_send["thinking_trace"] = thinking_trace
+            
+            # Send metadata chunk if we have any metadata to send
+            if metadata_to_send:
                 metadata_chunk = AIMessageChunk(
                     content="",
                     role="assistant",
                     additional_kwargs={
-                        "metadata": {
-                            "followUpQuestions": follow_up_questions[:5],  # Limit to 5 questions
-                            "followUpQuestionsUsed": 0
-                        }
+                        "metadata": metadata_to_send
                     }
                 )
                 yield metadata_chunk

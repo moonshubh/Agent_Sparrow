@@ -76,6 +76,7 @@ class Settings(BaseSettings):
     reasoning_enable_quality_assessment: bool = Field(default=True, alias="REASONING_ENABLE_QUALITY_ASSESSMENT")
     reasoning_enable_reasoning_transparency: bool = Field(default=True, alias="REASONING_ENABLE_REASONING_TRANSPARENCY")
     reasoning_debug_mode: bool = Field(default=False, alias="REASONING_DEBUG_MODE")
+    reasoning_enable_thinking_trace: bool = Field(default=False, alias="ENABLE_THINKING_TRACE")
     
     # Enhanced Log Analysis v3.0 Configuration
     log_analysis_use_optimized_analysis: bool = Field(default=True, alias="USE_OPTIMIZED_ANALYSIS")
@@ -248,6 +249,15 @@ class Settings(BaseSettings):
         API key endpoints are enabled unless explicitly disabled AND not in production.
         """
         return self._should_enable_security_endpoint(self.enable_api_key_endpoints)
+    
+    def should_enable_thinking_trace(self) -> bool:
+        """
+        Helper method to determine if thinking trace should be enabled.
+        Returns False in production mode, otherwise returns the value of reasoning_enable_thinking_trace.
+        """
+        if self.is_production_mode():
+            return False
+        return self.reasoning_enable_thinking_trace
 
     class Config:
         case_sensitive = False

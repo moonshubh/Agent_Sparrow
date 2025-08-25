@@ -701,3 +701,4 @@ dev-debug.log
 frontend/tsconfig.tsbuildinfo
 *.md
 *.xml
+*.bak

@@ -27,10 +27,32 @@ except ImportError:
         from app.core.settings import settings
         return getattr(settings, 'development_user_id', 'dev-user-12345')
 from app.core.user_context import user_context_scope, create_user_context_from_user_id
+import logging
 
+logger = logging.getLogger(__name__)
 router = APIRouter()
 
+# Precompiled regex patterns for performance
+SELF_CRITIQUE_RE = re.compile(r'<self_critique>.*?</self_critique>', flags=re.DOTALL)
+
 # --- Helper Functions ---
+
+def _get_user_id_for_dev_mode(settings) -> str:
+    """
+    Get user ID for development mode.
+    
+    Returns development_user_id if SKIP_AUTH is true and development_user_id is set,
+    otherwise returns 'anonymous'.
+    
+    Args:
+        settings: Application settings object
+        
+    Returns:
+        str: User ID to use
+    """
+    if settings.skip_auth and hasattr(settings, 'development_user_id') and settings.development_user_id:
+        return settings.development_user_id
+    return "anonymous"
 
 def safe_json_serializer(obj):
     """
@@ -78,7 +100,7 @@ def serialize_analysis_results(final_report):
         # Recursively serialize any complex nested objects
         return safe_json_serializer(serialized)
     except Exception as e:
-        print(f"Error serializing analysis results: {e}")
+        logger.error(f"Error serializing analysis results: {e}")
         # Return minimal fallback
         return {
             "overall_summary": "Analysis completed but serialization failed",
@@ -193,7 +215,7 @@ async def primary_agent_stream_generator(query: str, user_id: str, message_histo
     except Exception as e:
         # Use logger for consistency if available, otherwise print
         # logger.error(f"Error in primary_agent_stream_generator calling run_primary_agent: {e}", exc_info=True)
-        print(f"Error in primary_agent_stream_generator calling run_primary_agent: {e}")
+        logger.error(f"Error in primary_agent_stream_generator calling run_primary_agent: {e}", exc_info=True)
         error_payload = json.dumps({"role": "error", "content": f"An error occurred in the agent: {str(e)}"}, ensure_ascii=False)
         yield f"data: {error_payload}\n\n"
 
@@ -216,11 +238,20 @@ async def chat_stream_v1_legacy(
     if not request.message:
         raise HTTPException(status_code=400, detail="Message cannot be empty")
     
-    # Use default configuration for unauthenticated requests
+    # In development mode with SKIP_AUTH=true, use the development user ID
+    from app.core.settings import get_settings
+    settings = get_settings()
+    
+    # Determine user ID based on environment
+    user_id = _get_user_id_for_dev_mode(settings)
+    if user_id != "anonymous":
+        logger.info("Using development user ID for testing")
+    
+    # Use appropriate user configuration
     return StreamingResponse(
         primary_agent_stream_generator(
             request.message, 
-            user_id="anonymous",
+            user_id=user_id,
             message_history=request.messages,
             session_id=request.session_id
         ),
@@ -321,7 +352,7 @@ async def analyze_logs(
         try:
             return LogAnalysisV2Response(**response_dict)
         except Exception as validation_error:
-            print(f"LogAnalysisV2Response validation error: {validation_error}")
+            logger.warning(f"LogAnalysisV2Response validation error: {validation_error}")
             # Create a minimal response that will validate
             fallback_response = {
                 "overall_summary": response_dict.get("overall_summary", "Analysis completed"),
@@ -348,7 +379,7 @@ async def analyze_logs(
             return LogAnalysisV2Response(**fallback_response)
     except Exception as e:
         # Log the exception details for debugging
-        print(f"Error in Log Analysis Agent endpoint: {e}")
+        logger.error(f"Error in Log Analysis Agent endpoint: {e}", exc_info=True)
         # Consider how to propagate trace_id in error responses if needed
         raise HTTPException(status_code=500, detail=f"Error processing log analysis request: {str(e)}")
 
@@ -445,7 +476,7 @@ async def research_query(
         }
         return ResearchResponse(**response_data)
     except Exception as e:
-        print(f"Error in Research Agent endpoint: {e}")
+        logger.error(f"Error in Research Agent endpoint: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Error processing research request: {str(e)}")
 
 # --- Unified Agent Endpoint with LangGraph Orchestration ---
@@ -527,7 +558,7 @@ async def unified_agent_stream_generator(request: UnifiedAgentRequest) -> AsyncI
                 analysis_results = serialize_analysis_results(final_report)
                 
                 # Additional debug logging
-                print(f"Serialized analysis results keys: {list(analysis_results.keys()) if isinstance(analysis_results, dict) else 'not a dict'}")
+                logger.debug(f"Serialized analysis results keys: {list(analysis_results.keys()) if isinstance(analysis_results, dict) else 'not a dict'}")
                 
                 try:
                     json_payload = json.dumps({
@@ -539,7 +570,7 @@ async def unified_agent_stream_generator(request: UnifiedAgentRequest) -> AsyncI
                     }, ensure_ascii=False)
                     yield f"data: {json_payload}\n\n"
                 except Exception as json_error:
-                    print(f"JSON serialization error: {json_error}")
+                    logger.error(f"JSON serialization error: {json_error}")
                     # Send a fallback response
                     fallback_payload = json.dumps({
                         "role": "assistant", 
@@ -586,54 +617,88 @@ async def unified_agent_stream_generator(request: UnifiedAgentRequest) -> AsyncI
             yield f"data: {json_payload}\n\n"
             
         else:
-            # Handle primary agent queries
+            # Handle primary agent queries with user context
             from app.agents_v2.primary_agent.agent import run_primary_agent
             from app.agents_v2.primary_agent.schemas import PrimaryAgentState
+            from app.core.settings import get_settings
             
-            # Build message history
-            messages = []
+            settings = get_settings()
             
-            # Add conversation history if provided
-            if request.messages:
-                for msg in request.messages:
-                    if msg.get("type") == "user" or msg.get("role") == "user":
-                        messages.append(HumanMessage(content=msg.get("content", "")))
-                    elif msg.get("type") == "assistant" or msg.get("role") == "assistant" or msg.get("type") == "agent":
-                        messages.append(AIMessage(content=msg.get("content", "")))
+            # Determine user ID based on environment
+            user_id = _get_user_id_for_dev_mode(settings)
+            if user_id != "anonymous":
+                logger.info("Using development user ID for testing")
             
-            # Add current query
-            messages.append(HumanMessage(content=request.message))
+            # Create user context
+            user_context = await create_user_context_from_user_id(user_id)
             
-            initial_state = PrimaryAgentState(
-                messages=messages,
-                session_id=request.session_id
-            )
+            # Check if user has required API keys
+            gemini_key = await user_context.get_gemini_api_key()
+            if not gemini_key:
+                error_payload = json.dumps({
+                    "role": "error", 
+                    "content": "🔑 **API Key Required**: To use the AI assistant, please add your Google Gemini API key in Settings.\n\n**How to configure:**\n1. Click the ⚙️ Settings button in the top-right corner\n2. Navigate to the 'API Keys' section\n3. Add your Google Gemini API key (starts with 'AIza')\n4. Get your free API key at: https://makersuite.google.com/app/apikey",
+                    "trace_id": request.trace_id
+                }, ensure_ascii=False)
+                yield f"data: {error_payload}\n\n"
+                return
             
-            # Stream the primary agent's response
-            routing_message = f"🎯 Routing to {agent_type.replace('_', ' ').title()}"
-            yield f'data: {json.dumps({"role": "system", "content": routing_message, "agent_type": agent_type, "trace_id": request.trace_id})}\n\n'
-            
-            # Stream each chunk after cleaning
-            async for chunk in run_primary_agent(initial_state):
-                if hasattr(chunk, 'content') and chunk.content is not None:
-                    # Clean self-critique blocks from each chunk
-                    cleaned_content = re.sub(r'<self_critique>.*?</self_critique>', '', chunk.content, flags=re.DOTALL)
+            # Use user-specific context
+            async with user_context_scope(user_context):
+                # Build message history
+                messages = []
+                
+                # Add conversation history if provided
+                if request.messages:
+                    for msg in request.messages:
+                        if msg.get("type") == "user" or msg.get("role") == "user":
+                            messages.append(HumanMessage(content=msg.get("content", "")))
+                        elif msg.get("type") == "assistant" or msg.get("role") == "assistant" or msg.get("type") == "agent":
+                            messages.append(AIMessage(content=msg.get("content", "")))
+                
+                # Add current query
+                messages.append(HumanMessage(content=request.message))
+                
+                initial_state = PrimaryAgentState(
+                    messages=messages,
+                    session_id=request.session_id
+                )
+                
+                # Note: Routing message already sent earlier (lines 521-527)
+                # Stream each chunk after cleaning
+                async for chunk in run_primary_agent(initial_state):
+                    json_payload = ""
                     
-                    if cleaned_content.strip():  # Only send non-empty content
-                        role = getattr(chunk, 'role', 'assistant') or 'assistant'
+                    if hasattr(chunk, 'content') and chunk.content is not None:
+                        # Clean self-critique blocks from each chunk using precompiled regex
+                        cleaned_content = SELF_CRITIQUE_RE.sub('', chunk.content)
+                        
+                        if cleaned_content.strip():  # Only send non-empty content
+                            role = getattr(chunk, 'role', 'assistant') or 'assistant'
+                            json_payload = json.dumps({
+                                "role": role,
+                                "content": cleaned_content,
+                                "agent_type": agent_type,
+                                "trace_id": request.trace_id
+                            }, ensure_ascii=False)
+                    elif hasattr(chunk, 'additional_kwargs') and chunk.additional_kwargs.get('metadata'):
+                        # Handle metadata events (including follow-up questions)
+                        metadata = chunk.additional_kwargs['metadata']
                         json_payload = json.dumps({
-                            "role": role,
-                            "content": cleaned_content,
+                            "role": "metadata",
+                            "metadata": metadata,
                             "agent_type": agent_type,
                             "trace_id": request.trace_id
                         }, ensure_ascii=False)
+                    
+                    if json_payload:
                         yield f"data: {json_payload}\n\n"
                 
         # Send completion signal
         yield f"data: {json.dumps({'role': 'system', 'content': '[DONE]'})}\n\n"
         
     except Exception as e:
-        print(f"Error in unified_agent_stream_generator: {e}")
+        logger.error(f"Error in unified_agent_stream_generator: {e}", exc_info=True)
         import traceback
         traceback.print_exc()
         error_payload = json.dumps({
@@ -702,7 +767,7 @@ async def research_agent_stream_generator(query: str, trace_id: str | None = Non
         yield f"data: {json.dumps({'type': 'message', 'data': final_message})}\n\n"
         
     except Exception as e:
-        print(f"Error in research_agent_stream_generator: {e}")
+        logger.error(f"Error in research_agent_stream_generator: {e}", exc_info=True)
         error_step = {
             "type": "Error", 
             "description": f"Research failed: {str(e)}", 

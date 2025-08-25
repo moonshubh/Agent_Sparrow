@@ -210,9 +210,7 @@ export class ChatAPI {
   static messageToBackend(message: UnifiedMessage, sessionId: number): CreateMessageRequest {
     // Map agent types to valid backend values
     let mappedAgentType = message.agentType
-    if (mappedAgentType === 'primary_agent') {
-      mappedAgentType = 'primary'
-    } else if (mappedAgentType === 'log_analyst') {
+    if (mappedAgentType === 'log_analyst') {
       mappedAgentType = 'log_analysis'
     } else if (mappedAgentType === 'researcher') {
       mappedAgentType = 'research'
