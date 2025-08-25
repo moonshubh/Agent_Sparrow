@@ -17,7 +17,7 @@ from .schemas import LogAnalysisAgentState, StructuredLogAnalysisOutput
 from .prompts import LOG_ANALYSIS_PROMPT_TEMPLATE
 from .parsers import parse_log_content
 from datetime import datetime
-from app.core.user_context import get_user_context
+from app.core.user_context import get_current_user_context
 from app.api_keys.schemas import APIKeyType
 
 # GEMINI_API_KEY is now optional - will be retrieved from user context or database
@@ -39,7 +39,7 @@ async def _get_gemini_api_key() -> str:
         return settings.gemini_api_key
     
     # Try to get from user context if available
-    user_context = get_user_context()
+    user_context = get_current_user_context()
     if user_context:
         api_key = await user_context.get_gemini_api_key()
         if api_key:

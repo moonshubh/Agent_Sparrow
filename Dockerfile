@@ -6,16 +6,15 @@ RUN apt-get update && apt-get install -y \
     gcc \
     g++ \
     build-essential \
-    cargo \
-    rustc \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
 # Copy and install requirements first (for better caching)
 COPY requirements.txt .
+# Use pip cache and install in parallel where possible
 RUN pip install --no-cache-dir --upgrade pip wheel setuptools && \
-    pip install --no-cache-dir -r requirements.txt
+    pip install --no-cache-dir --prefer-binary -r requirements.txt
 
 # Production stage
 FROM python:3.10.14-slim
@@ -47,8 +46,9 @@ ENV PORT=8000
 EXPOSE ${PORT}
 
 # Health check (using curl which is more reliable in containers)
-HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
+# Increased start-period to 3 minutes to allow for model loading and service initialization
+HEALTHCHECK --interval=30s --timeout=10s --start-period=180s --retries=5 \
   CMD curl -f http://localhost:${PORT}/health || exit 1
 
-# Start the application
-CMD ["sh", "-c", "echo 'Starting MB-Sparrow on port ${PORT}...' && uvicorn app.main:app --host 0.0.0.0 --port ${PORT}"]
+# Start the application with detailed logging for Railway debugging
+CMD ["sh", "-c", "echo 'Starting MB-Sparrow on port ${PORT}...' && echo 'Initializing services, this may take 1-2 minutes...' && uvicorn app.main:app --host 0.0.0.0 --port ${PORT} --log-level info"]
