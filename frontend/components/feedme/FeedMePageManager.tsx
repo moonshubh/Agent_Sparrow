@@ -43,7 +43,7 @@ import { SecondaryFolderPanel } from './SecondaryFolderPanel'
 import { useConversations } from '@/lib/stores/conversations-store'
 import { useRealtime } from '@/lib/stores/realtime-store'
 import { useFolders, useFoldersActions, useFolderModals } from '@/lib/stores/folders-store'
-import { useUIPanels, useUIResponsive } from '@/lib/stores/ui-store'
+import { useUIPanels, useUIResponsive, useUIActions } from '@/lib/stores/ui-store'
 import { useStoreInitialization } from '@/lib/stores/store-composition'
 
 // Import custom hooks for extracted functionality
@@ -72,6 +72,7 @@ export function FeedMePageManager() {
 
   // Store hooks - only what's needed for rendering
   const { rightPanel, selectedConversationId } = useUIPanels()
+  const uiActions = useUIActions()
   const { isMobile } = useUIResponsive()
   const conversations = useConversations()
   const { notifications } = useRealtime()

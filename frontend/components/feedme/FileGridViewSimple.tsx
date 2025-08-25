@@ -206,7 +206,7 @@ export function FileGridView({ onConversationSelect, currentFolderId, onFolderSe
             <Card 
               key={conversation.id} 
               className="cursor-pointer hover:shadow-md hover:bg-mb-blue-300/50 focus-within:ring-2 focus-within:ring-accent/50 transition-all duration-200 relative group"
-              onClick={() => handleConversationSelect(conversation.id)}
+              onClick={() => handleConversationSelect(conversation.id || 0)}
               tabIndex={0}
             >
               {/* Actions dropdown - shows on hover */}
@@ -231,7 +231,7 @@ export function FileGridView({ onConversationSelect, currentFolderId, onFolderSe
                       className="flex items-center gap-2 cursor-pointer"
                       onClick={(e) => {
                         e.stopPropagation()
-                        handleMoveToFolder(conversation.id, null)
+                        handleMoveToFolder(conversation.id || 0, null)
                       }}
                     >
                       <Folder className="h-4 w-4" />
@@ -244,7 +244,7 @@ export function FileGridView({ onConversationSelect, currentFolderId, onFolderSe
                         className="flex items-center gap-2 cursor-pointer"
                         onClick={(e) => {
                           e.stopPropagation()
-                          handleMoveToFolder(conversation.id, folder.id)
+                          handleMoveToFolder(conversation.id || 0, folder.id)
                         }}
                       >
                         <div className="flex items-center gap-2">
@@ -262,7 +262,7 @@ export function FileGridView({ onConversationSelect, currentFolderId, onFolderSe
                       className="flex items-center gap-2 text-destructive focus:text-destructive cursor-pointer"
                       onClick={(e) => {
                         e.stopPropagation()
-                        handleDeleteClick(e, conversation.id)
+                        handleDeleteClick(e, conversation.id || 0)
                       }}
                     >
                       <Trash2 className="h-4 w-4" />

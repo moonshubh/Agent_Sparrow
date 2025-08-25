@@ -13,7 +13,7 @@ interface SecurityFeatureGridProps {
   features: SecurityFeature[]
 }
 
-export function SecurityFeatureGrid({ features }: SecurityFeatureGridProps): JSX.Element {
+export function SecurityFeatureGrid({ features }: SecurityFeatureGridProps): React.JSX.Element {
   return (
     <div className="grid gap-4 md:grid-cols-2">
       {features.map((feature) => (

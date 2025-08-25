@@ -139,7 +139,7 @@ class SupabaseAPIKeyService:
         try:
             response = self.supabase.client.table("user_api_keys")\
                 .select("id, api_key_type, key_name, is_active, created_at, updated_at, last_used_at, encrypted_key, masked_key")\
-                .or_(f"user_uuid.eq.{user_id},user_id.eq.{user_id}")\
+                .eq("user_uuid", user_id)\
                 .execute()
             
             api_key_infos = []

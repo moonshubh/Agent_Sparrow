@@ -19,8 +19,8 @@ class GraphState(BaseModel):
     final_report: Optional[StructuredLogAnalysisOutput] = None
     # Pre-processing cache hit response stored here.
     cached_response: Optional[Any] = None
-    # Retrieved context snippets from Qdrant
-    context: Optional[List[Document]] = None
+    # Context retrieval now handled directly by agents using Supabase
+    # context field removed - was originally for Qdrant integration
     # Arbitrary tool output (LangGraph ToolNode)
     tool_invocation_output: Optional[Any] = Field(default=None, description="Output from the last tool invocation if any.")
     # --- QA / Reflection Loop Fields ---

@@ -32,7 +32,7 @@ export function ConversationListExample() {
 
   // Initialize data on mount
   useEffect(() => {
-    conversationActions.loadConversations({ page: 1, page_size: 20 })
+    conversationActions.loadConversations({ page: 1, pageSize: 20 })
     realtimeActions.connect() // Auto-reconnecting WebSocket
   }, [])
 
@@ -68,7 +68,7 @@ export function ConversationListExample() {
         <Card 
           key={conversation.id}
           className="cursor-pointer hover:shadow-md transition-shadow"
-          onClick={() => handleSelect(conversation.id)}
+          onClick={() => handleSelect(conversation.id || conversation.conversation_id || 0)}
         >
           <CardHeader>
             <div className="flex items-center justify-between">
@@ -76,16 +76,25 @@ export function ConversationListExample() {
                 <FileText className="h-4 w-4" />
                 {conversation.title}
               </CardTitle>
-              <StatusBadge status={conversation.processing_status} />
+              <Badge variant={
+                conversation.processing_status === 'completed' ? 'default' :
+                conversation.processing_status === 'failed' ? 'destructive' :
+                conversation.processing_status === 'processing' ? 'secondary' :
+                'outline'
+              }>
+                {conversation.processing_status}
+              </Badge>
             </div>
           </CardHeader>
           <CardContent>
             <p className="text-sm text-muted-foreground line-clamp-2">
-              {conversation.raw_transcript?.substring(0, 150)}...
+              {(conversation as any).raw_transcript?.substring(0, 150) || 
+               conversation.metadata?.preview?.substring(0, 150) || 
+               'No preview available'}...
             </p>
             <div className="flex items-center gap-2 mt-2 text-xs text-muted-foreground">
               <Clock className="h-3 w-3" />
-              {new Date(conversation.created_at).toLocaleDateString()}
+              {conversation.created_at ? new Date(conversation.created_at).toLocaleDateString() : 'Unknown date'}
               {conversation.total_examples && (
                 <span className="ml-auto">{conversation.total_examples} examples</span>
               )}

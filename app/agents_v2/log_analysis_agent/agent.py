@@ -17,10 +17,41 @@ from .schemas import LogAnalysisAgentState, StructuredLogAnalysisOutput
 from .prompts import LOG_ANALYSIS_PROMPT_TEMPLATE
 from .parsers import parse_log_content
 from datetime import datetime
+from app.core.user_context import get_user_context
+from app.api_keys.schemas import APIKeyType
 
-# Ensure the GEMINI_API_KEY is set
-if not settings.gemini_api_key:
-    raise ValueError("GEMINI_API_KEY environment variable not set.")
+# GEMINI_API_KEY is now optional - will be retrieved from user context or database
+# if not settings.gemini_api_key:
+#     raise ValueError("GEMINI_API_KEY environment variable not set.")
+
+async def _get_gemini_api_key() -> str:
+    """
+    Retrieve Gemini API key from settings, user context, or database.
+    
+    Returns:
+        str: The Gemini API key
+        
+    Raises:
+        ValueError: If no API key can be found from any source
+    """
+    # First try settings
+    if settings.gemini_api_key:
+        return settings.gemini_api_key
+    
+    # Try to get from user context if available
+    user_context = get_user_context()
+    if user_context:
+        api_key = await user_context.get_gemini_api_key()
+        if api_key:
+            return api_key
+    
+    # If still no key, raise clear error
+    raise ValueError(
+        "Gemini API key not found. Please either:\n"
+        "1. Set GEMINI_API_KEY environment variable\n"
+        "2. Add your Gemini API key in Settings > API Keys\n"
+        "3. Get a free key at: https://makersuite.google.com/app/apikey"
+    )
 
 async def run_log_analysis_agent(state: LogAnalysisAgentState) -> Dict[str, Any]:
     """
@@ -79,7 +110,7 @@ async def run_legacy_log_analysis_agent(state: LogAnalysisAgentState) -> Dict[st
     """
     trace_id = state.get("trace_id") or str(uuid4())
     logger = get_logger("log_analysis_agent", trace_id=trace_id)
-    print("--- Running Log Analysis Agent v2 ---")
+    logger.info("--- Running Log Analysis Agent v2 ---")
 
     try:
         raw_log_content = state.get("raw_log_content")
@@ -90,23 +121,24 @@ async def run_legacy_log_analysis_agent(state: LogAnalysisAgentState) -> Dict[st
         logger.info("analysis_start", lines=len(raw_log_content.splitlines()))
 
         # 1. Parse log content
-        print("Parsing log content...")
+        logger.info("Parsing log content...")
         parsed_data = parse_log_content(raw_log_content)
         state['parsed_log_data'] = parsed_data
         logger.info("parsing_complete", entries=parsed_data["metadata"]["total_entries_parsed"])
 
         # 2. Initialize the Language Model for structured output with rate limiting
+        gemini_api_key = await _get_gemini_api_key()
         llm_base = ChatGoogleGenerativeAI(
             model="gemini-2.5-flash",  # Use supported model for rate limiting
             temperature=0.1,
-            google_api_key=settings.gemini_api_key,
+            google_api_key=gemini_api_key,
         )
         llm = wrap_gemini_agent(llm_base, "gemini-2.5-flash")
         llm_so = llm.with_structured_output(StructuredLogAnalysisOutput)
 
         # 3. Create and invoke the analysis chain
         analysis_chain = LOG_ANALYSIS_PROMPT_TEMPLATE | llm_so
-        print("Invoking LLM for deep analysis...")
+        logger.info("Invoking LLM for deep analysis...")
         parsed_log_json = json.dumps(parsed_data, indent=2)
         final_report = await analysis_chain.ainvoke({"parsed_log_json": parsed_log_json})
         logger.info("analysis_complete")
@@ -119,10 +151,10 @@ async def run_legacy_log_analysis_agent(state: LogAnalysisAgentState) -> Dict[st
             logger.error("UNEXPECTED_LLM_OUTPUT_TYPE", type=type(final_report).__name__)
             raise TypeError(f"LLM output was not the expected Pydantic model.")
 
-        print("--- Log Analysis Complete ---")
+        logger.info("--- Log Analysis Complete ---")
 
     except Exception as e:
-        print(f"Error in Log Analysis Agent: {e}")
+        logger.error(f"Error in Log Analysis Agent: {e}")
         logger.error("analysis_failed", error=str(e), exc_info=True)
 
         # Create a robust, schema-compliant error report

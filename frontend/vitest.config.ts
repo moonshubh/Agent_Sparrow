@@ -82,7 +82,7 @@ export default defineConfig({
     // Watch mode settings
     watch: false,
     // Reporter configuration
-    reporter: ['verbose', 'junit'],
+    reporters: ['verbose', 'junit'],
     outputFile: {
       junit: './test-results/junit.xml',
     },

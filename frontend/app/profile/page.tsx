@@ -54,6 +54,7 @@ export default function ProfilePage() {
 
         <UserPanel
           user={user}
+          isAuthenticated={!!user}
           onLogout={logout}
         />
       </div>

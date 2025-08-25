@@ -21,7 +21,7 @@ import {
 import { FolderIcon } from '@/components/ui/FolderIcon'
 import { cn } from '@/lib/utils'
 import { FolderTreeView } from './FolderTreeViewSimple'
-import { FolderSearch } from './FolderSearch'
+// import { FolderSearch } from './FolderSearch' // Component not yet created
 import { useFolders, useFoldersActions } from '@/lib/stores/folders-store'
 
 interface FolderPaneProps {
@@ -113,10 +113,7 @@ export function FolderPane({
               </div>
             ) : (
               <FolderTreeView
-                selectedFolderId={selectedFolderId}
                 onFolderSelect={onFolderSelect}
-                persistentSelection={true}
-                showConversationCounts={true}
                 expanded={true}
                 className="space-y-1"
               />

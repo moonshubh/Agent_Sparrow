@@ -211,6 +211,39 @@ export interface FeedMeExample {
   updated_at: string
 }
 
+// Folder Types
+export interface FeedMeFolder {
+  id: number
+  name: string
+  description?: string
+  color?: string
+  parent_id?: number | null
+  created_by?: string
+  created_at?: string
+  updated_at?: string
+  conversation_count?: number
+}
+
+export interface FolderListResponse {
+  folders: FeedMeFolder[]
+  total: number
+}
+
+export interface CreateFolderRequest {
+  name: string
+  description?: string
+  color?: string
+  parent_id?: number | null
+  created_by?: string
+}
+
+export interface UpdateFolderRequest {
+  name?: string
+  description?: string
+  color?: string
+  parent_id?: number | null
+}
+
 // API Client Class
 export class FeedMeApiClient {
   private baseUrl: string
@@ -923,17 +956,7 @@ export interface FeedMeFolder {
   conversation_count: number
 }
 
-export interface FolderCreate {
-  name: string
-  color?: string
-  description?: string
-}
-
-export interface FolderUpdate {
-  name?: string
-  color?: string
-  description?: string
-}
+// FolderCreate and FolderUpdate interfaces are defined with the new Folder types below
 
 export interface AssignFolderRequest {
   folder_id?: number | null
@@ -948,153 +971,153 @@ export interface FolderListResponse {
 /**
  * Get all folders with conversation counts
  */
-export async function listFolders(): Promise<FolderListResponse> {
-  try {
-    console.log('[FeedMe API] Fetching folders...')
-    // Increase timeout for database operations, skip retry on 503
-    const response = await fetchWithRetry(`${FEEDME_API_BASE}/folders`, {}, 3, 30000, true)
-
-    if (!response.ok) {
-      const errorData = await response.json().catch(() => ({}))
-      const errorMessage = errorData.detail || `Failed to list folders: ${response.status} ${response.statusText}`
-      console.error('[FeedMe API] Folders error:', errorMessage)
-      
-      // Handle service unavailable specially
-      if (response.status === 503) {
-        console.log('[FeedMe API] Service unavailable - returning empty folder list')
-        return { folders: [] }
-      }
-      
-      throw new Error(errorMessage)
-    }
-
-    const data = await response.json()
-    console.log(`[FeedMe API] Successfully fetched ${data.folders?.length || 0} folders`)
-    return data
-  } catch (error) {
-    console.error('[FeedMe API] Error fetching folders:', error)
-    
-    // Re-throw ApiUnreachableError as-is
-    if (error instanceof ApiUnreachableError) {
-      throw error
-    }
-    
-    // Wrap other errors
-    throw new Error(
-      error instanceof Error 
-        ? `Failed to list folders: ${error.message}`
-        : 'Failed to list folders: Unknown error'
-    )
-  }
-}
-
-/**
- * Create a new folder
- */
-export async function createFolder(folderData: FolderCreate): Promise<FeedMeFolder> {
-  const response = await fetchWithRetry(`${FEEDME_API_BASE}/folders`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(folderData),
-  })
-
-  if (!response.ok) {
-    const errorData = await response.json().catch(() => ({}))
-    throw new Error(errorData.detail || `Failed to create folder: ${response.status} ${response.statusText}`)
-  }
-
-  return response.json()
-}
-
-/**
- * Update an existing folder
- */
-export async function updateFolder(folderId: number, folderData: FolderUpdate): Promise<FeedMeFolder> {
-  const response = await fetchWithRetry(`${FEEDME_API_BASE}/folders/${folderId}`, {
-    method: 'PUT',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(folderData),
-  })
-
-  if (!response.ok) {
-    const errorData = await response.json().catch(() => ({}))
-    throw new Error(errorData.detail || `Failed to update folder: ${response.status} ${response.statusText}`)
-  }
-
-  return response.json()
-}
-
-/**
- * Delete a folder and optionally move conversations
- */
-export async function deleteFolder(folderId: number, moveConversationsTo?: number): Promise<any> {
-  let url = `${FEEDME_API_BASE}/folders/${folderId}`
-  if (moveConversationsTo !== undefined) {
-    const params = new URLSearchParams({ move_conversations_to: moveConversationsTo.toString() })
-    url += `?${params.toString()}`
-  }
-
-  const response = await fetchWithRetry(url, {
-    method: 'DELETE',
-  })
-
-  if (!response.ok) {
-    const errorData = await response.json().catch(() => ({}))
-    throw new Error(errorData.detail || `Failed to delete folder: ${response.status} ${response.statusText}`)
-  }
-
-  return response.json()
-}
-
-/**
- * Assign conversations to a folder
- */
-export async function assignConversationsToFolder(assignRequest: AssignFolderRequest): Promise<any> {
-  const response = await fetchWithRetry(`${FEEDME_API_BASE}/folders/assign`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(assignRequest),
-  })
-
-  if (!response.ok) {
-    const errorData = await response.json().catch(() => ({}))
-    throw new Error(errorData.detail || `Failed to assign conversations: ${response.status} ${response.statusText}`)
-  }
-
-  return response.json()
-}
-
-/**
- * Get conversations in a specific folder
- */
-export async function listFolderConversations(folderId: number, page = 1, pageSize = 20): Promise<ConversationListResponse> {
-  const params = new URLSearchParams({
-    page: page.toString(),
-    page_size: pageSize.toString(),
-  })
-
-  const response = await fetchWithRetry(`${FEEDME_API_BASE}/folders/${folderId}/conversations?${params.toString()}`)
-
-  if (!response.ok) {
-    const errorData = await response.json().catch(() => ({}))
-    throw new Error(errorData.detail || `Failed to list folder conversations: ${response.status} ${response.statusText}`)
-  }
-
-  return response.json()
-}
+// export async function listFolders(): Promise<FolderListResponse> {
+//   try {
+//     console.log('[FeedMe API] Fetching folders...')
+//     // Increase timeout for database operations, skip retry on 503
+//     const response = await fetchWithRetry(`${FEEDME_API_BASE}/folders`, {}, 3, 30000, true)
+// 
+//     if (!response.ok) {
+//       const errorData = await response.json().catch(() => ({}))
+//       const errorMessage = errorData.detail || `Failed to list folders: ${response.status} ${response.statusText}`
+//       console.error('[FeedMe API] Folders error:', errorMessage)
+//       
+//       // Handle service unavailable specially
+//       if (response.status === 503) {
+//         console.log('[FeedMe API] Service unavailable - returning empty folder list')
+//         return { folders: [] }
+//       }
+//       
+//       throw new Error(errorMessage)
+//     }
+// 
+//     const data = await response.json()
+//     console.log(`[FeedMe API] Successfully fetched ${data.folders?.length || 0} folders`)
+//     return data
+//   } catch (error) {
+//     console.error('[FeedMe API] Error fetching folders:', error)
+//     
+//     // Re-throw ApiUnreachableError as-is
+//     if (error instanceof ApiUnreachableError) {
+//       throw error
+//     }
+//     
+//     // Wrap other errors
+//     throw new Error(
+//       error instanceof Error 
+//         ? `Failed to list folders: ${error.message}`
+//         : 'Failed to list folders: Unknown error'
+//     )
+//   }
+// }
+// 
+// /**
+//  * Create a new folder
+//  */
+// export async function createFolder(folderData: FolderCreate): Promise<FeedMeFolder> {
+//   const response = await fetchWithRetry(`${FEEDME_API_BASE}/folders`, {
+//     method: 'POST',
+//     headers: {
+//       'Content-Type': 'application/json',
+//     },
+//     body: JSON.stringify(folderData),
+//   })
+// 
+//   if (!response.ok) {
+//     const errorData = await response.json().catch(() => ({}))
+//     throw new Error(errorData.detail || `Failed to create folder: ${response.status} ${response.statusText}`)
+//   }
+// 
+//   return response.json()
+// }
+// 
+// /**
+//  * Update an existing folder
+//  */
+// export async function updateFolder(folderId: number, folderData: FolderUpdate): Promise<FeedMeFolder> {
+//   const response = await fetchWithRetry(`${FEEDME_API_BASE}/folders/${folderId}`, {
+//     method: 'PUT',
+//     headers: {
+//       'Content-Type': 'application/json',
+//     },
+//     body: JSON.stringify(folderData),
+//   })
+// 
+//   if (!response.ok) {
+//     const errorData = await response.json().catch(() => ({}))
+//     throw new Error(errorData.detail || `Failed to update folder: ${response.status} ${response.statusText}`)
+//   }
+// 
+//   return response.json()
+// }
+// 
+// /**
+//  * Delete a folder and optionally move conversations
+//  */
+// export async function deleteFolder(folderId: number, moveConversationsTo?: number): Promise<any> {
+//   let url = `${FEEDME_API_BASE}/folders/${folderId}`
+//   if (moveConversationsTo !== undefined) {
+//     const params = new URLSearchParams({ move_conversations_to: moveConversationsTo.toString() })
+//     url += `?${params.toString()}`
+//   }
+// 
+//   const response = await fetchWithRetry(url, {
+//     method: 'DELETE',
+//   })
+// 
+//   if (!response.ok) {
+//     const errorData = await response.json().catch(() => ({}))
+//     throw new Error(errorData.detail || `Failed to delete folder: ${response.status} ${response.statusText}`)
+//   }
+// 
+//   return response.json()
+// }
+// 
+// /**
+//  * Assign conversations to a folder
+//  */
+// export async function assignConversationsToFolder(assignRequest: AssignFolderRequest): Promise<any> {
+//   const response = await fetchWithRetry(`${FEEDME_API_BASE}/folders/assign`, {
+//     method: 'POST',
+//     headers: {
+//       'Content-Type': 'application/json',
+//     },
+//     body: JSON.stringify(assignRequest),
+//   })
+// 
+//   if (!response.ok) {
+//     const errorData = await response.json().catch(() => ({}))
+//     throw new Error(errorData.detail || `Failed to assign conversations: ${response.status} ${response.statusText}`)
+//   }
+// 
+//   return response.json()
+// }
+// 
+// /**
+//  * Get conversations in a specific folder
+//  */
+// export async function listFolderConversations(folderId: number, page = 1, pageSize = 20): Promise<ConversationListResponse> {
+//   const params = new URLSearchParams({
+//     page: page.toString(),
+//     page_size: pageSize.toString(),
+//   })
+// 
+//   const response = await fetchWithRetry(`${FEEDME_API_BASE}/folders/${folderId}/conversations?${params.toString()}`)
+// 
+//   if (!response.ok) {
+//     const errorData = await response.json().catch(() => ({}))
+//     throw new Error(errorData.detail || `Failed to list folder conversations: ${response.status} ${response.statusText}`)
+//   }
+// 
+//   return response.json()
+// }
 
 // Supabase-enabled Folder Management Functions
 
 /**
  * Create folder with Supabase sync
  */
-export async function createFolderSupabase(folderData: FolderCreate): Promise<any> {
+export async function createFolderSupabase(folderData: CreateFolderRequest): Promise<any> {
   const response = await fetchWithRetry(`${FEEDME_API_BASE}/folders/create`, {
     method: 'POST',
     headers: {
@@ -1251,6 +1274,101 @@ export async function deleteExample(exampleId: number): Promise<{
   if (!response.ok) {
     const errorData = await response.json().catch(() => ({}))
     throw new Error(errorData.detail || `Failed to delete example: ${response.status} ${response.statusText}`)
+  }
+
+  return response.json()
+}
+
+// Folder API Functions
+
+/**
+ * List all folders
+ */
+export async function listFolders(): Promise<FolderListResponse> {
+  const response = await fetchWithRetry(`${FEEDME_API_BASE}/folders`)
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}))
+    throw new Error(errorData.detail || `Failed to list folders: ${response.status} ${response.statusText}`)
+  }
+
+  return response.json()
+}
+
+/**
+ * Create a new folder
+ */
+export async function createFolder(request: CreateFolderRequest): Promise<FeedMeFolder> {
+  const response = await fetchWithRetry(`${FEEDME_API_BASE}/folders`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(request),
+  })
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}))
+    throw new Error(errorData.detail || `Failed to create folder: ${response.status} ${response.statusText}`)
+  }
+
+  return response.json()
+}
+
+/**
+ * Update a folder
+ */
+export async function updateFolder(folderId: number, request: UpdateFolderRequest): Promise<FeedMeFolder> {
+  const response = await fetchWithRetry(`${FEEDME_API_BASE}/folders/${folderId}`, {
+    method: 'PUT',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(request),
+  })
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}))
+    throw new Error(errorData.detail || `Failed to update folder: ${response.status} ${response.statusText}`)
+  }
+
+  return response.json()
+}
+
+/**
+ * Delete a folder
+ */
+export async function deleteFolder(folderId: number): Promise<{ message: string }> {
+  const response = await fetchWithRetry(`${FEEDME_API_BASE}/folders/${folderId}`, {
+    method: 'DELETE',
+  })
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}))
+    throw new Error(errorData.detail || `Failed to delete folder: ${response.status} ${response.statusText}`)
+  }
+
+  return response.json()
+}
+
+/**
+ * Assign conversations to a folder
+ */
+export async function assignConversationsToFolder(
+  folderId: number, 
+  conversationIds: number[]
+): Promise<{ message: string; assigned_count: number }> {
+  const response = await fetchWithRetry(`${FEEDME_API_BASE}/folders/${folderId}/conversations`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ conversation_ids: conversationIds }),
+  })
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}))
+    throw new Error(errorData.detail || `Failed to assign conversations to folder: ${response.status} ${response.statusText}`)
   }
 
   return response.json()

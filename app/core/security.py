@@ -1,7 +1,7 @@
 import os
 import logging
 from datetime import datetime, timedelta, timezone
-from typing import Optional, Annotated
+from typing import Optional, Annotated, List, Union
 
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
@@ -12,6 +12,13 @@ import httpx
 import json
 from jose import jwk
 from jose.utils import base64url_decode
+
+# Configure logging if not already configured
+if not logging.getLogger().handlers:
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    )
 
 logger = logging.getLogger(__name__)
 
@@ -133,7 +140,40 @@ def _verify_supabase_jwt(token: str) -> TokenPayload:
     if exp is None or datetime.fromtimestamp(exp, tz=timezone.utc) < datetime.now(timezone.utc):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token has expired")
 
-    return TokenPayload(sub=claims.get("sub"), exp=exp, roles=claims.get("role") or [])
+    # Extract roles from multiple possible locations in the claims
+    roles = []
+    
+    # Check direct "role" claim (string or list)
+    if "role" in claims:
+        role_claim = claims["role"]
+        if isinstance(role_claim, str):
+            roles = [role_claim]
+        elif isinstance(role_claim, list):
+            roles = role_claim
+    # Check direct "roles" claim (typically a list)
+    elif "roles" in claims:
+        roles_claim = claims["roles"]
+        if isinstance(roles_claim, list):
+            roles = roles_claim
+        elif isinstance(roles_claim, str):
+            roles = [roles_claim]
+    # Check app_metadata.roles (Supabase pattern)
+    elif "app_metadata" in claims and isinstance(claims["app_metadata"], dict):
+        app_metadata = claims["app_metadata"]
+        if "roles" in app_metadata:
+            app_roles = app_metadata["roles"]
+            if isinstance(app_roles, list):
+                roles = app_roles
+            elif isinstance(app_roles, str):
+                roles = [app_roles]
+        elif "role" in app_metadata:
+            app_role = app_metadata["role"]
+            if isinstance(app_role, str):
+                roles = [app_role]
+            elif isinstance(app_role, list):
+                roles = app_role
+    
+    return TokenPayload(sub=claims.get("sub"), exp=exp, roles=roles)
 
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
     to_encode = data.copy()

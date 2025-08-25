@@ -78,3 +78,133 @@ export interface SendMessageRequest {
   messages?: ChatMessage[];
   agent_type?: AgentType;
 }
+
+/**
+ * Confidence level union type
+ */
+export type ConfidenceLevel = 'HIGH' | 'MEDIUM' | 'LOW';
+
+/**
+ * Numeric confidence value between 0 and 1
+ */
+export type ConfidenceScore = number; // 0 to 1
+
+/**
+ * Reasoning phase types
+ */
+export type ReasoningPhase = 
+  | 'QUERY_ANALYSIS'
+  | 'CONTEXT_RECOGNITION'
+  | 'SOLUTION_MAPPING'
+  | 'TOOL_ASSESSMENT'
+  | 'RESPONSE_STRATEGY'
+  | 'QUALITY_ASSESSMENT';
+
+/**
+ * Complexity level types
+ */
+export type ComplexityLevel = 'LOW' | 'MEDIUM' | 'HIGH' | 'VERY_HIGH';
+
+/**
+ * Emotional state types
+ */
+export type EmotionalState = 
+  | 'FRUSTRATED'
+  | 'CONFUSED'
+  | 'ANXIOUS'
+  | 'URGENT'
+  | 'PROFESSIONAL'
+  | 'SATISFIED'
+  | 'NEUTRAL'
+  | 'OTHER';
+
+/**
+ * Problem category types
+ */
+export type ProblemCategory = 
+  | 'EMAIL_CONNECTIVITY'
+  | 'ACCOUNT_SETUP'
+  | 'SYNC_ISSUES'
+  | 'PERFORMANCE'
+  | 'FEATURE_EDUCATION'
+  | 'TECHNICAL_ERROR'
+  | 'OTHER';
+
+/**
+ * Tool decision types
+ */
+export type ToolDecision = 
+  | 'NO_TOOLS_NEEDED'
+  | 'INTERNAL_KB_ONLY'
+  | 'WEB_SEARCH_REQUIRED'
+  | 'BOTH_SOURCES_NEEDED'
+  | 'ESCALATION_REQUIRED';
+
+/**
+ * Individual thinking step in the reasoning process
+ */
+export interface ThinkingStep {
+  /** The phase of reasoning */
+  phase: ReasoningPhase;
+  /** The thought or reasoning for this step */
+  thought: string;
+  /** Confidence score for this step (0 to 1) */
+  confidence: ConfidenceScore;
+}
+
+/**
+ * Complete thinking trace for message reasoning
+ */
+export interface ThinkingTrace {
+  /** Overall confidence score (0 to 1) */
+  confidence: ConfidenceScore;
+  /** Sequential thinking steps */
+  thinking_steps: ThinkingStep[];
+  /** Tool usage decision */
+  tool_decision?: ToolDecision;
+  /** Confidence level for tool decision */
+  tool_confidence?: ConfidenceLevel;
+  /** Identified knowledge gaps */
+  knowledge_gaps?: string[];
+  /** Detected emotional state */
+  emotional_state?: EmotionalState;
+  /** Categorized problem type */
+  problem_category?: ProblemCategory;
+  /** Complexity assessment */
+  complexity?: ComplexityLevel;
+  /** Self-critique score (0 to 1) */
+  critique_score?: ConfidenceScore;
+  /** Whether self-critique passed */
+  passed_critique?: boolean;
+}
+
+/**
+ * Source reference for citations
+ */
+export interface Source {
+  id: string;
+  title: string;
+  url: string;
+  snippet?: string;
+  type: 'web' | 'knowledge_base' | 'documentation';
+}
+
+/**
+ * Message metadata including thinking trace and follow-up questions
+ */
+export interface MessageMetadata {
+  /** Confidence score for the response (0 to 1) */
+  confidence?: ConfidenceScore;
+  /** Source citations */
+  sources?: Source[];
+  /** Analysis results (for log analysis agent) */
+  analysisResults?: any;
+  /** Reason for routing to specific agent */
+  routingReason?: string;
+  /** Suggested follow-up questions */
+  followUpQuestions?: string[];
+  /** Number of follow-up questions that have been used */
+  followUpQuestionsUsedCount?: number;
+  /** Thinking trace for reasoning transparency */
+  thinking_trace?: ThinkingTrace;
+}

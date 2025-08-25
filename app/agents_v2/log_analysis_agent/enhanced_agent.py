@@ -43,9 +43,9 @@ from .optimized_analyzer import OptimizedLogAnalyzer
 # Load environment variables
 load_dotenv()
 
-# Ensure the GEMINI_API_KEY is set
-if not settings.gemini_api_key:
-    raise ValueError("GEMINI_API_KEY environment variable not set.")
+# GEMINI_API_KEY is now optional - will be retrieved from user context or database
+# if not settings.gemini_api_key:
+#     raise ValueError("GEMINI_API_KEY environment variable not set.")
 
 
 class EnhancedLogAnalysisAgent:

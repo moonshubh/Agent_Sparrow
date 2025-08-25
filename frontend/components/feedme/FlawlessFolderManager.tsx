@@ -25,7 +25,7 @@ import {
   Move,
   ChevronRight,
   ChevronDown,
-  Folder,
+  Folder as FolderIcon,
   FolderOpen,
   AlertTriangle,
   CheckCircle2,
@@ -179,7 +179,7 @@ function FolderDialog({ isOpen, onClose, mode, folder, parentFolder, conversatio
           style={{ paddingLeft: `${12 + level * 20}px` }}
         >
           <div className="flex items-center gap-2">
-            {hasChildren ? <FolderOpen className="h-4 w-4" /> : <Folder className="h-4 w-4" />}
+            {hasChildren ? <FolderOpen className="h-4 w-4" /> : <FolderIcon className="h-4 w-4" />}
             <span className="flex-1">{folder.name}</span>
             {folder.conversation_count && folder.conversation_count > 0 && (
               <Badge variant="outline" className="text-xs">
@@ -321,7 +321,7 @@ function FolderDialog({ isOpen, onClose, mode, folder, parentFolder, conversatio
                     )}
                   >
                     <div className="flex items-center gap-2">
-                      <Folder className="h-4 w-4" />
+                      <FolderIcon className="h-4 w-4" />
                       <span className="flex-1">Root Folder</span>
                     </div>
                   </button>
@@ -385,7 +385,7 @@ function DeleteConfirmationDialog({ isOpen, onClose, folder, onConfirm }: Delete
           style={{ paddingLeft: `${12 + level * 20}px` }}
         >
           <div className="flex items-center gap-2">
-            <Folder className="h-4 w-4" />
+            <FolderIcon className="h-4 w-4" />
             <span className="flex-1">{folder.name}</span>
             {folder.conversation_count && folder.conversation_count > 0 && (
               <Badge variant="outline" className="text-xs">
@@ -462,7 +462,7 @@ function DeleteConfirmationDialog({ isOpen, onClose, folder, onConfirm }: Delete
                         )}
                       >
                         <div className="flex items-center gap-2">
-                          <Folder className="h-4 w-4" />
+                          <FolderIcon className="h-4 w-4" />
                           <span className="flex-1">Root Folder</span>
                         </div>
                       </button>
@@ -639,7 +639,7 @@ export default function FlawlessFolderManager() {
             {isExpanded && hasChildren ? (
               <FolderOpen className="h-4 w-4 text-white" />
             ) : (
-              <Folder className="h-4 w-4 text-white" />
+              <FolderIcon className="h-4 w-4 text-white" />
             )}
           </div>
           
@@ -651,7 +651,9 @@ export default function FlawlessFolderManager() {
           
           {/* Error Indicator */}
           {hasError && (
-            <AlertTriangle className="h-4 w-4 text-red-600" title={folder.errorMessage} />
+            <span title={folder.errorMessage}>
+              <AlertTriangle className="h-4 w-4 text-red-600" />
+            </span>
           )}
           
           {/* Conversation Count */}
@@ -735,7 +737,7 @@ export default function FlawlessFolderManager() {
           <div className="flex items-center justify-between">
             <div>
               <CardTitle className="flex items-center gap-2">
-                <Folder className="h-5 w-5" />
+                <FolderIcon className="h-5 w-5" />
                 Folder Management
               </CardTitle>
               <p className="text-sm text-muted-foreground mt-1">
@@ -810,7 +812,7 @@ export default function FlawlessFolderManager() {
                 </div>
               ) : folderTree.length === 0 ? (
                 <div className="text-center py-8 text-muted-foreground">
-                  <Folder className="h-12 w-12 mx-auto mb-4 opacity-50" />
+                  <FolderIcon className="h-12 w-12 mx-auto mb-4 opacity-50" />
                   <p className="text-sm">No folders yet</p>
                   <p className="text-xs mt-1">Create your first folder to get started</p>
                 </div>

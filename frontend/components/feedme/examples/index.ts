@@ -6,5 +6,5 @@
  */
 
 export { ConversationListExample } from './ConversationListExample'
-export { SearchWithFiltersExample } from './SearchWithFiltersExample'
+// export { SearchWithFiltersExample } from './SearchWithFiltersExample' // File not yet created
 export { RealtimeNotificationsExample } from './RealtimeNotificationsExample'

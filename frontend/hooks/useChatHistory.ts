@@ -3,6 +3,7 @@ import { v4 as uuidv4 } from 'uuid'
 import { UnifiedMessage } from './useUnifiedChat'
 import { chatAPI, ChatAPI, isChatPersistenceAvailable } from '@/lib/api/chat'
 import { AgentSessionLimits, AgentType, DEFAULT_SESSION_LIMIT } from '@/types/chat'
+import { debugLog, isStrictNumericId } from '@/lib/debug-logger'
 
 export interface ChatSession {
   id: string
@@ -261,7 +262,7 @@ export function useChatHistory() {
   }, [])
 
   const addMessageToSession = useCallback(async (sessionId: string, message: UnifiedMessage) => {
-    console.log('[CHAT HISTORY] Adding message to session:', {
+    debugLog('CHAT HISTORY', 'Adding message to session', {
       sessionId,
       messageId: message.id,
       messageType: message.type,
@@ -286,24 +287,48 @@ export function useChatHistory() {
     // Sync with API if available
     if (state.isPersistenceAvailable) {
       try {
-        const sessionIdNumber = parseInt(sessionId)
-        console.log('[CHAT HISTORY] Parsing session ID:', { sessionId, sessionIdNumber, isNaN: isNaN(sessionIdNumber) })
-        
-        if (!isNaN(sessionIdNumber)) {
-          const backendMessage = ChatAPI.messageToBackend(message, sessionIdNumber)
-          console.log('[CHAT HISTORY] Sending message to backend:', backendMessage)
-          
-          const response = await chatAPI.addMessage(sessionIdNumber, backendMessage)
-          console.log('[CHAT HISTORY] Message saved successfully:', response)
-        } else {
-          console.error('[CHAT HISTORY] Invalid session ID - not a number:', sessionId)
+        // Strict numeric validation to prevent UUID misrouting
+        if (!isStrictNumericId(sessionId)) {
+          console.error('[CHAT HISTORY] Invalid session ID format - not a strict numeric ID:', {
+            sessionId,
+            sessionIdLength: sessionId.length,
+            sessionIdPreview: sessionId.length > 8 ? `${sessionId.substring(0, 4)}...` : sessionId
+          })
+          return;
         }
+        
+        const sessionIdNumber = parseInt(sessionId, 10);
+        debugLog('CHAT HISTORY', 'Validated numeric session ID', { 
+          sessionId,
+          sessionIdNumber,
+          isValid: true 
+        })
+        
+        const backendMessage = ChatAPI.messageToBackend(message, sessionIdNumber)
+        debugLog('CHAT HISTORY', 'Sending message to backend', {
+          sessionId: sessionIdNumber,
+          messageType: backendMessage.message_type,
+          hasContent: !!backendMessage.content
+        })
+        
+        const response = await chatAPI.addMessage(sessionIdNumber, backendMessage)
+        debugLog('CHAT HISTORY', 'Message saved successfully', {
+          sessionId: sessionIdNumber,
+          responseId: response?.id
+        })
       } catch (error) {
-        console.error('[CHAT HISTORY] Failed to sync message to API:', error)
+        // Enhanced error logging with context
+        console.error('[CHAT HISTORY] Failed to sync message to API:', {
+          error: error instanceof Error ? error.message : error,
+          sessionId,
+          messageId: message.id,
+          messageType: message.type,
+          timestamp: new Date().toISOString()
+        })
         // Message is already added to local state, so we can continue
       }
     } else {
-      console.log('[CHAT HISTORY] Persistence not available, skipping sync')
+      debugLog('CHAT HISTORY', 'Persistence not available, skipping sync', null)
     }
   }, [state.isPersistenceAvailable])
 
