@@ -14,6 +14,8 @@ NODE_ENV = "production"
 NEXT_PUBLIC_NODE_ENV = "production"
 # CRITICAL: Backend API URL - Railway maps internal port 8080 to HTTPS
 NEXT_PUBLIC_API_URL = "https://agentsparrow-production.up.railway.app"
+# FeedMe client expects full API base when NEXT_PUBLIC_API_BASE is not present in some environments
+NEXT_PUBLIC_API_BASE = "https://agentsparrow-production.up.railway.app/api/v1"
 
 [deploy]
 startCommand = "npm start"

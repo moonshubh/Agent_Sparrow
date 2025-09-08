@@ -702,3 +702,7 @@ frontend/tsconfig.tsbuildinfo
 *.md
 *.xml
 *.bak
+
+# Exclude sensitive and unnecessary folders
+Sample_PDFs/
+supabase/

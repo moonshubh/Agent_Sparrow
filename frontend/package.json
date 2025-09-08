@@ -13,6 +13,9 @@
     "verify:env": "node scripts/verify-env.js"
   },
   "dependencies": {
+    "@ai-sdk/google": "^2.0.11",
+    "@ai-sdk/openai": "^2.0.11",
+    "@ai-sdk/react": "^2.0.28",
     "@hello-pangea/dnd": "^18.0.1",
     "@hookform/resolvers": "^3.9.1",
     "@radix-ui/react-accordion": "1.2.2",
@@ -46,6 +49,8 @@
     "@supabase/supabase-js": "^2.52.1",
     "@tailwindcss/typography": "^0.5.16",
     "@tiptap/extension-character-count": "^2.24.1",
+    "@tiptap/extension-image": "^3.4.1",
+    "@tiptap/extension-link": "^3.4.1",
     "@tiptap/extension-placeholder": "^2.24.1",
     "@tiptap/pm": "^2.24.1",
     "@tiptap/react": "^2.24.1",
@@ -53,6 +58,7 @@
     "@types/react-window": "^1.8.8",
     "@types/tinycolor2": "^1.4.6",
     "@types/uuid": "^10.0.0",
+    "ai": "^5.0.28",
     "autoprefixer": "^10.4.20",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",

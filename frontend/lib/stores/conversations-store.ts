@@ -1050,10 +1050,8 @@ export const useConversationsStore = create<ConversationsStore>()(
               last_updated: new Date().toISOString()
             })
             
-            // Get selected example IDs from the examples state if available
-            const selectedExampleIds = get().examples.examplesByConversation[id]
-              ?.filter(ex => ex.is_active)
-              ?.map(ex => ex.id)
+          // Deprecated: examples flow removed; no selected example IDs
+          const selectedExampleIds = null
             
             // Use new Supabase-integrated endpoint
             const supabaseRequest = {
@@ -1815,10 +1813,4 @@ export const useConversationsActions = () => useConversationsStore(state => stat
 
 export const useConversationById = (id: number) => useConversationsStore(state => state.conversations[id])
 
-export const useExamplesState = () => useConversationsStore(state => state.examples)
-
-export const useExamplesByConversation = (conversationId: number) => useConversationsStore(state => state.examples.examplesByConversation[conversationId])
-
-export const useExamplesLoading = (conversationId: number) => useConversationsStore(state => state.examples.examplesLoading[conversationId] || false)
-
-export const useExamplesError = (conversationId: number) => useConversationsStore(state => state.examples.examplesError[conversationId] || null)
+// Deprecated example selectors removed in unified text flow

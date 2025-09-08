@@ -1,12 +1,12 @@
 "use client"
 
-import UnifiedChatInterface from "@/components/chat/UnifiedChatInterface"
 import { ProtectedRoute } from "@/components/auth/ProtectedRoute"
+import AIChatPage from "@/app/chat/page"
 
 export default function HomePage() {
   return (
     <ProtectedRoute>
-      <UnifiedChatInterface />
+      <AIChatPage />
     </ProtectedRoute>
   )
 }

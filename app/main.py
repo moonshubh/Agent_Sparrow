@@ -30,6 +30,7 @@ from app.api.v1.endpoints import text_approval_endpoints  # Text approval workfl
 from app.api.v1.endpoints import chat_session_endpoints  # Chat session persistence
 from app.api.v1.endpoints import rate_limit_endpoints  # Rate limiting monitoring
 from app.api.v1.endpoints import feedme_intelligence  # FeedMe AI intelligence endpoints
+from app.api.v1.endpoints import advanced_agent_endpoints  # Advanced agent reasoning and troubleshooting
 from app.api.v1.websocket import feedme_websocket  # FeedMe WebSocket endpoints
 from app.core.settings import settings
 
@@ -132,6 +133,8 @@ app.include_router(feedme_intelligence.router, prefix="/api/v1", tags=["FeedMe I
 app.include_router(chat_session_endpoints.router, prefix="/api/v1", tags=["Chat Sessions"])
 # Register Rate Limiting routes
 app.include_router(rate_limit_endpoints.router, prefix="/api/v1", tags=["Rate Limiting"])
+# Register Advanced Agent routes (reasoning and troubleshooting)
+app.include_router(advanced_agent_endpoints.router, prefix="/api/v1", tags=["Advanced Agent"])
 
 # Conditionally include API Key Management router
 if api_key_endpoints and settings.should_enable_api_key_endpoints():

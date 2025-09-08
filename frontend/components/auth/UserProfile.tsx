@@ -12,7 +12,7 @@ import { toast } from 'sonner'
 
 interface UserProfileProps {
   user: User
-  onUpdate: (data: { full_name?: string; metadata?: any }) => Promise<void>
+  onUpdate: (data: { full_name?: string; avatar_url?: string; metadata?: any }) => Promise<void>
 }
 
 // Helper function to format dates consistently

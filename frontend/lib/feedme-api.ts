@@ -71,9 +71,14 @@ const fetchWithRetry = async (
   }
 }
 
-// API Base Configuration - Deterministic API base URL without typeof window checks
-// In development, default to localhost:8000 if not specified
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? 
+// API Base Configuration — prefer unified env resolver, with sensible fallbacks
+import { getApiBaseUrl } from '@/lib/utils/environment'
+
+// Prefer explicit NEXT_PUBLIC_API_BASE, then environment util (uses NEXT_PUBLIC_API_URL),
+// then final fallback based on NODE_ENV
+const resolvedBaseFromEnv = process.env.NEXT_PUBLIC_API_BASE
+const resolvedBaseFromUtils = getApiBaseUrl()
+const API_BASE = resolvedBaseFromEnv || resolvedBaseFromUtils ||
   (process.env.NODE_ENV === 'development' ? 'http://localhost:8000/api/v1' : '/api/v1')
 const FEEDME_API_BASE = `${API_BASE}/feedme`
 
@@ -171,45 +176,7 @@ export interface BulkApprovalResponse {
   action_taken: string
 }
 
-export interface ExampleReviewRequest {
-  reviewed_by: string
-  review_status: 'pending' | 'approved' | 'rejected' | 'edited'
-  reviewer_notes?: string
-  question_text?: string
-  answer_text?: string
-  tags?: string[]
-}
-
-export interface ExampleReviewResponse {
-  example: any // Would need the full example type
-  action: string
-  timestamp: string
-}
-
-export interface ExampleListResponse {
-  examples: FeedMeExample[]
-  total_examples: number
-  page: number
-  page_size: number
-  total_pages: number
-}
-
-export interface FeedMeExample {
-  id: number
-  conversation_id: number
-  question_text: string
-  answer_text: string
-  context_before?: string
-  context_after?: string
-  tags: string[]
-  issue_type?: string
-  resolution_type?: string
-  confidence_score: number
-  usefulness_score: number
-  is_active: boolean
-  created_at: string
-  updated_at: string
-}
+// Deprecated example interfaces removed in unified text flow
 
 // Folder Types
 export interface FeedMeFolder {
@@ -375,7 +342,8 @@ export class FeedMeApiClient {
       }
     }
 
-    const response = await fetchWithRetry(`${this.baseUrl}/conversations?${params.toString()}`, {}, 3, 10000, true)
+    // Listing conversations may involve DB pagination + filters; allow a slightly longer timeout
+    const response = await fetchWithRetry(`${this.baseUrl}/conversations?${params.toString()}`, {}, 3, 15000, true)
 
     if (!response.ok) {
       const errorData = await response.json().catch(() => ({}))
@@ -901,47 +869,12 @@ export async function getAnalytics(): Promise<any> {
 /**
  * Bulk approve or reject conversations
  */
-export async function bulkApproveConversations(
-  bulkRequest: BulkApprovalRequest
-): Promise<BulkApprovalResponse> {
-  const response = await fetchWithRetry(`${FEEDME_API_BASE}/conversations/bulk-approve`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(bulkRequest),
-  })
-
-  if (!response.ok) {
-    const errorData = await response.json().catch(() => ({}))
-    throw new Error(errorData.detail || `Failed to complete bulk approval: ${response.status} ${response.statusText}`)
-  }
-
-  return response.json()
-}
+// Deprecated: bulkApproveConversations removed in unified text flow
 
 /**
  * Review an individual example
  */
-export async function reviewExample(
-  exampleId: number, 
-  reviewRequest: ExampleReviewRequest
-): Promise<ExampleReviewResponse> {
-  const response = await fetchWithRetry(`${FEEDME_API_BASE}/examples/${exampleId}/review`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(reviewRequest),
-  })
-
-  if (!response.ok) {
-    const errorData = await response.json().catch(() => ({}))
-    throw new Error(errorData.detail || `Failed to review example: ${response.status} ${response.statusText}`)
-  }
-
-  return response.json()
-}
+// Deprecated: reviewExample removed in unified text flow
 
 // Folder Management API Functions
 
@@ -1209,74 +1142,35 @@ export async function assignConversationsToFolderSupabase(folderId: number | nul
 /**
  * Get conversation examples
  */
+// Deprecated: getConversationExamples (stub)
 export async function getConversationExamples(
   conversationId: number,
   page: number = 1,
   pageSize: number = 20,
-  isActive?: boolean
-): Promise<ExampleListResponse> {
-  const params = new URLSearchParams({
-    page: page.toString(),
-    page_size: pageSize.toString(),
-  })
-
-  if (isActive !== undefined) {
-    params.append('is_active', isActive.toString())
-  }
-
-  const response = await fetchWithRetry(`${FEEDME_API_BASE}/conversations/${conversationId}/examples?${params.toString()}`)
-
-  if (!response.ok) {
-    const errorData = await response.json().catch(() => ({}))
-    throw new Error(errorData.detail || `Failed to get examples: ${response.status} ${response.statusText}`)
-  }
-
-  return response.json()
+  _isActive?: boolean
+): Promise<{ examples: any[]; total_examples: number; page: number; page_size: number; has_next: boolean }> {
+  console.warn('[FeedMe API] getConversationExamples is deprecated (unified text flow). Returning empty.')
+  return { examples: [], total_examples: 0, page, page_size: pageSize, has_next: false }
 }
 
 /**
  * Update an example
  */
-export async function updateExample(
-  exampleId: number,
-  updates: Partial<FeedMeExample>
-): Promise<FeedMeExample> {
-  const response = await fetchWithRetry(`${FEEDME_API_BASE}/examples/${exampleId}`, {
-    method: 'PUT',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(updates),
-  })
-
-  if (!response.ok) {
-    const errorData = await response.json().catch(() => ({}))
-    throw new Error(errorData.detail || `Failed to update example: ${response.status} ${response.statusText}`)
-  }
-
-  return response.json()
+// Deprecated: updateExample (stub)
+export async function updateExample(_exampleId: number, _updates: any): Promise<any> {
+  console.warn('[FeedMe API] updateExample is deprecated (unified text flow). No-op.')
+  return {}
 }
 
 /**
  * Delete an individual Q&A example
  */
+// Deprecated: deleteExample (stub)
 export async function deleteExample(exampleId: number): Promise<{
-  example_id: number
-  conversation_id: number
-  conversation_title: string
-  question_preview: string
-  message: string
+  example_id: number; conversation_id: number; conversation_title: string; question_preview: string; message: string
 }> {
-  const response = await fetchWithRetry(`${FEEDME_API_BASE}/examples/${exampleId}`, {
-    method: 'DELETE',
-  })
-
-  if (!response.ok) {
-    const errorData = await response.json().catch(() => ({}))
-    throw new Error(errorData.detail || `Failed to delete example: ${response.status} ${response.statusText}`)
-  }
-
-  return response.json()
+  console.warn('[FeedMe API] deleteExample is deprecated (unified text flow). No-op.')
+  return { example_id: exampleId, conversation_id: 0, conversation_title: '', question_preview: '', message: 'deprecated' }
 }
 
 // Folder API Functions
@@ -1285,7 +1179,8 @@ export async function deleteExample(exampleId: number): Promise<{
  * List all folders
  */
 export async function listFolders(): Promise<FolderListResponse> {
-  const response = await fetchWithRetry(`${FEEDME_API_BASE}/folders`)
+  // Folder queries can be slower (DB aggregation). Use a higher timeout and skip retries on 503.
+  const response = await fetchWithRetry(`${FEEDME_API_BASE}/folders`, {}, 2, 30000, true)
 
   if (!response.ok) {
     const errorData = await response.json().catch(() => ({}))

@@ -41,6 +41,7 @@ from app.schemas.chat_schemas import (
     AgentType,
     MessageType
 )
+from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -49,6 +50,10 @@ router = APIRouter()
 GUEST_USER_COOKIE_NAME = "guest_user_id"
 GUEST_USER_COOKIE_MAX_AGE = 60 * 60 * 24 * 30  # 30 days
 GUEST_USER_PREFIX = "guest_"
+
+class ChatMessageAppendRequest(BaseModel):
+    """Payload for appending content to an existing chat message"""
+    delta: str = Field(..., min_length=1, description="Text to append to the message content")
 
 
 # Database connection setup
@@ -256,6 +261,36 @@ def create_chat_message_in_db(conn, message_data: ChatMessageCreate, user_id: st
             metadata_json
         ))
         
+        conn.commit()
+        return dict(cur.fetchone())
+
+
+def append_chat_message_content_in_db(conn, session_id: int, message_id: int, user_id: str, delta: str) -> Dict[str, Any]:
+    """Append text content to an existing chat message owned by the user"""
+    with conn.cursor() as cur:
+        # Verify session and message ownership
+        cur.execute(
+            """
+            SELECT cm.id
+            FROM chat_messages cm
+            JOIN chat_sessions cs ON cm.session_id = cs.id
+            WHERE cm.id = %s AND cm.session_id = %s AND cs.user_id = %s
+            """,
+            (message_id, session_id, user_id),
+        )
+        if not cur.fetchone():
+            raise HTTPException(status_code=404, detail="Message not found for this user/session")
+
+        # Append delta to content
+        cur.execute(
+            """
+            UPDATE chat_messages
+            SET content = content || %s
+            WHERE id = %s
+            RETURNING *
+            """,
+            (delta, message_id),
+        )
         conn.commit()
         return dict(cur.fetchone())
 
@@ -626,6 +661,39 @@ async def create_chat_message(
         if conn:
             conn.close()
             logger.debug(f"[MESSAGE SAVE] Database connection closed")
+
+
+@router.patch("/chat-sessions/{session_id}/messages/{message_id}/append", response_model=ChatMessage, tags=["Chat Messages"])
+async def append_chat_message(
+    session_id: int,
+    message_id: int,
+    append_data: "ChatMessageAppendRequest",
+    request: Request,
+    response: Response,
+    current_user: Optional[TokenPayload] = Depends(get_optional_current_user)
+):
+    """Append text to an existing chat message (authentication optional)"""
+    conn = None
+    try:
+        if current_user:
+            user_id = current_user.sub
+        else:
+            user_id = get_or_create_guest_user_id(request, response)
+
+        if not append_data.delta or not append_data.delta.strip():
+            raise HTTPException(status_code=400, detail="Delta cannot be empty")
+
+        conn = get_db_connection()
+        message = append_chat_message_content_in_db(conn, session_id, message_id, user_id, append_data.delta)
+        return ChatMessage(**message)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[MESSAGE APPEND] Error appending to message {message_id}: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+    finally:
+        if conn:
+            conn.close()
 
 
 @router.get("/chat-sessions/{session_id}/messages", response_model=ChatMessageListResponse, tags=["Chat Messages"])

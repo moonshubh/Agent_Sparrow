@@ -17,11 +17,12 @@ import React, { useState, useEffect, useCallback, useRef } from 'react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
+// Replaced textarea with Tiptap rich text editor
 import { Textarea } from '@/components/ui/textarea'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Separator } from '@/components/ui/separator'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import { 
+import {
   Edit3, 
   Save, 
   X, 
@@ -34,10 +35,19 @@ import {
   Clock,
   User,
   Bot,
-  Sparkles
+  Sparkles,
+  Folder
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { formatDistanceToNow } from 'date-fns'
+import { useEditor, EditorContent } from '@tiptap/react'
+import StarterKit from '@tiptap/starter-kit'
+import Placeholder from '@tiptap/extension-placeholder'
+import CharacterCount from '@tiptap/extension-character-count'
+import Link from '@tiptap/extension-link'
+import Image from '@tiptap/extension-image'
+import { listFolders, assignConversationsToFolderSupabase } from '@/lib/feedme-api'
+import { uploadImageToSupabase } from '@/lib/storage'
 
 // Types
 interface ProcessingMetadata {
@@ -60,7 +70,9 @@ interface TextStatistics {
 interface UnifiedTextCanvasProps {
   conversationId: number
   title: string
+  ticketId?: string | null
   extractedText: string
+  metadata?: Record<string, any> | null
   processingMetadata: ProcessingMetadata
   approvalStatus: 'pending' | 'approved' | 'rejected'
   approvedBy?: string
@@ -68,6 +80,7 @@ interface UnifiedTextCanvasProps {
   pdfCleaned?: boolean
   pdfCleanedAt?: string
   originalPdfSize?: number
+  folderId?: number | null
   onTextUpdate?: (text: string) => Promise<void>
   onApprovalAction?: (action: 'approve' | 'reject' | 'edit_and_approve', data?: any) => Promise<void>
   readOnly?: boolean
@@ -78,7 +91,9 @@ interface UnifiedTextCanvasProps {
 export function UnifiedTextCanvas({
   conversationId,
   title,
+  ticketId,
   extractedText,
+  metadata,
   processingMetadata,
   approvalStatus,
   approvedBy,
@@ -86,6 +101,7 @@ export function UnifiedTextCanvas({
   pdfCleaned = false,
   pdfCleanedAt,
   originalPdfSize,
+  folderId: initialFolderId,
   onTextUpdate,
   onApprovalAction,
   readOnly = false,
@@ -96,7 +112,69 @@ export function UnifiedTextCanvas({
   const [editedText, setEditedText] = useState(extractedText)
   const [isLoading, setIsLoading] = useState(false)
   const [textStats, setTextStats] = useState<TextStatistics | null>(null)
-  const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const [folders, setFolders] = useState<Array<{ id: number; name: string; color: string }>>([])
+  const [folderId, setFolderId] = useState<number | null | undefined>(initialFolderId)
+  const [subject, setSubject] = useState(title)
+  const [showNotes, setShowNotes] = useState(false)
+  const [aiNote, setAiNote] = useState<string>((metadata as any)?.ai_comment || '')
+
+  // Initialize Tiptap editor (stores HTML)
+  const editor = useEditor({
+    editable: !readOnly,
+    extensions: [
+      StarterKit.configure({ heading: { levels: [2, 3] } }),
+      Placeholder.configure({ placeholder: 'Edit extracted content here…' }),
+      CharacterCount.configure({ limit: 500000 }),
+      Link.configure({ openOnClick: true, autolink: true }),
+      Image.configure({ inline: false, allowBase64: false }),
+    ],
+    content: extractedText?.trim().length ? extractedText : '<p></p>',
+    onUpdate: ({ editor }) => setEditedText(editor.getHTML()),
+  })
+
+  // Paste/drop images: upload to Supabase storage and insert by URL
+  useEffect(() => {
+    if (!editor) return
+    const view = editor.view
+    const handlePaste = async (e: ClipboardEvent) => {
+      const items = e.clipboardData?.items
+      if (!items) return
+      for (const item of items) {
+        if (item.kind === 'file') {
+          const file = item.getAsFile()
+          if (file && file.type.startsWith('image/')) {
+            e.preventDefault()
+            try {
+              const url = await uploadImageToSupabase(file, conversationId)
+              editor.chain().focus().setImage({ src: url }).run()
+            } catch (err) {
+              console.error('Image upload failed', err)
+            }
+          }
+        }
+      }
+    }
+    const handleDrop = async (e: DragEvent) => {
+      if (!e.dataTransfer) return
+      const files = Array.from(e.dataTransfer.files || [])
+      const image = files.find(f => f.type.startsWith('image/'))
+      if (image) {
+        e.preventDefault()
+        try {
+          const url = await uploadImageToSupabase(image, conversationId)
+          editor.chain().focus().setImage({ src: url }).run()
+        } catch (err) {
+          console.error('Image upload failed', err)
+        }
+      }
+    }
+    view.dom.addEventListener('paste', handlePaste as any)
+    view.dom.addEventListener('drop', handleDrop as any)
+    return () => {
+      view.dom.removeEventListener('paste', handlePaste as any)
+      view.dom.removeEventListener('drop', handleDrop as any)
+    }
+  }, [editor, conversationId])
 
   // Calculate text statistics
   const calculateTextStats = useCallback((text: string): TextStatistics => {
@@ -123,23 +201,59 @@ export function UnifiedTextCanvas({
   // Update edited text when extracted text changes
   useEffect(() => {
     setEditedText(extractedText)
+    if (editor && extractedText) {
+      editor.commands.setContent(extractedText)
+    }
   }, [extractedText])
+
+  // Load folders for assignment
+  useEffect(() => {
+    async function load() {
+      try {
+        const resp = await listFolders()
+        setFolders(resp.folders.map(f => ({ id: f.id, name: f.name, color: f.color })))
+      } catch (e) {
+        console.warn('Failed to load folders', e)
+      }
+    }
+    load()
+  }, [])
 
   // Handle saving edited text
   const handleSaveText = async () => {
-    if (!onTextUpdate || editedText === extractedText) {
+    const aiNoteChanged = aiNote !== ((metadata as any)?.ai_comment || '')
+    if (!onTextUpdate && !(subject !== title || aiNoteChanged || editedText !== extractedText)) {
       setIsEditing(false)
       return
     }
 
     setIsLoading(true)
     try {
-      await onTextUpdate(editedText)
+      // Prepare merged metadata (preserve existing keys)
+      const mergedMeta = { ...(metadata || {}) }
+      if (aiNoteChanged) {
+        mergedMeta['ai_comment'] = aiNote
+      }
+
+      // Save text/subject/notes
+      const payload: any = {}
+      if (editedText !== extractedText) payload.extracted_text = editedText
+      if (subject !== title) payload.title = subject
+      if (aiNoteChanged) payload.metadata = mergedMeta
+
+      await fetch(`/api/v1/feedme/conversations/${conversationId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      })
       setIsEditing(false)
     } catch (error) {
       console.error('Failed to save text:', error)
       // Reset to original text on error
       setEditedText(extractedText)
+      editor?.commands.setContent(extractedText)
+      setSubject(title)
+      setAiNote(((metadata as any)?.ai_comment || ''))
     } finally {
       setIsLoading(false)
     }
@@ -247,6 +361,10 @@ export function UnifiedTextCanvas({
   }
 
   const methodInfo = getProcessingMethodInfo()
+  const canSave = !!folderId && (
+    (isEditing && (editedText !== extractedText || subject !== title)) ||
+    (aiNote !== ((metadata as any)?.ai_comment || ''))
+  )
 
   return (
     <div className="space-y-6">
@@ -255,7 +373,21 @@ export function UnifiedTextCanvas({
         <CardHeader className="pb-4">
           <div className="flex items-start justify-between">
             <div>
-              <CardTitle className="text-lg">{title}</CardTitle>
+              <div className="flex items-center gap-3">
+                <span className="text-xs text-muted-foreground">Ticket:</span>
+                <span className="text-sm font-mono bg-muted px-2 py-0.5 rounded">{ticketId || 'Unknown'}</span>
+              </div>
+              <div className="mt-2">
+                {isEditing ? (
+                  <input
+                    className="text-lg font-semibold bg-background border rounded px-2 py-1 w-full max-w-xl"
+                    value={subject}
+                    onChange={(e) => setSubject(e.target.value)}
+                  />
+                ) : (
+                  <CardTitle className="text-lg">{subject}</CardTitle>
+                )}
+              </div>
               <div className="flex items-center gap-4 mt-2">
                 <Badge variant="outline" className={cn("text-sm", methodInfo.color)}>
                   {methodInfo.icon}
@@ -268,6 +400,28 @@ export function UnifiedTextCanvas({
             </div>
             
             <div className="flex items-center gap-2">
+              {/* Assign to Folder selector */}
+              <div className="flex items-center gap-2">
+                <Folder className="h-4 w-4 text-muted-foreground" />
+                <select
+                  className="border rounded px-2 py-1 text-sm bg-background"
+                  value={folderId ?? ''}
+                  onChange={async (e) => {
+                    const val = e.target.value === '' ? null : Number(e.target.value)
+                    try {
+                      await assignConversationsToFolderSupabase(val as any, [conversationId])
+                      setFolderId(val)
+                    } catch (err) {
+                      console.error('Folder assignment failed', err)
+                    }
+                  }}
+                >
+                  <option value="">Assign folder…</option>
+                  {folders.map(f => (
+                    <option key={f.id} value={f.id}>{f.name}</option>
+                  ))}
+                </select>
+              </div>
               {!readOnly && (
                 <>
                   {isEditing ? (
@@ -284,7 +438,7 @@ export function UnifiedTextCanvas({
                       <Button
                         size="sm"
                         onClick={handleSaveText}
-                        disabled={isLoading || editedText === extractedText}
+                        disabled={isLoading || !canSave}
                       >
                         <Save className="h-4 w-4 mr-1" />
                         Save
@@ -351,25 +505,13 @@ export function UnifiedTextCanvas({
         </TabsList>
 
         <TabsContent value="text" className="space-y-4">
-          <Card className={cn(fullPageMode && "border-0 shadow-none")}>
+          <Card className={cn(fullPageMode && "border-0 shadow-none")}> 
             <CardContent className="p-0">
               {isEditing ? (
-                <div className={cn(
-                  "relative",
-                  fullPageMode && "min-h-[calc(100vh-300px)]"
-                )}>
-                  <Textarea
-                    ref={textareaRef}
-                    value={editedText}
-                    onChange={(e) => setEditedText(e.target.value)}
-                    placeholder="Enter extracted text..."
-                    className={cn(
-                      "border-0 resize-none focus:ring-0 font-mono text-sm",
-                      fullPageMode ? "min-h-[calc(100vh-300px)] p-6" : "min-h-[400px] p-4"
-                    )}
-                    disabled={isLoading}
-                  />
-                  {/* Character count in edit mode */}
+                <div className={cn("relative", fullPageMode && "min-h-[calc(100vh-300px)] p-2")}> 
+                  <div className={cn('border rounded-md', fullPageMode ? 'min-h-[calc(100vh-320px)] p-3' : 'min-h-[400px] p-2')}>
+                    <EditorContent editor={editor} />
+                  </div>
                   <div className="absolute bottom-4 right-4 text-xs text-muted-foreground bg-background px-2 py-1 rounded">
                     {editedText.length.toLocaleString()} characters
                   </div>
@@ -391,6 +533,28 @@ export function UnifiedTextCanvas({
                 </ScrollArea>
               )}
             </CardContent>
+          </Card>
+
+          {/* AI Notes (collapsible, editable) */}
+          <Card>
+            <CardHeader className="py-3 flex flex-row items-center justify-between">
+              <CardTitle className="text-base">AI Notes</CardTitle>
+              <Button variant="ghost" size="sm" onClick={() => setShowNotes(s => !s)}>
+                {showNotes ? 'Hide' : 'Show'}
+              </Button>
+            </CardHeader>
+            {showNotes && (
+              <CardContent>
+                <Textarea
+                  value={aiNote}
+                  onChange={(e) => setAiNote(e.target.value)}
+                  placeholder="Short AI comment to aid retrieval/search..."
+                  rows={4}
+                  className="font-sans text-sm"
+                />
+                <div className="text-xs text-muted-foreground mt-1">Editable. Included in metadata (ai_comment).</div>
+              </CardContent>
+            )}
           </Card>
 
           {/* Approval controls */}

@@ -1158,6 +1158,63 @@ class SupabaseClient:
         except Exception as e:
             logger.error(f"Error in bulk reprocess: {e}")
             raise
+
+    # =====================================================
+    # TEXT CHUNKS (FeedMe unified text embeddings)
+    # =====================================================
+
+    async def delete_text_chunks_for_conversation(self, conversation_id: int) -> int:
+        """Delete existing text chunks for a conversation"""
+        try:
+            response = self.client.table('feedme_text_chunks') \
+                .delete() \
+                .eq('conversation_id', conversation_id) \
+                .execute()
+            return len(response.data) if response.data else 0
+        except Exception as e:
+            logger.error(f"Failed to delete text chunks for conversation {conversation_id}: {e}")
+            return 0
+
+    async def insert_text_chunk(self, conversation_id: int, folder_id: Optional[int], chunk_index: int, content: str, metadata: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """Insert a text chunk row (without embedding)"""
+        try:
+            data = {
+                'conversation_id': conversation_id,
+                'folder_id': folder_id,
+                'chunk_index': chunk_index,
+                'content': content,
+                'metadata': metadata or {}
+            }
+            response = self.client.table('feedme_text_chunks').insert(data).execute()
+            if response.data:
+                return response.data[0]
+            raise Exception('No data from insert_text_chunk')
+        except Exception as e:
+            logger.error(f"Failed to insert text chunk: {e}")
+            raise
+
+    async def update_text_chunk_embedding(self, chunk_id: int, embedding: list[float]) -> bool:
+        """Update chunk embedding vector"""
+        try:
+            response = self.client.table('feedme_text_chunks').update({ 'embedding': embedding }).eq('id', chunk_id).execute()
+            return bool(response.data)
+        except Exception as e:
+            logger.error(f"Failed to update text chunk embedding: {e}")
+            return False
+
+    async def search_text_chunks(self, query_embedding: list[float], match_count: int = 10, folder_id: Optional[int] = None) -> List[Dict[str, Any]]:
+        """Search text chunks via RPC similarity function."""
+        try:
+            params = {
+                'query_embedding': query_embedding,
+                'match_count': match_count,
+                'filter_folder_id': folder_id
+            }
+            result = self.client.rpc('search_feedme_text_chunks', params).execute()
+            return result.data or []
+        except Exception as e:
+            logger.error(f"Text chunk search failed: {e}")
+            return []
     
     async def get_feedme_summary(self) -> Dict[str, Any]:
         """

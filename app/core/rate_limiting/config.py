@@ -21,13 +21,13 @@ def parse_boolean_env(value: str) -> bool:
 class RateLimitConfig:
     """Configuration for rate limiting system."""
     
-    # Gemini 2.5 Flash limits (80% of free tier)
-    flash_rpm_limit: int = 8    # 80% of 10 RPM
-    flash_rpd_limit: int = 200  # 80% of 250 RPD
+    # Gemini 2.5 Flash limits (free tier)
+    flash_rpm_limit: int = 10   # Free tier: 10 RPM
+    flash_rpd_limit: int = 250  # Free tier: 250 RPD
     
-    # Gemini 2.5 Pro limits (80% of free tier)
-    pro_rpm_limit: int = 4      # 80% of 5 RPM
-    pro_rpd_limit: int = 80     # 80% of 100 RPD
+    # Gemini 2.5 Pro limits (free tier)
+    pro_rpm_limit: int = 5       # Free tier: 5 RPM
+    pro_rpd_limit: int = 100     # Free tier: 100 RPD
     
     # Redis configuration
     redis_url: str = settings.redis_url
@@ -76,10 +76,10 @@ class RateLimitConfig:
         import os
         
         return cls(
-            flash_rpm_limit=int(os.getenv("GEMINI_FLASH_RPM_LIMIT", "8")),
-            flash_rpd_limit=int(os.getenv("GEMINI_FLASH_RPD_LIMIT", "200")),
-            pro_rpm_limit=int(os.getenv("GEMINI_PRO_RPM_LIMIT", "4")),
-            pro_rpd_limit=int(os.getenv("GEMINI_PRO_RPD_LIMIT", "80")),
+            flash_rpm_limit=int(os.getenv("GEMINI_FLASH_RPM_LIMIT", "10")),
+            flash_rpd_limit=int(os.getenv("GEMINI_FLASH_RPD_LIMIT", "250")),
+            pro_rpm_limit=int(os.getenv("GEMINI_PRO_RPM_LIMIT", "5")),
+            pro_rpd_limit=int(os.getenv("GEMINI_PRO_RPD_LIMIT", "100")),
             redis_url=os.getenv("RATE_LIMIT_REDIS_URL", settings.redis_url),
             redis_key_prefix=os.getenv("RATE_LIMIT_REDIS_PREFIX", "mb_sparrow_rl"),
             redis_db=int(os.getenv("RATE_LIMIT_REDIS_DB", "3")),

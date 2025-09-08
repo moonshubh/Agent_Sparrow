@@ -37,6 +37,11 @@ interface ApiKey {
   updated_at: string
 }
 
+interface ApiKeyListResponse {
+  api_keys: ApiKey[]
+  total_count: number
+}
+
 interface ApiKeyStatus {
   total_keys: number
   active_keys: number
@@ -412,7 +417,7 @@ export const authAPI = {
 }
 
 export const apiKeyAPI = {
-  list: (): Promise<ApiKey[]> => apiClient.get<ApiKey[]>('/api/v1/api-keys/'),
+  list: (): Promise<ApiKeyListResponse> => apiClient.get<ApiKeyListResponse>('/api/v1/api-keys/'),
 
   create: (data: { api_key_type: string; api_key: string; key_name?: string }): Promise<ApiKey> =>
     apiClient.post<ApiKey>('/api/v1/api-keys/', data),

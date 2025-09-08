@@ -1,11 +1,10 @@
 "use client"
 
 import React, { useState } from 'react'
-import { Avatar, AvatarImage, AvatarFallback } from '@/components/ui/avatar'
 import { LightDarkToggle } from '@/components/ui/LightDarkToggle'
 import { FeedMeButton } from '@/components/ui/FeedMeButton'
-// import { SettingsButton } from '@/components/ui/SettingsButton' // Removed - API Keys moved to user menu
-import { RateLimitDropdown } from '@/components/rate-limiting'
+import { SettingsButtonV2 } from '@/components/ui/SettingsButtonV2'
+import { DailyUsageTracker } from '@/components/rate-limiting/DailyUsageTracker'
 import { useAuth } from '@/hooks/useAuth'
 import { UserMenu } from '@/components/auth/UserMenu'
 import { Button } from '@/components/ui/button'
@@ -63,11 +62,9 @@ export function Header() {
         <span className="text-base font-semibold text-accent">Agent Sparrow</span>
       </div>
       <div className="flex items-center gap-3">
-        <RateLimitDropdown 
-          autoUpdate={true}
-          updateInterval={15000}
-        />
+        <DailyUsageTracker />
         <FeedMeButton />
+        <SettingsButtonV2 />
         <LightDarkToggle />
         
         {isAuthenticated && user ? (

@@ -12,6 +12,22 @@
     text-wrap: balance;
   }
   
+  /* AI SDK Elements gradient background */
+  .ai-gradient-bg {
+    background: linear-gradient(135deg, 
+      hsl(var(--background)) 0%, 
+      hsl(var(--background) / 0.98) 50%, 
+      hsl(220 30% 6%) 100%);
+  }
+  
+  /* Glass morphism effect for input */
+  .glass-input {
+    background: hsl(var(--background) / 0.5);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    border: 1px solid hsl(var(--border) / 0.2);
+  }
+  
   /* Background grid pattern utility using CSS variables */
   .bg-grid-pattern {
     background-image: 
@@ -268,8 +284,9 @@
     --card-foreground: 0 0% 3.9%;
     --popover: 0 0% 100%;
     --popover-foreground: 0 0% 3.9%;
-    --primary: 262 83% 58%;
-    --primary-foreground: 0 0% 98%;
+    /* Primary now uses Mailbird accent blue to remove purple */
+    --primary: 204 100% 50%; /* #0095ff */
+    --primary-foreground: 0 0% 100%;
     --secondary: 0 0% 96.1%;
     --secondary-foreground: 0 0% 9%;
     --muted: 0 0% 96.1%;
@@ -280,12 +297,12 @@
     --destructive-foreground: 0 0% 98%;
     --border: 0 0% 89.8%;
     --input: 0 0% 96.1%;
-    --ring: 262 83% 58%;
+    --ring: 204 100% 50%;
     --radius: 0.75rem;
     
     /* Chat-specific colors */
     --chat-background: 0 0% 100%;
-    --chat-user-bg: 262 83% 58%;
+    --chat-user-bg: 204 100% 50%;
     --chat-user-text: 0 0% 98%;
     --chat-agent-bg: 0 0% 96.1%;
     --chat-agent-text: 0 0% 3.9%;
@@ -328,36 +345,37 @@
   }
   
   .dark {
-    /* Dark theme colors - matching reference images */
-    --background: 0 0% 10.2%;
-    --foreground: 0 0% 96.1%;
-    --card: 0 0% 16.5%;
-    --card-foreground: 0 0% 96.1%;
-    --popover: 0 0% 16.5%;
-    --popover-foreground: 0 0% 96.1%;
-    --primary: 262 83% 58%;
-    --primary-foreground: 0 0% 98%;
-    --secondary: 0 0% 21.6%;
-    --secondary-foreground: 0 0% 96.1%;
-    --muted: 0 0% 21.6%;
-    --muted-foreground: 0 0% 62.8%;
+    /* AI SDK Elements inspired dark theme */
+    --background: 0 0% 7%;  /* Near black background */
+    --foreground: 0 0% 95%;
+    --card: 0 0% 12%;
+    --card-foreground: 0 0% 95%;
+    --popover: 0 0% 12%;
+    --popover-foreground: 0 0% 95%;
+    /* Dark theme primary also set to Mailbird blue (no purple) */
+    --primary: 203 100% 60%; /* #38b6ff */
+    --primary-foreground: 0 0% 0%;
+    --secondary: 0 0% 15%;
+    --secondary-foreground: 0 0% 90%;
+    --muted: 0 0% 15%;
+    --muted-foreground: 0 0% 55%;
     --accent: 203 100% 60%;    /* Lighter Mailbird blue #38b6ff for dark theme */
     --accent-foreground: 0 0% 0%;  /* black with transparency */
     --destructive: 0 62.8% 30.6%;
     --destructive-foreground: 0 0% 98%;
-    --border: 0 0% 21.6%;
-    --input: 0 0% 21.6%;
-    --ring: 262 83% 58%;
+    --border: 0 0% 15%;
+    --input: 0 0% 12%;
+    --ring: 203 100% 60%;
     
-    /* Dark chat-specific colors - matching reference */
-    --chat-background: 0 0% 10.2%;
-    --chat-user-bg: 262 83% 58%;
-    --chat-user-text: 0 0% 98%;
-    --chat-agent-bg: 0 0% 16.5%;
-    --chat-agent-text: 0 0% 96.1%;
-    --chat-input-bg: 0 0% 16.5%;
-    --chat-input-text: 0 0% 96.1%;
-    --chat-metadata: 0 0% 62.8%;
+    /* AI SDK Elements chat colors */
+    --chat-background: 0 0% 7%;
+    --chat-user-bg: 0 0% 15%;
+    --chat-user-text: 0 0% 95%;
+    --chat-agent-bg: 0 0% 12%;
+    --chat-agent-text: 0 0% 95%;
+    --chat-input-bg: 0 0% 10%;
+    --chat-input-text: 0 0% 95%;
+    --chat-metadata: 0 0% 50%;
     
     /* Responsive container widths (same as light theme) */
     --container-sm: 100%;

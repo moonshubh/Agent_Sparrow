@@ -41,6 +41,58 @@ def current_settings():
 
 from app.core.user_context_sync import get_user_gemini_api_key_sync
 from app.feedme.ai_extraction_engine import GeminiExtractionEngine
+import base64
+from pypdf import PdfReader
+import io
+from app.feedme.parsers.zendesk_pdf_normalizer import normalize_zendesk_print_text
+import google.generativeai as genai
+
+# Feature flags / behavior toggles
+DELETE_PDF_AFTER_EXTRACT = True  # Immediately remove PDF payload after extraction
+EMBEDDING_MODEL_NAME = "text-embedding-004"
+
+def _light_cleanup(text: str) -> str:
+    """Perform minimal cleanup to improve readability without changing content semantics."""
+    if not text:
+        return text
+    # Normalize Windows/Mac newlines
+    cleaned = text.replace('\r\n', '\n').replace('\r', '\n')
+    # Collapse excessive blank lines
+    lines = [line.strip() for line in cleaned.split('\n')]
+    # Join soft hyphenation breaks: e.g., "confi-\ndence" -> "confidence"
+    joined = []
+    skip_next_space = False
+    for i, line in enumerate(lines):
+        if line.endswith('-') and i + 1 < len(lines) and lines[i + 1][:1].islower():
+            # Drop trailing hyphen and concatenate with next line
+            joined.append(line[:-1])
+            lines[i + 1] = lines[i + 1].lstrip()
+            skip_next_space = True
+        else:
+            joined.append(line)
+            skip_next_space = False
+    cleaned = '\n'.join(joined)
+    # Collapse 3+ newlines to max 2
+    while '\n\n\n' in cleaned:
+        cleaned = cleaned.replace('\n\n\n', '\n\n')
+    return cleaned.strip()
+
+def _extract_text_from_pdf_bytes(pdf_bytes: bytes) -> str:
+    """Extract text from a PDF using pypdf. No OCR fallback by design."""
+    try:
+        reader = PdfReader(io.BytesIO(pdf_bytes))
+        parts = []
+        for page in reader.pages:
+            try:
+                txt = page.extract_text() or ""
+            except Exception:
+                txt = ""
+            if txt:
+                parts.append(txt)
+        return '\n\n'.join(parts)
+    except Exception as e:
+        logger.error(f"PDF text extraction failed: {e}")
+        return ""
 
 
 class MissingAPIKeyError(Exception):
@@ -99,142 +151,131 @@ def process_transcript(self, conversation_id: int, user_id: Optional[str] = None
         raw_transcript = conversation_data['raw_transcript']
         logger.info(f"Processing transcript of {len(raw_transcript)} characters")
         
-        # Phase 1: Use new AI extraction engine with gemma-3-27b-it
-        try:
-            # Check content type and use appropriate extraction strategy
-            metadata = conversation_data.get('metadata', {})
-            file_format = metadata.get('file_format', 'text')
-            mime_type = conversation_data.get('mime_type', 'text/plain')
-            
-            if file_format == 'pdf' or mime_type == 'application/pdf':
-                logger.info("Detected PDF content, using AI extraction engine with PDF parser")
-                
-                # Get user-specific Gemini API key (synchronous for Celery)
-                gemini_api_key = get_user_gemini_api_key_sync(user_id)
-                
-                if gemini_api_key:
-                    # Use Gemma-3-27b-it for intelligent extraction
-                    engine = GeminiExtractionEngine(api_key=gemini_api_key)
-                    
-                    # Prepare PDF metadata
-                    pdf_metadata = metadata.copy()
-                    pdf_metadata.update({
-                        'conversation_id': conversation_id,
-                        'original_filename': conversation_data.get('original_filename', ''),
-                        'file_format': 'pdf',
-                        'mime_type': mime_type,
-                        'pages': conversation_data.get('pages'),
-                        'pdf_metadata': conversation_data.get('pdf_metadata', {})
-                    })
-                    
-                    examples = engine.extract_conversations_sync(raw_transcript, pdf_metadata)
-                    logger.info(f"AI extraction engine extracted {len(examples)} Q&A pairs from PDF with gemma-3-27b-it")
-                else:
-                    error_msg = "No Gemini API key available for PDF extraction"
-                    logger.error(error_msg)
-                    raise MissingAPIKeyError(error_msg)
-                    
-            elif raw_transcript.strip().startswith('<') or 'html' in conversation_data.get('original_filename', '').lower():
-                logger.info("Detected HTML content, using AI extraction engine with enhanced HTML parser")
-                
-                # Use new AI extraction engine for HTML content
-                
-                if gemini_api_key:
-                    # Use Gemma-3-27b-it for intelligent extraction
-                    engine = GeminiExtractionEngine(api_key=gemini_api_key)
-                    
-                    # Use the synchronous wrapper method
-                    metadata = conversation_data.get('metadata', {})
-                    metadata.update({
-                        'conversation_id': conversation_id,
-                        'original_filename': conversation_data.get('original_filename', ''),
-                        'platform': 'zendesk'  # Assume Zendesk for HTML emails
-                    })
-                    
-                    examples = engine.extract_conversations_sync(raw_transcript, metadata)
-                    logger.info(f"AI extraction engine extracted {len(examples)} Q&A pairs with gemma-3-27b-it")
-                else:
-                    # HTML parsing functionality removed - using text processing only
-                    logger.info("HTML parsing disabled - processing as plain text")
-                    examples = []
-            else:
-                logger.info("Using AI-powered text extraction")
-                # Use AI extraction for text content as well
-                
-                if gemini_api_key:
-                    engine = GeminiExtractionEngine(api_key=gemini_api_key)
-                    
-                    # Convert text to simple HTML for consistent processing
-                    html_content = f"<div class='conversation'><pre>{raw_transcript}</pre></div>"
-                    
-                    # Use the synchronous wrapper method
-                    metadata = conversation_data.get('metadata', {})
-                    metadata.update({
-                        'conversation_id': conversation_id,
-                        'original_filename': conversation_data.get('original_filename', ''),
-                        'content_type': 'text'
-                    })
-                    
-                    examples = engine.extract_conversations_sync(html_content, metadata)
-                    logger.info(f"AI extraction engine processed text content: {len(examples)} Q&A pairs")
-                else:
-                    # Fallback to existing text parser
-                    
-                    parser = TranscriptParser()
-                    examples = parser.extract_qa_examples(
-                        transcript=raw_transcript,
-                        conversation_id=conversation_id,
-                        metadata=conversation_data.get('metadata', {})
-                    )
-                    
-                    # Convert to standard format
-                    examples = [
-                        {
-                            'question_text': ex.get('question_text', ''),
-                            'answer_text': ex.get('answer_text', ''),
-                            'confidence_score': ex.get('confidence_score', 0.5),
-                            'context_before': ex.get('context_before', ''),
-                            'context_after': ex.get('context_after', ''),
-                            'tags': ex.get('tags', []),
-                            'issue_type': ex.get('issue_type'),
-                            'resolution_type': ex.get('resolution_type'),
-                            'extraction_method': 'text_pattern',
-                            'metadata': ex.get('metadata', {})
-                        }
-                        for ex in examples
-                    ] if examples else []
-                    
-                    logger.info(f"Text parser extracted {len(examples)} Q&A pairs")
-                    
-        except Exception as e:
-            logger.error(f"Error in Phase 1 AI extraction: {e}")
-            # HTML parsing functionality removed - using text parser as fallback
-            logger.info("Using text parser as fallback")
-            parser = TranscriptParser()
-            examples = parser.extract_qa_examples(raw_transcript)
-            logger.info(f"Fallback text parser extracted {len(examples)} Q&A pairs")
-        
-        # Store examples temporarily for approval
-        if examples:
-            store_temp_examples(conversation_id, examples)
-            logger.info(f"Stored {len(examples)} examples temporarily")
+        # New simplified flow: produce unified extracted_text and purge original PDF immediately
+        metadata = conversation_data.get('metadata', {})
+        file_format = metadata.get('file_format', 'text')
+        mime_type = conversation_data.get('mime_type', 'text/plain')
+
+        extracted_text = ""
+        extraction_confidence = None
+        processing_method = 'manual_text'
+
+        if file_format == 'pdf' or mime_type == 'application/pdf':
+            logger.info("Detected PDF content, extracting text (no OCR fallback)")
+            try:
+                pdf_bytes = base64.b64decode(raw_transcript)
+            except Exception as e:
+                raise ValueError(f"Invalid base64 PDF content: {e}")
+
+            text = _extract_text_from_pdf_bytes(pdf_bytes)
+            if not text or len(text.strip()) < 10:
+                raise ValueError("Could not extract text from PDF (no OCR fallback configured)")
+
+            # Normalize into simplified Q/A flow and derive metadata
+            normalized_text, meta = normalize_zendesk_print_text(
+                _light_cleanup(text),
+                conversation_data.get('original_filename'),
+                conversation_data.get('title') or conversation_data.get('metadata', {}).get('title')
+            )
+            extracted_text = normalized_text
+            extraction_confidence = 0.95
+            processing_method = 'pdf_ocr'
+
+            # Immediately purge original PDF payload if enabled
+            if DELETE_PDF_AFTER_EXTRACT:
+                try:
+                    client = get_supabase_client()
+                    client.client.table('feedme_conversations').update({
+                        'raw_transcript': None,
+                        'pdf_cleaned': True,
+                        'pdf_cleaned_at': datetime.now(timezone.utc).isoformat(),
+                        'original_pdf_size': len(pdf_bytes)
+                    }).eq('id', conversation_id).execute()
+                    logger.info(f"Purged original PDF content for conversation {conversation_id}")
+                except Exception as e:
+                    logger.error(f"Failed to purge PDF content for conversation {conversation_id}: {e}")
+
+        elif raw_transcript.strip().startswith('<') or 'html' in (conversation_data.get('original_filename', '') or '').lower():
+            logger.info("Detected HTML content, performing light cleanup")
+            # Strip HTML to text with minimal processing
+            from bs4 import BeautifulSoup
+            soup = BeautifulSoup(raw_transcript, 'html.parser')
+            text = soup.get_text(separator='\n', strip=True)
+            extracted_text = _light_cleanup(text)
+            processing_method = 'manual_text'
+        else:
+            logger.info("Processing plain text content with light cleanup")
+            extracted_text = _light_cleanup(raw_transcript)
+            processing_method = 'text_paste'
+
+        # Q&A example extraction deprecated – unified text canvas only
         
         # Update status to completed
         processing_time = time.time() - start_time
         processing_time_ms = int(processing_time * 1000)
-        update_conversation_status(
-            conversation_id, 
-            ProcessingStatus.COMPLETED,
-            processing_time_ms=processing_time_ms,
-            total_examples=len(examples)
-        )
+        # Persist unified text and metadata
+        try:
+            client = get_supabase_client()
+            update = {
+                'extracted_text': extracted_text,
+                'processing_status': ProcessingStatus.COMPLETED.value,
+                'processed_at': datetime.now(timezone.utc).isoformat(),
+                'processing_time_ms': processing_time_ms,
+                'processing_method': processing_method,
+            }
+            if extraction_confidence is not None:
+                update['extraction_confidence'] = extraction_confidence
+
+            # Fetch current record to decide whether to overwrite title (only on first extraction)
+            try:
+                current = client.client.table('feedme_conversations') \
+                    .select('metadata, processed_at, title') \
+                    .eq('id', conversation_id) \
+                    .maybe_single() \
+                    .execute()
+                row = getattr(current, 'data', None) or {}
+                current_meta = row.get('metadata') or {}
+                already_processed = bool(row.get('processed_at'))
+            except Exception:
+                row = {}
+                current_meta = {}
+                already_processed = False
+
+            if 'meta' in locals() and isinstance(meta, dict):
+                cm = current_meta or {}
+                # Merge ticket_id (non-editable)
+                if meta.get('ticket_id'):
+                    cm['ticket_id'] = meta.get('ticket_id')
+                # Overwrite title with extracted subject only on first processing
+                if not already_processed and meta.get('subject'):
+                    update['title'] = meta['subject'][:255]
+                    cm['title_overridden_on_extract'] = True
+                update['metadata'] = cm
+
+            client.client.table('feedme_conversations').update(update).eq('id', conversation_id).execute()
+        except Exception as e:
+            logger.error(f"Failed to persist extracted_text/metadata for conversation {conversation_id}: {e}")
+
+        # Update status util for parity
+        update_conversation_status(conversation_id, ProcessingStatus.COMPLETED, processing_time_ms=processing_time_ms)
         
-        logger.info(f"Successfully processed conversation {conversation_id}: {len(examples)} examples in {processing_time:.2f}s")
-        
+        logger.info(f"Successfully processed conversation {conversation_id} in {processing_time:.2f}s")
+
+        # Schedule chunking + embeddings (Gemini embeddings) for unified text
+        try:
+            generate_text_chunks_and_embeddings.delay(conversation_id)
+        except Exception as e:
+            logger.warning(f"Failed to schedule chunk+embed task: {e}")
+
+        # Schedule AI tags/comments generation (low token usage)
+        try:
+            generate_ai_tags.delay(conversation_id)
+        except Exception as e:
+            logger.warning(f"Failed to schedule AI tags task: {e}")
+
         return {
             'success': True,
             'conversation_id': conversation_id,
-            'examples_extracted': len(examples),
             'processing_time': processing_time
         }
         
@@ -281,7 +322,7 @@ def store_temp_examples(conversation_id: int, examples: List[Dict[str, Any]]):
         raise
 
 
-@celery_app.task(bind=True, base=CallbackTask, name='app.feedme.tasks.parse_conversation')
+# Deprecated task removed: parse_conversation (example-based)
 def parse_conversation(self, conversation_id: int, raw_transcript: str, metadata: Dict[str, Any]) -> Dict[str, Any]:
     """
     Parse conversation transcript and extract Q&A examples
@@ -409,6 +450,141 @@ def generate_embeddings(self, conversation_id: int) -> Dict[str, Any]:
             "task_id": task_id,
             "error": str(e)
         }
+
+
+@celery_app.task(bind=True, base=CallbackTask, name='app.feedme.tasks.generate_text_chunks_and_embeddings')
+def generate_text_chunks_and_embeddings(self, conversation_id: int, max_chunk_chars: int = 1200) -> Dict[str, Any]:
+    """Chunk extracted_text and generate Gemini embeddings for each chunk."""
+    task_id = self.request.id
+    logger.info(f"Chunking + embedding for conversation {conversation_id} (task: {task_id})")
+    try:
+        client = get_supabase_client()
+        # Fetch conversation
+        resp = client.client.table('feedme_conversations').select('id, folder_id, extracted_text').eq('id', conversation_id).maybe_single().execute()
+        if not getattr(resp, 'data', None):
+            raise ValueError("Conversation not found")
+        convo = resp.data
+        text = (convo.get('extracted_text') or '').strip()
+        if not text:
+            return { 'success': True, 'conversation_id': conversation_id, 'chunks': 0 }
+
+        # Simple chunking by paragraph groups
+        paras = [p.strip() for p in text.split('\n\n') if p.strip()]
+        chunks: list[str] = []
+        buf = []
+        cur = 0
+        for p in paras:
+            if cur + len(p) + 2 > max_chunk_chars and buf:
+                chunks.append('\n\n'.join(buf))
+                buf = [p]
+                cur = len(p)
+            else:
+                buf.append(p)
+                cur += len(p) + 2
+        if buf:
+            chunks.append('\n\n'.join(buf))
+
+        # Clear existing chunks
+        try:
+            import asyncio
+            # Use sync client; call async wrapper not available here, using direct table ops handled above in sync
+            client.client.table('feedme_text_chunks').delete().eq('conversation_id', conversation_id).execute()
+        except Exception as e:
+            logger.warning(f"Failed to clear old chunks: {e}")
+
+        # Configure Gemini embeddings
+        genai.configure(api_key=getattr(get_cached_settings(), 'gemini_api_key', None) or getattr(get_settings(), 'gemini_api_key', None))
+
+        # Insert and embed per chunk
+        stored = 0
+        for idx, chunk in enumerate(chunks):
+            ins = client.client.table('feedme_text_chunks').insert({
+                'conversation_id': conversation_id,
+                'folder_id': convo.get('folder_id'),
+                'chunk_index': idx,
+                'content': chunk,
+                'metadata': {}
+            }).execute()
+            if not ins.data:
+                continue
+            chunk_id = ins.data[0]['id']
+
+            try:
+                emb = genai.embed_content(model=EMBEDDING_MODEL_NAME, content=chunk)
+                vec = emb['embedding'] if isinstance(emb, dict) else emb.embedding
+                client.client.table('feedme_text_chunks').update({ 'embedding': vec }).eq('id', chunk_id).execute()
+                stored += 1
+            except Exception as e:
+                logger.warning(f"Embedding failed for chunk {chunk_id}: {e}")
+
+        logger.info(f"Created {stored}/{len(chunks)} chunks with embeddings for conversation {conversation_id}")
+        return { 'success': True, 'conversation_id': conversation_id, 'chunks': stored }
+    except Exception as e:
+        logger.error(f"Chunk+embed task failed: {e}")
+        return { 'success': False, 'conversation_id': conversation_id, 'error': str(e) }
+
+
+@celery_app.task(bind=True, base=CallbackTask, name='app.feedme.tasks.generate_ai_tags')
+def generate_ai_tags(self, conversation_id: int, max_input_chars: int = 4000) -> Dict[str, Any]:
+    """Generate concise AI tags and a short comment for a conversation."""
+    task_id = self.request.id
+    logger.info(f"Generating AI tags for conversation {conversation_id} (task: {task_id})")
+    try:
+        client = get_supabase_client()
+        resp = client.client.table('feedme_conversations').select('extracted_text, metadata').eq('id', conversation_id).maybe_single().execute()
+        if not getattr(resp, 'data', None):
+            return { 'success': False, 'error': 'Conversation not found', 'conversation_id': conversation_id }
+        row = resp.data
+        text = (row.get('extracted_text') or '')[:max_input_chars]
+        if not text.strip():
+            return { 'success': True, 'conversation_id': conversation_id, 'tags': [] }
+
+        # Configure Gemini
+        genai.configure(api_key=getattr(get_cached_settings(), 'gemini_api_key', None) or getattr(get_settings(), 'gemini_api_key', None))
+        model = genai.GenerativeModel('gemini-2.5-flash-lite')
+        prompt = (
+            "You are tagging customer support threads. "
+            "Read the following Q/A flow and output concise JSON with keys tags (array of 5-7 short tags) and comment (<=120 chars).\n\n"
+            "Rules: no personal data, no emails, no names. Focus on issue, feature, action, resolution.\n\n"
+            f"TEXT:\n{text}\n\n"
+            "Return strictly JSON like {\"tags\":[...],\"comment\":\"...\"}."
+        )
+        try:
+            res = model.generate_content(prompt)
+            out = getattr(res, 'text', None) or (res.candidates[0].content.parts[0].text if getattr(res, 'candidates', None) else '')
+        except Exception as e:
+            logger.warning(f"Gemini tagging failed: {e}")
+            out = ''
+
+        import json
+        tags = []
+        comment = None
+        if out:
+            try:
+                data = json.loads(out)
+                if isinstance(data.get('tags'), list):
+                    tags = [str(t)[:32] for t in data['tags'][:7]]
+                if isinstance(data.get('comment'), str):
+                    comment = data['comment'][:120]
+            except Exception:
+                # Fallback: simple keyword heuristics
+                kw = []
+                for k in ['setup','sync','smtp','imap','account','password','login','notification','attachment','crash','upgrade','settings','calendar']:
+                    if k in text.lower(): kw.append(k)
+                tags = (kw[:7] or ['support'])
+                comment = 'Auto-tagged summary'
+
+        # Merge into metadata
+        meta = row.get('metadata') or {}
+        meta['ai_tags'] = tags
+        if comment:
+            meta['ai_comment'] = comment
+        client.client.table('feedme_conversations').update({ 'metadata': meta }).eq('id', conversation_id).execute()
+
+        return { 'success': True, 'conversation_id': conversation_id, 'tags': tags, 'comment': comment }
+    except Exception as e:
+        logger.error(f"AI tagging task failed: {e}")
+        return { 'success': False, 'conversation_id': conversation_id, 'error': str(e) }
 
 
 @celery_app.task(bind=True, base=CallbackTask, name='app.feedme.tasks.cleanup_approved_pdf')
