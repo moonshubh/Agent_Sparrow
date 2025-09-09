@@ -1,0 +1,25 @@
+# Railway deployment configuration for MB-Sparrow Frontend
+# This configuration deploys the frontend service only
+
+"$schema" = "https://railway.com/railway.schema.json"
+
+[build]
+builder = "NIXPACKS"
+buildCommand = "npm install && npm run build"
+nixpacksPlan = { providers = ["node"] }
+
+[env]
+NODE_ENV = "production"
+# Ensure Next.js uses production mode
+NEXT_PUBLIC_NODE_ENV = "production"
+# CRITICAL: Backend API URL - Railway maps internal port 8080 to HTTPS
+NEXT_PUBLIC_API_URL = "https://agentsparrow-production.up.railway.app"
+# FeedMe client expects full API base when NEXT_PUBLIC_API_BASE is not present in some environments
+NEXT_PUBLIC_API_BASE = "https://agentsparrow-production.up.railway.app/api/v1"
+
+[deploy]
+startCommand = "npm start"
+healthcheckPath = "/"
+healthcheckTimeout = 300
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 5

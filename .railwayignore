@@ -1,0 +1,81 @@
+# Railway ignore file - exclude unnecessary files from deployment
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+env/
+ENV/
+.pytest_cache/
+.coverage
+htmlcov/
+*.egg-info/
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Frontend (we're only deploying backend)
+frontend/
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.next/
+out/
+
+# Development files
+*.log
+logs/
+*.local
+.DS_Store
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Test files
+**/test_*.py
+**/*_test.py
+**/*.test.*
+**/__tests__/
+**/tests/
+**/test/
+**/spec/
+**/fixtures/
+**/__mocks__/
+**/test-results/
+**/coverage/
+
+# Documentation (except CLAUDE.md)
+*.md
+!CLAUDE.md
+!railway-env-template.md
+
+# Git
+.git/
+.gitignore
+
+# Icons and media
+Icons/
+Feed_Me_Sample PDF/
+
+# Scripts and dev tools
+scripts/
+startup_errors.log
+backend.log
+system_logs/
+cypress/
+
+# Other unnecessary files
+.railwayignore
+docker-compose*.yml
+stage_changes.sh
+railway_ssh_debug.sh
+generate_secret.py
+setup.sh
+start_celery_worker.sh

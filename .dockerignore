@@ -1,0 +1,76 @@
+# Python
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+.coverage
+.pytest_cache
+htmlcov
+dist
+build
+*.egg-info
+.eggs
+
+# Virtual environments
+venv/
+.venv/
+ENV/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Git
+.git/
+.gitignore
+.gitattributes
+
+# Documentation
+docs/
+*.md
+README.md
+CLAUDE.md
+WINDOWS_SETUP.md
+
+# Tests
+tests/
+test_*.py
+*_test.py
+
+# Logs
+*.log
+logs/
+
+# Environment files
+.env
+.env.*
+
+# Scripts
+scripts/
+*.sh
+*.bat
+
+# Frontend (if deploying backend only)
+frontend/
+
+# CI/CD
+.github/
+.gitlab-ci.yml
+
+# Railway/deployment files
+railway.toml
+runtime.txt
+nixpacks.toml
+Procfile
+
+# Other
+.dockerignore
+Dockerfile.*
+docker-compose*.yml
