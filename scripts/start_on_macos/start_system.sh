@@ -20,20 +20,43 @@ mkdir -p "$FRONTEND_LOG_DIR"
 echo "--- Starting Backend Server ---"
 cd "$ROOT_DIR"
 
-# Create and activate Python virtual environment
-if [ ! -d "venv" ]; then
-    echo "Creating Python virtual environment..."
-    python3 -m venv venv
+VENV_DIR="$ROOT_DIR/venv"
+VENV_PY="$VENV_DIR/bin/python"
+VENV_PIP="$VENV_DIR/bin/pip"
+
+# Export Python path to ensure local package resolution
+export PYTHONPATH="$ROOT_DIR:${PYTHONPATH}"
+
+# Helper to detect python version of venv
+get_python_version() {
+    "$1" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}")' 2>/dev/null || echo "unknown"
+}
+
+# Create venv if missing or if RECREATE_VENV=true
+if [ ! -x "$VENV_PY" ] || [ "${RECREATE_VENV:-false}" = "true" ]; then
+    echo "(Re)creating Python virtual environment..."
+    # Prefer python3.10 if available to match runtime.txt
+    if command -v python3.10 >/dev/null 2>&1; then
+        python3.10 -m venv "$VENV_DIR"
+    else
+        # Fallback to python3
+        python3 -m venv "$VENV_DIR"
+    fi
 fi
 
-echo "Activating virtual environment..."
-source venv/bin/activate
+# Verify venv python version matches runtime expectation if possible
+RUNTIME_VER=$(sed -E 's/.*([0-9]+\.[0-9]+\.[0-9]+).*/\1/' "$ROOT_DIR/runtime.txt" 2>/dev/null || echo "")
+VENV_VER=$(get_python_version "$VENV_PY")
+if [ -n "$RUNTIME_VER" ] && [ "$VENV_VER" != "unknown" ] && [ "${VENV_VER%%.*}" != "${RUNTIME_VER%%.*}" ]; then
+    echo "Warning: venv Python version ($VENV_VER) differs from runtime.txt ($RUNTIME_VER)."
+    echo "Set RECREATE_VENV=true to rebuild with preferred interpreter."
+fi
 
-echo "Upgrading pip..."
-python -m pip install --upgrade pip
+echo "Upgrading pip in venv..."
+"$VENV_PY" -m pip install --upgrade pip
 
-echo "Installing Python dependencies..."
-pip install -r requirements.txt 2>/dev/null || echo "Note: Some dependency warnings are expected due to google-generativeai compatibility"
+echo "Installing Python dependencies into venv..."
+"$VENV_PIP" install -r requirements.txt 2>/dev/null || echo "Note: Some dependency warnings are expected due to google-generativeai compatibility"
 
 # Function to kill processes on a given port
 kill_process_on_port() {
@@ -79,9 +102,9 @@ kill_process_on_port() {
 
 kill_process_on_port 8000
 
-echo "Starting Uvicorn server in the background..."
+echo "Starting Uvicorn server in the background (venv python)..."
 cd "$ROOT_DIR"
-uvicorn app.main:app --reload --port 8000 > "$BACKEND_LOG_DIR/backend.log" 2>&1 &
+"$VENV_PY" -m uvicorn app.main:app --reload --port 8000 > "$BACKEND_LOG_DIR/backend.log" 2>&1 &
 BACKEND_PID=$!
 echo "Backend server started with PID: $BACKEND_PID"
 
@@ -124,8 +147,8 @@ else
     fi
     
     # Start FeedMe Celery worker
-    echo "Starting FeedMe Celery worker in the background..."
-    python -m celery -A app.feedme.celery_app worker \
+    echo "Starting FeedMe Celery worker in the background (venv python)..."
+    "$VENV_PY" -m celery -A app.feedme.celery_app worker \
         --loglevel=info \
         --concurrency=2 \
         --queues=feedme_default,feedme_processing,feedme_embeddings,feedme_parsing,feedme_health \

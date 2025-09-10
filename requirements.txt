@@ -86,7 +86,7 @@ transformers
 chromadb
 pypika==0.48.9  # Required by chromadb
 scipy
-numpy
+numpy<2
 pandas
 requests
 websockets

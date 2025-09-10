@@ -126,11 +126,23 @@ class Settings(BaseSettings):
     supabase_service_key: Optional[str] = Field(default=None, alias="SUPABASE_SERVICE_KEY")
     supabase_jwt_secret: Optional[str] = Field(default=None, alias="SUPABASE_JWT_SECRET")
     
+    # FeedMe AI Configuration
+    feedme_ai_pdf_enabled: bool = Field(default=True, alias="FEEDME_AI_PDF_ENABLED")
+    feedme_ai_max_pages: int = Field(default=10, alias="FEEDME_AI_MAX_PAGES")
+    feedme_ai_pages_per_call: int = Field(default=3, alias="FEEDME_AI_PAGES_PER_CALL")
+    feedme_max_pdf_size_mb: int = Field(default=50, alias="FEEDME_MAX_PDF_SIZE_MB")
+    
     # Rate Limiting Configuration (free tier defaults; override via env)
     gemini_flash_rpm_limit: int = Field(default=10, alias="GEMINI_FLASH_RPM_LIMIT")
-    gemini_flash_rpd_limit: int = Field(default=250, alias="GEMINI_FLASH_RPD_LIMIT")
+    gemini_flash_rpd_limit: int = Field(default=1000, alias="GEMINI_FLASH_RPD_LIMIT")
     gemini_pro_rpm_limit: int = Field(default=5, alias="GEMINI_PRO_RPM_LIMIT")
     gemini_pro_rpd_limit: int = Field(default=100, alias="GEMINI_PRO_RPD_LIMIT")
+    
+    # Gemini Embeddings Configuration
+    gemini_embed_model: str = Field(default="models/gemini-embedding-001", alias="GEMINI_EMBED_MODEL")
+    gemini_embed_rpm_limit: int = Field(default=100, alias="GEMINI_EMBED_RPM_LIMIT")
+    gemini_embed_tpm_limit: int = Field(default=30000, alias="GEMINI_EMBED_TPM_LIMIT")
+    gemini_embed_rpd_limit: int = Field(default=1000, alias="GEMINI_EMBED_RPD_LIMIT")
     # Simplified rate limiting - uses in-memory tracking instead of Redis
     rate_limit_use_memory: bool = Field(default=True, alias="RATE_LIMIT_USE_MEMORY")
     rate_limit_redis_url: str = Field(default="redis://localhost:6379", alias="RATE_LIMIT_REDIS_URL")
