@@ -4,15 +4,33 @@
 
 import { createClient } from '@supabase/supabase-js'
 
-const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL as string
-const SUPABASE_ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY as string
+const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL as string | undefined
+const SUPABASE_ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY as string | undefined
+const LOCAL_BYPASS = process.env.NEXT_PUBLIC_LOCAL_AUTH_BYPASS === 'true'
 const BUCKET = process.env.NEXT_PUBLIC_FEEDME_ASSETS_BUCKET || 'feedme-assets'
 
+// Provide a safe client in all modes:
+// - Real Supabase client when env is configured
+// - Minimal mock in local bypass mode to avoid runtime errors
+// - Throw explicit error otherwise
 const supabase = (() => {
-  if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
-    console.warn('Supabase not configured for storage uploads.')
+  if (SUPABASE_URL && SUPABASE_ANON_KEY) {
+    return createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
   }
-  return createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
+  if (LOCAL_BYPASS) {
+    console.warn('Supabase storage disabled (local bypass). Uploads will be no-ops.')
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const mock: any = {
+      storage: {
+        from: (_bucket: string) => ({
+          upload: async (_path: string, _file: File, _opts?: any) => ({ data: { path: _path }, error: null }),
+          getPublicUrl: (_path: string) => ({ data: { publicUrl: '' }, error: null }),
+        }),
+      },
+    }
+    return mock
+  }
+  throw new Error('Supabase storage is not configured. Set NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY')
 })()
 
 function extFromMime(mime: string): string {
@@ -33,7 +51,6 @@ export async function uploadImageToSupabase(
   conversationId?: number
 ): Promise<string> {
   const client = supabase
-  if (!client) throw new Error('Supabase client not initialized')
 
   const ext = extFromMime(file.type)
   const ts = Date.now()
@@ -51,4 +68,3 @@ export async function uploadImageToSupabase(
   if (!data?.publicUrl) throw new Error('Failed to obtain public URL for uploaded image')
   return data.publicUrl
 }
-

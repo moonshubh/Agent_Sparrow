@@ -40,8 +40,8 @@ export function useFeedMeNavigation() {
       return
     }
     uiActions.selectConversation(conversationId)
-    // Ensure we use the inline editor panel, not the modal overlay
-    uiActions.setRightPanel('conversations')
+    // Ensure we show the inline editor panel
+    uiActions.setRightPanel('editor')
   }
 
   const handleConversationClose = () => {

@@ -184,7 +184,7 @@ export const useAnalyticsStore = create<AnalyticsStore>()(
             }))
             
           } catch (error) {
-            console.error('Failed to load workflow stats:', error)
+            console.warn('Analytics: service unreachable; skipping workflow stats load')
             
             set({
               error: error instanceof Error ? error.message : 'Failed to load workflow stats'
@@ -224,7 +224,7 @@ export const useAnalyticsStore = create<AnalyticsStore>()(
             })
             
           } catch (error) {
-            console.error('Failed to load performance metrics:', error)
+            console.warn('Analytics: failed to load performance metrics (mock used)')
             
             set({
               error: error instanceof Error ? error.message : 'Failed to load performance metrics'
@@ -273,7 +273,7 @@ export const useAnalyticsStore = create<AnalyticsStore>()(
             })
             
           } catch (error) {
-            console.error('Failed to load usage stats:', error)
+            console.warn('Analytics: failed to load usage stats (mock used)')
             
             set({
               error: error instanceof Error ? error.message : 'Failed to load usage stats'

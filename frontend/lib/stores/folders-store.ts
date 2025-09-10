@@ -171,9 +171,8 @@ export const useFoldersStore = create<FoldersStore>()(
             get().actions.buildFolderTree()
             
           } catch (error) {
-            console.error('Failed to load folders:', error)
-            set({ isLoading: false })
-            throw error
+            console.warn('Folders: service unreachable; using empty list')
+            set({ isLoading: false, folders: {}, folderTree: [] })
           }
         },
         

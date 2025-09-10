@@ -10,7 +10,6 @@ import { devtools, subscribeWithSelector } from 'zustand/middleware'
 import { 
   listConversations, 
   uploadTranscriptFile,
-  uploadTranscriptText,
   deleteConversation as apiDeleteConversation,
   editConversation as apiEditConversation,
   approveConversation as apiApproveConversation,
@@ -134,10 +133,9 @@ export interface Conversation extends UploadTranscriptResponse {
 
 export interface ConversationUpload {
   id: string
-  type: 'file' | 'text'
+  type: 'file'
   title: string
   file?: File
-  content?: string
   autoProcess: boolean
   status: 'preparing' | 'uploading' | 'processing' | 'completed' | 'failed'
   progress: number
@@ -416,7 +414,7 @@ export const useConversationsStore = create<ConversationsStore>()(
             }))
             
           } catch (error) {
-            console.error('Failed to load conversations:', error)
+            console.warn('Conversations: service unreachable; using empty list')
             
             // Check if it's a folder-related error
             if (isNotFoundError(error)) {
@@ -442,7 +440,7 @@ export const useConversationsStore = create<ConversationsStore>()(
               }))
             }
             
-            throw error
+            // Swallow API errors during initialization to avoid console noise
           }
         },
         
@@ -604,7 +602,7 @@ export const useConversationsStore = create<ConversationsStore>()(
               return conversation
               
             } catch (error) {
-              console.error(`Failed to get conversation ${id}:`, error)
+              console.warn(`Conversation ${id}: service unreachable; returning null`)
               
               // If it's a 404 error, don't remove from store yet
               // Let the UI handle cleanup to prevent cascading updates
@@ -795,15 +793,8 @@ export const useConversationsStore = create<ConversationsStore>()(
                 undefined,
                 upload.autoProcess
               )
-            } else if (upload.type === 'text' && upload.content) {
-              response = await uploadTranscriptText(
-                upload.title,
-                upload.content,
-                undefined,
-                upload.autoProcess
-              )
             } else {
-              throw new Error('Invalid upload configuration')
+              throw new Error('Invalid upload configuration: only PDF file uploads are supported')
             }
             
             // Update progress

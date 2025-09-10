@@ -671,6 +671,16 @@ export function useStoreInitialization() {
     const initialize = async () => {
       try {
         uiActions.setGlobalLoading(true)
+        // If offline, skip network initialization to avoid noisy errors
+        if (typeof window !== 'undefined' && navigator && navigator.onLine === false) {
+          uiActions.showToast({
+            type: 'info',
+            title: 'Offline Mode',
+            message: 'You appear to be offline. Data may be limited.'
+          })
+          uiActions.setGlobalLoading(false)
+          return
+        }
         
         // Load initial data in parallel
         await Promise.allSettled([
