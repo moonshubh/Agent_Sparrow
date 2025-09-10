@@ -11,6 +11,7 @@ from app.core.settings import settings
 if TYPE_CHECKING:
     from app.agents_v2.orchestration.state import GraphState # Import Pydantic GraphState
 from app.agents_v2.router.schemas import RouteQueryWithConf
+from app.core.user_context import get_current_user_id
 
 import logging
 
@@ -66,7 +67,7 @@ def get_user_query(messages: List[Union[BaseMessage, tuple, list, dict]]) -> str
         pass
     return ""
 
-def query_router(state: 'GraphState' | dict) -> Union[dict, str]:
+async def query_router(state: 'GraphState' | dict) -> Union[dict, str]:
     """
     Routes the query to the appropriate agent based on LLM classification.
     Updates the 'destination' field in the GraphState.
@@ -86,12 +87,13 @@ def query_router(state: 'GraphState' | dict) -> Union[dict, str]:
         # Default routing or error handling if query is missing
         return {"destination": "__end__"} # Or perhaps a default agent
 
-    # Get user-specific Gemini API key
+    # Resolve user ID from context or settings fallback
+    user_id = get_current_user_id() or settings.development_user_id
+
+    # Get user-specific Gemini API key, fallback to env var
     from app.api_keys.supabase_service import get_api_key_service
     api_key_service = get_api_key_service()
-    
-    # Fetch user-specific key (fallback to environment if no user key)
-    gemini_api_key = api_key_service.get_decrypted_api_key_sync(
+    gemini_api_key = await api_key_service.get_decrypted_api_key(
         user_id=user_id,
         api_key_type="gemini",
         fallback_env_var="GEMINI_API_KEY"
@@ -120,7 +122,7 @@ def query_router(state: 'GraphState' | dict) -> Union[dict, str]:
         chain = router_prompt | structured_llm
 
         # Invoke the LLM to get the routing decision
-        routing_decision = chain.invoke(prompt_input)
+        routing_decision = await chain.ainvoke(prompt_input)
         destination = routing_decision.destination
         confidence = routing_decision.confidence
         logger.info("Router decision: dest=%s confidence=%.2f", destination, confidence)

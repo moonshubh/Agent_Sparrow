@@ -120,6 +120,15 @@ if auth_endpoints and settings.should_enable_auth_endpoints():
 else:
     logging.warning("Authentication router not registered - endpoints disabled or import failed")
 
+# Include local auth bypass router for development
+if os.getenv("ENABLE_LOCAL_AUTH_BYPASS", "false").lower() == "true":
+    try:
+        from app.api.v1.endpoints import local_auth
+        app.include_router(local_auth.router, prefix="/api/v1/auth", tags=["Local Auth"])
+        logging.warning("⚠️  LOCAL AUTH BYPASS ENABLED - DO NOT USE IN PRODUCTION")
+    except ImportError as e:
+        logging.error(f"Failed to import local auth endpoints: {e}")
+
 # Always include core application routers
 app.include_router(search_tools_endpoints.router, prefix="/api/v1/tools", tags=["Search Tools"])
 app.include_router(agent_endpoints.router, prefix="/api/v1", tags=["Agent Interaction"])
@@ -164,7 +173,11 @@ async def startup_event():
     logging.info(f"Skip Auth (settings): {settings.skip_auth}")
     logging.info(f"Skip Auth (env raw): {skip_auth_env}")
     logging.info(f"Development User ID: {settings.development_user_id}")
-    logging.info(f"JWT Secret Configured: {bool(settings.supabase_jwt_secret)}")
+    # Reflect real JWT secret configuration (prefer explicit env var; treat default placeholder as not configured)
+    jwt_env = os.getenv("JWT_SECRET_KEY")
+    jwt_val = jwt_env if jwt_env is not None else getattr(settings, "jwt_secret_key", None)
+    jwt_configured = bool(jwt_val) and str(jwt_val) != "change-this-in-production"
+    logging.info(f"JWT Secret Configured: {jwt_configured}")
     
     if not is_production:
         logging.warning("Running in development mode - some security features may be disabled")

@@ -221,7 +221,8 @@ class SupabaseClient:
         uploaded_by: Optional[str] = None,
         mime_type: Optional[str] = None,
         pages: Optional[int] = None,
-        pdf_metadata: Optional[Dict] = None
+        pdf_metadata: Optional[Dict] = None,
+        processing_method: Optional[str] = None
     ) -> Dict[str, Any]:
         """Create a new conversation"""
         try:
@@ -235,7 +236,9 @@ class SupabaseClient:
                 "processing_status": "pending",
                 "mime_type": mime_type,
                 "pages": pages,
-                "pdf_metadata": pdf_metadata
+                "pdf_metadata": pdf_metadata,
+                # Include processing method to avoid NULLs that break Pydantic enum validation
+                "processing_method": processing_method or "pdf_ocr",
             }
             
             response = self.client.table('feedme_conversations').insert(data).execute()

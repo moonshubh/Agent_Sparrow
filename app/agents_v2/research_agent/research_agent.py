@@ -22,6 +22,7 @@ from typing import List, Optional, TypedDict
 
 from app.core.settings import settings
 from app.api_keys.supabase_service import get_api_key_service
+from app.core.user_context import get_current_user_id
 
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langgraph.graph import END, StateGraph
@@ -102,7 +103,7 @@ def scrape_node(state: ResearchState):
     return {"documents": documents}
 
 
-def synthesize_node(state: ResearchState):
+async def synthesize_node(state: ResearchState):
     """Use Gemini to synthesize answer + citations."""
 
     query = state["query"]
@@ -139,9 +140,11 @@ Return JSON in this format (no markdown block):
 }}
 """
 
-    # Get user-specific Gemini API key
+    # Resolve user and get user-specific Gemini API key with env fallback
     api_key_service = get_api_key_service()
-    gemini_api_key = api_key_service.get_decrypted_api_key_sync(
+    user_id = get_current_user_id()
+    user_id = user_id if user_id else settings.development_user_id
+    gemini_api_key = await api_key_service.get_decrypted_api_key(
         user_id=user_id,
         api_key_type="gemini",
         fallback_env_var="GEMINI_API_KEY"
@@ -159,7 +162,7 @@ Return JSON in this format (no markdown block):
     model = wrap_gemini_agent(model, "gemini-2.5-flash")
 
     try:
-        response = model.invoke(prompt)
+        response = await model.ainvoke(prompt)
         text = response.content.strip()
         data = json.loads(text)
         # Fallback if model didn't return expected schema

@@ -31,7 +31,7 @@ class QdrantMemory:
         self.client = QdrantClient(url=QDRANT_URL, api_key=QDRANT_API_KEY)
         # Gemini embedding model; 768-dimensional
         self.embedder = GoogleGenerativeAIEmbeddings(
-            model="models/embedding-001",
+            model="models/gemini-embedding-001",
             google_api_key=settings.gemini_api_key,
         )
 

@@ -40,7 +40,7 @@ load_dotenv(PROJECT_ROOT / '.env')
 
 # --- Configuration ---
 GEMINI_API_KEY = settings.gemini_api_key
-EMBEDDING_MODEL_NAME = "models/embedding-001" # Google's embedding-001 has 768 dimensions
+EMBEDDING_MODEL_NAME = "models/gemini-embedding-001" # 768-dimensional Gemini embeddings
 
 # --- Database Connection (Updated for FeedMe v3.0 - Supabase Only) ---
 def get_db_connection():

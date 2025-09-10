@@ -6,8 +6,7 @@ from datetime import datetime
 
 from app.agents_v2.primary_agent.agent import run_primary_agent
 from app.agents_v2.primary_agent.schemas import PrimaryAgentState # Import PrimaryAgentState
-from app.agents_v2.log_analysis_agent.schemas import LogAnalysisAgentState, StructuredLogAnalysisOutput
-from app.agents_v2.log_analysis_agent.enhanced_schemas import ComprehensiveLogAnalysisOutput
+from app.agents_v2.log_analysis_agent.simplified_schemas import SimplifiedLogAnalysisOutput, SimplifiedAgentState
 from langchain_core.messages import HumanMessage, AIMessage
 import json
 import re
@@ -112,7 +111,7 @@ def serialize_analysis_results(final_report):
 
 # --- Pydantic Models for Log Analysis Agent ---
 
-class LogAnalysisV2Response(ComprehensiveLogAnalysisOutput):
+class LogAnalysisV2Response(SimplifiedLogAnalysisOutput):
     trace_id: str | None = None
 class Issue(BaseModel):
     id: str
@@ -129,6 +128,7 @@ class LogAnalysisRequest(BaseModel):
     """
     log_text: str | None = None
     content: str | None = None  # Preferred new field name
+    question: str | None = None  # Optional question for focused analysis
     trace_id: str | None = None
 
 
@@ -323,12 +323,16 @@ async def analyze_logs(
         
         # Use user-specific context
         async with user_context_scope(user_context):
-            initial_state = LogAnalysisAgentState(
-                messages=[HumanMessage(content=log_body)],
-                raw_log_content=log_body,
-                # trace_id is handled within run_log_analysis_agent if passed as kwarg, but not part of state dict
-            )
+            initial_state = {
+                "raw_log_content": log_body,
+                "question": None,
+                "trace_id": None
+            }
 
+            # Add question if provided (for simplified agent)
+            if hasattr(request, 'question') and request.question:
+                initial_state['question'] = request.question
+            
             # Pass trace_id as a keyword argument if the agent function supports it for logging/tracing
             # The run_log_analysis_agent in agent.py is designed to pick up trace_id from the state dict if present,
             # or generate one. For explicit passing for the endpoint, let's ensure it's part of the initial call.
@@ -338,7 +342,7 @@ async def analyze_logs(
 
             raw_agent_output = await run_log_analysis_agent(initial_state)
 
-        final_report: ComprehensiveLogAnalysisOutput = raw_agent_output.get('final_report')
+        final_report: SimplifiedLogAnalysisOutput = raw_agent_output.get('final_report')
         returned_trace_id = raw_agent_output.get('trace_id')
 
         if not final_report:
@@ -533,12 +537,12 @@ async def unified_agent_stream_generator(request: UnifiedAgentRequest) -> AsyncI
         if agent_type == "log_analyst" and request.log_content:
             # Handle log analysis
             from app.agents_v2.log_analysis_agent.agent import run_log_analysis_agent
-            from app.agents_v2.log_analysis_agent.schemas import LogAnalysisAgentState
             
-            initial_state = LogAnalysisAgentState(
-                messages=[HumanMessage(content=request.message)],
-                raw_log_content=request.log_content
-            )
+            initial_state = {
+                "raw_log_content": request.log_content,
+                "question": request.message if request.message else None,
+                "trace_id": None
+            }
             
             result = await run_log_analysis_agent(initial_state)
             final_report = result.get('final_report')

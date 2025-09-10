@@ -67,6 +67,7 @@ from app.feedme.schemas import (
     ExampleReviewRequest,
     ExampleReviewResponse
 )
+from app.feedme.schemas import ProcessingMethod
 
 # Folder management schemas
 class FeedMeFolder(BaseModel):
@@ -210,6 +211,9 @@ async def get_conversation_by_id(conversation_id: int) -> Optional[FeedMeConvers
         client = get_supabase_client()
         result = await client.get_conversation(conversation_id)
         if result:
+            # Backward compatibility: ensure processing_method is not null
+            if result.get('processing_method') in (None, ''):
+                result['processing_method'] = ProcessingMethod.PDF_OCR.value
             return FeedMeConversation(**result)
         return None
     except Exception as e:
@@ -240,7 +244,8 @@ async def create_conversation_in_db(conversation_data: ConversationCreate) -> Fe
             uploaded_by=conversation_data.uploaded_by,
             mime_type=conversation_data.mime_type,
             pages=conversation_data.pages,
-            pdf_metadata=conversation_data.pdf_metadata
+            pdf_metadata=conversation_data.pdf_metadata,
+            processing_method=(conversation_data.processing_method.value if isinstance(conversation_data.processing_method, ProcessingMethod) else conversation_data.processing_method)
         )
         return FeedMeConversation(**result)
     except Exception as e:
@@ -304,8 +309,7 @@ async def upload_transcript(
     title: str = Form(..., description="Conversation title"),
     uploaded_by: Optional[str] = Form(None, description="User uploading the transcript"),
     auto_process: bool = Form(True, description="Whether to automatically process the transcript"),
-    transcript_file: Optional[UploadFile] = File(None, description="Transcript file to upload"),
-    transcript_content: Optional[str] = Form(None, description="Transcript content as text")
+    transcript_file: Optional[UploadFile] = File(None, description="PDF file to upload")
 ):
     """
     Uploads a customer support transcript for ingestion, accepting either a file upload or direct text input.
@@ -341,12 +345,9 @@ async def upload_transcript(
         )
         raise HTTPException(status_code=400, detail=str(e))
     
-    # Validate input
-    if not transcript_file and not transcript_content:
-        raise HTTPException(status_code=400, detail="Either transcript_file or transcript_content must be provided")
-    
-    if transcript_file and transcript_content:
-        raise HTTPException(status_code=400, detail="Provide either transcript_file or transcript_content, not both")
+    # Validate input – PDF file is required; manual text uploads are not supported
+    if not transcript_file:
+        raise HTTPException(status_code=400, detail="A PDF file is required")
     
     # Extract transcript content
     final_content = ""
@@ -385,8 +386,8 @@ async def upload_transcript(
             )
         
         # Validate file type and content type
-        allowed_content_types = ["text/plain", "text/html", "application/html", "text/csv", "application/octet-stream", "application/pdf"]
-        allowed_extensions = [".txt", ".log", ".html", ".htm", ".csv", ".pdf"]
+        allowed_content_types = ["application/pdf"]
+        allowed_extensions = [".pdf"]
         
         # Check content type if provided
         if transcript_file.content_type and transcript_file.content_type not in allowed_content_types:
@@ -400,18 +401,9 @@ async def upload_transcript(
             file_extension = os.path.splitext(transcript_file.filename.lower())[1]
             
             # Check if HTML file and HTML support is enabled
-            is_html_file = transcript_file.filename.lower().endswith(('.html', '.htm')) or \
-                          (transcript_file.content_type and transcript_file.content_type in ["text/html", "application/html"])
-            
             # Check if PDF file and PDF support is enabled
             is_pdf_file = transcript_file.filename.lower().endswith('.pdf') or \
                          (transcript_file.content_type and transcript_file.content_type == "application/pdf")
-            
-            if is_html_file and not settings.feedme_html_enabled:
-                raise HTTPException(
-                    status_code=400, 
-                    detail="HTML file uploads are not enabled. Please contact your administrator to enable FEEDME_HTML_ENABLED."
-                )
             
             if is_pdf_file and not settings.feedme_pdf_enabled:
                 raise HTTPException(
@@ -430,20 +422,14 @@ async def upload_transcript(
             content_bytes = await transcript_file.read()
             original_filename = transcript_file.filename
             
-            # Handle PDF files differently
-            if is_pdf_file:
-                # For PDF files, store as base64 for more efficient storage
-                import base64
-                final_content = base64.b64encode(content_bytes).decode('utf-8')
-                mime_type = "application/pdf"
-                file_format = "pdf"
-            else:
-                # For text files, decode as UTF-8
-                # Decode and sanitize text content
-                text_content = file_content.decode('utf-8')
-                final_content = SecurityValidator.sanitize_text(text_content, strip_html=not is_html_file)
-                mime_type = transcript_file.content_type or "text/plain"
-                file_format = "text"
+            # Enforce PDF-only uploads
+            if not is_pdf_file:
+                raise HTTPException(status_code=400, detail="Only PDF uploads are supported")
+            # Store PDF as base64 for downstream processing
+            import base64
+            final_content = base64.b64encode(content_bytes).decode('utf-8')
+            mime_type = "application/pdf"
+            file_format = "pdf"
                 
         except UnicodeDecodeError:
             if is_pdf_file:
@@ -452,28 +438,17 @@ async def upload_transcript(
                 raise HTTPException(status_code=400, detail="File must be valid UTF-8 text")
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"Error reading file: {str(e)}")
-    else:
-        # Validate and sanitize text content
-        try:
-            validated_text = SecureTextModel(text=transcript_content)
-            final_content = validated_text.text
-        except ValueError as e:
-            audit_logger.log_validation_failure(
-                "text_content",
-                transcript_content[:100] if transcript_content else "",
-                str(e),
-                client_ip
-            )
-            raise HTTPException(status_code=400, detail=str(e))
-        
-        mime_type = "text/plain"
-        file_format = "text"
-        is_pdf_file = False
+    # Manual text uploads are not supported
     
     # Validate content length
     if len(final_content.strip()) < 10:
         raise HTTPException(status_code=400, detail="Transcript content must be at least 10 characters long")
     
+    # Determine initial processing method based on input type
+    initial_method = ProcessingMethod.PDF_OCR if is_pdf_file else (
+        ProcessingMethod.MANUAL_TEXT if transcript_file else ProcessingMethod.TEXT_PASTE
+    )
+
     # Create conversation
     conversation_data = ConversationCreate(
         title=title,
@@ -483,6 +458,7 @@ async def upload_transcript(
         metadata={"auto_process": auto_process, "file_format": file_format},
         mime_type=mime_type,
         pages=None,  # Will be populated during PDF processing
+        processing_method=initial_method,
         pdf_metadata=None  # Will be populated during PDF processing
     )
     
@@ -578,7 +554,11 @@ async def list_conversations(
         )
         
         # Convert to FeedMeConversation objects
-        conversations = [FeedMeConversation(**conv) for conv in result["conversations"]]
+        conversations = []
+        for conv in result["conversations"]:
+            if conv.get('processing_method') in (None, ''):
+                conv['processing_method'] = ProcessingMethod.PDF_OCR.value
+            conversations.append(FeedMeConversation(**conv))
         
         return ConversationListResponse(
             conversations=conversations,
@@ -3142,6 +3122,90 @@ async def delete_folder_supabase(
         raise HTTPException(status_code=500, detail="Failed to delete folder")
 
 
+@router.get("/gemini-usage", response_model=Dict[str, Any], tags=["FeedMe"])
+async def get_gemini_usage():
+    """
+    Get current Gemini vision API usage statistics
+    
+    Returns daily usage, limits, RPM status, and utilization metrics
+    for the Gemini Flash vision model used in PDF extraction.
+    
+    Returns:
+        Dict containing usage statistics and rate limit information
+    """
+    
+    if not settings.feedme_enabled:
+        raise HTTPException(status_code=503, detail="FeedMe service is currently disabled")
+    
+    try:
+        from app.feedme.rate_limiting.gemini_tracker import get_tracker_info
+        
+        # Get current usage info from the tracker
+        usage_info = get_tracker_info(
+            daily_limit=settings.gemini_flash_rpd_limit,
+            rpm_limit=settings.gemini_flash_rpm_limit
+        )
+        
+        return {
+            "daily_used": usage_info["daily_used"],
+            "daily_limit": usage_info["daily_limit"],
+            "rpm_limit": usage_info["rpm_limit"],
+            "calls_in_window": usage_info["calls_in_window"],
+            "window_seconds_remaining": usage_info["window_seconds_remaining"],
+            "utilization": usage_info["utilization"],
+            "status": "healthy" if usage_info["utilization"]["daily"] < 0.9 else "warning",
+            "day": usage_info["day"]
+        }
+        
+    except Exception as e:
+        logger.error(f"Error fetching Gemini usage: {e}")
+        raise HTTPException(status_code=500, detail="Failed to fetch usage statistics")
+
+
+@router.get("/embedding-usage", response_model=Dict[str, Any], tags=["FeedMe"])
+async def get_embedding_usage():
+    """
+    Get current embedding API usage statistics
+    
+    Returns daily usage, limits, RPM/TPM status, and utilization metrics
+    for the Gemini embedding model used in text chunk vectorization.
+    
+    Returns:
+        Dict containing embedding usage statistics and rate limit information
+    """
+    
+    if not settings.feedme_enabled:
+        raise HTTPException(status_code=503, detail="FeedMe service is currently disabled")
+    
+    try:
+        from app.feedme.rate_limiting.gemini_tracker import get_embed_tracker_info
+        
+        # Get current usage info from the embedding tracker
+        usage_info = get_embed_tracker_info(
+            daily_limit=settings.gemini_embed_rpd_limit,
+            rpm_limit=settings.gemini_embed_rpm_limit,
+            tpm_limit=settings.gemini_embed_tpm_limit
+        )
+        
+        return {
+            "daily_used": usage_info["daily_used"],
+            "daily_limit": usage_info["daily_limit"],
+            "rpm_limit": usage_info["rpm_limit"],
+            "tpm_limit": usage_info["tpm_limit"],
+            "calls_in_window": usage_info["calls_in_window"],
+            "tokens_in_window": usage_info["tokens_in_window"],
+            "window_seconds_remaining": usage_info["window_seconds_remaining"],
+            "token_window_seconds_remaining": usage_info["token_window_seconds_remaining"],
+            "utilization": usage_info["utilization"],
+            "status": "healthy" if max(usage_info["utilization"].values()) < 0.9 else "warning",
+            "day": usage_info["day"]
+        }
+        
+    except Exception as e:
+        logger.error(f"Error fetching embedding usage: {e}")
+        raise HTTPException(status_code=500, detail="Failed to fetch usage statistics")
+
+
 @router.delete("/examples/{example_id}", response_model=Dict[str, Any], tags=["FeedMe"])
 async def delete_example(example_id: int):
     """
@@ -3195,4 +3259,3 @@ async def delete_example(example_id: int):
     except Exception as e:
         logger.error(f"Failed to delete example {example_id}: {e}")
         raise HTTPException(status_code=500, detail="Failed to delete example")
-
