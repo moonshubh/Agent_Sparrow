@@ -18,9 +18,13 @@ const fetchWithRetry = async (
   url: string, 
   options: RequestInit = {}, 
   retries: number = 3,
-  timeout: number = 10000,
+  timeout: number = 20000,
   skipRetryOn503: boolean = false
 ): Promise<Response> => {
+  // Offline short-circuit to avoid noisy errors
+  if (typeof window !== 'undefined' && navigator && navigator.onLine === false) {
+    throw new ApiUnreachableError('You are offline - unable to reach FeedMe service')
+  }
   const controller = new AbortController()
   const timeoutId = setTimeout(() => controller.abort(), timeout)
   
@@ -41,14 +45,14 @@ const fetchWithRetry = async (
     return response
   } catch (error) {
     clearTimeout(timeoutId)
-    console.error(`[FeedMe API] Fetch failed for ${url}:`, error)
+    console.warn(`[FeedMe API] Fetch failed for ${url}:`, error)
     
     if (retries > 0 && (error instanceof Error && error.name !== 'AbortError')) {
       // Wait before retry (exponential backoff)
       const delay = Math.pow(2, 3 - retries) * 1000
       console.log(`[FeedMe API] Retrying in ${delay}ms...`)
       await new Promise(resolve => setTimeout(resolve, delay))
-      return fetchWithRetry(url, options, retries - 1, timeout)
+      return fetchWithRetry(url, options, retries - 1, timeout, skipRetryOn503)
     }
     
     // On final failure, throw ApiUnreachableError with friendly message
@@ -88,7 +92,6 @@ console.log('[FeedMe API] Using FEEDME_API_BASE:', FEEDME_API_BASE)
 // Types
 export interface UploadTranscriptRequest {
   title: string
-  transcript_content?: string
   uploaded_by?: string
   auto_process?: boolean
 }
@@ -255,40 +258,7 @@ export class FeedMeApiClient {
     return response.json()
   }
 
-  /**
-   * Upload a transcript via text content
-   */
-  async uploadTranscriptText(
-    title: string,
-    transcriptContent: string,
-    uploadedBy?: string,
-    autoProcess: boolean = true
-  ): Promise<UploadTranscriptResponse> {
-    const formData = new FormData()
-    formData.append('title', title)
-    formData.append('transcript_content', transcriptContent)
-    formData.append('auto_process', autoProcess.toString())
-    
-    if (uploadedBy) {
-      formData.append('uploaded_by', uploadedBy)
-    }
-
-    console.log('[FeedMe API] Uploading to:', `${this.baseUrl}/conversations/upload`)
-    
-    const response = await fetchWithRetry(`${this.baseUrl}/conversations/upload`, {
-      method: 'POST',
-      body: formData,
-    })
-
-    if (!response.ok) {
-      console.error('[FeedMe API] Upload failed:', response.status, response.statusText)
-      const errorData = await response.json().catch(() => ({}))
-      console.error('[FeedMe API] Error details:', errorData)
-      throw new Error(errorData.detail || `Upload failed: ${response.status} ${response.statusText}`)
-    }
-
-    return response.json()
-  }
+  // Text-based uploads are not supported in strict AI mode
 
   /**
    * Get processing status for a conversation
@@ -519,6 +489,55 @@ export class FeedMeApiClient {
   async assignConversationsToFolderSupabase(folderId: number | null, conversationIds: number[]): Promise<any> {
     return assignConversationsToFolderSupabase(folderId, conversationIds)
   }
+
+  /**
+   * Get Gemini vision API usage statistics
+   */
+  async getGeminiUsage(): Promise<{
+    daily_used: number
+    daily_limit: number
+    rpm_limit: number
+    calls_in_window: number
+    window_seconds_remaining: number
+    utilization: { daily: number; rpm: number }
+    status: 'healthy' | 'warning'
+    day: string
+  }> {
+    const response = await fetchWithRetry(`${this.baseUrl}/gemini-usage`)
+    
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}))
+      throw new Error(errorData.detail || `Failed to get Gemini usage: ${response.status} ${response.statusText}`)
+    }
+    
+    return response.json()
+  }
+
+  /**
+   * Get embedding API usage statistics
+   */
+  async getEmbeddingUsage(): Promise<{
+    daily_used: number
+    daily_limit: number
+    rpm_limit: number
+    tpm_limit: number
+    calls_in_window: number
+    tokens_in_window: number
+    window_seconds_remaining: number
+    token_window_seconds_remaining: number
+    utilization: { daily: number; rpm: number; tpm: number }
+    status: 'healthy' | 'warning'
+    day: string
+  }> {
+    const response = await fetchWithRetry(`${this.baseUrl}/embedding-usage`)
+    
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}))
+      throw new Error(errorData.detail || `Failed to get embedding usage: ${response.status} ${response.statusText}`)
+    }
+    
+    return response.json()
+  }
 }
 
 // Default client instance
@@ -532,12 +551,9 @@ export const uploadTranscriptFile = (
   autoProcess?: boolean
 ) => feedMeApi.uploadTranscriptFile(title, file, uploadedBy, autoProcess)
 
-export const uploadTranscriptText = (
-  title: string,
-  transcriptContent: string,
-  uploadedBy?: string,
-  autoProcess?: boolean
-) => feedMeApi.uploadTranscriptText(title, transcriptContent, uploadedBy, autoProcess)
+export const uploadTranscriptText = () => {
+  throw new Error('Text-based uploads are disabled. Please upload a PDF file.')
+}
 
 export const getProcessingStatus = (conversationId: number) => 
   feedMeApi.getProcessingStatus(conversationId)

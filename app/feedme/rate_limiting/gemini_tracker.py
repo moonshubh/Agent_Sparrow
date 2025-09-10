@@ -129,12 +129,16 @@ class GeminiRateTracker:
 
 _tracker: Optional[GeminiRateTracker] = None
 _embed_tracker: Optional[GeminiRateTracker] = None
+_tracker_lock = threading.Lock()
+_embed_tracker_lock = threading.Lock()
 
 
 def get_tracker(daily_limit: int, rpm_limit: int) -> GeminiRateTracker:
     global _tracker
     if _tracker is None:
-        _tracker = GeminiRateTracker(daily_limit=daily_limit, rpm_limit=rpm_limit)
+        with _tracker_lock:
+            if _tracker is None:  # Double-check pattern
+                _tracker = GeminiRateTracker(daily_limit=daily_limit, rpm_limit=rpm_limit)
     return _tracker
 
 def get_tracker_info(daily_limit: int, rpm_limit: int) -> dict:
@@ -143,7 +147,9 @@ def get_tracker_info(daily_limit: int, rpm_limit: int) -> dict:
 def get_embed_tracker(daily_limit: int, rpm_limit: int, tpm_limit: int) -> GeminiRateTracker:
     global _embed_tracker
     if _embed_tracker is None:
-        _embed_tracker = GeminiRateTracker(daily_limit=daily_limit, rpm_limit=rpm_limit, tpm_limit=tpm_limit)
+        with _embed_tracker_lock:
+            if _embed_tracker is None:  # Double-check pattern
+                _embed_tracker = GeminiRateTracker(daily_limit=daily_limit, rpm_limit=rpm_limit, tpm_limit=tpm_limit)
     return _embed_tracker
 
 def get_embed_tracker_info(daily_limit: int, rpm_limit: int, tpm_limit: int) -> dict:

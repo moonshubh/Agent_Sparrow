@@ -32,6 +32,7 @@ import { cn } from '@/lib/utils'
 import { FileGridView } from './FileGridViewSimple'
 import { AnalyticsDashboard } from './AnalyticsDashboardSimple'
 import { EnhancedFeedMeModal } from './EnhancedFeedMeModal'
+import ConversationEditorPanel from './ConversationEditorPanel'
 import { FeedMeErrorBoundary } from './ErrorBoundary'
 
 // Import new two-panel components
@@ -90,7 +91,7 @@ export function FeedMePageManager() {
 
   return (
     <FeedMeErrorBoundary>
-      <div className="h-screen flex bg-background">
+      <div className="h-screen flex bg-background overflow-hidden">
         {/* Sidebar removed in new layout; navigation is now in top-right header */}
 
         {/* Secondary Folder Panel */}
@@ -114,7 +115,22 @@ export function FeedMePageManager() {
                 onConversationMove={handleConversationMove}
               />
             )}
-            
+
+            {rightPanel === 'editor' && (
+              <div className="w-full">
+                {selectedConversationId ? (
+                  <ConversationEditorPanel />
+                ) : (
+                  <div className="flex-1 flex items-center justify-center text-muted-foreground">
+                    <div className="text-center">
+                      <p className="text-lg font-medium">Select a conversation</p>
+                      <p className="text-sm mt-1">Choose a conversation from the list to view and edit its content</p>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
             {rightPanel === 'analytics' && (
               <AnalyticsDashboard />
             )}

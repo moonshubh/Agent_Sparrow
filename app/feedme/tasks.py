@@ -49,7 +49,7 @@ import google.generativeai as genai
 
 # Feature flags / behavior toggles
 DELETE_PDF_AFTER_EXTRACT = True  # Immediately remove PDF payload after extraction
-EMBEDDING_MODEL_NAME = "text-embedding-004"
+EMBEDDING_MODEL_NAME = "models/gemini-embedding-001"
 
 def _light_cleanup(text: str) -> str:
     """Perform minimal cleanup to improve readability without changing content semantics."""
@@ -158,55 +158,89 @@ def process_transcript(self, conversation_id: int, user_id: Optional[str] = None
 
         extracted_text = ""
         extraction_confidence = None
-        processing_method = 'manual_text'
+        processing_method = 'pdf_ai'
 
         if file_format == 'pdf' or mime_type == 'application/pdf':
-            logger.info("Detected PDF content, extracting text (no OCR fallback)")
+            logger.info("Detected PDF content")
+            
+            # Validate PDF size before decoding
+            # Base64 increases size by ~33%, so check encoded size first
+            max_pdf_size_mb = getattr(current_settings(), 'feedme_max_pdf_size_mb', 50)
+            max_encoded_size = int(max_pdf_size_mb * 1024 * 1024 * 1.4)  # 1.4x for base64 overhead
+            
+            if len(raw_transcript) > max_encoded_size:
+                raise ValueError(f"PDF too large: {len(raw_transcript) / (1024*1024):.1f}MB encoded (max {max_pdf_size_mb}MB)")
+            
             try:
                 pdf_bytes = base64.b64decode(raw_transcript)
             except Exception as e:
                 raise ValueError(f"Invalid base64 PDF content: {e}")
+            
+            # Double-check decoded size
+            if len(pdf_bytes) > max_pdf_size_mb * 1024 * 1024:
+                raise ValueError(f"PDF too large: {len(pdf_bytes) / (1024*1024):.1f}MB (max {max_pdf_size_mb}MB)")
 
-            text = _extract_text_from_pdf_bytes(pdf_bytes)
-            if not text or len(text.strip()) < 10:
-                raise ValueError("Could not extract text from PDF (no OCR fallback configured)")
-
-            # Normalize into simplified Q/A flow and derive metadata
-            normalized_text, meta = normalize_zendesk_print_text(
-                _light_cleanup(text),
-                conversation_data.get('original_filename'),
-                conversation_data.get('title') or conversation_data.get('metadata', {}).get('title')
-            )
-            extracted_text = normalized_text
-            extraction_confidence = 0.95
-            processing_method = 'pdf_ocr'
+            # Check if AI PDF extraction is enabled
+            if current_settings().feedme_ai_pdf_enabled:
+                logger.info("Using Gemini vision API for PDF extraction")
+                try:
+                    # Get user's API key if available
+                    user_api_key = None
+                    if user_id:
+                        try:
+                            user_api_key = get_user_gemini_api_key_sync(user_id)
+                        except Exception as e:
+                            logger.debug(f"Could not get user API key: {e}")
+                    
+                    # Use Gemini vision processor
+                    from app.feedme.processors.gemini_pdf_processor import process_pdf_to_markdown
+                    
+                    markdown_text, extraction_info = process_pdf_to_markdown(
+                        pdf_bytes,
+                        max_pages=current_settings().feedme_ai_max_pages,
+                        pages_per_call=current_settings().feedme_ai_pages_per_call,
+                        api_key=user_api_key or current_settings().gemini_api_key,
+                        rpm_limit=current_settings().gemini_flash_rpm_limit,
+                        rpd_limit=current_settings().gemini_flash_rpd_limit
+                    )
+                    
+                    if markdown_text:
+                        extracted_text = markdown_text
+                        extraction_confidence = 0.98  # High confidence for AI extraction
+                        processing_method = 'pdf_ai'
+                        
+                        # Store extraction info in metadata
+                        metadata.update({
+                            'extraction_info': extraction_info,
+                            'extraction_method': 'gemini_vision'
+                        })
+                        logger.info(f"Successfully extracted {extraction_info['pages_processed']} pages using Gemini vision")
+                    else:
+                        raise ValueError("Gemini extraction returned empty result")
+                except Exception as e:
+                    logger.error(f"Gemini vision extraction failed: {e}")
+                    raise
+            else:
+                # Strict mode: AI extraction must be enabled
+                raise ValueError("AI PDF extraction is disabled in settings")
 
             # Immediately purge original PDF payload if enabled
             if DELETE_PDF_AFTER_EXTRACT:
                 try:
                     client = get_supabase_client()
+                    # Do not null raw_transcript if the column is NOT NULL; just mark cleaned
                     client.client.table('feedme_conversations').update({
-                        'raw_transcript': None,
                         'pdf_cleaned': True,
                         'pdf_cleaned_at': datetime.now(timezone.utc).isoformat(),
                         'original_pdf_size': len(pdf_bytes)
                     }).eq('id', conversation_id).execute()
-                    logger.info(f"Purged original PDF content for conversation {conversation_id}")
+                    logger.info(f"Marked PDF content as cleaned for conversation {conversation_id}")
                 except Exception as e:
-                    logger.error(f"Failed to purge PDF content for conversation {conversation_id}: {e}")
+                    logger.error(f"Failed to mark PDF cleaned for conversation {conversation_id}: {e}")
 
-        elif raw_transcript.strip().startswith('<') or 'html' in (conversation_data.get('original_filename', '') or '').lower():
-            logger.info("Detected HTML content, performing light cleanup")
-            # Strip HTML to text with minimal processing
-            from bs4 import BeautifulSoup
-            soup = BeautifulSoup(raw_transcript, 'html.parser')
-            text = soup.get_text(separator='\n', strip=True)
-            extracted_text = _light_cleanup(text)
-            processing_method = 'manual_text'
         else:
-            logger.info("Processing plain text content with light cleanup")
-            extracted_text = _light_cleanup(raw_transcript)
-            processing_method = 'text_paste'
+            # Non-PDF content is not supported in strict AI mode
+            raise ValueError("Only PDF content is supported for FeedMe processing")
 
         # Q&A example extraction deprecated – unified text canvas only
         
@@ -464,7 +498,41 @@ def generate_text_chunks_and_embeddings(self, conversation_id: int, max_chunk_ch
         if not getattr(resp, 'data', None):
             raise ValueError("Conversation not found")
         convo = resp.data
-        text = (convo.get('extracted_text') or '').strip()
+        raw_text = (convo.get('extracted_text') or '').strip()
+        if not raw_text:
+            return { 'success': True, 'conversation_id': conversation_id, 'chunks': 0 }
+
+        # Normalize content for embeddings: prefer plain text without markdown/HTML
+        def markdown_to_text(md: str) -> str:
+            # Remove code fences
+            import re
+            s = re.sub(r"```[\s\S]*?```", lambda m: m.group(0).strip('`').strip(), md)
+            # Inline code
+            s = re.sub(r"`([^`]+)`", r"\1", s)
+            # Bold/italic
+            s = re.sub(r"\*\*([^*]+)\*\*", r"\1", s)
+            s = re.sub(r"__([^_]+)__", r"\1", s)
+            s = re.sub(r"\*([^*]+)\*", r"\1", s)
+            s = re.sub(r"_([^_]+)_", r"\1", s)
+            # Headings
+            s = re.sub(r"^#{1,6}\s+", "", s, flags=re.MULTILINE)
+            # Links [text](url) -> text (url)
+            s = re.sub(r"\[([^\]]+)\]\((https?[^)]+)\)", r"\1 (\2)", s)
+            # Images ![alt](url) -> alt (url)
+            s = re.sub(r"!\[([^\]]*)\]\((https?[^)]+)\)", r"\1 (\2)", s)
+            # Lists markers
+            s = re.sub(r"^[\t ]*[-*]\s+", "• ", s, flags=re.MULTILINE)
+            s = re.sub(r"^[\t ]*\d+\.\s+", lambda m: f"{m.group(0).strip()} ", s, flags=re.MULTILINE)
+            # HTML line breaks
+            s = re.sub(r"<br\s*/?>", "\n", s, flags=re.IGNORECASE)
+            # Remove remaining HTML tags
+            s = re.sub(r"<[^>]+>", "", s)
+            # Normalize whitespace
+            s = re.sub(r"\r", "\n", s)
+            s = re.sub(r"\n{3,}", "\n\n", s)
+            return s.strip()
+
+        text = markdown_to_text(raw_text)
         if not text:
             return { 'success': True, 'conversation_id': conversation_id, 'chunks': 0 }
 
@@ -492,11 +560,34 @@ def generate_text_chunks_and_embeddings(self, conversation_id: int, max_chunk_ch
         except Exception as e:
             logger.warning(f"Failed to clear old chunks: {e}")
 
-        # Configure Gemini embeddings
-        genai.configure(api_key=getattr(get_cached_settings(), 'gemini_api_key', None) or getattr(get_settings(), 'gemini_api_key', None))
+        # Get user's API key if available (from conversation uploader)
+        user_api_key = None
+        try:
+            uploader_resp = client.client.table('feedme_conversations').select('uploaded_by').eq('id', conversation_id).maybe_single().execute()
+            if uploader_resp.data and uploader_resp.data.get('uploaded_by'):
+                user_api_key = get_user_gemini_api_key_sync(uploader_resp.data['uploaded_by'])
+        except Exception as e:
+            logger.debug(f"Could not get user API key: {e}")
+        
+        # Configure Gemini embeddings with user key or fallback to system key
+        api_key = user_api_key or current_settings().gemini_api_key
+        if not api_key:
+            raise ValueError("No Gemini API key available")
+        genai.configure(api_key=api_key)
+        
+        # Get embedding rate tracker
+        from app.feedme.rate_limiting.gemini_tracker import get_embed_tracker
+        embed_tracker = get_embed_tracker(
+            daily_limit=current_settings().gemini_embed_rpd_limit,
+            rpm_limit=current_settings().gemini_embed_rpm_limit,
+            tpm_limit=current_settings().gemini_embed_tpm_limit
+        )
 
-        # Insert and embed per chunk
+        # Insert and embed per chunk with rate limiting
         stored = 0
+        model_name = current_settings().gemini_embed_model or "models/gemini-embedding-001"
+        expected_dim = 3072 if "embedding-004" in model_name else 768
+        
         for idx, chunk in enumerate(chunks):
             ins = client.client.table('feedme_text_chunks').insert({
                 'conversation_id': conversation_id,
@@ -510,10 +601,34 @@ def generate_text_chunks_and_embeddings(self, conversation_id: int, max_chunk_ch
             chunk_id = ins.data[0]['id']
 
             try:
-                emb = genai.embed_content(model=EMBEDDING_MODEL_NAME, content=chunk)
+                # Check rate limits
+                if not embed_tracker.can_request():
+                    logger.warning(f"Daily embedding limit reached, stopping at chunk {idx}")
+                    break
+                
+                # Estimate tokens (rough approximation: 1 token per 4 chars)
+                estimated_tokens = len(chunk) // 4
+                
+                # Throttle for RPM and TPM
+                embed_tracker.throttle()
+                embed_tracker.throttle_tokens(estimated_tokens)
+                
+                # Generate embedding
+                emb = genai.embed_content(model=model_name, content=chunk)
                 vec = emb['embedding'] if isinstance(emb, dict) else emb.embedding
+                
+                # Verify dimension based on model
+                if len(vec) != expected_dim:
+                    logger.warning(f"Unexpected embedding dimension: {len(vec)}, expected {expected_dim}")
+                
+                # Store embedding
                 client.client.table('feedme_text_chunks').update({ 'embedding': vec }).eq('id', chunk_id).execute()
                 stored += 1
+                
+                # Record usage
+                embed_tracker.record()
+                embed_tracker.record_tokens(estimated_tokens)
+                
             except Exception as e:
                 logger.warning(f"Embedding failed for chunk {chunk_id}: {e}")
 

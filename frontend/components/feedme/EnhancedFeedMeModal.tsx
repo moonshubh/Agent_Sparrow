@@ -28,7 +28,7 @@ import {
   Clock,
   AlertTriangle
 } from 'lucide-react'
-import { uploadTranscriptFile, uploadTranscriptText, getProcessingStatus } from '@/lib/feedme-api'
+import { uploadTranscriptFile, getProcessingStatus } from '@/lib/feedme-api'
 import { cn } from '@/lib/utils'
 
 interface EnhancedFeedMeModalProps {
@@ -559,10 +559,7 @@ export function EnhancedFeedMeModal({ isOpen, onClose, onUploadComplete }: Enhan
               <FileText className="h-4 w-4 mr-2" />
               Single File
             </TabsTrigger>
-            <TabsTrigger value="text" disabled={batchUploadState.isUploading}>
-              <FileCheck className="h-4 w-4 mr-2" />
-              Paste Text
-            </TabsTrigger>
+            {/* Text upload disabled in strict AI mode */}
           </TabsList>
 
           {/* Multi-File Upload Tab */}
@@ -586,7 +583,7 @@ export function EnhancedFeedMeModal({ isOpen, onClose, onUploadComplete }: Enhan
                   ref={fileInputRef}
                   type="file"
                   multiple
-                  accept=".txt,.log,.html,.htm,.csv,.pdf,text/*"
+                  accept="application/pdf"
                   onChange={handleFileInputChange}
                   className="hidden"
                   disabled={batchUploadState.isUploading}
@@ -596,9 +593,7 @@ export function EnhancedFeedMeModal({ isOpen, onClose, onUploadComplete }: Enhan
                   <p className="text-sm font-medium">
                     {isDragActive ? 'Drop files here...' : 'Drag and drop files here, or click to select'}
                   </p>
-                  <p className="text-xs text-muted-foreground">
-                    Supports multiple .txt, .log, .html, .htm, .csv, and .pdf files (up to 10MB for text files, 20MB for PDFs)
-                  </p>
+                  <p className="text-xs text-muted-foreground">Supports multiple PDF files (up to 20MB each)</p>
                 </div>
               </div>
 
@@ -829,9 +824,7 @@ export function EnhancedFeedMeModal({ isOpen, onClose, onUploadComplete }: Enhan
                       <p className="text-sm font-medium">
                         {isDragActive ? 'Drop the file here...' : 'Drag and drop a file here, or click to select'}
                       </p>
-                      <p className="text-xs text-muted-foreground">
-                        Supports .txt, .log, .html, .htm, .csv, and .pdf files (up to 10MB for text files, 20MB for PDFs)
-                      </p>
+                      <p className="text-xs text-muted-foreground">Supports PDF files (up to 20MB)</p>
                     </>
                   )}
                 </div>
@@ -867,109 +860,7 @@ export function EnhancedFeedMeModal({ isOpen, onClose, onUploadComplete }: Enhan
             </form>
           </TabsContent>
 
-          {/* Text Input Tab */}
-          <TabsContent value="text" className="flex-1 overflow-auto mt-4">
-            <form onSubmit={async (e) => {
-              e.preventDefault()
-              if (!singleTitle.trim() || !textContent.trim()) return
-              
-              setBatchUploadState({
-                isUploading: true,
-                totalFiles: 1,
-                completedFiles: 0,
-                errors: [],
-                results: []
-              })
-
-              try {
-                const uploadResponse = await uploadTranscriptText(
-                  singleTitle,
-                  textContent,
-                  userId,
-                  true
-                )
-                
-                const uploadId = uploadResponse.conversation_id || uploadResponse.id || 0
-                setBatchUploadState(prev => ({
-                  ...prev,
-                  isUploading: false,
-                  completedFiles: 1,
-                  results: [{
-                    id: uploadId,
-                    title: singleTitle,
-                    status: uploadResponse.processing_status,
-                    total_examples: uploadResponse.total_examples || 0
-                  }]
-                }))
-
-                setTimeout(() => {
-                  handleClose()
-                }, 3000)
-              } catch (error) {
-                const errorMessage = error instanceof Error ? error.message : 'Upload failed'
-                setBatchUploadState(prev => ({
-                  ...prev,
-                  isUploading: false,
-                  errors: [errorMessage]
-                }))
-              }
-            }} className="space-y-4">
-              <div className="space-y-2">
-                <Label htmlFor="text-title">Conversation Title *</Label>
-                <Input
-                  id="text-title"
-                  placeholder="e.g., Email Setup Issue - Customer #12345"
-                  value={singleTitle}
-                  onChange={(e) => setSingleTitle(e.target.value)}
-                  disabled={batchUploadState.isUploading}
-                  className="focus-visible:ring-accent"
-                />
-              </div>
-
-              <div className="space-y-2">
-                <Label htmlFor="text-content">Transcript Content *</Label>
-                <Textarea
-                  id="text-content"
-                  placeholder="Paste your customer support transcript here..."
-                  value={textContent}
-                  onChange={(e) => setTextContent(e.target.value)}
-                  disabled={batchUploadState.isUploading}
-                  className="min-h-[300px] focus-visible:ring-accent"
-                />
-                <p className="text-xs text-muted-foreground">
-                  {textContent.length} characters
-                </p>
-              </div>
-
-              <div className="flex justify-end gap-3 pt-4 border-t">
-                <Button
-                  type="button"
-                  variant="outline"
-                  onClick={handleClose}
-                  disabled={batchUploadState.isUploading}
-                >
-                  Cancel
-                </Button>
-                <Button
-                  type="submit"
-                  disabled={!singleTitle.trim() || !textContent.trim() || batchUploadState.isUploading}
-                  className="bg-accent hover:bg-mb-blue-300/90"
-                >
-                  {batchUploadState.isUploading ? (
-                    <>
-                      <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                      Uploading...
-                    </>
-                  ) : (
-                    <>
-                      <Upload className="h-4 w-4 mr-2" />
-                      Upload Text
-                    </>
-                  )}
-                </Button>
-              </div>
-            </form>
-          </TabsContent>
+          {/* Text Input Tab removed in strict AI mode */}
         </Tabs>
       </DialogContent>
     </Dialog>

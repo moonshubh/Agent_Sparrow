@@ -84,9 +84,13 @@ class ResolutionType(str, Enum):
 
 class ProcessingMethod(str, Enum):
     """Methods for processing conversation content"""
+    # Legacy/compatible values
     PDF_OCR = "pdf_ocr"
     MANUAL_TEXT = "manual_text" 
     TEXT_PASTE = "text_paste"
+    # Extended values used by processing tasks
+    PDF_AI = "pdf_ai"
+    PDF_TEXT = "pdf_text"
 
 
 class FeedMeConversationBase(BaseModel):
