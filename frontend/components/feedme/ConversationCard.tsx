@@ -34,6 +34,7 @@ import {
 import { FolderIcon } from '@/components/ui/FolderIcon'
 import { cn } from '@/lib/utils'
 import { useFolders } from '@/lib/stores/folders-store'
+import { formatDistanceToNow } from 'date-fns'
 
 export interface Conversation {
   id: number
@@ -94,11 +95,7 @@ export function ConversationCard({
       // Check if date is invalid
       if (isNaN(date.getTime())) return 'Invalid date'
       
-      return date.toLocaleDateString('en-US', {
-        month: 'short',
-        day: 'numeric',
-        year: 'numeric'
-      })
+      return formatDistanceToNow(date, { addSuffix: true })
     } catch {
       return 'Invalid date'
     }
@@ -166,11 +163,6 @@ export function ConversationCard({
               <StatusIcon className={cn("h-3 w-3", statusInfo.color, conversation.processing_status === 'processing' && "animate-spin")} />
               <span className={statusInfo.color}>{statusInfo.label}</span>
             </div>
-            {conversation.total_examples && conversation.total_examples > 0 && (
-              <Badge variant="secondary" className="text-xs">
-                {conversation.total_examples} examples
-              </Badge>
-            )}
           </div>
 
           {/* Folder Info */}

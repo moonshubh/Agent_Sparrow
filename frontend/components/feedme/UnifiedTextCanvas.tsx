@@ -13,31 +13,18 @@
 
 'use client'
 
-import React, { useState, useEffect, useCallback, useRef } from 'react'
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
+import { Toggle } from '@/components/ui/toggle'
+import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 // Replaced textarea with Tiptap rich text editor
 import { Textarea } from '@/components/ui/textarea'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Separator } from '@/components/ui/separator'
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import {
-  Edit3, 
-  Save, 
-  X, 
-  FileText, 
-  Eye, 
-  Zap, 
-  AlertTriangle,
-  CheckCircle2,
-  Info,
-  Clock,
-  User,
-  Bot,
-  Sparkles,
-  Folder
-} from 'lucide-react'
+import { Tabs, TabsContent } from '@/components/ui/tabs'
+import { Edit3, Save, X, FileText, Bold, Italic, List, ListOrdered, Bot, User, CheckCircle2, AlertTriangle, Clock } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { formatDistanceToNow } from 'date-fns'
 import { useEditor, EditorContent } from '@tiptap/react'
@@ -46,8 +33,8 @@ import Placeholder from '@tiptap/extension-placeholder'
 import CharacterCount from '@tiptap/extension-character-count'
 import Link from '@tiptap/extension-link'
 import Image from '@tiptap/extension-image'
-import { listFolders, assignConversationsToFolderSupabase } from '@/lib/feedme-api'
 import { uploadImageToSupabase } from '@/lib/storage'
+import DOMPurify from 'isomorphic-dompurify'
 
 // Types
 interface ProcessingMetadata {
@@ -101,7 +88,6 @@ export function UnifiedTextCanvas({
   pdfCleaned = false,
   pdfCleanedAt,
   originalPdfSize,
-  folderId: initialFolderId,
   onTextUpdate,
   onApprovalAction,
   readOnly = false,
@@ -112,11 +98,132 @@ export function UnifiedTextCanvas({
   const [editedText, setEditedText] = useState(extractedText)
   const [isLoading, setIsLoading] = useState(false)
   const [textStats, setTextStats] = useState<TextStatistics | null>(null)
-  const [folders, setFolders] = useState<Array<{ id: number; name: string; color: string }>>([])
-  const [folderId, setFolderId] = useState<number | null | undefined>(initialFolderId)
-  const [subject, setSubject] = useState(title)
+  // Folder selection and title editing are handled in the sidebar
   const [showNotes, setShowNotes] = useState(false)
   const [aiNote, setAiNote] = useState<string>((metadata as any)?.ai_comment || '')
+
+  // ---------- Minimal Markdown/HTML helpers (LLM-friendly store = Markdown) ----------
+  const isLikelyHtml = (text: string): boolean => /<\s*(p|br|ul|ol|li|h[1-6]|strong|em|a|img|code|pre)\b/i.test(text)
+
+  const escapeHtml = (s: string) => s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+
+  // Helper to detect and style agent/customer names
+  const styleNamesInHtml = (html: string): string => {
+    // Pattern to detect names at the beginning of lines or after dates
+    // Common patterns in support tickets:
+    // "**Name LastName Month Day, Year at Time**" (agent messages)
+    // "**Name LastName** Month Day, Year at Time" (customer messages)
+    // Also handle patterns like "Mailbird Support: Name LastName"
+    
+    // Style agent names (Mailbird Support staff)
+    html = html.replace(/(<strong>)?Mailbird Support:?\s*([A-Z][a-z]+\s+[A-Z][a-z]+)(<\/strong>)?/g, 
+      '<code class="agent-name bg-blue-100 text-blue-900 px-1 py-0.5 rounded text-sm font-semibold">Mailbird Support: $2</code>')
+    
+    // Style any name that appears after a strong tag and date pattern (agents)
+    html = html.replace(/(<strong>)([A-Z][a-z]+\s+[A-Z][a-z]+)(\s+[A-Z][a-z]+ \d+, \d{4} at \d+:\d+)(<\/strong>)/g,
+      '<code class="agent-name bg-blue-100 text-blue-900 px-1 py-0.5 rounded text-sm font-semibold">$2</code>$3')
+    
+    // Style customer names (typically at the start without "Mailbird Support")
+    html = html.replace(/^(<p>)?(<strong>)?([A-Z][a-z]+\s+[A-Z][a-z]+)(?!\s*:?\s*Mailbird)(\s+[A-Z][a-z]+ \d+, \d{4} at \d+:\d+)/gm,
+      '$1<code class="customer-name bg-amber-100 text-amber-900 px-1 py-0.5 rounded text-sm font-semibold">$3</code>$4')
+    
+    return html
+  }
+
+  // Convert a subset of Markdown we use into HTML (bold, italic, lists, headings, links, code, paragraphs)
+  const markdownToHtml = (md: string): string => {
+    if (!md) return ''
+    // Code blocks ```
+    let html = md.replace(/```([\s\S]*?)```/g, (_m, code) => `<pre><code>${escapeHtml(code.trim())}</code></pre>`)
+    // Inline code `code`
+    html = html.replace(/`([^`]+)`/g, (_m, code) => `<code>${escapeHtml(code)}</code>`)
+    // Headings #, ##, ### (limit to h1-h3 for readability)
+    html = html.replace(/^(#{1,3})\s+(.+)$/gm, (_m, hashes, text) => {
+      const level = Math.min(hashes.length, 3)
+      return `<h${level}>${text.trim()}</h${level}>`
+    })
+    // Bold **text**
+    html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+    // Italic _text_ or *text*
+    html = html.replace(/(^|\W)_(.+?)_(?=\W|$)/g, '$1<em>$2</em>')
+    html = html.replace(/(^|\W)\*(.+?)\*(?=\W|$)/g, '$1<em>$2</em>')
+    // Links [text](url)
+    html = html.replace(/\[([^\]]+)\]\((https?:[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>')
+    // Lists: group consecutive - or * lines
+    html = html.replace(/(?:^|\n)([\t ]*[-*] .+(?:\n[\t ]*[-*] .+)*)/g, (m) => {
+      const items = m.trim().split(/\n/).map(l => l.replace(/^[-*]\s+/, '').trim())
+      return `\n<ul>${items.map(it => `<li>${it}</li>`).join('')}</ul>`
+    })
+    // Ordered lists: 1. 2. ...
+    html = html.replace(/(?:^|\n)([\t ]*\d+\. .+(?:\n[\t ]*\d+\. .+)*)/g, (m) => {
+      const items = m.trim().split(/\n/).map(l => l.replace(/^\d+\.\s+/, '').trim())
+      return `\n<ol>${items.map(it => `<li>${it}</li>`).join('')}</ol>`
+    })
+    // Paragraphs: split on blank lines
+    const blocks = html.split(/\n\n+/).map(b => b.trim()).filter(Boolean).map(b => {
+      if (/^<\/?(h\d|ul|ol|li|pre|blockquote|p|img|code)/i.test(b)) return b
+      return `<p>${b.replace(/\n/g, '<br />')}</p>`
+    })
+    
+    // Apply name styling after all other conversions
+    return styleNamesInHtml(blocks.join('\n'))
+  }
+
+  const htmlToMarkdown = (html: string): string => {
+    if (!html) return ''
+    let md = html
+    // Normalize line breaks
+    md = md.replace(/<br\s*\/?>(\s*)/gi, '\n')
+    // Code blocks
+    md = md.replace(/<pre[^>]*>\s*<code[^>]*>([\s\S]*?)<\/code>\s*<\/pre>/gi, (_m, code) => `\n\n\
+\`\`\`\n${code}\n\`\`\`\n\n`)
+    // Inline code
+    md = md.replace(/<code[^>]*>([\s\S]*?)<\/code>/gi, (_m, code) => '`' + code + '`')
+    // Headings
+    md = md.replace(/<h1[^>]*>([\s\S]*?)<\/h1>/gi, '# $1\n\n')
+    md = md.replace(/<h2[^>]*>([\s\S]*?)<\/h2>/gi, '## $1\n\n')
+    md = md.replace(/<h3[^>]*>([\s\S]*?)<\/h3>/gi, '### $1\n\n')
+    // Strong/Emphasis
+    md = md.replace(/<strong[^>]*>([\s\S]*?)<\/strong>/gi, '**$1**')
+    md = md.replace(/<b[^>]*>([\s\S]*?)<\/b>/gi, '**$1**')
+    md = md.replace(/<em[^>]*>([\s\S]*?)<\/em>/gi, '*$1*')
+    md = md.replace(/<i[^>]*>([\s\S]*?)<\/i>/gi, '*$1*')
+    // Links
+    md = md.replace(/<a[^>]*href=["'](https?:[^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi, '[$2]($1)')
+    // Images
+    md = md.replace(/<img[^>]*src=["'](https?:[^"']+)["'][^>]*alt=["']([^"']*)["'][^>]*\/?>(?:<\/img>)?/gi, '![$2]($1)')
+    md = md.replace(/<img[^>]*src=["'](https?:[^"']+)["'][^>]*\/?>(?:<\/img>)?/gi, '![]($1)')
+    // Lists
+    md = md.replace(/<ul[^>]*>([\s\S]*?)<\/ul>/gi, (_m, inner) => {
+      const items = inner.replace(/<li[^>]*>([\s\S]*?)<\/li>/gi, '- $1\n')
+      return `\n${items}\n`
+    })
+    md = md.replace(/<ol[^>]*>([\s\S]*?)<\/ol>/gi, (_m, inner) => {
+      let i = 0
+      return `\n${inner.replace(/<li[^>]*>([\s\S]*?)<\/li>/gi, (_m2, it) => `${++i}. ${it}\n`)}\n`
+    })
+    // Paragraphs
+    md = md.replace(/<p[^>]*>([\s\S]*?)<\/p>/gi, '$1\n\n')
+    // Blockquotes
+    md = md.replace(/<blockquote[^>]*>([\s\S]*?)<\/blockquote>/gi, (_m, inr) => inr.split(/\n/).map(l => `> ${l}`).join('\n') + '\n\n')
+    // Remove remaining tags
+    md = md.replace(/<[^>]+>/g, '')
+    // Normalize spacing
+    return md.split('\n').map(l => l.trimEnd()).join('\n').replace(/\n{3,}/g, '\n\n').trim()
+  }
+
+  const htmlToPlain = (html: string): string => DOMPurify.sanitize(html, { ALLOWED_TAGS: [], ALLOWED_ATTR: [] })
+
+  // Sanitize config for rendering
+  const sanitizeHtml = (html: string) => DOMPurify.sanitize(html, {
+    ALLOWED_TAGS: ['p','br','strong','em','a','ul','ol','li','code','pre','blockquote','h1','h2','h3','img'],
+    ALLOWED_ATTR: ['href','target','rel','src','alt','class'],
+    ALLOW_DATA_ATTR: false,
+    FORBID_TAGS: ['style','script','iframe','object','embed','link']
+  })
 
   // Initialize Tiptap editor (stores HTML)
   const editor = useEditor({
@@ -128,7 +235,7 @@ export function UnifiedTextCanvas({
       Link.configure({ openOnClick: true, autolink: true }),
       Image.configure({ inline: false, allowBase64: false }),
     ],
-    content: extractedText?.trim().length ? extractedText : '<p></p>',
+    content: '<p></p>',
     onUpdate: ({ editor }) => setEditedText(editor.getHTML()),
   })
 
@@ -191,38 +298,28 @@ export function UnifiedTextCanvas({
     }
   }, [])
 
-  // Update text statistics when text changes
+  // Update text statistics when text changes (compute from plain text)
   useEffect(() => {
-    if (extractedText) {
-      setTextStats(calculateTextStats(extractedText))
-    }
+    if (!extractedText) { setTextStats(null); return }
+    const html = isLikelyHtml(extractedText) ? extractedText : markdownToHtml(extractedText)
+    const plain = htmlToPlain(html)
+    setTextStats(calculateTextStats(plain))
   }, [extractedText, calculateTextStats])
 
-  // Update edited text when extracted text changes
+  // Initialize/refresh editor content preserving formatting
   useEffect(() => {
-    setEditedText(extractedText)
-    if (editor && extractedText) {
-      editor.commands.setContent(extractedText)
-    }
-  }, [extractedText])
+    if (!editor) return
+    const html = isLikelyHtml(extractedText) ? extractedText : markdownToHtml(extractedText)
+    setEditedText(html)
+    editor.commands.setContent(html || '<p></p>')
+  }, [extractedText, editor])
 
-  // Load folders for assignment
-  useEffect(() => {
-    async function load() {
-      try {
-        const resp = await listFolders()
-        setFolders(resp.folders.map(f => ({ id: f.id, name: f.name, color: f.color })))
-      } catch (e) {
-        console.warn('Failed to load folders', e)
-      }
-    }
-    load()
-  }, [])
+  // Folder selection is handled in the sidebar; nothing to load here
 
   // Handle saving edited text
   const handleSaveText = async () => {
     const aiNoteChanged = aiNote !== ((metadata as any)?.ai_comment || '')
-    if (!onTextUpdate && !(subject !== title || aiNoteChanged || editedText !== extractedText)) {
+    if (!onTextUpdate && !(aiNoteChanged || editedText !== extractedText)) {
       setIsEditing(false)
       return
     }
@@ -230,16 +327,20 @@ export function UnifiedTextCanvas({
     setIsLoading(true)
     try {
       // Prepare merged metadata (preserve existing keys)
-      const mergedMeta = { ...(metadata || {}) }
+    const mergedMeta = { ...(metadata || {}) }
+      mergedMeta['content_format'] = 'markdown'
       if (aiNoteChanged) {
         mergedMeta['ai_comment'] = aiNote
       }
 
-      // Save text/subject/notes
+      // Save text/notes
       const payload: any = {}
-      if (editedText !== extractedText) payload.extracted_text = editedText
-      if (subject !== title) payload.title = subject
-      if (aiNoteChanged) payload.metadata = mergedMeta
+      if (editedText !== extractedText) {
+        // Convert editor HTML → Markdown for storage
+        payload.extracted_text = htmlToMarkdown(editedText)
+      }
+      const needMetaUpdate = aiNoteChanged || (metadata as any)?.content_format !== 'markdown'
+      if (needMetaUpdate) payload.metadata = mergedMeta
 
       await fetch(`/api/v1/feedme/conversations/${conversationId}`, {
         method: 'PUT',
@@ -250,9 +351,9 @@ export function UnifiedTextCanvas({
     } catch (error) {
       console.error('Failed to save text:', error)
       // Reset to original text on error
-      setEditedText(extractedText)
-      editor?.commands.setContent(extractedText)
-      setSubject(title)
+      const html = isLikelyHtml(extractedText) ? extractedText : markdownToHtml(extractedText)
+      setEditedText(html)
+      editor?.commands.setContent(html)
       setAiNote(((metadata as any)?.ai_comment || ''))
     } finally {
       setIsLoading(false)
@@ -282,6 +383,19 @@ export function UnifiedTextCanvas({
       setIsLoading(false)
     }
   }
+
+  // Listen for external edit toggles from sidebar
+  useEffect(() => {
+    const onToggle = (e: Event) => {
+      const ce = e as CustomEvent<{ conversationId: number; action: 'start' | 'stop' }>
+      if (!ce?.detail) return
+      if (ce.detail.conversationId === conversationId) {
+        setIsEditing(ce.detail.action === 'start')
+      }
+    }
+    document.addEventListener('feedme:toggle-edit', onToggle as EventListener)
+    return () => document.removeEventListener('feedme:toggle-edit', onToggle as EventListener)
+  }, [conversationId])
 
   // Get processing method display info
   const getProcessingMethodInfo = () => {
@@ -359,184 +473,19 @@ export function UnifiedTextCanvas({
         </Badge>
     }
   }
-
-  const methodInfo = getProcessingMethodInfo()
-  const canSave = !!folderId && (
-    (isEditing && (editedText !== extractedText || subject !== title)) ||
+ 
+  const canSave = (isEditing && (editedText !== extractedText)) ||
     (aiNote !== ((metadata as any)?.ai_comment || ''))
-  )
 
   return (
     <div className="space-y-6">
-      {/* Header with metadata */}
-      <Card>
-        <CardHeader className="pb-4">
-          <div className="flex items-start justify-between">
-            <div>
-              <div className="flex items-center gap-3">
-                <span className="text-xs text-muted-foreground">Ticket:</span>
-                <span className="text-sm font-mono bg-muted px-2 py-0.5 rounded">{ticketId || 'Unknown'}</span>
-              </div>
-              <div className="mt-2">
-                {isEditing ? (
-                  <input
-                    className="text-lg font-semibold bg-background border rounded px-2 py-1 w-full max-w-xl"
-                    value={subject}
-                    onChange={(e) => setSubject(e.target.value)}
-                  />
-                ) : (
-                  <CardTitle className="text-lg">{subject}</CardTitle>
-                )}
-              </div>
-              <div className="flex items-center gap-4 mt-2">
-                <Badge variant="outline" className={cn("text-sm", methodInfo.color)}>
-                  {methodInfo.icon}
-                  <span className="ml-1">{methodInfo.label}</span>
-                  {methodInfo.enhanced && <Sparkles className="h-3 w-3 ml-1" />}
-                </Badge>
-                {getConfidenceIndicator(methodInfo.confidence)}
-                {getApprovalStatusIndicator()}
-              </div>
-            </div>
-            
-            <div className="flex items-center gap-2">
-              {/* Assign to Folder selector */}
-              <div className="flex items-center gap-2">
-                <Folder className="h-4 w-4 text-muted-foreground" />
-                <select
-                  className="border rounded px-2 py-1 text-sm bg-background"
-                  value={folderId ?? ''}
-                  onChange={async (e) => {
-                    const val = e.target.value === '' ? null : Number(e.target.value)
-                    try {
-                      await assignConversationsToFolderSupabase(val as any, [conversationId])
-                      setFolderId(val)
-                    } catch (err) {
-                      console.error('Folder assignment failed', err)
-                    }
-                  }}
-                >
-                  <option value="">Assign folder…</option>
-                  {folders.map(f => (
-                    <option key={f.id} value={f.id}>{f.name}</option>
-                  ))}
-                </select>
-              </div>
-              {!readOnly && (
-                <>
-                  {isEditing ? (
-                    <>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={handleCancelEdit}
-                        disabled={isLoading}
-                      >
-                        <X className="h-4 w-4 mr-1" />
-                        Cancel
-                      </Button>
-                      <Button
-                        size="sm"
-                        onClick={handleSaveText}
-                        disabled={isLoading || !canSave}
-                      >
-                        <Save className="h-4 w-4 mr-1" />
-                        Save
-                      </Button>
-                    </>
-                  ) : (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => setIsEditing(true)}
-                      disabled={isLoading}
-                    >
-                      <Edit3 className="h-4 w-4 mr-1" />
-                      Edit
-                    </Button>
-                  )}
-                </>
-              )}
-            </div>
-          </div>
-        </CardHeader>
-
-        <CardContent className="space-y-4">
-          {/* Processing warnings */}
-          {processingMetadata.warnings && processingMetadata.warnings.length > 0 && (
-            <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-3">
-              <div className="flex items-start gap-2">
-                <Info className="h-4 w-4 text-yellow-600 mt-0.5" />
-                <div>
-                  <p className="text-sm font-medium text-yellow-800">Processing Notes</p>
-                  <ul className="text-sm text-yellow-700 mt-1 space-y-1">
-                    {processingMetadata.warnings.map((warning, index) => (
-                      <li key={index}>• {warning}</li>
-                    ))}
-                  </ul>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* Text statistics */}
-          {textStats && (
-            <div className="flex items-center gap-6 text-sm text-muted-foreground">
-              <span>{textStats.word_count.toLocaleString()} words</span>
-              <span>{textStats.character_count.toLocaleString()} characters</span>
-              <span>{textStats.paragraph_count} paragraphs</span>
-              <span>~{textStats.estimated_read_time_minutes} min read</span>
-            </div>
-          )}
-        </CardContent>
-      </Card>
+      {/* Removed legacy header; info now lives in the sidebar */}
 
       {/* Main content area */}
       <Tabs defaultValue="text" className="w-full">
-        <TabsList className="grid w-full grid-cols-2">
-          <TabsTrigger value="text" className="flex items-center gap-2">
-            <FileText className="h-4 w-4" />
-            Text Content
-          </TabsTrigger>
-          <TabsTrigger value="metadata" className="flex items-center gap-2">
-            <Info className="h-4 w-4" />
-            Metadata
-          </TabsTrigger>
-        </TabsList>
-
         <TabsContent value="text" className="space-y-4">
-          <Card className={cn(fullPageMode && "border-0 shadow-none")}> 
-            <CardContent className="p-0">
-              {isEditing ? (
-                <div className={cn("relative", fullPageMode && "min-h-[calc(100vh-300px)] p-2")}> 
-                  <div className={cn('border rounded-md', fullPageMode ? 'min-h-[calc(100vh-320px)] p-3' : 'min-h-[400px] p-2')}>
-                    <EditorContent editor={editor} />
-                  </div>
-                  <div className="absolute bottom-4 right-4 text-xs text-muted-foreground bg-background px-2 py-1 rounded">
-                    {editedText.length.toLocaleString()} characters
-                  </div>
-                </div>
-              ) : (
-                <ScrollArea className={cn(
-                  fullPageMode ? "h-[calc(100vh-300px)]" : "h-[400px]"
-                )}>
-                  <div className={cn(
-                    "whitespace-pre-wrap font-mono text-sm leading-relaxed",
-                    fullPageMode ? "p-6" : "p-4"
-                  )}>
-                    {extractedText || (
-                      <div className="text-muted-foreground italic">
-                        No text content available
-                      </div>
-                    )}
-                  </div>
-                </ScrollArea>
-              )}
-            </CardContent>
-          </Card>
-
-          {/* AI Notes (collapsible, editable) */}
-          <Card>
+          {/* AI Notes (collapsible, editable) moved above content */}
+          <Card className="border-0 shadow-none bg-transparent">
             <CardHeader className="py-3 flex flex-row items-center justify-between">
               <CardTitle className="text-base">AI Notes</CardTitle>
               <Button variant="ghost" size="sm" onClick={() => setShowNotes(s => !s)}>
@@ -557,9 +506,99 @@ export function UnifiedTextCanvas({
             )}
           </Card>
 
+          <Card className="border-0 shadow-none bg-transparent"> 
+            <CardContent className="p-0">
+              {isEditing ? (
+                <div className={cn("relative", fullPageMode ? "min-h-[60vh] p-2" : "p-2")}> 
+                {/* Formatting toolbar + actions */}
+                <div className="flex items-center justify-between gap-2 pb-2">
+                  <div className="flex items-center gap-2">
+                  {/* Inline formatting: Bold + Italic */}
+                  <div className="flex items-center gap-1">
+                    <Toggle
+                      size="sm"
+                      aria-label="Toggle bold"
+                      pressed={!!editor?.isActive('bold')}
+                      onPressedChange={() => editor?.chain().focus().toggleBold().run()}
+                    >
+                      <Bold className="h-4 w-4" />
+                    </Toggle>
+                    <Toggle
+                      size="sm"
+                      aria-label="Toggle italic"
+                      pressed={!!editor?.isActive('italic')}
+                      onPressedChange={() => editor?.chain().focus().toggleItalic().run()}
+                    >
+                      <Italic className="h-4 w-4" />
+                    </Toggle>
+                  </div>
+
+                  {/* List formatting: Bulleted vs Numbered (mutually exclusive) */}
+                  <ToggleGroup type="single" size="sm" aria-label="List type" value={
+                      editor?.isActive('orderedList') ? 'ol' : (editor?.isActive('bulletList') ? 'ul' : undefined)
+                    } onValueChange={(val) => {
+                      if (!editor) return
+                      if (val === 'ul') {
+                        editor.chain().focus().toggleBulletList().run()
+                      } else if (val === 'ol') {
+                        editor.chain().focus().toggleOrderedList().run()
+                      } else {
+                        // Clicking the active item again clears list
+                        if (editor.isActive('orderedList')) editor.chain().focus().toggleOrderedList().run()
+                        if (editor.isActive('bulletList')) editor.chain().focus().toggleBulletList().run()
+                      }
+                    }}
+                  >
+                    <ToggleGroupItem value="ul" aria-label="Bulleted list">
+                      <List className="h-4 w-4" />
+                    </ToggleGroupItem>
+                    <ToggleGroupItem value="ol" aria-label="Numbered list">
+                      <ListOrdered className="h-4 w-4" />
+                    </ToggleGroupItem>
+                  </ToggleGroup>
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    <Button variant="outline" size="sm" onClick={handleCancelEdit} disabled={!isEditing || isLoading}>
+                      <X className="h-4 w-4 mr-1" /> Cancel
+                    </Button>
+                    <Button size="sm" onClick={handleSaveText} disabled={!isEditing || isLoading || !canSave}>
+                      <Save className="h-4 w-4 mr-1" /> Save
+                    </Button>
+                  </div>
+                </div>
+                <div className={cn('font-sans', fullPageMode ? 'min-h-[60vh] p-3' : 'min-h-[400px] p-2')}>
+                  <EditorContent
+                    editor={editor}
+                    className={cn(
+                      'prose max-w-none leading-7 text-sm',
+                      'prose-p:my-3 prose-li:my-1 prose-ul:my-3 prose-ol:my-3',
+                      'prose-headings:mt-6 prose-headings:mb-3',
+                      '[&_code.agent-name]:bg-blue-100 [&_code.agent-name]:text-blue-900 [&_code.agent-name]:px-1 [&_code.agent-name]:py-0.5 [&_code.agent-name]:rounded [&_code.agent-name]:text-sm [&_code.agent-name]:font-semibold',
+                      '[&_code.customer-name]:bg-amber-100 [&_code.customer-name]:text-amber-900 [&_code.customer-name]:px-1 [&_code.customer-name]:py-0.5 [&_code.customer-name]:rounded [&_code.customer-name]:text-sm [&_code.customer-name]:font-semibold'
+                    )}
+                  />
+                </div>
+                <div className="absolute bottom-4 right-4 text-xs text-muted-foreground bg-background px-2 py-1 rounded">
+                  {editedText.length.toLocaleString()} characters
+                </div>
+              </div>
+            ) : (
+              <div className={cn(
+                "prose max-w-none font-sans text-sm leading-relaxed",
+                fullPageMode ? "p-6" : "p-4",
+                "[&_code.agent-name]:bg-blue-100 [&_code.agent-name]:text-blue-900 [&_code.agent-name]:px-1 [&_code.agent-name]:py-0.5 [&_code.agent-name]:rounded [&_code.agent-name]:text-sm [&_code.agent-name]:font-semibold [&_code.agent-name]:not-italic",
+                "[&_code.customer-name]:bg-amber-100 [&_code.customer-name]:text-amber-900 [&_code.customer-name]:px-1 [&_code.customer-name]:py-0.5 [&_code.customer-name]:rounded [&_code.customer-name]:text-sm [&_code.customer-name]:font-semibold [&_code.customer-name]:not-italic"
+              )}
+                dangerouslySetInnerHTML={{ __html: sanitizeHtml(isLikelyHtml(extractedText) ? styleNamesInHtml(extractedText) : markdownToHtml(extractedText)) }}
+              />
+            )}
+          </CardContent>
+        </Card>
+
           {/* Approval controls */}
           {showApprovalControls && approvalStatus === 'pending' && (
-            <Card>
+            <Card className="border-0 shadow-none bg-transparent">
               <CardHeader>
                 <CardTitle className="text-base">Approval Actions</CardTitle>
               </CardHeader>
@@ -600,7 +639,7 @@ export function UnifiedTextCanvas({
 
           {/* Approval history */}
           {approvalStatus === 'approved' && approvedBy && (
-            <Card>
+            <Card className="border-0 shadow-none bg-transparent">
               <CardContent className="pt-4 space-y-2">
                 <div className="flex items-center gap-2 text-sm text-muted-foreground">
                   <CheckCircle2 className="h-4 w-4 text-green-600" />
@@ -641,60 +680,6 @@ export function UnifiedTextCanvas({
               </CardContent>
             </Card>
           )}
-        </TabsContent>
-
-        <TabsContent value="metadata" className="space-y-4">
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-base">Processing Information</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="grid grid-cols-2 gap-4 text-sm">
-                <div>
-                  <span className="font-medium">Method:</span>
-                  <span className="ml-2">{methodInfo.label}</span>
-                </div>
-                {methodInfo.confidence !== undefined && (
-                  <div>
-                    <span className="font-medium">Confidence:</span>
-                    <span className="ml-2">{Math.round(methodInfo.confidence * 100)}%</span>
-                  </div>
-                )}
-                {processingMetadata.processing_time_ms && (
-                  <div>
-                    <span className="font-medium">Processing Time:</span>
-                    <span className="ml-2">{processingMetadata.processing_time_ms}ms</span>
-                  </div>
-                )}
-                <div>
-                  <span className="font-medium">Conversation ID:</span>
-                  <span className="ml-2">{conversationId}</span>
-                </div>
-              </div>
-
-              {processingMetadata.quality_metrics && (
-                <>
-                  <Separator />
-                  <div>
-                    <h4 className="font-medium mb-2">Quality Metrics</h4>
-                    <div className="grid grid-cols-2 gap-2 text-sm">
-                      {Object.entries(processingMetadata.quality_metrics).map(([key, value]) => (
-                        <div key={key}>
-                          <span className="font-medium capitalize">{key.replace('_', ' ')}:</span>
-                          <span className="ml-2">
-                            {typeof value === 'number' ? 
-                              (value < 1 ? `${Math.round(value * 100)}%` : value.toLocaleString()) 
-                              : String(value)
-                            }
-                          </span>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                </>
-              )}
-            </CardContent>
-          </Card>
         </TabsContent>
       </Tabs>
     </div>

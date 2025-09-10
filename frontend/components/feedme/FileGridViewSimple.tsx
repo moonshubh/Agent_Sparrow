@@ -293,11 +293,6 @@ export function FileGridView({ onConversationSelect, currentFolderId, onFolderSe
               <CardContent className="pt-0">
                 <div className="space-y-2 text-xs text-muted-foreground">
                   <div className="flex items-center gap-1">
-                    <FileText className="h-3 w-3" />
-                    <span>{conversation.total_examples} examples</span>
-                  </div>
-                  
-                  <div className="flex items-center gap-1">
                     <Clock className="h-3 w-3" />
                     <span>
                       {conversation.created_at && 
