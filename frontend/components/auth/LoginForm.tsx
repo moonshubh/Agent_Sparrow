@@ -6,6 +6,10 @@ import { isOAuthEnabled, oauthConfig } from '@/lib/oauth-config'
 import { toast } from 'sonner'
 import { OAuthButton } from './OAuthButton'
 import { WarningMessage } from './WarningMessage'
+import { LocalDevLoginForm } from './LocalDevLoginForm'
+
+// Check if we're in local development mode with auth bypass
+const isLocalAuthBypass = process.env.NEXT_PUBLIC_LOCAL_AUTH_BYPASS === 'true'
 
 // Helper function to create user-friendly error messages
 const getErrorMessage = (error: unknown, provider: string): string => {
@@ -46,6 +50,11 @@ export const LoginForm: React.FC = () => {
   const { loginWithOAuth, isLoading: authLoading } = useAuth()
   const [loadingProvider, setLoadingProvider] = useState<'google' | 'github' | null>(null)
   const [error, setError] = useState<string | null>(null)
+  
+  // If local auth bypass is enabled, show the local login form
+  if (isLocalAuthBypass) {
+    return <LocalDevLoginForm />
+  }
 
   // Debug logging
   useEffect(() => {

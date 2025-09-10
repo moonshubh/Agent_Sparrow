@@ -225,16 +225,33 @@
     outline: none;
     padding: 8px 12px;
     border-radius: 6px;
-    line-height: 1.5;
+    /* Reduce edit-mode font-size by ~3px for clear parity */
+    font-size: 0.9125rem; /* ~13px */
+    line-height: 1.75; /* improved readability in edit mode */
   }
   
   .ProseMirror:focus {
-    outline: none;
-    box-shadow: none;
+    outline: none !important;
+    box-shadow: none !important;
+    border: none !important;
+  }
+
+  .ProseMirror-focused {
+    outline: none !important;
+    box-shadow: none !important;
+    border: none !important;
+  }
+
+  /* Extra hardening for UA focus rings on contentEditable */
+  [contenteditable="true"]:focus,
+  [contenteditable="true"]:focus-visible {
+    outline: none !important;
+    box-shadow: none !important;
+    border: none !important;
   }
   
   .ProseMirror p {
-    margin: 0.5rem 0;
+    margin: 0.75rem 0; /* more breathing room between paragraphs */
   }
   
   .ProseMirror p:first-child {
@@ -246,8 +263,24 @@
   }
   
   .ProseMirror ul, .ProseMirror ol {
-    margin: 0.5rem 0;
+    margin: 0.75rem 0; /* increase vertical rhythm for lists */
     padding-left: 1.5rem;
+  }
+  .ProseMirror li { margin: 0.25rem 0; }
+  .ProseMirror h1, .ProseMirror h2, .ProseMirror h3 {
+    margin-top: 1.25rem;
+    margin-bottom: 0.5rem;
+    line-height: 1.4;
+  }
+
+  /* Speaker labels: first bold token in a paragraph appears like inline code */
+  .ProseMirror p > strong:first-child,
+  .ProseMirror p > b:first-child {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+    background-color: hsl(var(--muted));
+    color: hsl(var(--foreground));
+    border-radius: 4px;
+    padding: 0 0.25rem;
   }
   
   .ProseMirror blockquote {

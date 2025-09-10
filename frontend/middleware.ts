@@ -2,6 +2,9 @@ import { NextResponse } from 'next/server'
 import type { NextRequest } from 'next/server'
 import { createServerClient } from '@supabase/ssr'
 
+// Check if local auth bypass is enabled
+const isLocalAuthBypass = process.env.NEXT_PUBLIC_LOCAL_AUTH_BYPASS === 'true'
+
 // List of public routes that don't require authentication
 const publicRoutes = [
   '/login',
@@ -23,6 +26,35 @@ export async function middleware(request: NextRequest) {
     pathname === '/api/health'
   ) {
     return NextResponse.next()
+  }
+
+  // In local auth bypass mode, check for local token
+  if (isLocalAuthBypass) {
+    // Special handling for /api/chat in local mode
+    if (pathname === '/api/chat') {
+      const authHeader = request.headers.get('authorization')
+      if (!authHeader || !authHeader.startsWith('Bearer ')) {
+        if (process.env.NODE_ENV === 'development') {
+          console.log('Middleware - /api/chat: No authorization header (local mode)')
+        }
+        // In local mode, we might want to allow requests with local tokens
+        // For now, still require a token
+        return new Response('Unauthorized: Authentication required', { status: 401 })
+      }
+      // In local mode, accept any Bearer token
+      if (process.env.NODE_ENV === 'development') {
+        console.log('Middleware - /api/chat: Local auth bypass - accepting token')
+      }
+      return NextResponse.next()
+    }
+
+    // Skip auth checks for other routes in local mode
+    if (!pathname.startsWith('/api')) {
+      if (process.env.NODE_ENV === 'development') {
+        console.log('Middleware - Local auth bypass mode, skipping auth checks for:', pathname)
+      }
+      return NextResponse.next()
+    }
   }
 
   // Special handling for /api/chat - requires authentication

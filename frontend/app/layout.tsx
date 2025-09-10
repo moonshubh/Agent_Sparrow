@@ -5,7 +5,6 @@ import { cookies } from "next/headers";
 import "./globals.css";
 import { Toaster } from "@/components/ui/sonner";
 import { AuthProvider } from "@/contexts/AuthContext";
-import { DevModeIndicator } from "@/components/dev/DevModeIndicator";
 import { ChunkErrorRecovery } from "@/components/utils/ChunkErrorRecovery";
 
 export const metadata: Metadata = {
@@ -46,7 +45,6 @@ export default async function RootLayout({
           disableTransitionOnChange
         >
           <AuthProvider>
-            {process.env.NODE_ENV === 'development' && <DevModeIndicator />}
             <ChunkErrorRecovery />
             {children}
           </AuthProvider>
