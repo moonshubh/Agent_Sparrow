@@ -3,7 +3,7 @@ from langchain_core.documents import Document
 from langchain_core.messages import BaseMessage
 from pydantic import BaseModel, Field, model_serializer
 
-from app.agents_v2.log_analysis_agent.schemas import StructuredLogAnalysisOutput
+from app.agents_v2.log_analysis_agent.simplified_schemas import SimplifiedLogAnalysisOutput as StructuredLogAnalysisOutput
 from app.agents_v2.reflection.schema import ReflectionFeedback  # noqa: E402, isort:skip
 
 from pydantic import model_serializer
