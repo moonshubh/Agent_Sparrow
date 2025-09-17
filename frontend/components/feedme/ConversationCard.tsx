@@ -40,7 +40,7 @@ export interface Conversation {
   id: number
   title: string
   folder_id?: number | null
-  processing_status: 'pending' | 'processing' | 'completed' | 'failed'
+  processing_status: 'pending' | 'processing' | 'completed' | 'failed' | 'cancelled'
   total_examples?: number
   uploaded_by?: string
   created_at: string
@@ -76,6 +76,8 @@ export function ConversationCard({
         return { icon: Clock, color: 'text-yellow-600', bg: 'bg-yellow-50', label: 'Pending' }
       case 'failed':
         return { icon: AlertCircle, color: 'text-red-600', bg: 'bg-red-50', label: 'Failed' }
+      case 'cancelled':
+        return { icon: AlertCircle, color: 'text-muted-foreground', bg: 'bg-muted', label: 'Cancelled' }
       default:
         return { icon: Clock, color: 'text-gray-600', bg: 'bg-gray-50', label: 'Unknown' }
     }

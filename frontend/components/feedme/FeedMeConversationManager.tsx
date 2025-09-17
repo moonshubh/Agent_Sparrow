@@ -54,7 +54,7 @@ interface ConversationData {
   extracted_text?: string
   raw_transcript?: string
   processing_method: 'pdf_ocr' | 'manual_text' | 'text_paste'
-  processing_status: 'pending' | 'processing' | 'completed' | 'failed'
+  processing_status: 'pending' | 'processing' | 'completed' | 'failed' | 'cancelled'
   approval_status: 'pending' | 'approved' | 'rejected'
   extraction_confidence?: number
   processing_time_ms?: number
@@ -89,6 +89,7 @@ function ConversationCard({ conversation, onView, onDelete, onRefresh }: Convers
       case 'completed': return 'text-green-600 bg-green-50 border-green-200'
       case 'processing': return 'text-blue-600 bg-blue-50 border-blue-200'
       case 'failed': return 'text-red-600 bg-red-50 border-red-200'
+      case 'cancelled': return 'text-gray-600 bg-gray-100 border-gray-300'
       default: return 'text-yellow-600 bg-yellow-50 border-yellow-200'
     }
   }
@@ -98,6 +99,7 @@ function ConversationCard({ conversation, onView, onDelete, onRefresh }: Convers
       case 'completed': return <CheckCircle2 className="h-3 w-3" />
       case 'processing': return <Loader2 className="h-3 w-3 animate-spin" />
       case 'failed': return <AlertCircle className="h-3 w-3" />
+      case 'cancelled': return <AlertCircle className="h-3 w-3" />
       default: return <Clock className="h-3 w-3" />
     }
   }

@@ -237,8 +237,11 @@ export async function getAPIKeyWithFallback(
   keyType: APIKeyType,
   envFallback?: string
 ): Promise<string | null> {
-  // Try to get user's key first if authenticated
-  if (authToken) {
+  // In local development mode with auth bypass, skip user key lookup
+  const isLocalAuthBypass = process.env.NEXT_PUBLIC_LOCAL_AUTH_BYPASS === 'true'
+
+  // Try to get user's key first if authenticated and not in local auth bypass mode
+  if (authToken && !isLocalAuthBypass) {
     const userKey = await getUserAPIKey(authToken, keyType)
     if (userKey) {
       return userKey

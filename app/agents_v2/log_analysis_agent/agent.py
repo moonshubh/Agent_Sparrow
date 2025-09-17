@@ -37,11 +37,11 @@ async def run_log_analysis_agent(state: Dict[str, Any]) -> Dict[str, Any]:
     logger = get_logger("log_analysis_agent", trace_id=trace_id)
     
     # Log the analysis request
-    logger.info("Starting log analysis", {
-        "has_question": bool(state.get("question")),
-        "log_size": len(state.get("raw_log_content", "")),
-        "trace_id": trace_id
-    })
+    logger.info("Starting log analysis",
+        has_question=bool(state.get("question")),
+        log_size=len(state.get("raw_log_content", "")),
+        trace_id=trace_id
+    )
     
     # Use simplified implementation
     simplified_state = {
@@ -52,14 +52,14 @@ async def run_log_analysis_agent(state: Dict[str, Any]) -> Dict[str, Any]:
     
     try:
         result = await run_simplified_log_analysis(simplified_state)
-        logger.info("Log analysis completed successfully", {
-            "trace_id": trace_id,
-            "method": "simplified"
-        })
+        logger.info("Log analysis completed successfully",
+            trace_id=trace_id,
+            method="simplified"
+        )
         return result
     except Exception as e:
-        logger.error(f"Log analysis failed: {e}", {
-            "trace_id": trace_id,
-            "error": str(e)
-        })
+        logger.error(f"Log analysis failed: {e}",
+            trace_id=trace_id,
+            error=str(e)
+        )
         raise

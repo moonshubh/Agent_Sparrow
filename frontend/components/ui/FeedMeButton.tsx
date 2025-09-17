@@ -28,7 +28,7 @@ export function FeedMeButton({ onClick, mode = 'navigate' }: FeedMeButtonProps) 
 
   const handleClick = () => {
     if (mode === 'navigate') {
-      router.push('/feedme')
+      router.push('/feedme-revamped')
     } else {
       setIsModalOpen(true)
     }

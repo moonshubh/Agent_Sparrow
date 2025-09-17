@@ -59,6 +59,11 @@ class ChatMessageAppendRequest(BaseModel):
 # Database connection setup
 def get_db_connection():
     """Get a database connection using Supabase credentials"""
+    # In local mode with auth bypass, skip database connection
+    if settings.skip_auth or os.getenv("SKIP_AUTH", "false").lower() in {"1", "true", "yes"}:
+        logger.info("Skipping database connection in local auth bypass mode")
+        return None
+    
     # Try to get DATABASE_URL first
     database_url = os.getenv("DATABASE_URL")
     
@@ -457,6 +462,28 @@ async def create_chat_session(
             logger.info(f"Creating chat session for guest user: {hashlib.sha256(user_id.encode()).hexdigest()[:8]}...")
         
         conn = get_db_connection()
+        
+        # If no database connection (local mode), create a mock session
+        if conn is None:
+            from datetime import datetime
+            import uuid
+            mock_session = {
+                'id': abs(hash(str(uuid.uuid4()))) % (10**8),  # Generate a random int ID
+                'user_id': user_id,
+                'agent_type': session_data.agent_type.value if session_data.agent_type else 'primary',
+                'session_key': str(uuid.uuid4()),
+                'title': session_data.title or 'New Chat',
+                'summary': session_data.summary,
+                'metadata': session_data.metadata or {},
+                'is_active': True,
+                'created_at': datetime.utcnow(),
+                'updated_at': datetime.utcnow(),
+                'last_activity': datetime.utcnow(),
+                'message_count': 0
+            }
+            logger.info(f"Created mock chat session in local mode: {mock_session['id']}")
+            return ChatSession(**mock_session)
+        
         session_dict = create_chat_session_in_db(conn, session_data, user_id)
         logger.info(f"Successfully created chat session: {session_dict['id']}")
         return ChatSession(**session_dict)
@@ -497,6 +524,16 @@ async def list_chat_sessions(
             user_id = get_or_create_guest_user_id(request, response)
         
         conn = get_db_connection()
+        
+        # If no database connection (local mode), return empty list
+        if conn is None:
+            return ChatSessionListResponse(
+                sessions=[],
+                total_count=0,
+                page=page,
+                page_size=page_size,
+                has_more=False
+            )
         
         # Always fetch active sessions only by default unless explicitly requested otherwise
         if is_active is None:

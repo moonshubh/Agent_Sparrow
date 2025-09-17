@@ -12,7 +12,6 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, HTTPException, Depends, UploadFile, File, Form, Query, Body, BackgroundTasks, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
-import asyncio
 import io
 # import psycopg2.extras as psycopg2_extras  # Removed - using Supabase exclusively
 
@@ -65,7 +64,9 @@ from app.feedme.schemas import (
     BulkApprovalRequest,
     BulkApprovalResponse,
     ExampleReviewRequest,
-    ExampleReviewResponse
+    ExampleReviewResponse,
+    ConversationProcessingStatus,
+    ProcessingStage
 )
 from app.feedme.schemas import ProcessingMethod
 
@@ -114,6 +115,8 @@ from app.db.embedding_utils import get_embedding_model
 # Constants
 UNASSIGNED_FOLDER_ID = 0
 from app.db.supabase_client import get_supabase_client
+from app.feedme.websocket.schemas import ProcessingUpdate
+from app.api.v1.websocket.feedme_websocket import notify_processing_update
 # from .feedme_db_helper import get_db_connection  # Removed - using Supabase exclusively
 
 # Temporary function to catch remaining get_db_connection calls
@@ -175,20 +178,66 @@ class _SupabaseClientProxy:
 supabase_client = _SupabaseClientProxy()
 
 
-async def update_conversation_status(conversation_id: int, status: ProcessingStatus, error_message: Optional[str] = None):
-    """Updates the processing status and error message of a conversation in Supabase."""
+async def update_conversation_status(
+    conversation_id: int,
+    status: ProcessingStatus,
+    error_message: Optional[str] = None,
+    stage: Optional[ProcessingStage] = None,
+    progress: Optional[int] = None,
+    message: Optional[str] = None
+):
+    """Updates the processing status, persists progress, and emits websocket notifications."""
+    client = get_feedme_supabase_client()
+
+    stage = stage or (
+        ProcessingStage.COMPLETED if status == ProcessingStatus.COMPLETED else
+        ProcessingStage.FAILED if status == ProcessingStatus.FAILED else
+        ProcessingStage.AI_EXTRACTION if status == ProcessingStatus.PROCESSING else
+        ProcessingStage.QUEUED
+    )
+
+    if progress is None:
+        if status == ProcessingStatus.COMPLETED:
+            progress = 100
+        elif status == ProcessingStatus.PENDING:
+            progress = 0
+        else:
+            progress = 25
+
+    default_messages = {
+        ProcessingStatus.PENDING: "Pending processing",
+        ProcessingStatus.PROCESSING: "Processing transcript",
+        ProcessingStatus.COMPLETED: "Processing completed",
+        ProcessingStatus.FAILED: "Processing failed"
+    }
+    message = message or default_messages.get(status, "Processing update")
+
+    if client is not None:
+        try:
+            await client.record_processing_update(
+                conversation_id=conversation_id,
+                status=status.value,
+                stage=stage.value,
+                progress=progress,
+                message=message,
+                error_message=error_message,
+                metadata_overrides=None,
+                processed_at=datetime.now(timezone.utc) if status == ProcessingStatus.COMPLETED else None
+            )
+        except Exception as e:
+            logger.error(f"Failed to record processing update for conversation {conversation_id}: {e}")
+
     try:
-        client = get_supabase_client()
-        # Fix: update_conversation expects two positional arguments, not keyword arguments
-        await client.update_conversation(
-            conversation_id,
-            {
-                'processing_status': status.value,
-                'error_message': error_message
-            }
-        )
+        await notify_processing_update(ProcessingUpdate(
+            conversation_id=conversation_id,
+            status=status,
+            stage=stage,
+            progress=progress,
+            message=message,
+            error_details=error_message
+        ))
     except Exception as e:
-        logger.error(f"Failed to update status for conversation {conversation_id}: {e}")
+        logger.error(f"Failed to broadcast processing update for conversation {conversation_id}: {e}")
 
 # Supabase client helper
 def get_supabase_connection():
@@ -286,7 +335,7 @@ async def update_conversation_in_db(conversation_id: int, update_data: Conversat
         # Update in Supabase
         updated_conversation = await supabase_client.update_conversation(
             conversation_id=conversation_id,
-            update_data=update_dict
+            updates=update_dict
         )
         
         if updated_conversation:
@@ -488,7 +537,13 @@ async def process_uploaded_transcript(conversation_id: int, processed_by: str):
     try:
         from app.feedme.tasks import process_transcript
         logger.info(f"Starting background processing for conversation {conversation_id} - scheduling Celery task")
-        await update_conversation_status(conversation_id, ProcessingStatus.PENDING)
+        await update_conversation_status(
+            conversation_id,
+            ProcessingStatus.PENDING,
+            stage=ProcessingStage.QUEUED,
+            progress=0,
+            message="Queued for processing"
+        )
         
         # Schedule the actual processing as a Celery task
         task = process_transcript.delay(conversation_id, processed_by)
@@ -496,7 +551,14 @@ async def process_uploaded_transcript(conversation_id: int, processed_by: str):
         
     except Exception as e:
         logger.error(f"Background processing scheduling failed for conversation {conversation_id}: {e}")
-        await update_conversation_status(conversation_id, ProcessingStatus.FAILED)
+        await update_conversation_status(
+            conversation_id,
+            ProcessingStatus.FAILED,
+            error_message=str(e),
+            stage=ProcessingStage.FAILED,
+            progress=0,
+            message="Scheduling failed"
+        )
 
 
 @router.get("/conversations", response_model=ConversationListResponse, tags=["FeedMe"])
@@ -692,27 +754,19 @@ async def delete_conversation(conversation_id: int):
         if not conversation:
             raise HTTPException(status_code=404, detail="Conversation not found")
         
-        # Count examples before deletion
-        examples_response = supabase_client.client.table('feedme_examples')\
-            .select('id', count='exact')\
-            .eq('conversation_id', conversation_id)\
-            .execute()
-        
-        examples_count = examples_response.count or 0
-        
-        # Delete using Supabase client
+        # Delete using Supabase client (will also delete associated text chunks)
         deletion_success = await supabase_client.delete_conversation(conversation_id)
         
         if not deletion_success:
             raise HTTPException(status_code=500, detail="Failed to delete conversation")
         
-        logger.info(f"Successfully deleted conversation {conversation_id} and {examples_count} examples using Supabase")
+        logger.info(f"Successfully deleted conversation {conversation_id} using Supabase")
         
         return DeleteConversationResponse(
             conversation_id=conversation_id,
             title=conversation.get('title', 'Unknown'),
-            examples_deleted=examples_count,
-            message=f"Successfully deleted conversation '{conversation.get('title', 'Unknown')}' and {examples_count} associated examples"
+            examples_deleted=0,  # No examples table anymore
+            message=f"Successfully deleted conversation '{conversation.get('title', 'Unknown')}'"
         )
                 
     except HTTPException:
@@ -987,7 +1041,7 @@ async def get_formatted_qa_content(conversation_id: int):
         }
 
 
-@router.get("/conversations/{conversation_id}/status", response_model=FeedMeConversation, tags=["FeedMe"])
+@router.get("/conversations/{conversation_id}/status", response_model=ConversationProcessingStatus, tags=["FeedMe"])
 async def get_processing_status(conversation_id: int):
     """
     Retrieve the processing status and progress information for a specific conversation.
@@ -1005,8 +1059,54 @@ async def get_processing_status(conversation_id: int):
     conversation = await get_conversation_by_id(conversation_id)
     if not conversation:
         raise HTTPException(status_code=404, detail="Conversation not found")
-    
-    return conversation
+
+    tracker = {}
+    if conversation.metadata and isinstance(conversation.metadata, dict):
+        tracker = conversation.metadata.get('processing_tracker', {}) or {}
+
+    # Determine stage
+    stage_raw = tracker.get('stage')
+    try:
+        stage = ProcessingStage(stage_raw) if stage_raw else None
+    except ValueError:
+        stage = None
+
+    if stage is None:
+        if conversation.processing_status == ProcessingStatus.COMPLETED:
+            stage = ProcessingStage.COMPLETED
+        elif conversation.processing_status == ProcessingStatus.FAILED:
+            stage = ProcessingStage.FAILED
+        elif conversation.processing_status == ProcessingStatus.PROCESSING:
+            stage = ProcessingStage.AI_EXTRACTION
+        else:
+            stage = ProcessingStage.QUEUED
+
+    progress = tracker.get('progress')
+    if progress is None:
+        progress = 100 if conversation.processing_status == ProcessingStatus.COMPLETED else 0
+
+    default_messages = {
+        ProcessingStatus.PENDING: "Pending processing",
+        ProcessingStatus.PROCESSING: "Processing transcript",
+        ProcessingStatus.COMPLETED: "Processing completed",
+        ProcessingStatus.FAILED: "Processing failed"
+    }
+    message = tracker.get('message') or default_messages.get(conversation.processing_status, "Processing updated")
+
+    error_message = conversation.error_message or tracker.get('error')
+
+    return ConversationProcessingStatus(
+        conversation_id=conversation.id,
+        status=conversation.processing_status,
+        stage=stage,
+        progress_percentage=int(progress),
+        message=message,
+        error_message=error_message,
+        processing_started_at=conversation.processing_started_at,
+        processing_completed_at=conversation.processing_completed_at,
+        processing_time_ms=conversation.processing_time_ms,
+        metadata=tracker,
+    )
 
 
 # Search functionality removed - FeedMe system now focuses on PDF OCR and manual text processing only
@@ -1228,10 +1328,12 @@ async def manually_process_conversation(conversation_id: int):
             from app.feedme.tasks import process_transcript
             
             # Reset status to pending before queueing using Supabase
-            await supabase_client.update_conversation_status(
-                conversation_id, 
-                ProcessingStatus.PENDING.value,
-                error_message=None
+            await update_conversation_status(
+                conversation_id,
+                ProcessingStatus.PENDING,
+                stage=ProcessingStage.QUEUED,
+                progress=0,
+                message="Queued for processing"
             )
             
             # Queue the task
@@ -1259,9 +1361,12 @@ async def manually_process_conversation(conversation_id: int):
                 from app.db.embedding_utils import generate_feedme_embeddings
                 
                 # Update status to processing using Supabase
-                await supabase_client.update_conversation_status(
-                    conversation_id, 
-                    ProcessingStatus.PROCESSING.value
+                await update_conversation_status(
+                    conversation_id,
+                    ProcessingStatus.PROCESSING,
+                    stage=ProcessingStage.PARSING,
+                    progress=15,
+                    message="Reprocessing transcript"
                 )
                 
                 parser = TranscriptParser()
@@ -1330,6 +1435,15 @@ async def manually_process_conversation(conversation_id: int):
                         "total_examples": len(examples)
                     }
                 )
+
+                await update_conversation_status(
+                    conversation_id,
+                    ProcessingStatus.COMPLETED,
+                    stage=ProcessingStage.COMPLETED,
+                    progress=100,
+                    message="Processing completed",
+                    error_message=None
+                )
                 
                 logger.info(f"Successfully processed conversation {conversation_id} with {len(examples)} examples")
                 
@@ -1347,9 +1461,12 @@ async def manually_process_conversation(conversation_id: int):
                 logger.error(f"Error processing conversation {conversation_id}: {e}")
                 
                 # Update status to failed using Supabase
-                await supabase_client.update_conversation_status(
+                await update_conversation_status(
                     conversation_id,
-                    ProcessingStatus.FAILED.value,
+                    ProcessingStatus.FAILED,
+                    stage=ProcessingStage.FAILED,
+                    progress=100,
+                    message="Processing failed",
                     error_message=str(e)
                 )
                 

@@ -8,7 +8,7 @@ conversation persistence, and example synchronization.
 import os
 import logging
 from typing import Dict, List, Optional, Any, Tuple
-from datetime import datetime
+from datetime import datetime, timezone
 import asyncio
 from contextlib import asynccontextmanager
 
@@ -391,7 +391,7 @@ class SupabaseClient:
     
     async def delete_conversation(self, conversation_id: int) -> bool:
         """
-        Delete a conversation and all its associated examples
+        Delete a conversation and all its associated data
         
         Args:
             conversation_id: The ID of the conversation to delete
@@ -400,11 +400,17 @@ class SupabaseClient:
             True if deletion was successful, False otherwise
         """
         try:
-            # First delete associated examples
-            examples_response = self.client.table('feedme_examples')\
-                .delete()\
-                .eq('conversation_id', conversation_id)\
-                .execute()
+            # Delete associated text chunks first (if they exist)
+            try:
+                chunks_response = self.client.table('feedme_text_chunks')\
+                    .delete()\
+                    .eq('conversation_id', conversation_id)\
+                    .execute()
+                chunks_count = len(chunks_response.data) if chunks_response.data else 0
+            except Exception as e:
+                # Table might not exist or have no chunks - that's OK
+                logger.debug(f"No text chunks to delete for conversation {conversation_id}: {e}")
+                chunks_count = 0
             
             # Then delete the conversation
             conversation_response = self.client.table('feedme_conversations')\
@@ -413,8 +419,7 @@ class SupabaseClient:
                 .execute()
             
             if conversation_response.data:
-                examples_count = len(examples_response.data) if examples_response.data else 0
-                logger.info(f"Deleted conversation {conversation_id} and {examples_count} examples")
+                logger.info(f"Deleted conversation {conversation_id} and {chunks_count} text chunks")
                 return True
             else:
                 logger.warning(f"Conversation {conversation_id} not found for deletion")
@@ -1297,32 +1302,38 @@ class SupabaseClient:
             List of folders with stats
         """
         try:
-            # Get all folders
-            folders_response = self.client.table('feedme_folders')\
-                .select('*')\
-                .order('name')\
+            # Fetch folders along with aggregated conversation counts in a single query
+            # The `feedme_conversations(count)` syntax leverages the PostgREST relation that exists
+            # via the foreign key between feedme_conversations.folder_id and feedme_folders.id.
+            folders_response = (
+                self.client
+                .table('feedme_folders')
+                .select('id,name,color,description,created_by,created_at,updated_at,feedme_conversations(count)')
+                .order('name')
                 .execute()
-            
-            folders = folders_response.data or []
-            
-            # Get conversation counts per folder
-            for folder in folders:
-                folder_id = folder['id']
-                
-                # Count conversations in this folder
-                count_response = self.client.table('feedme_conversations')\
-                    .select('id', count='exact')\
-                    .eq('folder_id', folder_id)\
-                    .execute()
-                
-                folder['conversation_count'] = count_response.count or 0
-            
-            # Add special "No Folder" entry
-            no_folder_response = self.client.table('feedme_conversations')\
-                .select('id', count='exact')\
-                .is_('folder_id', 'null')\
+            )
+
+            folders: List[Dict[str, Any]] = []
+            for record in folders_response.data or []:
+                related_counts = record.pop('feedme_conversations', []) or []
+                count_value = 0
+                if isinstance(related_counts, list) and related_counts:
+                    raw_count = related_counts[0].get('count')
+                    if isinstance(raw_count, int):
+                        count_value = raw_count
+
+                record['conversation_count'] = count_value
+                folders.append(record)
+
+            # Add special "No Folder" entry (conversations without folder assignment)
+            no_folder_response = (
+                self.client
+                .table('feedme_conversations')
+                .select('id', count='exact')
+                .is_('folder_id', 'null')
                 .execute()
-            
+            )
+
             folders.insert(0, {
                 'id': None,
                 'name': 'No Folder',
@@ -1333,7 +1344,7 @@ class SupabaseClient:
                 'updated_at': None,
                 'created_by': None
             })
-            
+
             return folders
             
         except Exception as e:
@@ -1460,6 +1471,74 @@ class SupabaseClient:
                 
         except Exception as e:
             logger.error(f"Error updating conversation {conversation_id} status: {e}")
+            return False
+
+    async def record_processing_update(
+        self,
+        conversation_id: int,
+        status: str,
+        stage: str,
+        progress: int,
+        message: str,
+        error_message: Optional[str] = None,
+        processing_time_ms: Optional[int] = None,
+        metadata_overrides: Optional[Dict[str, Any]] = None,
+        processed_at: Optional[datetime] = None
+    ) -> bool:
+        """Persist processing progress details to Supabase"""
+        try:
+            metadata: Dict[str, Any] = {}
+            existing = self.client.table('feedme_conversations')\
+                .select('metadata')\
+                .eq('id', conversation_id)\
+                .maybe_single()\
+                .execute()
+
+            if existing and existing.data and isinstance(existing.data, dict):
+                metadata = existing.data.get('metadata') or {}
+
+            tracker = metadata.get('processing_tracker', {})
+            tracker.update({
+                'status': status,
+                'stage': stage,
+                'progress': int(progress),
+                'message': message,
+                'updated_at': datetime.now(timezone.utc).isoformat()
+            })
+
+            if error_message:
+                tracker['error'] = error_message
+            elif 'error' in tracker:
+                tracker.pop('error')
+
+            if metadata_overrides:
+                tracker.update(metadata_overrides)
+
+            metadata['processing_tracker'] = tracker
+
+            update_data = {
+                'processing_status': status,
+                'metadata': metadata,
+                'updated_at': datetime.now(timezone.utc).isoformat()
+            }
+
+            if error_message is not None:
+                update_data['error_message'] = error_message
+
+            if processing_time_ms is not None:
+                update_data['processing_time_ms'] = processing_time_ms
+
+            if processed_at is not None:
+                update_data['processed_at'] = processed_at.isoformat() if isinstance(processed_at, datetime) else processed_at
+
+            self.client.table('feedme_conversations')\
+                .update(update_data)\
+                .eq('id', conversation_id)\
+                .execute()
+
+            return True
+        except Exception as e:
+            logger.error(f"Error recording processing update for conversation {conversation_id}: {e}")
             return False
     
     async def bulk_update_examples(

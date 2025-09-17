@@ -32,18 +32,9 @@ export async function middleware(request: NextRequest) {
   if (isLocalAuthBypass) {
     // Special handling for /api/chat in local mode
     if (pathname === '/api/chat') {
-      const authHeader = request.headers.get('authorization')
-      if (!authHeader || !authHeader.startsWith('Bearer ')) {
-        if (process.env.NODE_ENV === 'development') {
-          console.log('Middleware - /api/chat: No authorization header (local mode)')
-        }
-        // In local mode, we might want to allow requests with local tokens
-        // For now, still require a token
-        return new Response('Unauthorized: Authentication required', { status: 401 })
-      }
-      // In local mode, accept any Bearer token
+      // In local dev mode, allow requests without authentication
       if (process.env.NODE_ENV === 'development') {
-        console.log('Middleware - /api/chat: Local auth bypass - accepting token')
+        console.log('Middleware - /api/chat: Local auth bypass enabled - allowing request')
       }
       return NextResponse.next()
     }

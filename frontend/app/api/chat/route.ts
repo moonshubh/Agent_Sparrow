@@ -8,6 +8,7 @@ import { getAPIKeyWithFallback } from '@/lib/api/api-key-service'
 import { APIKeyType } from '@/lib/api-keys'
 import { rateLimitApi } from '@/lib/api/rateLimitApi'
 import { supabase } from '@/lib/supabase-browser'
+import { getAuthToken } from '@/lib/local-auth'
 
 export const runtime = 'nodejs'
 
@@ -59,6 +60,7 @@ const troubleshootingSchema = z.object({
 const SYSTEM_PROMPT = `You are Agent Sparrow, a professional customer support assistant for Mailbird.
 - Be concise, accurate, and empathetic.
 - Use tools when you need grounded knowledge or log analysis.
+- IMPORTANT: When a log file is attached to the conversation, you MUST use the logAnalysis tool to analyze it before responding.
 - If information is uncertain, say so and offer next steps.
 - At the end of your reasoning, internally derive 2-4 follow-up questions and a brief high-level thinking trace (no secrets).`
 
@@ -112,7 +114,16 @@ function validateMessages(messages: any[]): { valid: boolean; error?: string } {
   }
   
   for (const msg of messages) {
-    const content = typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content)
+    // Handle undefined, null, or other content types
+    let content: string
+    if (msg.content === undefined || msg.content === null) {
+      content = ''
+    } else if (typeof msg.content === 'string') {
+      content = msg.content
+    } else {
+      content = JSON.stringify(msg.content)
+    }
+    
     if (content.length > MAX_MESSAGE_LENGTH) {
       return { 
         valid: false, 
@@ -269,7 +280,15 @@ export async function POST(req: NextRequest) {
   let openaiApiKey: string | null = null
   
   if (provider === 'google') {
+    // Debug: Log environment variable
+    console.log('DEBUG: envGoogleApiKey from env:', envGoogleApiKey ? `${envGoogleApiKey.substring(0, 10)}...` : 'NOT SET')
+    console.log('DEBUG: GEMINI_API_KEY env var:', process.env.GEMINI_API_KEY ? `${process.env.GEMINI_API_KEY.substring(0, 10)}...` : 'NOT SET')
+    
     googleApiKey = await getAPIKeyWithFallback(authToken, APIKeyType.GEMINI, envGoogleApiKey)
+    
+    // Debug: Log the actual key being used
+    console.log('DEBUG: Final googleApiKey:', googleApiKey ? `${googleApiKey.substring(0, 10)}...` : 'NOT SET')
+    
     if (!googleApiKey) {
       return new Response(
         'Gemini API key missing. Please configure your API key in settings or contact your administrator.',
@@ -342,6 +361,14 @@ export async function POST(req: NextRequest) {
     const troubleshootingCollected: Array<any> = []
     let accumulatedText = ''
     const shouldUseTools = Boolean(attachedLogText)
+    
+    // When a log is attached, prepend instruction to the last user message
+    if (attachedLogText && modelMessages.length > 0) {
+      const lastMessage = modelMessages[modelMessages.length - 1]
+      if (lastMessage.role === 'user' && typeof lastMessage.content === 'string') {
+        lastMessage.content = `[A log file has been attached. Please analyze it using the logAnalysis tool before responding.]\n\n${lastMessage.content}`
+      }
+    }
     
     const result = await streamText({
       model,

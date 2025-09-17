@@ -12,6 +12,7 @@ import {
   uploadTranscriptFile,
   deleteConversation as apiDeleteConversation,
   editConversation as apiEditConversation,
+  updateConversation as apiUpdateConversation,
   approveConversation as apiApproveConversation,
   rejectConversation as apiRejectConversation,
   feedMeApi,
@@ -1130,10 +1131,20 @@ export const useConversationsStore = create<ConversationsStore>()(
         
         editConversation: async (id, request) => {
           try {
-            const result = await apiEditConversation(id, request)
-            
-            // Update conversation with new data
-            get().actions.updateConversation(id, result as Partial<Conversation>)
+            // Check if this is a simple rename (only title field)
+            if (Object.keys(request).length === 1 && 'title' in request) {
+              // Use the update endpoint for simple renames
+              const result = await apiUpdateConversation(id, { title: request.title })
+              
+              // Update conversation with new data
+              get().actions.updateConversation(id, result as Partial<Conversation>)
+            } else {
+              // Use the full edit endpoint for content changes
+              const result = await apiEditConversation(id, request)
+              
+              // Update conversation with new data
+              get().actions.updateConversation(id, result as Partial<Conversation>)
+            }
             
           } catch (error) {
             console.error(`Failed to edit conversation ${id}:`, error)

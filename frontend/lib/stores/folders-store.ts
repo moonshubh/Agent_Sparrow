@@ -191,6 +191,7 @@ export const useFoldersStore = create<FoldersStore>()(
             
             const newFolder: Folder = {
               ...response.folder,
+              parent_id: response.folder.parent_id ?? null,
               isExpanded: true,
               isSelected: false,
               conversationCount: 0
@@ -236,7 +237,8 @@ export const useFoldersStore = create<FoldersStore>()(
                 ...state.folders,
                 [id]: {
                   ...state.folders[id],
-                  ...response.folder
+                  ...response.folder,
+                  parent_id: response.folder.parent_id ?? null
                 }
               }
             }))
@@ -344,7 +346,7 @@ export const useFoldersStore = create<FoldersStore>()(
           folders.forEach(folder => {
             const folderNode = folderMap.get(folder.id)!
             
-            if (folder.parent_id && folderMap.has(folder.parent_id)) {
+            if (folder.parent_id != null && folderMap.has(folder.parent_id)) {
               const parent = folderMap.get(folder.parent_id)!
               parent.children!.push(folderNode)
               folderNode.level = (parent.level || 0) + 1
@@ -412,8 +414,8 @@ export const useFoldersStore = create<FoldersStore>()(
           }
           
           // Helper function to add folder to correct parent
-          const addFolderToParent = (folders: Folder[], newFolder: Folder, parentId: number | null): Folder[] => {
-            if (parentId === null) {
+          const addFolderToParent = (folders: Folder[], newFolder: Folder, parentId: number | null | undefined): Folder[] => {
+            if (parentId == null) {
               // Add to root level
               const rootFolder = {
                 ...newFolder,

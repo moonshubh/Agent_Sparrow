@@ -35,27 +35,59 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   // Check if auth bypass is enabled
   const bypassAuth = process.env.NEXT_PUBLIC_BYPASS_AUTH === 'true'
   const devMode = process.env.NEXT_PUBLIC_DEV_MODE === 'true'
+  const localAuthBypass = process.env.NEXT_PUBLIC_LOCAL_AUTH_BYPASS === 'true'
 
   // Initialize auth state
   useEffect(() => {
     const initializeAuth = async () => {
       console.log('AuthContext: Starting initialization...')
+      console.log('Local Auth Bypass:', localAuthBypass)
       console.log('Supabase URL:', process.env.NEXT_PUBLIC_SUPABASE_URL)
       console.log('Has Anon Key:', !!process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY)
       try {
-        // Bypass authentication in development mode
-        if (bypassAuth && devMode) {
-          console.log('🚀 Auth bypass enabled - creating mock user')
+        // Bypass authentication in local development mode
+        if (localAuthBypass || (bypassAuth && devMode)) {
+          console.log('🚀 Local auth bypass enabled - creating mock user')
+          
+          // Check if we have a local token
+          const localUser = localStorage.getItem('user')
+          if (localUser) {
+            try {
+              const parsedUser = JSON.parse(localUser)
+              const mockUser = {
+                id: parsedUser.id || 'dev-user-123',
+                email: parsedUser.email || 'dev@localhost.com',
+                user_metadata: {
+                  full_name: parsedUser.full_name || 'Local Dev User',
+                  avatar_url: '/agent-sparrow.png'
+                },
+                app_metadata: {
+                  provider: 'local',
+                  providers: ['local']
+                },
+                created_at: parsedUser.created_at || new Date().toISOString(),
+                last_sign_in_at: parsedUser.last_sign_in_at || new Date().toISOString()
+              } as User
+              
+              setUser(mockUser)
+              setIsLoading(false)
+              return
+            } catch (e) {
+              console.error('Failed to parse local user:', e)
+            }
+          }
+          
+          // Fallback mock user
           const mockUser = {
-            id: 'dev-user-12345',
-            email: 'developer@mailbird.com',
+            id: 'dev-user-123',
+            email: 'dev@localhost.com',
             user_metadata: {
-              full_name: 'Test Developer',
+              full_name: 'Local Dev User',
               avatar_url: '/agent-sparrow.png'
             },
             app_metadata: {
-              provider: 'bypass',
-              providers: ['bypass']
+              provider: 'local',
+              providers: ['local']
             },
             created_at: new Date().toISOString(),
             last_sign_in_at: new Date().toISOString()
@@ -104,19 +136,21 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
     initializeAuth()
 
-    // Listen for auth changes
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
-      if (event === 'SIGNED_IN' && session) {
-        setUser(session.user)
-      } else if (event === 'SIGNED_OUT') {
-        setUser(null)
-      } else if (event === 'TOKEN_REFRESHED' && session) {
-        setUser(session.user)
-      }
-    })
+    // Only listen for auth changes if not in local bypass mode
+    if (!localAuthBypass) {
+      const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
+        if (event === 'SIGNED_IN' && session) {
+          setUser(session.user)
+        } else if (event === 'SIGNED_OUT') {
+          setUser(null)
+        } else if (event === 'TOKEN_REFRESHED' && session) {
+          setUser(session.user)
+        }
+      })
 
-    return () => subscription.unsubscribe()
-  }, [bypassAuth, devMode])
+      return () => subscription.unsubscribe()
+    }
+  }, [bypassAuth, devMode, localAuthBypass])
 
 
   const loginWithOAuth = useCallback(async (provider: 'google' | 'github') => {

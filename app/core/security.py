@@ -55,7 +55,7 @@ if not SECRET_KEY and not SUPABASE_URL and not SKIP_AUTH:
 if not SECRET_KEY:
     raise EnvironmentError("JWT_SECRET_KEY environment variable not set.")
 
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/token")
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/token", auto_error=not SKIP_AUTH)
 
 class TokenPayload(BaseModel):
     sub: Optional[str] = None # Subject (usually user identifier)
@@ -187,11 +187,18 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -
     encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
     return encoded_jwt
 
-async def get_current_user(token: Annotated[str, Depends(oauth2_scheme)]) -> TokenPayload:
+async def get_current_user(token: Optional[str] = Depends(oauth2_scheme)) -> TokenPayload:
     if SKIP_AUTH:
         # Return a dummy user payload if authentication is skipped
         logger.debug("[AUTH] Skipping authentication - SKIP_AUTH=true")
-        return TokenPayload(sub="skipped_auth_user", exp=int((datetime.now(timezone.utc) + timedelta(hours=1)).timestamp()), roles=["admin"])
+        return TokenPayload(sub="dev-user-123", exp=int((datetime.now(timezone.utc) + timedelta(hours=1)).timestamp()), roles=["admin"])
+    
+    if not token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Not authenticated",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
     
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
@@ -244,7 +251,7 @@ async def get_optional_current_user(token: Optional[str] = Depends(oauth2_scheme
     if SKIP_AUTH:
         # Return a dummy user payload if authentication is skipped
         logger.debug("[AUTH-OPTIONAL] Skipping authentication - SKIP_AUTH=true")
-        return TokenPayload(sub="skipped_auth_user", exp=int((datetime.now(timezone.utc) + timedelta(hours=1)).timestamp()), roles=["admin"])
+        return TokenPayload(sub="dev-user-123", exp=int((datetime.now(timezone.utc) + timedelta(hours=1)).timestamp()), roles=["admin"])
     
     if not token:
         logger.debug("[AUTH-OPTIONAL] No token provided, returning None")

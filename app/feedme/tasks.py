@@ -23,7 +23,9 @@ from app.feedme.celery_app import celery_app, BaseTaskWithRetry
 from app.db.supabase_client import get_supabase_client
 from app.feedme.transcript_parser import TranscriptParser
 from app.db.embedding_utils import get_embedding_model, generate_feedme_embeddings
-from app.feedme.schemas import ProcessingStatus
+from app.feedme.schemas import ProcessingStatus, ProcessingStage
+from app.feedme.websocket.schemas import ProcessingUpdate
+from app.api.v1.websocket.feedme_websocket import notify_processing_update
 from app.core.settings import get_settings
 from functools import lru_cache
 
@@ -141,7 +143,14 @@ def process_transcript(self, conversation_id: int, user_id: Optional[str] = None
     
     try:
         # Update status to processing
-        update_conversation_status(conversation_id, ProcessingStatus.PROCESSING, task_id=task_id)
+        update_conversation_status(
+            conversation_id,
+            ProcessingStatus.PROCESSING,
+            task_id=task_id,
+            stage=ProcessingStage.PARSING,
+            progress=10,
+            message="Preparing transcript for extraction"
+        )
         
         # Get conversation data
         conversation_data = get_conversation_data(conversation_id)
@@ -195,6 +204,14 @@ def process_transcript(self, conversation_id: int, user_id: Optional[str] = None
                     # Use Gemini vision processor
                     from app.feedme.processors.gemini_pdf_processor import process_pdf_to_markdown
                     
+                    update_conversation_status(
+                        conversation_id,
+                        ProcessingStatus.PROCESSING,
+                        stage=ProcessingStage.AI_EXTRACTION,
+                        progress=40,
+                        message="Running AI extraction"
+                    )
+
                     markdown_text, extraction_info = process_pdf_to_markdown(
                         pdf_bytes,
                         max_pages=current_settings().feedme_ai_max_pages,
@@ -291,9 +308,24 @@ def process_transcript(self, conversation_id: int, user_id: Optional[str] = None
             logger.error(f"Failed to persist extracted_text/metadata for conversation {conversation_id}: {e}")
 
         # Update status util for parity
-        update_conversation_status(conversation_id, ProcessingStatus.COMPLETED, processing_time_ms=processing_time_ms)
+        update_conversation_status(
+            conversation_id,
+            ProcessingStatus.COMPLETED,
+            processing_time_ms=processing_time_ms,
+            stage=ProcessingStage.COMPLETED,
+            progress=100,
+            message="Processing completed"
+        )
         
         logger.info(f"Successfully processed conversation {conversation_id} in {processing_time:.2f}s")
+
+        update_conversation_status(
+            conversation_id,
+            ProcessingStatus.PROCESSING,
+            stage=ProcessingStage.QUALITY_ASSESSMENT,
+            progress=80,
+            message="Generating embeddings and quality metrics"
+        )
 
         # Schedule chunking + embeddings (Gemini embeddings) for unified text
         try:
@@ -316,9 +348,12 @@ def process_transcript(self, conversation_id: int, user_id: Optional[str] = None
     except Exception as e:
         logger.error(f"Error processing transcript for conversation {conversation_id}: {e}")
         update_conversation_status(
-            conversation_id, 
+            conversation_id,
             ProcessingStatus.FAILED,
-            error_message=str(e)
+            error_message=str(e),
+            stage=ProcessingStage.FAILED,
+            progress=100,
+            message="Processing failed"
         )
         
         if self.request.retries < self.max_retries:
@@ -864,42 +899,73 @@ def update_conversation_status(
     task_id: Optional[str] = None,
     error_message: Optional[str] = None,
     processing_time_ms: Optional[int] = None,
-    total_examples: Optional[int] = None
+    total_examples: Optional[int] = None,
+    stage: Optional[ProcessingStage] = None,
+    progress: Optional[int] = None,
+    message: Optional[str] = None
 ):
-    """Update conversation processing status (synchronous for Celery)"""
-    try:
-        client = get_supabase_client()
-        
-        # Update conversation in Supabase
-        update_data = {
-            'processing_status': status.value
-        }
-        
+    """Update conversation processing status and broadcast changes"""
+    client = get_supabase_client()
+
+    stage = stage or (
+        ProcessingStage.COMPLETED if status == ProcessingStatus.COMPLETED else
+        ProcessingStage.FAILED if status == ProcessingStatus.FAILED else
+        ProcessingStage.AI_EXTRACTION if status == ProcessingStatus.PROCESSING else
+        ProcessingStage.QUEUED
+    )
+
+    if progress is None:
         if status == ProcessingStatus.COMPLETED:
-            update_data['processed_at'] = datetime.now(timezone.utc).isoformat()
-            if processing_time_ms is not None:
-                update_data['processing_time_ms'] = processing_time_ms
-            if total_examples is not None:
-                update_data['total_examples'] = total_examples
-        elif status == ProcessingStatus.PROCESSING:
-            update_data['processed_at'] = None
-        
-        if error_message is not None:
-            update_data['error_message'] = error_message
-        
-        # Add task_id to metadata if provided
-        if task_id:
-            import json
-            current_metadata = {}
-            # We'll merge with existing metadata if any
-            update_data['metadata'] = {**current_metadata, "task_id": task_id}
-        
-        # Use synchronous Supabase client operations
-        result = client.client.table('feedme_conversations').update(update_data).eq('id', conversation_id).execute()
+            progress = 100
+        elif status == ProcessingStatus.PENDING:
+            progress = 0
+        else:
+            progress = 25
+
+    default_messages = {
+        ProcessingStatus.PENDING: "Pending processing",
+        ProcessingStatus.PROCESSING: "Processing transcript",
+        ProcessingStatus.COMPLETED: "Processing completed",
+        ProcessingStatus.FAILED: "Processing failed"
+    }
+    message = message or default_messages.get(status, "Processing update")
+
+    metadata_overrides: Dict[str, Any] = {}
+    if total_examples is not None:
+        metadata_overrides['total_examples'] = total_examples
+    if task_id:
+        metadata_overrides['task_id'] = task_id
+
+    processed_at = datetime.now(timezone.utc) if status == ProcessingStatus.COMPLETED else None
+
+    try:
+        asyncio.run(client.record_processing_update(
+            conversation_id=conversation_id,
+            status=status.value,
+            stage=stage.value,
+            progress=progress,
+            message=message,
+            error_message=error_message,
+            processing_time_ms=processing_time_ms,
+            metadata_overrides=metadata_overrides,
+            processed_at=processed_at
+        ))
         logger.info(f"Updated conversation {conversation_id} status to {status.value}")
-        
     except Exception as e:
-        logger.error(f"Error updating conversation {conversation_id}: {e}")
+        logger.error(f"Error recording processing update for conversation {conversation_id}: {e}")
+
+    try:
+        asyncio.run(notify_processing_update(ProcessingUpdate(
+            conversation_id=conversation_id,
+            status=status,
+            stage=stage,
+            progress=progress,
+            message=message,
+            processing_time_ms=processing_time_ms,
+            error_details=error_message
+        )))
+    except Exception as e:
+        logger.error(f"Failed to broadcast processing update for conversation {conversation_id}: {e}")
 
 
 def save_examples_to_temp_db(conversation_id: int, examples: List[Dict[str, Any]], is_html: bool = False) -> int:

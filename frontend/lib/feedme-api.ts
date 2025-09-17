@@ -107,12 +107,28 @@ export interface UploadTranscriptResponse {
   message?: string  // Backend includes a message field
 }
 
+export type ProcessingStatusValue = 'pending' | 'processing' | 'completed' | 'failed' | 'cancelled'
+export type ProcessingStageValue =
+  | 'queued'
+  | 'parsing'
+  | 'ai_extraction'
+  | 'embedding_generation'
+  | 'quality_assessment'
+  | 'completed'
+  | 'failed'
+
 export interface ProcessingStatusResponse {
   conversation_id: number
-  status: 'pending' | 'processing' | 'completed' | 'failed'
+  status: ProcessingStatusValue
+  stage: ProcessingStageValue
   progress_percentage: number
+  message?: string
   error_message?: string
-  examples_extracted: number
+  processing_started_at?: string
+  processing_completed_at?: string
+  processing_time_ms?: number
+  metadata?: Record<string, unknown>
+  examples_extracted?: number
   estimated_completion?: string
 }
 
@@ -275,6 +291,47 @@ export class FeedMeApiClient {
   }
 
   /**
+   * Get a single conversation by ID
+   */
+  async getConversationById(conversationId: number): Promise<UploadTranscriptResponse> {
+    const response = await fetchWithRetry(`${this.baseUrl}/conversations/${conversationId}`)
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}))
+      throw new Error(errorData.detail || `Failed to get conversation: ${response.status} ${response.statusText}`)
+    }
+
+    return response.json()
+  }
+
+  /**
+   * Update a conversation
+   */
+  async updateConversation(
+    conversationId: number,
+    updates: {
+      title?: string
+      extracted_text?: string
+      metadata?: Record<string, any>
+    }
+  ): Promise<UploadTranscriptResponse> {
+    const response = await fetchWithRetry(`${this.baseUrl}/conversations/${conversationId}`, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(updates),
+    })
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}))
+      throw new Error(errorData.detail || `Failed to update conversation: ${response.status} ${response.statusText}`)
+    }
+
+    return response.json()
+  }
+
+  /**
    * List conversations with pagination
    */
   async listConversations(
@@ -343,22 +400,6 @@ export class FeedMeApiClient {
    */
   async getConversation(conversationId: number): Promise<UploadTranscriptResponse> {
     const response = await fetchWithRetry(`${this.baseUrl}/conversations/${conversationId}`)
-
-    if (!response.ok) {
-      const errorData = await response.json().catch(() => ({}))
-      throw new Error(errorData.detail || `Failed to get conversation: ${response.status} ${response.statusText}`)
-    }
-
-    return response.json()
-  }
-
-  /**
-   * Get a single conversation by ID
-   */
-  async getConversation(conversationId: number): Promise<Conversation> {
-    const response = await fetchWithRetry(`${this.baseUrl}/conversations/${conversationId}`, {
-      method: 'GET',
-    })
 
     if (!response.ok) {
       const errorData = await response.json().catch(() => ({}))
@@ -677,6 +718,29 @@ export interface RevertResponse {
 }
 
 // Phase 3: Versioning API Functions
+
+/**
+ * Update conversation details (like title) without creating a new version
+ */
+export async function updateConversation(
+  conversationId: number, 
+  updateData: { title?: string; metadata?: any }
+): Promise<FeedMeConversation> {
+  const response = await fetchWithRetry(`${FEEDME_API_BASE}/conversations/${conversationId}`, {
+    method: 'PUT',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(updateData),
+  })
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}))
+    throw new Error(errorData.detail || `Failed to update conversation: ${response.status} ${response.statusText}`)
+  }
+
+  return response.json()
+}
 
 /**
  * Edit a conversation and create a new version

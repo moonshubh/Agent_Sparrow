@@ -6,6 +6,11 @@ const nextConfig = {
   typescript: {
     ignoreBuildErrors: true,
   },
+  env: {
+    GEMINI_API_KEY: process.env.GEMINI_API_KEY,
+    GOOGLE_GENERATIVE_AI_API_KEY: process.env.GOOGLE_GENERATIVE_AI_API_KEY,
+    OPENAI_API_KEY: process.env.OPENAI_API_KEY,
+  },
   // Security headers configuration
   // Note: Runtime header toggling should be handled in middleware.ts for dynamic control
   async headers() {

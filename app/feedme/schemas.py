@@ -23,6 +23,17 @@ class ProcessingStatus(str, Enum):
     FAILED = "failed"
 
 
+class ProcessingStage(str, Enum):
+    """Detailed stage within the processing pipeline"""
+    QUEUED = "queued"
+    PARSING = "parsing"
+    AI_EXTRACTION = "ai_extraction"
+    EMBEDDING_GENERATION = "embedding_generation"
+    QUALITY_ASSESSMENT = "quality_assessment"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
 class ApprovalStatus(str, Enum):
     """Status of conversation approval workflow"""
     PENDING = "pending"
@@ -338,6 +349,23 @@ class FeedMeConversation(FeedMeConversationBase):
 
 
 # API Response Models
+
+
+class ConversationProcessingStatus(BaseModel):
+    """Processing status payload shared between HTTP and WebSocket layers"""
+
+    conversation_id: int
+    status: ProcessingStatus
+    stage: ProcessingStage
+    progress_percentage: int = Field(default=0, ge=0, le=100)
+    message: Optional[str] = None
+    error_message: Optional[str] = None
+
+    processing_started_at: Optional[datetime] = None
+    processing_completed_at: Optional[datetime] = None
+    processing_time_ms: Optional[int] = None
+
+    metadata: Dict[str, Any] = Field(default_factory=dict)
 
 class ConversationListResponse(BaseModel):
     """Response for listing conversations"""

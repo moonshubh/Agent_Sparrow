@@ -7,6 +7,30 @@
 /* FeedMe Navigation Polish */
 @import './feedme-navigation.css';
 
+/* Chat Layout Overrides for Centered Content */
+@layer components {
+  /* Ensure sidebar behaves as overlay */
+  [data-sidebar="sidebar"] {
+    position: relative;
+    height: 100%;
+  }
+  
+  /* Sidebar in collapsed state should still be visible */
+  .group\/sidebar-wrapper[data-state="collapsed"] [data-sidebar="sidebar"] {
+    width: var(--sidebar-width-icon);
+  }
+  
+  /* Ensure proper z-indexing for sidebar components */
+  [data-sidebar="sidebar"] {
+    z-index: 30;
+  }
+  
+  /* Smooth transitions for sidebar state changes */
+  [data-sidebar="sidebar"] {
+    transition: width 200ms ease-in-out;
+  }
+}
+
 @layer utilities {
   .text-balance {
     text-wrap: balance;
@@ -406,7 +430,7 @@
     --chat-user-text: 0 0% 95%;
     --chat-agent-bg: 0 0% 12%;
     --chat-agent-text: 0 0% 95%;
-    --chat-input-bg: 0 0% 10%;
+    --chat-input-bg: 0 0% 9%;
     --chat-input-text: 0 0% 95%;
     --chat-metadata: 0 0% 50%;
     
@@ -417,8 +441,8 @@
     --container-xl: 80%;
     --container-max: 1400px;
     
-    /* Dark sidebar colors */
-    --sidebar-background: 240 5.9% 10%;
+    /* Dark sidebar colors (updated per new spec) */
+    --sidebar-background: 0 0% 9%;
     --sidebar-foreground: 240 4.8% 95.9%;
     --sidebar-primary: 224.3 76.3% 48%;
     --sidebar-primary-foreground: 0 0% 100%;
@@ -551,7 +575,7 @@
   }
 
   /* Floating animation for background orbs */
-  @keyframes float {
+@keyframes float {
     0%, 100% {
       transform: translateY(0px) rotate(0deg);
     }
@@ -569,5 +593,13 @@
     animation: float var(--float-duration, 6s) ease-in-out infinite;
     animation-delay: var(--float-delay, 0s);
     will-change: transform;
+  }
+
+  /* Minor upward offset for center hero icon */
+  .hero-offset {
+    transform: translateY(-2rem);
+  }
+  @media (min-width: 768px) {
+    .hero-offset { transform: translateY(-2.5rem); }
   }
 }

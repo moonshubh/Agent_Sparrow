@@ -10,6 +10,8 @@ from enum import Enum
 
 from pydantic import BaseModel, Field, ConfigDict
 
+from app.feedme.schemas import ProcessingStatus, ProcessingStage
+
 
 class MessageType(str, Enum):
     """WebSocket message types"""
@@ -21,24 +23,6 @@ class MessageType(str, Enum):
     NOTIFICATION = "notification"
 
 
-class ProcessingStage(str, Enum):
-    """Processing stages for status updates"""
-    QUEUED = "queued"
-    PARSING = "parsing"
-    AI_EXTRACTION = "ai_extraction"
-    EMBEDDING_GENERATION = "embedding_generation"
-    QUALITY_ASSESSMENT = "quality_assessment"
-    COMPLETED = "completed"
-    FAILED = "failed"
-
-
-class ProcessingStatus(str, Enum):
-    """Overall processing status"""
-    PENDING = "pending"
-    PROCESSING = "processing"
-    COMPLETED = "completed"
-    FAILED = "failed"
-    CANCELLED = "cancelled"
 
 
 # ===========================

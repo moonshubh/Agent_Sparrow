@@ -107,6 +107,10 @@ const config: Config = {
   			sm: 'calc(var(--radius) - 4px)'
   		},
   		keyframes: {
+  			shine: {
+  				'0%': { backgroundPosition: '200% 0%' },
+  				'100%': { backgroundPosition: '-200% 0%' }
+  			},
   			'accordion-down': {
   				from: {
   					height: '0'
@@ -125,6 +129,7 @@ const config: Config = {
   			}
   		},
   		animation: {
+  			shine: 'shine 5s linear infinite',
   			'accordion-down': 'accordion-down 0.2s ease-out',
   			'accordion-up': 'accordion-up 0.2s ease-out'
   		}

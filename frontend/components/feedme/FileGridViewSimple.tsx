@@ -6,7 +6,7 @@
 'use client'
 
 import React, { useEffect, useState } from 'react'
-import { FileText, Clock, User, CheckCircle2, AlertCircle, Loader2, Trash2, MoreHorizontal, Folder, Move } from 'lucide-react'
+import { FileText, Clock, User, CheckCircle2, AlertCircle, Loader2, Trash2, MoreHorizontal, Folder, Move, Edit2 } from 'lucide-react'
 import { useConversations, useConversationsActions } from '@/lib/stores/conversations-store'
 import { useUIActions } from '@/lib/stores/ui-store'
 import { useFoldersStore } from '@/lib/stores/folders-store'
@@ -32,6 +32,16 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
 import { cn } from '@/lib/utils'
 import { formatDistanceToNow } from 'date-fns'
 
@@ -64,6 +74,9 @@ export function FileGridView({ onConversationSelect, currentFolderId, onFolderSe
   
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
   const [conversationToDelete, setConversationToDelete] = useState<number | null>(null)
+  const [renameDialogOpen, setRenameDialogOpen] = useState(false)
+  const [conversationToRename, setConversationToRename] = useState<{ id: number, title: string } | null>(null)
+  const [newTitle, setNewTitle] = useState('')
 
   useEffect(() => {
     // Load conversations and folders on mount
@@ -143,6 +156,37 @@ export function FileGridView({ onConversationSelect, currentFolderId, onFolderSe
     setConversationToDelete(null)
   }
 
+  const handleRenameClick = (conversationId: number, currentTitle: string) => {
+    setConversationToRename({ id: conversationId, title: currentTitle })
+    setNewTitle(currentTitle)
+    setRenameDialogOpen(true)
+  }
+
+  const handleRenameConfirm = async () => {
+    if (conversationToRename && newTitle.trim()) {
+      try {
+        await conversationsActions.editConversation(conversationToRename.id, {
+          title: newTitle.trim()
+        })
+        uiActions.showToast({
+          type: 'success',
+          title: 'Conversation Renamed',
+          message: 'The conversation has been successfully renamed.'
+        })
+      } catch (error) {
+        console.error('Failed to rename conversation:', error)
+        uiActions.showToast({
+          type: 'error',
+          title: 'Rename Failed',
+          message: 'Failed to rename the conversation. Please try again.'
+        })
+      }
+    }
+    setRenameDialogOpen(false)
+    setConversationToRename(null)
+    setNewTitle('')
+  }
+
   if (isLoading) {
     return (
       <div className="flex items-center justify-center h-64">
@@ -155,6 +199,7 @@ export function FileGridView({ onConversationSelect, currentFolderId, onFolderSe
   // Get current folder name for display
   const currentFolder = currentFolderId ? Object.values(folders).find(f => f.id === currentFolderId) : null
   const folderDisplayName = currentFolderId === 0 ? "Unassigned" : currentFolder?.name || "All Conversations"
+  const isUnassignedFolder = currentFolderId === 0
 
   if (conversations.length === 0) {
     return (
@@ -185,8 +230,8 @@ export function FileGridView({ onConversationSelect, currentFolderId, onFolderSe
   return (
     <ScrollArea className={`${className} feedme-scrollbar`}>
       <div className="p-6">
-        {/* Folder navigation header */}
-        {currentFolderId !== null && (
+        {/* Folder navigation header - don't show for unassigned conversations */}
+        {currentFolderId !== null && currentFolderId !== 0 && (
           <div className="mb-6 flex items-center gap-2 text-sm text-muted-foreground">
             <Button
               variant="ghost"
@@ -202,7 +247,16 @@ export function FileGridView({ onConversationSelect, currentFolderId, onFolderSe
         )}
         
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-          {conversations.map((conversation) => (
+          {conversations.map((conversation) => {
+            const tracker = (conversation.metadata as any)?.processing_tracker || {}
+            const statusMessage = tracker.message as string | undefined
+            const progress = typeof tracker.progress === 'number'
+              ? tracker.progress
+              : conversation.processing_status === 'completed'
+                ? 100
+                : undefined
+
+            return (
             <Card 
               key={conversation.id} 
               className="cursor-pointer hover:shadow-md hover:bg-mb-blue-300/50 focus-within:ring-2 focus-within:ring-accent/50 transition-all duration-200 relative group"
@@ -223,61 +277,91 @@ export function FileGridView({ onConversationSelect, currentFolderId, onFolderSe
                     </Button>
                   </DropdownMenuTrigger>
                   <DropdownMenuContent align="end" className="w-56">
-                    <DropdownMenuLabel>Actions</DropdownMenuLabel>
-                    <DropdownMenuSeparator />
-                    
-                    {/* Move to Folder submenu */}
-                    <DropdownMenuItem 
-                      className="flex items-center gap-2 cursor-pointer"
-                      onClick={(e) => {
-                        e.stopPropagation()
-                        handleMoveToFolder(conversation.id || 0, null)
-                      }}
-                    >
-                      <Folder className="h-4 w-4" />
-                      Move to Root
-                    </DropdownMenuItem>
-                    
-                    {Object.values(folders).map((folder) => (
-                      <DropdownMenuItem 
-                        key={folder.id}
-                        className="flex items-center gap-2 cursor-pointer"
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          handleMoveToFolder(conversation.id || 0, folder.id)
-                        }}
-                      >
-                        <div className="flex items-center gap-2">
-                          <div 
-                            className="w-3 h-3 rounded-full border"
-                            style={{ backgroundColor: folder.color }}
-                          />
-                          <span>Move to {folder.name}</span>
-                        </div>
-                      </DropdownMenuItem>
-                    ))}
-                    
-                    <DropdownMenuSeparator />
-                    <DropdownMenuItem 
-                      className="flex items-center gap-2 text-destructive focus:text-destructive cursor-pointer"
-                      onClick={(e) => {
-                        e.stopPropagation()
-                        handleDeleteClick(e, conversation.id || 0)
-                      }}
-                    >
-                      <Trash2 className="h-4 w-4" />
-                      Delete
-                    </DropdownMenuItem>
+                    {isUnassignedFolder ? (
+                      // For unassigned conversations, only show Rename and Delete
+                      <>
+                        <DropdownMenuItem 
+                          className="flex items-center gap-2 cursor-pointer"
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            handleRenameClick(conversation.id || 0, conversation.title || '')
+                          }}
+                        >
+                          <Edit2 className="h-4 w-4" />
+                          Rename
+                        </DropdownMenuItem>
+                        <DropdownMenuSeparator />
+                        <DropdownMenuItem 
+                          className="flex items-center gap-2 text-destructive focus:text-destructive cursor-pointer"
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            handleDeleteClick(e, conversation.id || 0)
+                          }}
+                        >
+                          <Trash2 className="h-4 w-4" />
+                          Delete
+                        </DropdownMenuItem>
+                      </>
+                    ) : (
+                      // For other folders, show full menu
+                      <>
+                        <DropdownMenuLabel>Actions</DropdownMenuLabel>
+                        <DropdownMenuSeparator />
+                        
+                        {/* Move to Folder submenu */}
+                        <DropdownMenuItem 
+                          className="flex items-center gap-2 cursor-pointer"
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            handleMoveToFolder(conversation.id || 0, null)
+                          }}
+                        >
+                          <Folder className="h-4 w-4" />
+                          Move to Root
+                        </DropdownMenuItem>
+                        
+                        {Object.values(folders).map((folder) => (
+                          <DropdownMenuItem 
+                            key={folder.id}
+                            className="flex items-center gap-2 cursor-pointer"
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              handleMoveToFolder(conversation.id || 0, folder.id)
+                            }}
+                          >
+                            <div className="flex items-center gap-2">
+                              <div 
+                                className="w-3 h-3 rounded-full border"
+                                style={{ backgroundColor: folder.color }}
+                              />
+                              <span>Move to {folder.name}</span>
+                            </div>
+                          </DropdownMenuItem>
+                        ))}
+                        
+                        <DropdownMenuSeparator />
+                        <DropdownMenuItem 
+                          className="flex items-center gap-2 text-destructive focus:text-destructive cursor-pointer"
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            handleDeleteClick(e, conversation.id || 0)
+                          }}
+                        >
+                          <Trash2 className="h-4 w-4" />
+                          Delete
+                        </DropdownMenuItem>
+                      </>
+                    )}
                   </DropdownMenuContent>
                 </DropdownMenu>
               </div>
 
               <CardHeader className="pb-3">
-                <CardTitle className="text-sm line-clamp-2 h-10 pr-8">
-                  {conversation.title}
-                </CardTitle>
-                <div className="flex items-center gap-2">
-                  <StatusIcon status={conversation.processing_status} />
+               <CardTitle className="text-sm line-clamp-2 h-10 pr-8">
+                 {conversation.title}
+               </CardTitle>
+               <div className="flex items-center gap-2">
+                 <StatusIcon status={conversation.processing_status} />
                   <Badge 
                     variant={conversation.processing_status === 'completed' ? 'default' : 'secondary'}
                     className={cn(
@@ -285,7 +369,7 @@ export function FileGridView({ onConversationSelect, currentFolderId, onFolderSe
                       conversation.processing_status === 'completed' && "bg-accent text-accent-foreground"
                     )}
                   >
-                    {conversation.processing_status}
+                    {statusMessage || conversation.processing_status}
                   </Badge>
                 </div>
               </CardHeader>
@@ -300,6 +384,21 @@ export function FileGridView({ onConversationSelect, currentFolderId, onFolderSe
                       }
                     </span>
                   </div>
+
+                  {conversation.processing_status === 'processing' && typeof progress === 'number' && (
+                    <div className="pt-1">
+                      <div className="flex items-center justify-between mb-1">
+                        <span className="text-[11px] uppercase tracking-wide text-muted-foreground">Progress</span>
+                        <span className="text-[11px] font-medium text-foreground">{progress}%</span>
+                      </div>
+                      <div className="h-1.5 w-full rounded-full bg-secondary/40 overflow-hidden">
+                        <div
+                          className="h-full rounded-full bg-accent transition-all duration-300"
+                          style={{ width: `${Math.min(Math.max(progress, 0), 100)}%` }}
+                        />
+                      </div>
+                    </div>
+                  )}
                   
                   {conversation.metadata?.uploaded_by && (
                     <div className="flex items-center gap-1">
@@ -320,7 +419,7 @@ export function FileGridView({ onConversationSelect, currentFolderId, onFolderSe
           <AlertDialogHeader>
             <AlertDialogTitle>Delete Conversation</AlertDialogTitle>
             <AlertDialogDescription>
-              Are you sure you want to delete this conversation? This action cannot be undone and will permanently remove all Q&A examples extracted from this transcript.
+              Are you sure you want to delete this conversation? This action cannot be undone.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -336,6 +435,52 @@ export function FileGridView({ onConversationSelect, currentFolderId, onFolderSe
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {/* Rename dialog */}
+      <Dialog open={renameDialogOpen} onOpenChange={setRenameDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Rename Conversation</DialogTitle>
+            <DialogDescription>
+              Enter a new name for this conversation.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-4 py-4">
+            <div className="grid grid-cols-4 items-center gap-4">
+              <Label htmlFor="name" className="text-right">
+                Name
+              </Label>
+              <Input
+                id="name"
+                value={newTitle}
+                onChange={(e) => setNewTitle(e.target.value)}
+                className="col-span-3"
+                placeholder="Enter conversation name"
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    handleRenameConfirm()
+                  }
+                }}
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setRenameDialogOpen(false)
+                setConversationToRename(null)
+                setNewTitle('')
+              }}
+            >
+              Cancel
+            </Button>
+            <Button onClick={handleRenameConfirm} disabled={!newTitle.trim()}>
+              Rename
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </ScrollArea>
   )
 }

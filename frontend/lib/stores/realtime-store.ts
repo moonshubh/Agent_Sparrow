@@ -17,12 +17,25 @@ const NOTIFICATION_TIMEOUTS = {
 } as const
 
 // Types
+export type ProcessingStatusValue = 'pending' | 'processing' | 'completed' | 'failed' | 'cancelled'
+export type ProcessingStageValue =
+  | 'queued'
+  | 'parsing'
+  | 'ai_extraction'
+  | 'embedding_generation'
+  | 'quality_assessment'
+  | 'completed'
+  | 'failed'
+
 export interface ProcessingUpdate {
   conversation_id: number
-  status: 'pending' | 'processing' | 'completed' | 'failed'
+  status: ProcessingStatusValue
+  stage: ProcessingStageValue
   progress: number
   message?: string
-  examples_extracted?: number
+  error_details?: string
+  processing_time_ms?: number
+  metadata?: Record<string, unknown>
 }
 
 export interface Notification {
@@ -453,7 +466,7 @@ export const useRealtimeStore = create<RealtimeStore>()(
           }))
           
           // Auto-remove completed/failed updates after delay
-          if (update.status === 'completed' || update.status === 'failed') {
+          if (update.status === 'completed' || update.status === 'failed' || update.status === 'cancelled') {
             setTimeout(() => {
               get().actions.clearProcessingUpdate(update.conversation_id)
             }, NOTIFICATION_TIMEOUTS.PROCESSING_UPDATE_REMOVAL)
@@ -832,7 +845,17 @@ export const useRealtimeStore = create<RealtimeStore>()(
               
             case 'processing_update':
               if (data.conversation_id && data.status) {
-                state.actions.handleProcessingUpdate(data as ProcessingUpdate)
+                const normalized: ProcessingUpdate = {
+                  conversation_id: data.conversation_id,
+                  status: data.status,
+                  stage: data.stage ?? 'queued',
+                  progress: typeof data.progress === 'number' ? data.progress : 0,
+                  message: data.message,
+                  error_details: data.error_details,
+                  processing_time_ms: data.processing_time_ms,
+                  metadata: data.metadata
+                }
+                state.actions.handleProcessingUpdate(normalized)
               }
               break
               

@@ -46,7 +46,7 @@ export function CommandBar({
     <form onSubmit={submit} className="w-full max-w-3xl mx-auto px-4">
       <div className="relative group">
         {/* Modern glass morphism input container */}
-        <div className="relative flex items-center gap-2 rounded-[28px] bg-background/60 dark:bg-zinc-900/60 backdrop-blur-xl border border-border/40 dark:border-zinc-800/60 px-4 py-3 shadow-lg hover:shadow-xl transition-all duration-300 focus-within:border-primary/50">
+        <div className="relative flex items-center gap-2 rounded-[28px] bg-[hsl(var(--chat-input-bg)/0.80)] backdrop-blur-xl border border-border/50 px-4 py-3 shadow-lg hover:shadow-xl transition-all duration-300 focus-within:border-primary/50">
           
           {/* Attachment button - clean + icon */}
           <button

@@ -21,7 +21,7 @@ export default async function RootLayout({
   // Read theme from cookies on server side for consistent SSR/CSR
   const cookieStore = await cookies();
   const themeCookie = cookieStore.get('theme');
-  const initialTheme = themeCookie?.value || 'light'; // Default to light for consistency
+  const initialTheme = themeCookie?.value || 'dark'; // Default to dark per design direction
 
   return (
     <html lang="en" data-theme={initialTheme} suppressHydrationWarning>
