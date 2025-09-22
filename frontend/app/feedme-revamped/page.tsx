@@ -9,6 +9,7 @@ import CenterHero from '@/components/feedme-revamped/CenterHero'
 import FoldersDialog from '@/components/feedme-revamped/FoldersDialog'
 import UploadDialog from '@/components/feedme-revamped/UploadDialog'
 import UnassignedDialog from '@/components/feedme-revamped/UnassignedDialog'
+import { StatsPopover } from '@/components/feedme-revamped/StatsPopover'
 import { ErrorBoundary } from '@/components/feedme-revamped/ErrorBoundary'
 import BackendHealthAlert from '@/components/BackendHealthAlert'
 
@@ -19,7 +20,9 @@ export default function FeedMeRevampedPage() {
   const [foldersOpen, setFoldersOpen] = useState(false)
   const [uploadOpen, setUploadOpen] = useState(false)
   const [unassignedOpen, setUnassignedOpen] = useState(false)
+  const [statsOpen, setStatsOpen] = useState(false)
   const router = useRouter()
+
   return (
     <ErrorBoundary>
       <section className="relative h-screen w-screen overflow-hidden bg-background">
@@ -71,14 +74,24 @@ export default function FeedMeRevampedPage() {
               { icon: <FolderOpen />, label: 'Folders', onClick: () => { setShowCenter(false); setFoldersOpen(true) } },
               { icon: <Upload />, label: 'Upload', onClick: () => { setShowCenter(false); setUploadOpen(true) } },
               { icon: <MessageCircle />, label: 'Unassigned', onClick: () => { setShowCenter(false); setUnassignedOpen(true) } },
-              { icon: <BarChart3 />, label: 'Stats', onClick: () => setShowCenter(false) },
+              {
+                icon: <BarChart3 />,
+                label: 'Stats',
+                onClick: () => {
+                  setShowCenter(false)
+                  setStatsOpen(true)
+                }
+              },
             ]}
             baseItemSize={72}
           />
         </div>
+
+        {/* Dialogs */}
         <FoldersDialog isOpen={foldersOpen} onClose={() => setFoldersOpen(false)} />
         <UploadDialog isOpen={uploadOpen} onClose={() => setUploadOpen(false)} />
         <UnassignedDialog isOpen={unassignedOpen} onClose={() => setUnassignedOpen(false)} />
+        <StatsPopover open={statsOpen} onOpenChange={setStatsOpen} />
       </section>
     </ErrorBoundary>
   )
