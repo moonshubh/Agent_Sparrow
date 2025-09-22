@@ -63,6 +63,15 @@ const fetchWithRetry = async (
     throw new ApiUnreachableError('You are offline - unable to reach FeedMe service')
   }
 
+  // Check backend health on first attempt
+  if (retries === 3) {
+    const healthStatus = backendHealthMonitor.getLastHealthStatus()
+    if (healthStatus && !healthStatus.healthy) {
+      console.warn('[FeedMe API] Backend is unhealthy, attempting anyway:', healthStatus)
+      // Don't block the request, but log the warning
+    }
+  }
+
   // Cancel any existing request with the same key
   if (requestKey && activeRequests.has(requestKey)) {
     const existingController = activeRequests.get(requestKey)
@@ -201,12 +210,17 @@ const fetchWithRetry = async (
       message = 'Unexpected error connecting to FeedMe service'
     }
 
-    throw new ApiUnreachableError(
-      message,
-      error instanceof Error ? error : new Error(String(error)),
-      errorType,
-      url
+    // Enhance error with backend health information
+    const enhancedError = backendHealthMonitor.handleApiError(
+      new ApiUnreachableError(
+        message,
+        error instanceof Error ? error : new Error(String(error)),
+        errorType,
+        url
+      )
     )
+
+    throw enhancedError
   }
 }
 
@@ -222,6 +236,7 @@ export const cancelAllActiveRequests = (): void => {
 // API Base Configuration — prefer unified env resolver, with sensible fallbacks
 import { getApiBaseUrl } from '@/lib/utils/environment'
 import { apiMonitor } from '@/lib/api-monitor'
+import backendHealthMonitor from '@/lib/backend-health-check'
 
 // Prefer explicit NEXT_PUBLIC_API_BASE, then environment util (uses NEXT_PUBLIC_API_URL),
 // then final fallback based on NODE_ENV

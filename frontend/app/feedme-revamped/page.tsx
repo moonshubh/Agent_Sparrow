@@ -10,6 +10,7 @@ import FoldersDialog from '@/components/feedme-revamped/FoldersDialog'
 import UploadDialog from '@/components/feedme-revamped/UploadDialog'
 import UnassignedDialog from '@/components/feedme-revamped/UnassignedDialog'
 import { ErrorBoundary } from '@/components/feedme-revamped/ErrorBoundary'
+import BackendHealthAlert from '@/components/BackendHealthAlert'
 
 const LightRays = dynamic(() => import('@/components/LightRays'), { ssr: false })
 
@@ -22,6 +23,11 @@ export default function FeedMeRevampedPage() {
   return (
     <ErrorBoundary>
       <section className="relative h-screen w-screen overflow-hidden bg-background">
+        {/* Backend health monitoring alert */}
+        <div className="absolute top-4 right-4 z-50 max-w-md">
+          <BackendHealthAlert showWhenHealthy={false} />
+        </div>
+
         {/* No SVG filters needed; dock is icon-only */}
 
         {/* Light rays background */}
