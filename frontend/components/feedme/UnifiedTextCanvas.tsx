@@ -1,7 +1,7 @@
 /**
  * Unified Text Canvas for FeedMe System
  * Replaces fragmented Q&A sections with a single editable text area
- * 
+ *
  * Features:
  * - Display extracted text in a unified canvas
  * - Edit text with real-time preview
@@ -14,17 +14,13 @@
 'use client'
 
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { withErrorBoundary } from '@/components/feedme-revamped/ErrorBoundary'
+import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Toggle } from '@/components/ui/toggle'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
-// Replaced textarea with Tiptap rich text editor
-import { Textarea } from '@/components/ui/textarea'
-import { ScrollArea } from '@/components/ui/scroll-area'
-import { Separator } from '@/components/ui/separator'
-import { Tabs, TabsContent } from '@/components/ui/tabs'
-import { Edit3, Save, X, FileText, Bold, Italic, List, ListOrdered, Bot, User, CheckCircle2, AlertTriangle, Clock } from 'lucide-react'
+import { Edit3, Save, X, FileText, Bold, Italic, Underline, Code, List, ListOrdered, Bot, User, CheckCircle2, AlertTriangle, Clock } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { formatDistanceToNow } from 'date-fns'
 import { useEditor, EditorContent } from '@tiptap/react'
@@ -33,8 +29,9 @@ import Placeholder from '@tiptap/extension-placeholder'
 import CharacterCount from '@tiptap/extension-character-count'
 import Link from '@tiptap/extension-link'
 import Image from '@tiptap/extension-image'
+import UnderlineExtension from '@tiptap/extension-underline'
 import { uploadImageToSupabase } from '@/lib/storage'
-import DOMPurify from 'isomorphic-dompurify'
+
 
 // Types
 interface ProcessingMetadata {
@@ -98,9 +95,23 @@ export function UnifiedTextCanvas({
   const [editedText, setEditedText] = useState(extractedText)
   const [isLoading, setIsLoading] = useState(false)
   const [textStats, setTextStats] = useState<TextStatistics | null>(null)
-  // Folder selection and title editing are handled in the sidebar
-  const [showNotes, setShowNotes] = useState(false)
-  const [aiNote, setAiNote] = useState<string>((metadata as any)?.ai_comment || '')
+  // Use the actual DOMPurify type from the library
+  const [purify, setPurify] = useState<typeof import('isomorphic-dompurify').default | null>(null)
+  const [purifyLoading, setPurifyLoading] = useState(true)
+
+  // Load DOMPurify on client side
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      import('isomorphic-dompurify').then(module => {
+        // Access the default export which is the actual DOMPurify instance
+        setPurify(() => module.default)
+        setPurifyLoading(false)
+      }).catch(err => {
+        console.error('Failed to load DOMPurify:', err)
+        setPurifyLoading(false)
+      })
+    }
+  }, [])
 
   // ---------- Minimal Markdown/HTML helpers (LLM-friendly store = Markdown) ----------
   const isLikelyHtml = (text: string): boolean => /<\s*(p|br|ul|ol|li|h[1-6]|strong|em|a|img|code|pre)\b/i.test(text)
@@ -147,6 +158,8 @@ export function UnifiedTextCanvas({
     })
     // Bold **text**
     html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+    // Underline __text__
+    html = html.replace(/__([^_]+)__/g, '<u>$1</u>')
     // Italic _text_ or *text*
     html = html.replace(/(^|\W)_(.+?)_(?=\W|$)/g, '$1<em>$2</em>')
     html = html.replace(/(^|\W)\*(.+?)\*(?=\W|$)/g, '$1<em>$2</em>')
@@ -169,7 +182,17 @@ export function UnifiedTextCanvas({
     })
     
     // Apply name styling after all other conversions
-    return styleNamesInHtml(blocks.join('\n'))
+    const finalHtml = styleNamesInHtml(blocks.join('\n'))
+
+    // Sanitize HTML to prevent XSS if DOMPurify is available
+    if (purify) {
+      return purify.sanitize(finalHtml, {
+        ALLOWED_TAGS: ['p', 'br', 'strong', 'em', 'u', 'a', 'ul', 'ol', 'li', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'code', 'pre', 'blockquote', 'img'],
+        ALLOWED_ATTR: ['href', 'target', 'rel', 'src', 'alt', 'class'],
+        ALLOWED_URI_REGEXP: /^(?:(?:(?:f|ht)tps?|mailto|tel|callto|cid|xmpp|data):|[^a-z]|[a-z+.\-]+(?:[^a-z+.\-:]|$))/i
+      })
+    }
+    return finalHtml
   }
 
   const htmlToMarkdown = (html: string): string => {
@@ -186,9 +209,10 @@ export function UnifiedTextCanvas({
     md = md.replace(/<h1[^>]*>([\s\S]*?)<\/h1>/gi, '# $1\n\n')
     md = md.replace(/<h2[^>]*>([\s\S]*?)<\/h2>/gi, '## $1\n\n')
     md = md.replace(/<h3[^>]*>([\s\S]*?)<\/h3>/gi, '### $1\n\n')
-    // Strong/Emphasis
+    // Strong/Emphasis/Underline
     md = md.replace(/<strong[^>]*>([\s\S]*?)<\/strong>/gi, '**$1**')
     md = md.replace(/<b[^>]*>([\s\S]*?)<\/b>/gi, '**$1**')
+    md = md.replace(/<u[^>]*>([\s\S]*?)<\/u>/gi, '__$1__')
     md = md.replace(/<em[^>]*>([\s\S]*?)<\/em>/gi, '*$1*')
     md = md.replace(/<i[^>]*>([\s\S]*?)<\/i>/gi, '*$1*')
     // Links
@@ -201,29 +225,83 @@ export function UnifiedTextCanvas({
       const items = inner.replace(/<li[^>]*>([\s\S]*?)<\/li>/gi, '- $1\n')
       return `\n${items}\n`
     })
-    md = md.replace(/<ol[^>]*>([\s\S]*?)<\/ol>/gi, (_m, inner) => {
+    md = md.replace(/<ol[^>]*>([\s\S]*?)<\/ol>/gi, (_m: string, inner: string) => {
       let i = 0
-      return `\n${inner.replace(/<li[^>]*>([\s\S]*?)<\/li>/gi, (_m2, it) => `${++i}. ${it}\n`)}\n`
+      return `\n${inner.replace(/<li[^>]*>([\s\S]*?)<\/li>/gi, (_m2: string, it: string) => `${++i}. ${it}\n`)}\n`
     })
     // Paragraphs
     md = md.replace(/<p[^>]*>([\s\S]*?)<\/p>/gi, '$1\n\n')
     // Blockquotes
-    md = md.replace(/<blockquote[^>]*>([\s\S]*?)<\/blockquote>/gi, (_m, inr) => inr.split(/\n/).map(l => `> ${l}`).join('\n') + '\n\n')
+    md = md.replace(/<blockquote[^>]*>([\s\S]*?)<\/blockquote>/gi, (_m: string, inr: string) => inr.split(/\n/).map((l: string) => `> ${l}`).join('\n') + '\n\n')
     // Remove remaining tags
     md = md.replace(/<[^>]+>/g, '')
     // Normalize spacing
     return md.split('\n').map(l => l.trimEnd()).join('\n').replace(/\n{3,}/g, '\n\n').trim()
   }
 
-  const htmlToPlain = (html: string): string => DOMPurify.sanitize(html, { ALLOWED_TAGS: [], ALLOWED_ATTR: [] })
+  const htmlToPlain = (html: string): string => {
+    if (!purify) return html.replace(/<[^>]*>/g, '') // Fallback to simple tag stripping
+    return purify.sanitize(html, { ALLOWED_TAGS: [], ALLOWED_ATTR: [] })
+  }
 
-  // Sanitize config for rendering
-  const sanitizeHtml = (html: string) => DOMPurify.sanitize(html, {
-    ALLOWED_TAGS: ['p','br','strong','em','a','ul','ol','li','code','pre','blockquote','h1','h2','h3','img'],
-    ALLOWED_ATTR: ['href','target','rel','src','alt','class'],
-    ALLOW_DATA_ATTR: false,
-    FORBID_TAGS: ['style','script','iframe','object','embed','link']
-  })
+  // Sanitize config for rendering - NEVER render unsanitized HTML
+  const sanitizeHtml = (html: string) => {
+    if (!purify) {
+      // If DOMPurify isn't loaded, strip all HTML tags as a fallback
+      return html.replace(/<[^>]*>/g, '')
+    }
+    return purify.sanitize(html, {
+      ALLOWED_TAGS: ['p','br','strong','em','u','a','ul','ol','li','code','pre','blockquote','h1','h2','h3','img'],
+      ALLOWED_ATTR: ['href','target','rel','src','alt','class'],
+      ALLOW_DATA_ATTR: false,
+      FORBID_TAGS: ['style','script','iframe','object','embed','link']
+    })
+  }
+
+  // Handle auto-save - defined early for editor dependency
+  const [isSaving, setIsSaving] = useState(false)
+  const saveAbortControllerRef = useRef<AbortController | null>(null)
+
+  const handleAutoSave = useCallback(async (html: string) => {
+    const markdown = htmlToMarkdown(html)
+    if (markdown === extractedText) return
+
+    // Cancel any pending save request
+    if (saveAbortControllerRef.current) {
+      saveAbortControllerRef.current.abort()
+    }
+
+    // Create new abort controller for this save
+    const abortController = new AbortController()
+    saveAbortControllerRef.current = abortController
+
+    setIsSaving(true)
+    try {
+      if (onTextUpdate) {
+        await onTextUpdate(markdown)
+      } else {
+        await fetch(`/api/v1/feedme/conversations/${conversationId}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            extracted_text: markdown,
+            metadata: { ...(metadata || {}), content_format: 'markdown' }
+          }),
+          signal: abortController.signal
+        })
+      }
+    } catch (error) {
+      // Ignore abort errors
+      if (error instanceof Error && error.name !== 'AbortError') {
+        console.error('Failed to auto-save text:', error)
+      }
+    } finally {
+      // Only update saving state if this request wasn't aborted
+      if (!abortController.signal.aborted) {
+        setIsSaving(false)
+      }
+    }
+  }, [extractedText, onTextUpdate, conversationId, metadata])
 
   // Initialize Tiptap editor (stores HTML)
   const editor = useEditor({
@@ -234,9 +312,13 @@ export function UnifiedTextCanvas({
       CharacterCount.configure({ limit: 500000 }),
       Link.configure({ openOnClick: true, autolink: true }),
       Image.configure({ inline: false, allowBase64: false }),
+      UnderlineExtension,
     ],
     content: '<p></p>',
-    onUpdate: ({ editor }) => setEditedText(editor.getHTML()),
+    onUpdate: useCallback(({ editor }: any) => {
+      const html = editor.getHTML()
+      setEditedText(html)
+    }, [])
   })
 
   // Paste/drop images: upload to Supabase storage and insert by URL
@@ -316,55 +398,88 @@ export function UnifiedTextCanvas({
 
   // Folder selection is handled in the sidebar; nothing to load here
 
-  // Handle saving edited text
+  // Handle saving edited text (kept for compatibility but not used in UI)
   const handleSaveText = async () => {
-    const aiNoteChanged = aiNote !== ((metadata as any)?.ai_comment || '')
-    if (!onTextUpdate && !(aiNoteChanged || editedText !== extractedText)) {
+    if (editedText === extractedText) {
       setIsEditing(false)
       return
     }
 
     setIsLoading(true)
     try {
-      // Prepare merged metadata (preserve existing keys)
-    const mergedMeta = { ...(metadata || {}) }
-      mergedMeta['content_format'] = 'markdown'
-      if (aiNoteChanged) {
-        mergedMeta['ai_comment'] = aiNote
+      const markdown = htmlToMarkdown(editedText)
+      if (onTextUpdate) {
+        await onTextUpdate(markdown)
+      } else {
+        await fetch(`/api/v1/feedme/conversations/${conversationId}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            extracted_text: markdown,
+            metadata: { ...(metadata || {}), content_format: 'markdown' }
+          })
+        })
       }
-
-      // Save text/notes
-      const payload: any = {}
-      if (editedText !== extractedText) {
-        // Convert editor HTML → Markdown for storage
-        payload.extracted_text = htmlToMarkdown(editedText)
-      }
-      const needMetaUpdate = aiNoteChanged || (metadata as any)?.content_format !== 'markdown'
-      if (needMetaUpdate) payload.metadata = mergedMeta
-
-      await fetch(`/api/v1/feedme/conversations/${conversationId}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      })
       setIsEditing(false)
     } catch (error) {
       console.error('Failed to save text:', error)
-      // Reset to original text on error
       const html = isLikelyHtml(extractedText) ? extractedText : markdownToHtml(extractedText)
       setEditedText(html)
       editor?.commands.setContent(html)
-      setAiNote(((metadata as any)?.ai_comment || ''))
     } finally {
       setIsLoading(false)
     }
   }
 
-  // Handle canceling edit
+  // Handle canceling edit (kept for compatibility but not used in UI)
   const handleCancelEdit = () => {
-    setEditedText(extractedText)
+    const html = isLikelyHtml(extractedText) ? extractedText : markdownToHtml(extractedText)
+    setEditedText(html)
+    editor?.commands.setContent(html)
     setIsEditing(false)
   }
+
+  // Handle clicking outside to exit edit mode
+  useEffect(() => {
+    if (!isEditing) return
+
+    const handleClickOutside = (event: MouseEvent) => {
+      const target = event.target as HTMLElement
+      const editorElement = document.querySelector('.ProseMirror')
+      const toolbarElement = document.querySelector('[data-toolbar="true"]')
+
+      if (editorElement && !editorElement.contains(target) &&
+          toolbarElement && !toolbarElement.contains(target)) {
+        setIsEditing(false)
+      }
+    }
+
+    document.addEventListener('mousedown', handleClickOutside)
+    return () => document.removeEventListener('mousedown', handleClickOutside)
+  }, [isEditing])
+
+  // Handle auto-save with proper cleanup
+  useEffect(() => {
+    if (!isEditing || !editedText) return
+
+    const timeoutId = setTimeout(() => {
+      handleAutoSave(editedText)
+    }, 2000) // Auto-save after 2 seconds of no activity
+
+    return () => {
+      clearTimeout(timeoutId)
+    }
+  }, [editedText, isEditing, handleAutoSave])
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      // Cleanup any pending saves on unmount
+      if (saveAbortControllerRef.current) {
+        saveAbortControllerRef.current.abort()
+      }
+    }
+  }, [])
 
   // Handle approval actions
   const handleApprovalAction = async (action: 'approve' | 'reject' | 'edit_and_approve') => {
@@ -474,46 +589,18 @@ export function UnifiedTextCanvas({
     }
   }
  
-  const canSave = (isEditing && (editedText !== extractedText)) ||
-    (aiNote !== ((metadata as any)?.ai_comment || ''))
+  // Compare the markdown versions to determine if content has changed
+  const currentMarkdown = useMemo(() => htmlToMarkdown(editedText), [editedText])
+  const canSave = isEditing && (currentMarkdown !== extractedText)
 
   return (
-    <div className="space-y-6">
-      {/* Removed legacy header; info now lives in the sidebar */}
-
-      {/* Main content area */}
-      <Tabs defaultValue="text" className="w-full">
-        <TabsContent value="text" className="space-y-4">
-          {/* AI Notes (collapsible, editable) moved above content */}
-          <Card className="border-0 shadow-none bg-transparent">
-            <CardHeader className="py-3 flex flex-row items-center justify-between">
-              <CardTitle className="text-base">AI Notes</CardTitle>
-              <Button variant="ghost" size="sm" onClick={() => setShowNotes(s => !s)}>
-                {showNotes ? 'Hide' : 'Show'}
-              </Button>
-            </CardHeader>
-            {showNotes && (
-              <CardContent>
-                <Textarea
-                  value={aiNote}
-                  onChange={(e) => setAiNote(e.target.value)}
-                  placeholder="Short AI comment to aid retrieval/search..."
-                  rows={4}
-                  className="font-sans text-sm"
-                />
-                <div className="text-xs text-muted-foreground mt-1">Editable. Included in metadata (ai_comment).</div>
-              </CardContent>
-            )}
-          </Card>
-
-          <Card className="border-0 shadow-none bg-transparent"> 
-            <CardContent className="p-0">
-              {isEditing ? (
-                <div className={cn("relative", fullPageMode ? "min-h-[60vh] p-2" : "p-2")}> 
-                {/* Formatting toolbar + actions */}
-                <div className="flex items-center justify-between gap-2 pb-2">
-                  <div className="flex items-center gap-2">
-                  {/* Inline formatting: Bold + Italic */}
+    <Card className="border-0 shadow-none bg-transparent h-full">
+      <CardContent className="flex h-full flex-col gap-4 p-0">
+        <div className="flex-1">
+          {isEditing ? (
+            <div className={cn('relative flex h-full flex-col', fullPageMode ? 'p-4' : 'p-3')}>
+              <div className="flex flex-wrap items-center justify-between gap-2 pb-3 pr-12" data-toolbar="true">
+                <div className="flex items-center gap-2">
                   <div className="flex items-center gap-1">
                     <Toggle
                       size="sm"
@@ -531,19 +618,41 @@ export function UnifiedTextCanvas({
                     >
                       <Italic className="h-4 w-4" />
                     </Toggle>
+                    <Toggle
+                      size="sm"
+                      aria-label="Toggle underline"
+                      pressed={!!editor?.isActive('underline')}
+                      onPressedChange={() => {
+                        if (editor?.isActive('underline')) {
+                          editor?.chain().focus().unsetMark('underline').run()
+                        } else {
+                          editor?.chain().focus().setMark('underline').run()
+                        }
+                      }}
+                    >
+                      <Underline className="h-4 w-4" />
+                    </Toggle>
+                    <Toggle
+                      size="sm"
+                      aria-label="Toggle code"
+                      pressed={!!editor?.isActive('code')}
+                      onPressedChange={() => editor?.chain().focus().toggleCode().run()}
+                    >
+                      <Code className="h-4 w-4" />
+                    </Toggle>
                   </div>
-
-                  {/* List formatting: Bulleted vs Numbered (mutually exclusive) */}
-                  <ToggleGroup type="single" size="sm" aria-label="List type" value={
-                      editor?.isActive('orderedList') ? 'ol' : (editor?.isActive('bulletList') ? 'ul' : undefined)
-                    } onValueChange={(val) => {
+                  <ToggleGroup
+                    type="single"
+                    size="sm"
+                    aria-label="List type"
+                    value={editor?.isActive('orderedList') ? 'ol' : (editor?.isActive('bulletList') ? 'ul' : undefined)}
+                    onValueChange={(val) => {
                       if (!editor) return
                       if (val === 'ul') {
                         editor.chain().focus().toggleBulletList().run()
                       } else if (val === 'ol') {
                         editor.chain().focus().toggleOrderedList().run()
                       } else {
-                        // Clicking the active item again clears list
                         if (editor.isActive('orderedList')) editor.chain().focus().toggleOrderedList().run()
                         if (editor.isActive('bulletList')) editor.chain().focus().toggleBulletList().run()
                       }
@@ -556,134 +665,113 @@ export function UnifiedTextCanvas({
                       <ListOrdered className="h-4 w-4" />
                     </ToggleGroupItem>
                   </ToggleGroup>
-                  </div>
-
-                  <div className="flex items-center gap-2">
-                    <Button variant="outline" size="sm" onClick={handleCancelEdit} disabled={!isEditing || isLoading}>
-                      <X className="h-4 w-4 mr-1" /> Cancel
-                    </Button>
-                    <Button size="sm" onClick={handleSaveText} disabled={!isEditing || isLoading || !canSave}>
-                      <Save className="h-4 w-4 mr-1" /> Save
-                    </Button>
-                  </div>
                 </div>
-                <div className={cn('font-sans', fullPageMode ? 'min-h-[60vh] p-3' : 'min-h-[400px] p-2')}>
-                  <EditorContent
-                    editor={editor}
-                    className={cn(
-                      'prose max-w-none leading-7 text-sm',
-                      'prose-p:my-3 prose-li:my-1 prose-ul:my-3 prose-ol:my-3',
-                      'prose-headings:mt-6 prose-headings:mb-3',
-                      '[&_code.agent-name]:bg-blue-100 [&_code.agent-name]:text-blue-900 [&_code.agent-name]:px-1 [&_code.agent-name]:py-0.5 [&_code.agent-name]:rounded [&_code.agent-name]:text-sm [&_code.agent-name]:font-semibold',
-                      '[&_code.customer-name]:bg-amber-100 [&_code.customer-name]:text-amber-900 [&_code.customer-name]:px-1 [&_code.customer-name]:py-0.5 [&_code.customer-name]:rounded [&_code.customer-name]:text-sm [&_code.customer-name]:font-semibold'
-                    )}
-                  />
-                </div>
-                <div className="absolute bottom-4 right-4 text-xs text-muted-foreground bg-background px-2 py-1 rounded">
-                  {editedText.length.toLocaleString()} characters
+                <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                  {isSaving ? (
+                    <>
+                      <div className="h-2 w-2 animate-pulse rounded-full bg-blue-500" />
+                      Saving...
+                    </>
+                  ) : (
+                    'Auto-saving enabled'
+                  )}
                 </div>
               </div>
-            ) : (
-              <div className={cn(
-                "prose max-w-none font-sans text-sm leading-relaxed",
-                fullPageMode ? "p-6" : "p-4",
-                "[&_code.agent-name]:bg-blue-100 [&_code.agent-name]:text-blue-900 [&_code.agent-name]:px-1 [&_code.agent-name]:py-0.5 [&_code.agent-name]:rounded [&_code.agent-name]:text-sm [&_code.agent-name]:font-semibold [&_code.agent-name]:not-italic",
-                "[&_code.customer-name]:bg-amber-100 [&_code.customer-name]:text-amber-900 [&_code.customer-name]:px-1 [&_code.customer-name]:py-0.5 [&_code.customer-name]:rounded [&_code.customer-name]:text-sm [&_code.customer-name]:font-semibold [&_code.customer-name]:not-italic"
-              )}
-                dangerouslySetInnerHTML={{ __html: sanitizeHtml(isLikelyHtml(extractedText) ? styleNamesInHtml(extractedText) : markdownToHtml(extractedText)) }}
-              />
-            )}
-          </CardContent>
-        </Card>
-
-          {/* Approval controls */}
-          {showApprovalControls && approvalStatus === 'pending' && (
-            <Card className="border-0 shadow-none bg-transparent">
-              <CardHeader>
-                <CardTitle className="text-base">Approval Actions</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="flex items-center gap-3">
-                  <Button
-                    variant="outline"
-                    onClick={() => handleApprovalAction('approve')}
-                    disabled={isLoading}
-                    className="text-green-700 border-green-300 hover:bg-green-50"
-                  >
-                    <CheckCircle2 className="h-4 w-4 mr-1" />
-                    Approve
-                  </Button>
-                  <Button
-                    variant="outline"
-                    onClick={() => handleApprovalAction('reject')}
-                    disabled={isLoading}
-                    className="text-red-700 border-red-300 hover:bg-red-50"
-                  >
-                    <X className="h-4 w-4 mr-1" />
-                    Reject
-                  </Button>
-                  {isEditing && (
-                    <Button
-                      onClick={() => handleApprovalAction('edit_and_approve')}
-                      disabled={isLoading || editedText === extractedText}
-                      className="text-blue-700 bg-blue-50 border-blue-300 hover:bg-blue-100"
-                    >
-                      <Edit3 className="h-4 w-4 mr-1" />
-                      Edit & Approve
-                    </Button>
-                  )}
-                </div>
-              </CardContent>
-            </Card>
-          )}
-
-          {/* Approval history */}
-          {approvalStatus === 'approved' && approvedBy && (
-            <Card className="border-0 shadow-none bg-transparent">
-              <CardContent className="pt-4 space-y-2">
-                <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                  <CheckCircle2 className="h-4 w-4 text-green-600" />
-                  <span>Approved by {approvedBy}</span>
-                  {approvedAt && (
-                    <span>• {formatDistanceToNow(new Date(approvedAt), { addSuffix: true })}</span>
-                  )}
-                </div>
-                
-                {/* PDF cleanup status */}
-                {processingMetadata.processing_method === 'pdf_ocr' && (
-                  <div className="flex items-center gap-2 text-sm">
-                    {pdfCleaned ? (
-                      <>
-                        <Badge variant="outline" className="bg-green-50 text-green-700 border-green-300">
-                          <CheckCircle2 className="h-3 w-3 mr-1" />
-                          PDF Cleaned
-                        </Badge>
-                        {originalPdfSize && (
-                          <span className="text-muted-foreground">
-                            • Saved {(originalPdfSize / 1024 / 1024).toFixed(2)} MB
-                          </span>
-                        )}
-                        {pdfCleanedAt && (
-                          <span className="text-muted-foreground">
-                            • {formatDistanceToNow(new Date(pdfCleanedAt), { addSuffix: true })}
-                          </span>
-                        )}
-                      </>
-                    ) : (
-                      <Badge variant="outline" className="bg-yellow-50 text-yellow-700 border-yellow-300">
-                        <Clock className="h-3 w-3 mr-1" />
-                        PDF Cleanup Pending
-                      </Badge>
-                    )}
-                  </div>
+              <div
+                className={cn(
+                  'font-sans bg-background/95 text-foreground rounded-md border border-border/40',
+                  fullPageMode ? 'max-h-[calc(78vh-56px)] overflow-y-auto p-4 pb-12' : 'max-h-[360px] overflow-y-auto p-3 pb-8'
                 )}
-              </CardContent>
-            </Card>
+              >
+                <EditorContent
+                  editor={editor}
+                  className={cn(
+                    'prose max-w-none leading-7 text-sm dark:prose-invert',
+                    'prose-p:my-3 prose-li:my-1 prose-ul:my-3 prose-ol:my-3',
+                    'prose-headings:mt-6 prose-headings:mb-3',
+                    '[&_code.agent-name]:bg-blue-100 [&_code.agent-name]:text-blue-900 [&_code.agent-name]:px-1 [&_code.agent-name]:py-0.5 [&_code.agent-name]:rounded [&_code.agent-name]:text-sm [&_code.agent-name]:font-semibold',
+                    '[&_code.customer-name]:bg-amber-100 [&_code.customer-name]:text-amber-900 [&_code.customer-name]:px-1 [&_code.customer-name]:py-0.5 [&_code.customer-name]:rounded [&_code.customer-name]:text-sm [&_code.customer-name]:font-semibold'
+                  )}
+                />
+              </div>
+              <div className="absolute bottom-4 right-4 rounded bg-background px-2 py-1 text-xs text-muted-foreground shadow">
+                {editedText.length.toLocaleString()} characters
+              </div>
+            </div>
+          ) : purifyLoading ? (
+            <div className={cn(
+              'flex items-center justify-center rounded-md border border-border/40 bg-background/95',
+              fullPageMode ? 'min-h-[calc(82vh)]' : 'min-h-[380px]'
+            )}>
+              <div className="text-center space-y-2">
+                <div className="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent mx-auto" />
+                <p className="text-sm text-muted-foreground">Loading content viewer...</p>
+              </div>
+            </div>
+          ) : (
+            <div
+              className={cn(
+                'prose max-w-none font-sans text-sm leading-relaxed dark:prose-invert rounded-md border border-border/40 bg-background/95 text-foreground',
+                fullPageMode ? 'max-h-[calc(82vh)] overflow-y-auto p-6 pb-12' : 'max-h-[380px] overflow-y-auto p-4 pb-8',
+                '[&_code.agent-name]:bg-blue-100 [&_code.agent-name]:text-blue-900 [&_code.agent-name]:px-1 [&_code.agent-name]:py-0.5 [&_code.agent-name]:rounded [&_code.agent-name]:text-sm [&_code.agent-name]:font-semibold [&_code.agent-name]:not-italic',
+                '[&_code.customer-name]:bg-amber-100 [&_code.customer-name]:text-amber-900 [&_code.customer-name]:px-1 [&_code.customer-name]:py-0.5 [&_code.customer-name]:rounded [&_code.customer-name]:text-sm [&_code.customer-name]:font-semibold [&_code.customer-name]:not-italic'
+              )}
+              dangerouslySetInnerHTML={{ __html: sanitizeHtml(isLikelyHtml(extractedText) ? styleNamesInHtml(extractedText) : markdownToHtml(extractedText)) }}
+            />
           )}
-        </TabsContent>
-      </Tabs>
-    </div>
+        </div>
+
+        {showApprovalControls && approvalStatus === 'pending' && (
+          <div className="rounded-lg border border-border/60 bg-muted/20 px-4 py-3">
+            <p className="text-xs text-muted-foreground mb-3">Review and decide whether this conversation should be added to the knowledge base.</p>
+            <div className="flex flex-wrap items-center gap-3">
+              <Button
+                variant="outline"
+                onClick={() => handleApprovalAction('approve')}
+                disabled={isLoading}
+                className="text-green-700 border-green-300 hover:bg-green-50"
+              >
+                <CheckCircle2 className="h-4 w-4 mr-1" />
+                Approve
+              </Button>
+              <Button
+                variant="outline"
+                onClick={() => handleApprovalAction('reject')}
+                disabled={isLoading}
+                className="text-red-700 border-red-300 hover:bg-red-50"
+              >
+                <X className="h-4 w-4 mr-1" />
+                Reject
+              </Button>
+              {isEditing && (
+                <Button
+                  onClick={() => handleApprovalAction('edit_and_approve')}
+                  disabled={isLoading || editedText === extractedText}
+                  className="text-blue-700 bg-blue-50 border-blue-300 hover:bg-blue-100"
+                >
+                  <Edit3 className="h-4 w-4 mr-1" />
+                  Edit & Approve
+                </Button>
+              )}
+            </div>
+          </div>
+        )}
+
+        {approvalStatus === 'approved' && approvedBy && (
+          <div className="rounded-lg border border-border/60 bg-muted/10 px-4 py-3 text-sm text-muted-foreground">
+            <div className="flex flex-wrap items-center gap-2">
+              <CheckCircle2 className="h-4 w-4 text-green-600" />
+              <span>Approved by {approvedBy}</span>
+              {approvedAt && (
+                <span>• {formatDistanceToNow(new Date(approvedAt), { addSuffix: true })}</span>
+              )}
+            </div>
+          </div>
+        )}
+      </CardContent>
+    </Card>
   )
 }
 
-export default UnifiedTextCanvas
+// Export the component wrapped with error boundary
+export default withErrorBoundary(UnifiedTextCanvas)

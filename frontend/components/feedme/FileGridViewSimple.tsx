@@ -6,6 +6,7 @@
 'use client'
 
 import React, { useEffect, useState } from 'react'
+import { withErrorBoundary } from '@/components/feedme-revamped/ErrorBoundary'
 import { FileText, Clock, User, CheckCircle2, AlertCircle, Loader2, Trash2, MoreHorizontal, Folder, Move, Edit2 } from 'lucide-react'
 import { useConversations, useConversationsActions } from '@/lib/stores/conversations-store'
 import { useUIActions } from '@/lib/stores/ui-store'
@@ -84,18 +85,28 @@ export function FileGridView({ onConversationSelect, currentFolderId, onFolderSe
     foldersActions.loadFolders()
   }, []) // Empty dependency array - only run once on mount
 
-  const handleConversationSelect = (conversationId: number) => {
-    // Validate conversation ID before setting
-    if (!conversationId || conversationId <= 0) {
-      console.warn('Invalid conversation ID selected:', conversationId)
+  const handleConversationSelect = (conversation: { id?: number; title?: string }) => {
+    // Type guard to ensure conversation has a valid ID
+    const isValidConversationId = (id: any): id is number => {
+      return typeof id === 'number' && Number.isInteger(id) && id > 0
+    }
+
+    // Validate conversation ID before processing
+    if (!conversation.id || !isValidConversationId(conversation.id)) {
+      console.warn('Invalid conversation ID selected:', conversation.id)
+      uiActions.showToast({
+        type: 'error',
+        title: 'Invalid Selection',
+        message: 'Please select a valid conversation'
+      })
       return
     }
-    
+
     // Check if conversation exists in current store
-    const conversation = conversations.find(c => c.id === conversationId)
-    if (!conversation) {
-      console.warn(`Conversation ${conversationId} not found in current list`)
-      
+    const existingConversation = conversations.find(c => c.id === conversation.id)
+    if (!existingConversation) {
+      console.warn(`Conversation ${conversation.id} not found in current list`)
+
       // Show loading message but don't refresh here - let the editor handle the load
       uiActions.showToast({
         type: 'info',
@@ -103,22 +114,41 @@ export function FileGridView({ onConversationSelect, currentFolderId, onFolderSe
         message: 'Loading conversation details...'
       })
     }
-    
-    // Always call the parent callback - let the editor handle loading/errors
-    onConversationSelect?.(conversationId)
+
+    // Always call the parent callback with validated ID
+    onConversationSelect?.(conversation.id)
   }
 
-  const handleDeleteClick = (e: React.MouseEvent, conversationId: number) => {
+  const handleDeleteClick = (e: React.MouseEvent, conversationId: number | undefined) => {
     e.stopPropagation() // Prevent card click
+    if (typeof conversationId !== 'number' || conversationId <= 0) {
+      console.warn('Invalid conversation ID for delete:', conversationId)
+      uiActions.showToast({
+        type: 'error',
+        title: 'Invalid Selection',
+        message: 'Cannot delete - invalid conversation ID'
+      })
+      return
+    }
     setConversationToDelete(conversationId)
     setDeleteDialogOpen(true)
   }
 
-  const handleMoveToFolder = async (conversationId: number, folderId: number | null) => {
+  const handleMoveToFolder = async (conversationId: number | undefined, folderId: number | null) => {
+    if (typeof conversationId !== 'number' || conversationId <= 0) {
+      console.warn('Invalid conversation ID for move:', conversationId)
+      uiActions.showToast({
+        type: 'error',
+        title: 'Invalid Selection',
+        message: 'Cannot move - invalid conversation ID'
+      })
+      return
+    }
+
     try {
       await conversationsActions.bulkAssignToFolder([conversationId], folderId)
       const folderName = folderId ? Object.values(folders).find(f => f.id === folderId)?.name || 'Unknown Folder' : 'Root'
-      
+
       uiActions.showToast({
         type: 'success',
         title: 'Conversation Moved',
@@ -156,7 +186,16 @@ export function FileGridView({ onConversationSelect, currentFolderId, onFolderSe
     setConversationToDelete(null)
   }
 
-  const handleRenameClick = (conversationId: number, currentTitle: string) => {
+  const handleRenameClick = (conversationId: number | undefined, currentTitle: string) => {
+    if (typeof conversationId !== 'number' || conversationId <= 0) {
+      console.warn('Invalid conversation ID for rename:', conversationId)
+      uiActions.showToast({
+        type: 'error',
+        title: 'Invalid Selection',
+        message: 'Cannot rename - invalid conversation ID'
+      })
+      return
+    }
     setConversationToRename({ id: conversationId, title: currentTitle })
     setNewTitle(currentTitle)
     setRenameDialogOpen(true)
@@ -257,12 +296,12 @@ export function FileGridView({ onConversationSelect, currentFolderId, onFolderSe
                 : undefined
 
             return (
-            <Card 
-              key={conversation.id} 
-              className="cursor-pointer hover:shadow-md hover:bg-mb-blue-300/50 focus-within:ring-2 focus-within:ring-accent/50 transition-all duration-200 relative group"
-              onClick={() => handleConversationSelect(conversation.id || 0)}
-              tabIndex={0}
-            >
+              <Card
+                key={conversation.id}
+                className="cursor-pointer hover:shadow-md hover:bg-mb-blue-300/50 focus-within:ring-2 focus-within:ring-accent/50 transition-all duration-200 relative group"
+                onClick={() => handleConversationSelect(conversation)}
+                tabIndex={0}
+              >
               {/* Actions dropdown - shows on hover */}
               <div className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity duration-200 z-10">
                 <DropdownMenu>
@@ -284,7 +323,7 @@ export function FileGridView({ onConversationSelect, currentFolderId, onFolderSe
                           className="flex items-center gap-2 cursor-pointer"
                           onClick={(e) => {
                             e.stopPropagation()
-                            handleRenameClick(conversation.id || 0, conversation.title || '')
+                            handleRenameClick(conversation.id, conversation.title || '')
                           }}
                         >
                           <Edit2 className="h-4 w-4" />
@@ -295,7 +334,7 @@ export function FileGridView({ onConversationSelect, currentFolderId, onFolderSe
                           className="flex items-center gap-2 text-destructive focus:text-destructive cursor-pointer"
                           onClick={(e) => {
                             e.stopPropagation()
-                            handleDeleteClick(e, conversation.id || 0)
+                            handleDeleteClick(e, conversation.id)
                           }}
                         >
                           <Trash2 className="h-4 w-4" />
@@ -313,7 +352,7 @@ export function FileGridView({ onConversationSelect, currentFolderId, onFolderSe
                           className="flex items-center gap-2 cursor-pointer"
                           onClick={(e) => {
                             e.stopPropagation()
-                            handleMoveToFolder(conversation.id || 0, null)
+                            handleMoveToFolder(conversation.id, null)
                           }}
                         >
                           <Folder className="h-4 w-4" />
@@ -326,7 +365,7 @@ export function FileGridView({ onConversationSelect, currentFolderId, onFolderSe
                             className="flex items-center gap-2 cursor-pointer"
                             onClick={(e) => {
                               e.stopPropagation()
-                              handleMoveToFolder(conversation.id || 0, folder.id)
+                              handleMoveToFolder(conversation.id, folder.id)
                             }}
                           >
                             <div className="flex items-center gap-2">
@@ -344,7 +383,7 @@ export function FileGridView({ onConversationSelect, currentFolderId, onFolderSe
                           className="flex items-center gap-2 text-destructive focus:text-destructive cursor-pointer"
                           onClick={(e) => {
                             e.stopPropagation()
-                            handleDeleteClick(e, conversation.id || 0)
+                            handleDeleteClick(e, conversation.id)
                           }}
                         >
                           <Trash2 className="h-4 w-4" />
@@ -388,12 +427,12 @@ export function FileGridView({ onConversationSelect, currentFolderId, onFolderSe
                   {conversation.processing_status === 'processing' && typeof progress === 'number' && (
                     <div className="pt-1">
                       <div className="flex items-center justify-between mb-1">
-                        <span className="text-[11px] uppercase tracking-wide text-muted-foreground">Progress</span>
-                        <span className="text-[11px] font-medium text-foreground">{progress}%</span>
+                        <span className="text-[11px] uppercase tracking-wide text-emerald-600">Progress</span>
+                        <span className="text-[11px] font-medium text-emerald-600">{progress}%</span>
                       </div>
-                      <div className="h-1.5 w-full rounded-full bg-secondary/40 overflow-hidden">
+                      <div className="h-1.5 w-full rounded-full bg-emerald-500/20 overflow-hidden">
                         <div
-                          className="h-full rounded-full bg-accent transition-all duration-300"
+                          className="h-full rounded-full bg-emerald-500 transition-all duration-300"
                           style={{ width: `${Math.min(Math.max(progress, 0), 100)}%` }}
                         />
                       </div>
@@ -409,7 +448,8 @@ export function FileGridView({ onConversationSelect, currentFolderId, onFolderSe
                 </div>
               </CardContent>
             </Card>
-          ))}
+            )
+          })}
         </div>
       </div>
 
@@ -484,3 +524,6 @@ export function FileGridView({ onConversationSelect, currentFolderId, onFolderSe
     </ScrollArea>
   )
 }
+
+// Export the component wrapped with error boundary
+export default withErrorBoundary(FileGridView)

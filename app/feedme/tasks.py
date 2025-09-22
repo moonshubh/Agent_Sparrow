@@ -307,18 +307,6 @@ def process_transcript(self, conversation_id: int, user_id: Optional[str] = None
         except Exception as e:
             logger.error(f"Failed to persist extracted_text/metadata for conversation {conversation_id}: {e}")
 
-        # Update status util for parity
-        update_conversation_status(
-            conversation_id,
-            ProcessingStatus.COMPLETED,
-            processing_time_ms=processing_time_ms,
-            stage=ProcessingStage.COMPLETED,
-            progress=100,
-            message="Processing completed"
-        )
-        
-        logger.info(f"Successfully processed conversation {conversation_id} in {processing_time:.2f}s")
-
         update_conversation_status(
             conversation_id,
             ProcessingStatus.PROCESSING,
@@ -338,6 +326,19 @@ def process_transcript(self, conversation_id: int, user_id: Optional[str] = None
             generate_ai_tags.delay(conversation_id)
         except Exception as e:
             logger.warning(f"Failed to schedule AI tags task: {e}")
+
+        # Keep status as PROCESSING since downstream tasks are still running
+        # The downstream tasks should mark as COMPLETED when they finish
+        update_conversation_status(
+            conversation_id,
+            ProcessingStatus.PROCESSING,
+            processing_time_ms=processing_time_ms,
+            stage=ProcessingStage.QUALITY_ASSESSMENT,
+            progress=90,
+            message="Finalizing embeddings and metadata"
+        )
+
+        logger.info(f"Successfully processed conversation {conversation_id} in {processing_time:.2f}s")
 
         return {
             'success': True,
@@ -668,6 +669,17 @@ def generate_text_chunks_and_embeddings(self, conversation_id: int, max_chunk_ch
                 logger.warning(f"Embedding failed for chunk {chunk_id}: {e}")
 
         logger.info(f"Created {stored}/{len(chunks)} chunks with embeddings for conversation {conversation_id}")
+
+        # Mark conversation as COMPLETED after embeddings are done
+        # (AI tags task runs in parallel and is optional)
+        update_conversation_status(
+            conversation_id,
+            ProcessingStatus.COMPLETED,
+            stage=ProcessingStage.COMPLETED,
+            progress=100,
+            message="Processing completed"
+        )
+
         return { 'success': True, 'conversation_id': conversation_id, 'chunks': stored }
     except Exception as e:
         logger.error(f"Chunk+embed task failed: {e}")

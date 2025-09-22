@@ -7,76 +7,221 @@
 
 // Custom error class for API unreachable scenarios
 export class ApiUnreachableError extends Error {
-  constructor(message: string, public readonly originalError?: Error) {
+  public readonly errorType?: 'timeout' | 'network' | 'server' | 'unknown'
+  public readonly timestamp: Date
+  public readonly url?: string
+
+  constructor(
+    message: string,
+    public readonly originalError?: Error,
+    errorType?: 'timeout' | 'network' | 'server' | 'unknown',
+    url?: string
+  ) {
     super(message)
     this.name = 'ApiUnreachableError'
+    this.errorType = errorType
+    this.timestamp = new Date()
+    this.url = url
   }
 }
 
-// Retry and timeout utilities
+// Request timeout configurations based on operation type
+const TIMEOUT_CONFIGS = {
+  // Quick operations (status checks, small payloads)
+  quick: { timeout: 10000, retries: 2 },
+  // Standard operations (most API calls)
+  standard: { timeout: 30000, retries: 3 },
+  // Heavy operations (file uploads, batch operations)
+  heavy: { timeout: 60000, retries: 2 },
+  // Database operations (queries with potential slow aggregations)
+  database: { timeout: 45000, retries: 2 },
+} as const
+
+// Track in-flight requests to prevent duplicates and enable cancellation
+const activeRequests = new Map<string, AbortController>()
+
+// Intelligent retry delay with exponential backoff and jitter to prevent thundering herd
+const getRetryDelay = (attempt: number, maxRetries: number): number => {
+  // Correct exponential backoff: delay increases with attempt number
+  const attemptNumber = maxRetries - attempt // Convert remaining retries to attempt number
+  const baseDelay = Math.min(Math.pow(2, attemptNumber) * 1000, 8000)
+  const jitter = Math.random() * 1000 // Add 0-1s of jitter
+  return baseDelay + jitter
+}
+
+// Enhanced fetch with retry, timeout, and request deduplication
 const fetchWithRetry = async (
-  url: string, 
-  options: RequestInit = {}, 
+  url: string,
+  options: RequestInit = {},
   retries: number = 3,
-  timeout: number = 20000,
-  skipRetryOn503: boolean = false
+  timeout: number = 30000,
+  skipRetryOn503: boolean = false,
+  requestKey?: string // Optional key for request deduplication
 ): Promise<Response> => {
-  // Offline short-circuit to avoid noisy errors
+  // Offline detection with more robust check
   if (typeof window !== 'undefined' && navigator && navigator.onLine === false) {
     throw new ApiUnreachableError('You are offline - unable to reach FeedMe service')
   }
+
+  // Cancel any existing request with the same key
+  if (requestKey && activeRequests.has(requestKey)) {
+    const existingController = activeRequests.get(requestKey)
+    existingController?.abort()
+    activeRequests.delete(requestKey)
+    console.log(`[FeedMe API] Cancelled existing request for key: ${requestKey}`)
+  }
+
   const controller = new AbortController()
-  const timeoutId = setTimeout(() => controller.abort(), timeout)
-  
+
+  // Track this request if it has a key
+  if (requestKey) {
+    activeRequests.set(requestKey, controller)
+  }
+
+  const startTime = Date.now()
+  const timeoutId = setTimeout(() => {
+    controller.abort()
+    console.warn(`[FeedMe API] Request timeout after ${timeout}ms for ${url}`)
+  }, timeout)
+
   try {
-    console.log(`[FeedMe API] Attempting fetch to ${url} (retries left: ${retries})`)
+    console.log(`[FeedMe API] Fetching ${url} (timeout: ${timeout}ms, retries left: ${retries})`)
+
     const response = await fetch(url, {
       ...options,
       signal: controller.signal,
     })
+
     clearTimeout(timeoutId)
-    
-    // Check for 503 Service Unavailable and don't retry if skipRetryOn503 is true
-    if (response.status === 503 && skipRetryOn503) {
-      console.log(`[FeedMe API] Service unavailable (503) for ${url}, skipping retries`)
-      return response
+    const duration = Date.now() - startTime
+
+    // Track metrics
+    apiMonitor.track({
+      url,
+      method: options.method || 'GET',
+      duration,
+      status: response.status,
+      timestamp: new Date(),
+      size: parseInt(response.headers.get('content-length') || '0', 10),
+    })
+
+    // Log slow requests for monitoring
+    if (duration > timeout * 0.8) {
+      console.warn(`[FeedMe API] Slow request detected: ${url} took ${duration}ms`)
     }
-    
+
+    // Clean up request tracking
+    if (requestKey) {
+      activeRequests.delete(requestKey)
+    }
+
+    // Check for 503 Service Unavailable
+    if (response.status === 503) {
+      if (skipRetryOn503) {
+        console.log(`[FeedMe API] Service unavailable (503) for ${url}, skipping retries`)
+        return response
+      }
+      // Treat 503 as retriable
+      throw new Error(`Service temporarily unavailable (503)`)
+    }
+
+    // Check for other server errors that should trigger retry
+    if (response.status >= 500 && retries > 0) {
+      throw new Error(`Server error (${response.status})`)
+    }
+
     return response
   } catch (error) {
     clearTimeout(timeoutId)
-    console.warn(`[FeedMe API] Fetch failed for ${url}:`, error)
-    
-    if (retries > 0 && (error instanceof Error && error.name !== 'AbortError')) {
-      // Wait before retry (exponential backoff)
-      const delay = Math.pow(2, 3 - retries) * 1000
-      console.log(`[FeedMe API] Retrying in ${delay}ms...`)
-      await new Promise(resolve => setTimeout(resolve, delay))
-      return fetchWithRetry(url, options, retries - 1, timeout, skipRetryOn503)
+    const duration = Date.now() - startTime
+
+    // Determine error type
+    const isTimeout = error instanceof Error && error.name === 'AbortError'
+    const isNetworkError = error instanceof Error &&
+      (error.message.includes('NetworkError') ||
+       error.message.includes('fetch') ||
+       error.message.includes('ECONNREFUSED'))
+    const isServerError = error instanceof Error &&
+      (error.message.includes('Server error') ||
+       error.message.includes('Service temporarily unavailable'))
+
+    // Track failed request metrics
+    apiMonitor.track({
+      url,
+      method: options.method || 'GET',
+      duration,
+      status: isTimeout ? 'timeout' : 'error',
+      timestamp: new Date(),
+    })
+
+    // Clean up request tracking
+    if (requestKey) {
+      activeRequests.delete(requestKey)
     }
-    
-    // On final failure, throw ApiUnreachableError with friendly message
+
+    console.warn(`[FeedMe API] Request failed for ${url}:`, error)
+
+    const shouldRetry = retries > 0 && (isNetworkError || isServerError || (isTimeout && retries > 1))
+
+    if (shouldRetry) {
+      const delay = getRetryDelay(retries, 3)
+      console.log(`[FeedMe API] Retrying in ${Math.round(delay)}ms... (${retries} retries left)`)
+      await new Promise(resolve => setTimeout(resolve, delay))
+
+      // Increase timeout slightly for retries to account for potential slowness
+      const retryTimeout = isTimeout ? timeout * 1.5 : timeout
+      return fetchWithRetry(url, options, retries - 1, retryTimeout, skipRetryOn503, requestKey)
+    }
+
+    // Generate contextual error message
     let message: string
+    let errorType: 'timeout' | 'network' | 'server' | 'unknown' = 'unknown'
+
     if (error instanceof Error) {
-      if (error.name === 'AbortError') {
-        message = 'Request timed out - please check your internet connection'
+      if (isTimeout) {
+        errorType = 'timeout'
+        const timeoutSeconds = Math.round(timeout / 1000)
+        message = `Request timed out after ${timeoutSeconds} seconds - the server may be under heavy load`
       } else if (error.message.includes('NetworkError') || error.message.includes('fetch')) {
-        message = 'Network error - please check your internet connection'
+        errorType = 'network'
+        message = 'Network connection failed - please check your internet connection'
       } else if (error.message.includes('ECONNREFUSED') || error.message.includes('refused')) {
-        message = 'FeedMe service is currently unavailable - please try again later'
+        errorType = 'server'
+        message = 'Cannot connect to FeedMe service - it may be temporarily down'
+      } else if (error.message.includes('Service temporarily unavailable')) {
+        errorType = 'server'
+        message = 'FeedMe service is temporarily unavailable - please try again in a few moments'
+      } else if (error.message.includes('Server error')) {
+        errorType = 'server'
+        message = 'FeedMe service encountered an error - please try again later'
       } else {
         message = `Connection failed: ${error.message}`
       }
     } else {
-      message = 'Unable to reach FeedMe service - please try again later'
+      message = 'Unexpected error connecting to FeedMe service'
     }
-    
-    throw new ApiUnreachableError(message, error instanceof Error ? error : new Error(String(error)))
+
+    throw new ApiUnreachableError(
+      message,
+      error instanceof Error ? error : new Error(String(error)),
+      errorType,
+      url
+    )
   }
+}
+
+// Helper to cancel all active requests (useful for cleanup)
+export const cancelAllActiveRequests = (): void => {
+  activeRequests.forEach((controller, key) => {
+    controller.abort()
+    console.log(`[FeedMe API] Cancelled request: ${key}`)
+  })
+  activeRequests.clear()
 }
 
 // API Base Configuration — prefer unified env resolver, with sensible fallbacks
 import { getApiBaseUrl } from '@/lib/utils/environment'
+import { apiMonitor } from '@/lib/api-monitor'
 
 // Prefer explicit NEXT_PUBLIC_API_BASE, then environment util (uses NEXT_PUBLIC_API_URL),
 // then final fallback based on NODE_ENV
@@ -195,7 +340,37 @@ export interface BulkApprovalResponse {
   action_taken: string
 }
 
-// Deprecated example interfaces removed in unified text flow
+// Example Types (for backward compatibility)
+export interface FeedMeExample {
+  id: number
+  conversation_id: number
+  question: string
+  answer: string
+  is_active: boolean
+  created_at: string
+  updated_at: string
+  metadata?: Record<string, any>
+}
+
+export interface ExampleListResponse {
+  examples: FeedMeExample[]
+  total_examples: number
+  page: number
+  page_size: number
+  has_next: boolean
+}
+
+// Conversation Types
+export interface FeedMeConversation {
+  id: number
+  title: string
+  processing_status: ProcessingStatusValue
+  extracted_text?: string
+  folder_id?: number | null
+  created_at: string
+  updated_at: string
+  metadata?: Record<string, any>
+}
 
 // Folder Types
 export interface FeedMeFolder {
@@ -252,17 +427,19 @@ export class FeedMeApiClient {
     formData.append('title', title)
     formData.append('transcript_file', file)
     formData.append('auto_process', autoProcess.toString())
-    
+
     if (uploadedBy) {
       formData.append('uploaded_by', uploadedBy)
     }
 
     console.log('[FeedMe API] Uploading to:', `${this.baseUrl}/conversations/upload`)
-    
+
+    // Use heavy timeout for file uploads
+    const { timeout, retries } = TIMEOUT_CONFIGS.heavy
     const response = await fetchWithRetry(`${this.baseUrl}/conversations/upload`, {
       method: 'POST',
       body: formData,
-    })
+    }, retries, timeout)
 
     if (!response.ok) {
       console.error('[FeedMe API] Upload failed:', response.status, response.statusText)
@@ -280,7 +457,14 @@ export class FeedMeApiClient {
    * Get processing status for a conversation
    */
   async getProcessingStatus(conversationId: number): Promise<ProcessingStatusResponse> {
-    const response = await fetchWithRetry(`${this.baseUrl}/conversations/${conversationId}/status`)
+    // Status checks should be quick
+    const { timeout, retries } = TIMEOUT_CONFIGS.quick
+    const response = await fetchWithRetry(
+      `${this.baseUrl}/conversations/${conversationId}/status`,
+      {},
+      retries,
+      timeout
+    )
 
     if (!response.ok) {
       const errorData = await response.json().catch(() => ({}))
@@ -369,8 +553,16 @@ export class FeedMeApiClient {
       }
     }
 
-    // Listing conversations may involve DB pagination + filters; allow a slightly longer timeout
-    const response = await fetchWithRetry(`${this.baseUrl}/conversations?${params.toString()}`, {}, 3, 15000, true)
+    // Listing conversations may involve DB pagination + filters; use database timeout
+    const { timeout, retries } = TIMEOUT_CONFIGS.database
+    const response = await fetchWithRetry(
+      `${this.baseUrl}/conversations?${params.toString()}`,
+      {},
+      retries,
+      timeout,
+      true,
+      `listConversations-${page}-${pageSize}-${searchQuery || ''}-${folderId || ''}` // Request key for deduplication
+    )
 
     if (!response.ok) {
       const errorData = await response.json().catch(() => ({}))
@@ -443,7 +635,16 @@ export class FeedMeApiClient {
   async healthCheck(): Promise<boolean> {
     try {
       console.log('[FeedMe API] Health check:', `${this.baseUrl}/analytics`)
-      const response = await fetchWithRetry(`${this.baseUrl}/analytics`)
+      // Health checks should be very quick
+      const { timeout, retries } = TIMEOUT_CONFIGS.quick
+      const response = await fetchWithRetry(
+        `${this.baseUrl}/analytics`,
+        {},
+        retries,
+        timeout,
+        false,
+        'healthCheck' // Deduplicate health checks
+      )
       console.log('[FeedMe API] Health check result:', response.ok, response.status)
       return response.ok
     } catch (error) {
@@ -506,28 +707,28 @@ export class FeedMeApiClient {
   /**
    * Create folder with Supabase sync
    */
-  async createFolderSupabase(folderData: FolderCreate): Promise<any> {
-    return createFolderSupabase(folderData)
+  async createFolderSupabase(folderData: FolderCreate): Promise<FeedMeFolder> {
+    return createFolderSupabase(folderData as CreateFolderRequest)
   }
 
   /**
    * Update folder with Supabase sync
    */
-  async updateFolderSupabase(folderId: number, folderData: FolderUpdate): Promise<any> {
+  async updateFolderSupabase(folderId: number, folderData: FolderUpdate): Promise<FeedMeFolder> {
     return updateFolderSupabase(folderId, folderData)
   }
 
   /**
    * Delete folder with Supabase sync
    */
-  async deleteFolderSupabase(folderId: number, moveConversationsTo?: number): Promise<any> {
+  async deleteFolderSupabase(folderId: number, moveConversationsTo?: number): Promise<{ message: string; folders_affected: number }> {
     return deleteFolderSupabase(folderId, moveConversationsTo)
   }
 
   /**
    * Assign conversations to folder with Supabase sync
    */
-  async assignConversationsToFolderSupabase(folderId: number | null, conversationIds: number[]): Promise<any> {
+  async assignConversationsToFolderSupabase(folderId: number | null, conversationIds: number[]): Promise<{ message: string; assigned_count: number }> {
     return assignConversationsToFolderSupabase(folderId, conversationIds)
   }
 
@@ -906,7 +1107,16 @@ export async function rejectConversation(
  * Get approval workflow statistics
  */
 export async function getApprovalWorkflowStats(): Promise<ApprovalWorkflowStats> {
-  const response = await fetchWithRetry(`${FEEDME_API_BASE}/approval/stats`, {}, 3, 10000, true)
+  // Stats queries might be slow due to aggregation
+  const { timeout, retries } = TIMEOUT_CONFIGS.database
+  const response = await fetchWithRetry(
+    `${FEEDME_API_BASE}/approval/stats`,
+    {},
+    retries,
+    timeout,
+    true,
+    'approvalStats' // Deduplicate stats requests
+  )
 
   if (!response.ok) {
     const errorData = await response.json().catch(() => ({}))
@@ -935,7 +1145,7 @@ export async function getApprovalWorkflowStats(): Promise<ApprovalWorkflowStats>
 /**
  * Get general FeedMe analytics
  */
-export async function getAnalytics(): Promise<any> {
+export async function getAnalytics(): Promise<ApprovalWorkflowStats> {
   const response = await fetchWithRetry(`${FEEDME_API_BASE}/analytics`)
 
   if (!response.ok) {
@@ -969,7 +1179,20 @@ export interface FeedMeFolder {
   conversation_count: number
 }
 
-// FolderCreate and FolderUpdate interfaces are defined with the new Folder types below
+export interface FolderCreate {
+  name: string
+  description?: string
+  color?: string
+  parent_id?: number | null
+  created_by?: string
+}
+
+export interface FolderUpdate {
+  name?: string
+  description?: string
+  color?: string
+  parent_id?: number | null
+}
 
 export interface AssignFolderRequest {
   folder_id?: number | null
@@ -1130,7 +1353,7 @@ export interface FolderListResponse {
 /**
  * Create folder with Supabase sync
  */
-export async function createFolderSupabase(folderData: CreateFolderRequest): Promise<any> {
+export async function createFolderSupabase(folderData: CreateFolderRequest): Promise<FeedMeFolder> {
   const response = await fetchWithRetry(`${FEEDME_API_BASE}/folders/create`, {
     method: 'POST',
     headers: {
@@ -1150,7 +1373,7 @@ export async function createFolderSupabase(folderData: CreateFolderRequest): Pro
 /**
  * Update folder with Supabase sync
  */
-export async function updateFolderSupabase(folderId: number, folderData: FolderUpdate): Promise<any> {
+export async function updateFolderSupabase(folderId: number, folderData: FolderUpdate): Promise<FeedMeFolder> {
   const response = await fetchWithRetry(`${FEEDME_API_BASE}/folders/${folderId}/update`, {
     method: 'PUT',
     headers: {
@@ -1170,7 +1393,7 @@ export async function updateFolderSupabase(folderId: number, folderData: FolderU
 /**
  * Delete folder with Supabase sync
  */
-export async function deleteFolderSupabase(folderId: number, moveConversationsTo?: number): Promise<any> {
+export async function deleteFolderSupabase(folderId: number, moveConversationsTo?: number): Promise<{ message: string; folders_affected: number }> {
   let url = `${FEEDME_API_BASE}/folders/${folderId}/remove`
   if (moveConversationsTo !== undefined) {
     const params = new URLSearchParams({ move_conversations_to: moveConversationsTo.toString() })
@@ -1192,9 +1415,9 @@ export async function deleteFolderSupabase(folderId: number, moveConversationsTo
 /**
  * Assign conversations to folder with Supabase sync
  */
-export async function assignConversationsToFolderSupabase(folderId: number | null, conversationIds: number[]): Promise<any> {
+export async function assignConversationsToFolderSupabase(folderId: number | null, conversationIds: number[]): Promise<{ message: string; assigned_count: number }> {
   let url: string
-  let body: any
+  let body: { folder_id: number | null; conversation_ids: number[] }
   
   // Always use the general assign endpoint
   url = `${FEEDME_API_BASE}/folders/assign`
@@ -1237,9 +1460,10 @@ export async function getConversationExamples(
  * Update an example
  */
 // Deprecated: updateExample (stub)
-export async function updateExample(_exampleId: number, _updates: any): Promise<any> {
+export async function updateExample(_exampleId: number, _updates: Partial<FeedMeExample>): Promise<FeedMeExample> {
   console.warn('[FeedMe API] updateExample is deprecated (unified text flow). No-op.')
-  return {}
+  // Return a valid FeedMeExample object with default values instead of empty object
+  throw new Error('updateExample is deprecated and should not be used. Please use the unified text flow.')
 }
 
 /**
@@ -1250,7 +1474,14 @@ export async function deleteExample(exampleId: number): Promise<{
   example_id: number; conversation_id: number; conversation_title: string; question_preview: string; message: string
 }> {
   console.warn('[FeedMe API] deleteExample is deprecated (unified text flow). No-op.')
-  return { example_id: exampleId, conversation_id: 0, conversation_title: '', question_preview: '', message: 'deprecated' }
+  // Return a proper response object with deprecation notice
+  return {
+    example_id: exampleId,
+    conversation_id: 0,
+    conversation_title: 'Deprecated Function',
+    question_preview: 'This function is deprecated',
+    message: 'deleteExample is deprecated. Please use the unified text flow.'
+  }
 }
 
 // Folder API Functions
@@ -1259,8 +1490,16 @@ export async function deleteExample(exampleId: number): Promise<{
  * List all folders
  */
 export async function listFolders(): Promise<FolderListResponse> {
-  // Folder queries can be slower (DB aggregation). Use a higher timeout and skip retries on 503.
-  const response = await fetchWithRetry(`${FEEDME_API_BASE}/folders`, {}, 2, 30000, true)
+  // Folder queries can be slower (DB aggregation)
+  const { timeout, retries } = TIMEOUT_CONFIGS.database
+  const response = await fetchWithRetry(
+    `${FEEDME_API_BASE}/folders`,
+    {},
+    retries,
+    timeout,
+    true,
+    'listFolders' // Deduplicate folder list requests
+  )
 
   if (!response.ok) {
     const errorData = await response.json().catch(() => ({}))

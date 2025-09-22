@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 import type { NextRequest } from 'next/server'
-import { createServerClient } from '@supabase/ssr'
+import { createEdgeClient, getUserFromToken, hasAuthCookies } from '@/lib/supabase-edge'
 
 // Check if local auth bypass is enabled
 const isLocalAuthBypass = process.env.NEXT_PUBLIC_LOCAL_AUTH_BYPASS === 'true'
@@ -58,23 +58,9 @@ export async function middleware(request: NextRequest) {
       return new Response('Unauthorized: Authentication required', { status: 401 })
     }
 
-    // Create a Supabase client to verify the token
-    const supabase = createServerClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-      {
-        cookies: {
-          get(name: string) {
-            return request.cookies.get(name)?.value
-          },
-          set() {},
-          remove() {},
-        },
-      }
-    )
-
+    // Use Edge Runtime compatible auth verification
     const token = authHeader.replace('Bearer ', '')
-    const { data: { user }, error } = await supabase.auth.getUser(token)
+    const { user, error } = await getUserFromToken(token)
 
     if (error || !user) {
       if (process.env.NODE_ENV === 'development') {
@@ -99,42 +85,19 @@ export async function middleware(request: NextRequest) {
   const isPublicRoute = publicRoutes.some(route => pathname.startsWith(route))
   const isAuthRoute = authRoutes.some(route => pathname.startsWith(route))
 
-  // Create a Supabase client configured for server-side use
+  // Create response object first
   let response = NextResponse.next({
     request: {
       headers: request.headers,
     },
   })
 
-  const supabase = createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-    {
-      cookies: {
-        get(name: string) {
-          return request.cookies.get(name)?.value
-        },
-        set(name: string, value: string, options: any) {
-          response.cookies.set({
-            name,
-            value,
-            ...options,
-          })
-        },
-        remove(name: string, options: any) {
-          response.cookies.set({
-            name,
-            value: '',
-            ...options,
-          })
-        },
-      },
-    }
-  )
+  // Create Edge Runtime compatible Supabase client
+  const supabase = createEdgeClient(request, response)
 
   // Get the user session
   const { data: { user }, error } = await supabase.auth.getUser()
-  
+
   const isAuthenticated = !!user && !error
 
   if (process.env.NODE_ENV === 'development') {
