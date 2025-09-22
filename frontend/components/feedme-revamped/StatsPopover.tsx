@@ -5,7 +5,7 @@
  * when the Stats button is clicked in the Dock.
  */
 
-import React, { useState, useEffect } from 'react'
+import React, { useState, useCallback } from 'react'
 import { Dialog, DialogContent } from '@/components/ui/dialog'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Separator } from '@/components/ui/separator'
@@ -47,16 +47,26 @@ export function StatsPopover({
     autoRefresh: open, // Only auto-refresh when dialog is open
     refreshInterval: 30000, // 30 seconds
     onError: (error) => {
-      console.error('Failed to fetch stats:', error)
+      // Error is already being handled by the error state in the UI
+      // No need to log to console in production
     }
   })
 
-  // Manual refresh handler
-  const handleRefresh = async () => {
+  // Manual refresh handler without memory leak
+  const handleRefresh = useCallback(async () => {
     setIsRefreshing(true)
-    await refetch()
-    setTimeout(() => setIsRefreshing(false), 500) // Show animation briefly
-  }
+    try {
+      await refetch()
+    } finally {
+      // Use requestAnimationFrame instead of setTimeout to avoid memory leak
+      // and ensure the animation is visible for at least one frame
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          setIsRefreshing(false)
+        })
+      })
+    }
+  }, [refetch])
 
   // Format last updated time
   const lastUpdatedText = lastFetchTime
@@ -196,8 +206,8 @@ export function StatsPopover({
                   size="sm"
                   className="text-xs"
                   onClick={() => {
-                    // TODO: Implement full dashboard navigation
-                    console.log('Navigate to full dashboard')
+                    // Full dashboard navigation will be implemented when dashboard route is ready
+                    // For now, this serves as a placeholder for future functionality
                   }}
                 >
                   View Full Dashboard →

@@ -127,27 +127,29 @@ export function useStatsData(options: UseStatsDataOptions = {}): UseStatsDataRet
   // Transform API data into structured stats
   const transformData = useCallback((
     workflowStats: ApprovalWorkflowStats,
-    geminiUsage: any,
-    embeddingUsage: any,
-    analyticsData: any
+    geminiUsage: GeminiUsage | null,
+    embeddingUsage: EmbeddingUsage | null,
+    analyticsData: ReturnType<typeof useAnalyticsStore.getState>
   ): StatsData => {
-    // Calculate platform breakdown (mock for now, would need actual data from API)
+    // Calculate platform breakdown - use actual data when API provides it
     const totalConversations = workflowStats.total_conversations || 0
-    const windowsRatio = 0.65 // Mock: 65% Windows
-    const macosRatio = 0.30 // Mock: 30% macOS
-    const linuxRatio = 0.03 // Mock: 3% Linux
-    const otherRatio = 0.02 // Mock: 2% Other
+    // TODO: Replace with actual platform data from API when available
+    // For now, show 0 distribution until backend provides platform breakdown
+    const windowsRatio = 0
+    const macosRatio = 0
+    const linuxRatio = 0
+    const otherRatio = 0
 
     // Processing metrics
     const avgProcessingTime = workflowStats.avg_processing_time_ms
       ? workflowStats.avg_processing_time_ms / 1000 // Convert to seconds
-      : 45 // Default 45 seconds
+      : 0 // No default, show actual data only
 
     const totalProcessed = (workflowStats.approved || 0) + (workflowStats.rejected || 0) + (workflowStats.published || 0)
     const totalAttempted = totalProcessed + (workflowStats.processing_failed || 0)
     const successRate = totalAttempted > 0
       ? ((totalProcessed / totalAttempted) * 100)
-      : 100
+      : 0 // Show 0% when there's no data, not 100%
 
     // System health calculation
     const calculateHealthScore = () => {
@@ -188,10 +190,10 @@ export function useStatsData(options: UseStatsDataOptions = {}): UseStatsDataRet
 
     const { score, status, issues } = calculateHealthScore()
 
-    // Get recent activity from analytics store (mock for now)
-    const todayUploads = analyticsData?.usageStats?.uploads_today || 23
-    const todaySearches = analyticsData?.usageStats?.searches_today || 145
-    const todayApprovals = analyticsData?.usageStats?.approvals_today || 67
+    // Get recent activity from analytics store
+    const todayUploads = analyticsData?.usageStats?.uploads_today || 0
+    const todaySearches = analyticsData?.usageStats?.searches_today || 0
+    const todayApprovals = analyticsData?.usageStats?.approvals_today || 0
 
     return {
       conversations: {
@@ -245,15 +247,16 @@ export function useStatsData(options: UseStatsDataOptions = {}): UseStatsDataRet
         todayUploads,
         todaySearches,
         todayApprovals,
-        lastUploadTime: new Date(Date.now() - 15 * 60000).toISOString(), // Mock: 15 mins ago
-        lastSearchTime: new Date(Date.now() - 5 * 60000).toISOString(), // Mock: 5 mins ago
-        lastApprovalTime: new Date(Date.now() - 30 * 60000).toISOString() // Mock: 30 mins ago
+        // TODO: Get actual timestamps from API when available
+        lastUploadTime: '', // Will be populated by backend
+        lastSearchTime: '', // Will be populated by backend
+        lastApprovalTime: '' // Will be populated by backend
       },
       systemHealth: {
         score,
         status,
         issues,
-        uptime: 168 // Mock: 7 days in hours
+        uptime: 0 // Will be populated by backend with actual system uptime
       },
       lastUpdated: new Date().toISOString()
     }

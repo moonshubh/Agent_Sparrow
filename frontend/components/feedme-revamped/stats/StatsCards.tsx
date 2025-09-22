@@ -5,7 +5,7 @@
  * in the FeedMe stats popover.
  */
 
-import React from 'react'
+import React, { useMemo } from 'react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Progress } from '@/components/ui/progress'
 import { Badge } from '@/components/ui/badge'
@@ -65,12 +65,13 @@ interface ConversationStatsCardProps {
 }
 
 export function ConversationStatsCard({ data, className }: ConversationStatsCardProps) {
-  const platforms = [
+  // Memoize platform data array to prevent recreation on every render
+  const platforms = useMemo(() => [
     { name: 'Windows', value: data.byPlatform.windows, icon: <Laptop className="h-3 w-3" /> },
     { name: 'macOS', value: data.byPlatform.macos, icon: <MonitorSmartphone className="h-3 w-3" /> },
     { name: 'Linux', value: data.byPlatform.linux, icon: <Server className="h-3 w-3" /> },
     { name: 'Other', value: data.byPlatform.other, icon: <Globe className="h-3 w-3" /> }
-  ]
+  ], [data.byPlatform])
 
   return (
     <Card className={className}>
@@ -154,7 +155,15 @@ export function ProcessingMetricsCard({ data, className }: ProcessingMetricsCard
             <span className="text-muted-foreground">Processing Queue</span>
             <span className="font-medium">{data.currentlyProcessing + data.queueSize}</span>
           </div>
-          <Progress value={(data.currentlyProcessing / (data.currentlyProcessing + data.queueSize + 1)) * 100} className="h-1.5" />
+          <Progress
+            value={
+              // Proper division by zero handling
+              data.currentlyProcessing + data.queueSize > 0
+                ? (data.currentlyProcessing / (data.currentlyProcessing + data.queueSize)) * 100
+                : 0
+            }
+            className="h-1.5"
+          />
         </div>
 
         {data.currentlyProcessing > 0 && (
@@ -177,8 +186,18 @@ interface ApiUsageCardProps {
 }
 
 export function ApiUsageCard({ data, className }: ApiUsageCardProps) {
-  const geminiPercent = (data.gemini.dailyUsed / data.gemini.dailyLimit) * 100
-  const embeddingPercent = (data.embedding.dailyUsed / data.embedding.dailyLimit) * 100
+  // Memoize percentage calculations with proper division by zero handling
+  const geminiPercent = useMemo(() => {
+    return data.gemini.dailyLimit > 0
+      ? (data.gemini.dailyUsed / data.gemini.dailyLimit) * 100
+      : 0
+  }, [data.gemini.dailyUsed, data.gemini.dailyLimit])
+
+  const embeddingPercent = useMemo(() => {
+    return data.embedding.dailyLimit > 0
+      ? (data.embedding.dailyUsed / data.embedding.dailyLimit) * 100
+      : 0
+  }, [data.embedding.dailyUsed, data.embedding.dailyLimit])
 
   return (
     <Card className={className}>
@@ -252,7 +271,8 @@ interface RecentActivityCardProps {
 }
 
 export function RecentActivityCard({ data, className }: RecentActivityCardProps) {
-  const activities = [
+  // Memoize activities array to prevent recreation on every render
+  const activities = useMemo(() => [
     {
       icon: <Upload className="h-3 w-3" />,
       label: 'Uploads',
@@ -274,7 +294,7 @@ export function RecentActivityCard({ data, className }: RecentActivityCardProps)
       time: data.lastApprovalTime,
       color: 'text-green-500'
     }
-  ]
+  ], [data.todayUploads, data.todaySearches, data.todayApprovals, data.lastUploadTime, data.lastSearchTime, data.lastApprovalTime])
 
   return (
     <Card className={className}>
@@ -315,12 +335,13 @@ interface SystemHealthCardProps {
 }
 
 export function SystemHealthCard({ data, className }: SystemHealthCardProps) {
-  const statusIcon = {
+  // Memoize status icon mapping
+  const statusIcon = useMemo(() => ({
     excellent: <Heart className="h-4 w-4 text-green-500" />,
     good: <CheckCircle2 className="h-4 w-4 text-green-400" />,
     fair: <AlertCircle className="h-4 w-4 text-yellow-500" />,
     poor: <XCircle className="h-4 w-4 text-red-500" />
-  }
+  }), [])
 
   return (
     <Card className={className}>
