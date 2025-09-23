@@ -14,7 +14,7 @@ import {
   Info
 } from 'lucide-react'
 
-interface ThinkingStep {
+export interface ReasoningStep {
   phase: string
   thought: string
   confidence: number
@@ -22,7 +22,14 @@ interface ThinkingStep {
   alternatives_considered?: string[]
 }
 
-interface ReasoningData {
+export interface SolutionCandidate {
+  solution: string
+  confidence: number
+  time_estimate?: string
+  prerequisites?: string[]
+}
+
+export interface ReasoningData {
   query_analysis?: {
     intent?: string
     problem_category?: string
@@ -62,7 +69,7 @@ interface ReasoningData {
     improvement_suggestions?: string[]
   }
   confidence_score?: number
-  thinking_steps?: ThinkingStep[]
+  thinking_steps?: ReasoningStep[]
   emotional_intelligence?: {
     detected_emotion?: string
     empathy_response?: string
@@ -70,7 +77,7 @@ interface ReasoningData {
   }
 }
 
-interface ReasoningTraceProps {
+export interface ReasoningTraceProps {
   reasoning: ReasoningData
   className?: string
 }

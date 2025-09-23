@@ -58,6 +58,7 @@ export interface FolderDeletedPayload {
 export interface SearchPerformedPayload {
   query: string
   results: number
+  responseTime?: number
 }
 
 export interface WebSocketConnectedPayload {}

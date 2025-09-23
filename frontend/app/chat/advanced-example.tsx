@@ -8,11 +8,14 @@
 'use client'
 
 import { useState, useEffect } from 'react'
-import { useChat } from 'ai/react'
+import { useChat, type CreateUIMessage } from '@ai-sdk/react'
+import { type UIMessage, DefaultChatTransport } from 'ai'
 import { ReasoningTrace, TroubleshootingWorkflow } from '@/components/chat/advanced'
 import { Card } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Brain, Wrench } from 'lucide-react'
+import { ModelSelector } from './components/ModelSelector'
+import { getAuthToken } from '@/lib/local-auth'
 
 // Example: Handling advanced agent data parts in the chat interface
 export default function AdvancedChatExample() {
@@ -20,26 +23,30 @@ export default function AdvancedChatExample() {
   const [troubleshootingData, setTroubleshootingData] = useState<any>(null)
   const [showAdvancedFeatures, setShowAdvancedFeatures] = useState(true)
 
+  // Provider/model selection for advanced reasoning requests
+  const [provider, setProvider] = useState<'google' | 'openai'>('google')
+  const [model, setModel] = useState<string>('gemini-2.5-flash')
+
+  const [input, setInput] = useState('')
+
   const {
     messages,
-    input,
-    handleInputChange,
-    handleSubmit,
-    data, // This contains the data parts from the stream
-    isLoading,
+    sendMessage,
+    status,
   } = useChat({
-    api: '/api/chat',
-    onFinish: (message, options) => {
+    transport: new DefaultChatTransport({ api: '/api/chat' }),
+    onFinish: (message) => {
       // Process data parts when message finishes
-      if (options?.data) {
+      const dataParts = (message as any).data
+      if (dataParts) {
         // Look for reasoning data
-        const reasoning = options.data.find((d: any) => d.type === 'data-reasoning')
+        const reasoning = dataParts.find((d: any) => d.type === 'data-reasoning')
         if (reasoning) {
           setReasoningData(reasoning.data)
         }
-        
+
         // Look for troubleshooting data
-        const troubleshooting = options.data.find((d: any) => d.type === 'data-troubleshooting')
+        const troubleshooting = dataParts.find((d: any) => d.type === 'data-troubleshooting')
         if (troubleshooting) {
           setTroubleshootingData(troubleshooting.data)
         }
@@ -47,30 +54,45 @@ export default function AdvancedChatExample() {
     },
   })
 
+  const isLoading = status === 'streaming'
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault()
+    if (input.trim()) {
+      sendMessage({ text: input })
+      setInput('')
+    }
+  }
+
   // Handle troubleshooting step completion
   const handleStepComplete = async (
     sessionId: string,
-    result: 'success' | 'failure' | 'inconclusive',
+    result: 'success' | 'failure' | 'inconclusive' | 'partial' | 'skip',
     feedback?: string
   ) => {
     try {
+      // Map UI result to backend-accepted values
+      const stepResult =
+        result === 'inconclusive' ? 'partial' : (result as 'success' | 'failure' | 'partial' | 'skip')
+
       const response = await fetch('/api/v1/agent/advanced/troubleshooting/step', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${await getAuthToken()}`, // Your auth token function
+          'Authorization': `Bearer ${await getAuthToken()}`,
         },
         body: JSON.stringify({
           session_id: sessionId,
-          step_id: troubleshootingData?.current_step?.step_id || '',
-          result,
+          step_id: troubleshootingData?.current_step?.id || '',
+          step_result: stepResult,
           customer_feedback: feedback,
         }),
       })
       
       if (response.ok) {
         const data = await response.json()
-        setTroubleshootingData(data.troubleshooting_state)
+        // Backend returns TroubleshootingResponse directly
+        setTroubleshootingData(data)
       }
     } catch (error) {
       console.error('Failed to complete troubleshooting step:', error)
@@ -94,18 +116,21 @@ export default function AdvancedChatExample() {
         },
         body: JSON.stringify({
           query,
+          provider,
+          model,
           enable_chain_of_thought: true,
           enable_problem_solving: true,
           enable_tool_intelligence: true,
           enable_quality_assessment: true,
-          enable_self_critique: true,
-          thinking_budget: 8192, // Medium complexity
+          // Backend ReasoningRequest limits thinking_budget to 1-100
+          thinking_budget: 50,
         }),
       })
       
       if (response.ok) {
         const data = await response.json()
-        setReasoningData(data.reasoning_state)
+        // Backend returns ReasoningResponse directly
+        setReasoningData(data)
       }
     } catch (error) {
       console.error('Failed to trigger reasoning analysis:', error)
@@ -136,7 +161,8 @@ export default function AdvancedChatExample() {
       
       if (response.ok) {
         const data = await response.json()
-        setTroubleshootingData(data.troubleshooting_state)
+        // Backend returns TroubleshootingResponse directly
+        setTroubleshootingData(data)
       }
     } catch (error) {
       console.error('Failed to start troubleshooting:', error)
@@ -156,7 +182,14 @@ export default function AdvancedChatExample() {
                 'p-3',
                 message.role === 'user' ? 'ml-auto bg-blue-900/20' : 'bg-zinc-900/50'
               )}>
-                <p className="text-sm">{message.content}</p>
+                <p className="text-sm">
+                  {message.parts?.map((part, i) => {
+                    if (part.type === 'text') {
+                      return <span key={i}>{part.text}</span>
+                    }
+                    return null
+                  })}
+                </p>
               </Card>
               
               {/* Show reasoning trace after assistant messages if available */}
@@ -168,8 +201,11 @@ export default function AdvancedChatExample() {
               {message.role === 'assistant' && index === messages.length - 1 && troubleshootingData && (
                 <TroubleshootingWorkflow
                   troubleshooting={troubleshootingData}
-                  onStepComplete={handleStepComplete}
-                  onEscalate={handleEscalation}
+                  onStepExecute={(stepId, result, feedback) => {
+                    // Pass-through to the same handler with session id
+                    const sessionId = troubleshootingData?.session_id || ''
+                    handleStepComplete(sessionId, result as any, feedback)
+                  }}
                 />
               )}
             </div>
@@ -178,10 +214,23 @@ export default function AdvancedChatExample() {
 
         {/* Input Area */}
         <div className="border-t p-4">
+          {/* Model selector for provider/model */}
+          <div className="flex justify-end mb-2">
+            <ModelSelector
+              provider={provider}
+              model={model}
+              onChangeProvider={(p) => {
+                setProvider(p)
+                // Model will be set by ModelSelector component based on validation
+              }}
+              onChangeModel={(m) => setModel(m)}
+              align="right"
+            />
+          </div>
           <form onSubmit={handleSubmit} className="flex gap-2">
             <input
               value={input}
-              onChange={handleInputChange}
+              onChange={(e) => setInput(e.target.value)}
               placeholder="Type your message..."
               className="flex-1 px-3 py-2 rounded-lg bg-zinc-800 text-sm"
               disabled={isLoading}
@@ -247,8 +296,10 @@ export default function AdvancedChatExample() {
                 </h4>
                 <TroubleshootingWorkflow
                   troubleshooting={troubleshootingData}
-                  onStepComplete={handleStepComplete}
-                  onEscalate={handleEscalation}
+                  onStepExecute={(stepId, result, feedback) => {
+                    const sessionId = troubleshootingData?.session_id || ''
+                    handleStepComplete(sessionId, result as any, feedback)
+                  }}
                 />
               </div>
             )}
@@ -259,12 +310,6 @@ export default function AdvancedChatExample() {
   )
 }
 
-// Helper function to get auth token (implement based on your auth setup)
-async function getAuthToken(): Promise<string> {
-  // This should return the current user's auth token
-  // Example: return await supabase.auth.getSession()?.access_token
-  return ''
-}
 
 // Utility function (add to your utils)
 function cn(...classes: (string | undefined | null | false)[]): string {

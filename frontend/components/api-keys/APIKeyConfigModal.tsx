@@ -61,6 +61,13 @@ const API_KEY_INFO = {
     helpUrl: 'https://makersuite.google.com/app/apikey',
     color: 'blue'
   },
+  [APIKeyType.OPENAI]: {
+    label: 'OpenAI API Key',
+    description: 'Enables OpenAI provider in chat',
+    placeholder: 'sk-...',
+    helpUrl: 'https://platform.openai.com/api-keys',
+    color: 'purple'
+  },
   [APIKeyType.TAVILY]: {
     label: 'Tavily API Key',
     description: 'Enables web search and research features',
@@ -84,6 +91,7 @@ export const APIKeyConfigModal: React.FC<APIKeyConfigModalProps> = ({
   const [activeTab, setActiveTab] = useState<APIKeyType>(APIKeyType.GEMINI);
   const [formData, setFormData] = useState<Record<APIKeyType, APIKeyFormData>>({
     [APIKeyType.GEMINI]: { type: APIKeyType.GEMINI, apiKey: '', isVisible: false },
+    [APIKeyType.OPENAI]: { type: APIKeyType.OPENAI, apiKey: '', isVisible: false },
     [APIKeyType.TAVILY]: { type: APIKeyType.TAVILY, apiKey: '', isVisible: false },
     [APIKeyType.FIRECRAWL]: { type: APIKeyType.FIRECRAWL, apiKey: '', isVisible: false }
   });
@@ -92,6 +100,7 @@ export const APIKeyConfigModal: React.FC<APIKeyConfigModalProps> = ({
   const [testing, setTesting] = useState<APIKeyType | null>(null);
   const [testResults, setTestResults] = useState<Record<APIKeyType, { success: boolean; message: string } | null>>({
     [APIKeyType.GEMINI]: null,
+    [APIKeyType.OPENAI]: null,
     [APIKeyType.TAVILY]: null,
     [APIKeyType.FIRECRAWL]: null
   });

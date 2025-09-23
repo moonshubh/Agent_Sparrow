@@ -1,0 +1,12 @@
+{
+  "provider_mappings": {
+    "google": "Google",
+    "openai": "OpenAI"
+  },
+  "model_mappings": {
+    "gemini-2.5-flash": "Gemini-2.5-Flash",
+    "gpt5-mini": "GPT-5-Mini",
+    "gpt-5-mini": "GPT-5-Mini",
+    "gpt-5-mini-2025-08-07": "GPT-5-Mini"
+  }
+}

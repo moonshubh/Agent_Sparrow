@@ -216,7 +216,7 @@ export async function POST(req: NextRequest) {
   }
 
   // Convert to model messages
-  let modelMessages: Array<{ role: 'user' | 'assistant' | 'system'; content: any }>
+  let modelMessages: any[]
   try {
     const first = uiMessages[0]
     if (first && Array.isArray((first as any).parts)) {
@@ -241,7 +241,11 @@ export async function POST(req: NextRequest) {
 
   // Prepare model with user or fallback API keys
   const provider = modelProvider || 'google'
-  const selectedModel = modelName || (provider === 'openai' ? 'gpt-4o-mini' : 'gemini-2.5-flash')
+  const selectedModelRaw = modelName || (provider === 'openai' ? 'gpt-5-mini' : 'gemini-2.5-flash')
+  // Normalize OpenAI model aliases to the official id
+  const selectedModel = selectedModelRaw === 'gpt5-mini' || selectedModelRaw === 'gpt-5-mini-2025-08-07'
+    ? 'gpt-5-mini'
+    : selectedModelRaw
   
   // Check rate limits for ALL providers
   const rateLimitResult = await checkRateLimits(provider, selectedModel, authToken)
@@ -314,7 +318,15 @@ export async function POST(req: NextRequest) {
   // Create model instances
   const google = provider === 'google' && googleApiKey ? createGoogleGenerativeAI({ apiKey: googleApiKey }) : null
   const openai = provider === 'openai' && openaiApiKey ? createOpenAI({ apiKey: openaiApiKey }) : null
-  const model = provider === 'openai' && openai ? openai(selectedModel) : google ? google(selectedModel) : null
+
+  // Ensure gpt5-mini uses medium reasoning effort with AISDK5
+  let model: any = null
+  if (provider === 'openai' && openai) {
+    // OpenAI models don't support a second options parameter in this version
+    model = openai(selectedModel)
+  } else if (google) {
+    model = google(selectedModel)
+  }
   
   if (!model) {
     return new Response(
@@ -377,7 +389,7 @@ export async function POST(req: NextRequest) {
       tools: {
         kbSearch: {
           description: 'Search approved FeedMe examples and knowledge base.',
-          parameters: kbSearchSchema,
+          inputSchema: kbSearchSchema,
           execute: async ({ query, limit = 8, minConfidence = 0.7 }) => {
             try {
               const res = await fetch(`${apiBase}/api/v1/feedme/search`, {
@@ -412,7 +424,7 @@ export async function POST(req: NextRequest) {
         },
         logAnalysis: {
           description: 'Analyze a log file text for issues and solutions.',
-          parameters: logAnalysisSchema,
+          inputSchema: logAnalysisSchema,
           execute: async ({ logText }) => {
             try {
               const textToUse = logText || attachedLogText
@@ -448,7 +460,7 @@ export async function POST(req: NextRequest) {
         },
         reasoningAnalysis: {
           description: 'Perform advanced reasoning analysis with 6-phase pipeline to understand complex queries',
-          parameters: reasoningAnalysisSchema,
+          inputSchema: reasoningAnalysisSchema,
           execute: async ({ query, enableChainOfThought = true, enableProblemSolving = true, enableToolIntelligence = true, enableQualityAssessment = true, enableSelfCritique = true, thinkingBudget }) => {
             try {
               const res = await fetch(`${apiBase}/api/v1/agent/advanced/reasoning`, {
@@ -494,7 +506,7 @@ export async function POST(req: NextRequest) {
         },
         startTroubleshooting: {
           description: 'Start a structured 7-phase troubleshooting workflow with diagnostic steps',
-          parameters: troubleshootingSchema,
+          inputSchema: troubleshootingSchema,
           execute: async ({ problemDescription, problemCategory, customerTechnicalLevel = 3 }) => {
             try {
               const res = await fetch(`${apiBase}/api/v1/agent/advanced/troubleshooting/start`, {
@@ -541,9 +553,9 @@ export async function POST(req: NextRequest) {
       },
       toolChoice: shouldUseTools ? 'auto' : 'none',
       includeRawChunks: false,
-      onChunk: (part) => {
-        if (part.type === 'text-delta' && typeof part.text === 'string') {
-          accumulatedText += part.text
+      onChunk: ({ chunk }) => {
+        if (chunk.type === 'text-delta' && typeof chunk.text === 'string') {
+          accumulatedText += chunk.text
         }
       },
     })

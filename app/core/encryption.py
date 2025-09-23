@@ -26,7 +26,15 @@ class APIKeyEncryption:
     
     def _get_master_secret(self) -> bytes:
         """Get or generate master secret for encryption."""
+        # Prefer environment variable; fallback to settings (which loads .env)
         secret = os.getenv('API_KEY_ENCRYPTION_SECRET')
+        if not secret:
+            try:
+                # Fallback to settings-managed value (validated length)
+                secret = getattr(settings, 'api_key_encryption_secret', None)
+            except Exception:
+                secret = None
+
         if not secret:
             # If production security is enforced, fail fast instead of using default
             if getattr(settings, 'force_production_security', True):
@@ -37,7 +45,7 @@ class APIKeyEncryption:
             secret = 'MB_SPARROW_DEV_SECRET_CHANGE_IN_PRODUCTION'
         
         # Ensure we have a 32-byte key
-        return hashlib.sha256(secret.encode()).digest()
+        return hashlib.sha256(str(secret).encode()).digest()
     
     def _derive_user_key(self, user_id: str) -> bytes:
         """Derive a unique encryption key for each user."""
@@ -93,6 +101,9 @@ class APIKeyEncryption:
         if api_key_type == "gemini":
             # Gemini keys typically start with "AIza" and are 39 characters
             return api_key.startswith("AIza") and len(api_key) == 39
+        elif api_key_type == "openai":
+            # OpenAI keys typically start with "sk-" (or "sk-proj-") and length >= 20
+            return (api_key.startswith("sk-")) and len(api_key) >= 20
         elif api_key_type == "tavily":
             # Tavily keys are typically 32-40 characters, alphanumeric
             return len(api_key) >= 32 and len(api_key) <= 40 and api_key.isalnum()

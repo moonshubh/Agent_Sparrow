@@ -22,7 +22,7 @@ import {
   Target
 } from 'lucide-react'
 
-interface DiagnosticStep {
+export interface DiagnosticStep {
   id: string
   name: string
   description: string
@@ -33,23 +33,27 @@ interface DiagnosticStep {
   verification?: string
 }
 
-interface TroubleshootingData {
+export interface VerificationCheckpoint {
+  checkpoints_passed?: string[]
+  current_verification?: string
+}
+
+export interface TroubleshootingState {
   session_id?: string
   current_phase?: string
   current_step?: DiagnosticStep
   next_steps?: DiagnosticStep[]
   progress_percentage?: number
-  verification_status?: {
-    checkpoints_passed?: string[]
-    current_verification?: string
-  }
+  verification_status?: VerificationCheckpoint
   escalation_recommended?: boolean
   escalation_reason?: string
   workflow_complete?: boolean
   resolution_summary?: string
 }
 
-interface TroubleshootingWorkflowProps {
+interface TroubleshootingData extends TroubleshootingState {}
+
+export interface TroubleshootingWorkflowProps {
   troubleshooting: TroubleshootingData
   onStepExecute?: (stepId: string, result: string, feedback?: string) => void
   className?: string

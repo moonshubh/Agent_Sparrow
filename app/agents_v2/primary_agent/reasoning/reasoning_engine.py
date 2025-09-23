@@ -35,7 +35,8 @@ logger = logging.getLogger(__name__)
 tracer = trace.get_tracer(__name__)
 
 
-from langchain_google_genai import ChatGoogleGenerativeAI
+from typing import Any
+from app.providers.base import BaseChatModel
 
 class ReasoningEngine:
     """
@@ -49,7 +50,7 @@ class ReasoningEngine:
     - Emotional intelligence integration
     """
     
-    def __init__(self, model: ChatGoogleGenerativeAI, config: Optional[ReasoningConfig] = None):
+    def __init__(self, model: BaseChatModel, config: Optional[ReasoningConfig] = None):
         """
         Initialize the ReasoningEngine with optional configuration.
         

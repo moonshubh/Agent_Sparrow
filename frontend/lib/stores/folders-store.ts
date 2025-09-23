@@ -187,11 +187,11 @@ export const useFoldersStore = create<FoldersStore>()(
         createFolder: async (request) => {
           try {
             // Call Supabase-enabled endpoint
-            const response = await feedMeApi.createFolderSupabase(request)
-            
+            const folder = await feedMeApi.createFolderSupabase(request)
+
             const newFolder: Folder = {
-              ...response.folder,
-              parent_id: response.folder.parent_id ?? null,
+              ...folder,
+              parent_id: folder.parent_id ?? null,
               isExpanded: true,
               isSelected: false,
               conversationCount: 0
@@ -215,7 +215,7 @@ export const useFoldersStore = create<FoldersStore>()(
             // Show Supabase sync status
             useUIStore.getState().actions.showToast({
               title: 'Folder Created',
-              description: response.message,
+              message: `Folder "${newFolder.name}" created successfully`,
               duration: 3000
             })
             
@@ -237,8 +237,8 @@ export const useFoldersStore = create<FoldersStore>()(
                 ...state.folders,
                 [id]: {
                   ...state.folders[id],
-                  ...response.folder,
-                  parent_id: response.folder.parent_id ?? null
+                  ...response,
+                  parent_id: response.parent_id ?? null
                 }
               }
             }))
@@ -249,7 +249,7 @@ export const useFoldersStore = create<FoldersStore>()(
             // Show Supabase sync status
             useUIStore.getState().actions.showToast({
               title: 'Folder Updated',
-              description: response.message,
+              message: `Folder updated successfully`,
               duration: 3000
             })
             
@@ -289,7 +289,7 @@ export const useFoldersStore = create<FoldersStore>()(
             // Show Supabase sync status
             useUIStore.getState().actions.showToast({
               title: 'Folder Deleted',
-              description: response.message,
+              message: response.message || 'Folder deleted successfully',
               duration: 3000
             })
             
@@ -319,8 +319,8 @@ export const useFoldersStore = create<FoldersStore>()(
             description: 'Conversations not assigned to any folder',
             parent_id: null,
             created_by: 'system',
-            created_at: new Date(),
-            updated_at: new Date(),
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
             is_active: true,
             conversationCount: 0,
             children: [],
@@ -583,7 +583,7 @@ export const useFoldersStore = create<FoldersStore>()(
             // Show Supabase sync status
             useUIStore.getState().actions.showToast({
               title: 'Conversations Assigned',
-              description: response.message,
+              message: response.message || `${conversationIds.length} conversation(s) assigned`,
               duration: 3000
             })
             

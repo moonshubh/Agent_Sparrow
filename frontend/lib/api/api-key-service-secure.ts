@@ -285,6 +285,8 @@ export function validateAPIKeyFormat(keyType: APIKeyType, apiKey: string): boole
   switch (keyType) {
     case APIKeyType.GEMINI:
       return apiKey.length >= 30 && apiKey.length <= 50
+    case APIKeyType.OPENAI:
+      return /^sk-/.test(apiKey)
     case APIKeyType.TAVILY:
       return /^[a-zA-Z0-9-_]{20,50}$/.test(apiKey)
     case APIKeyType.FIRECRAWL:

@@ -357,6 +357,7 @@ class APIKeyService:
             
             format_requirements = {
                 APIKeyType.GEMINI: "Should start with 'AIza' and be 39 characters long",
+                APIKeyType.OPENAI: "Should start with 'sk-' (or 'sk-proj-') and be at least 20 characters",
                 APIKeyType.TAVILY: "Should be 32-40 alphanumeric characters",
                 APIKeyType.FIRECRAWL: "Should start with 'fc-' and be at least 20 characters"
             }
@@ -393,6 +394,7 @@ class APIKeyService:
             return APIKeyStatus(
                 user_id=user_id,
                 gemini_configured=APIKeyType.GEMINI in key_types,
+                openai_configured=APIKeyType.OPENAI in key_types,
                 tavily_configured=APIKeyType.TAVILY in key_types,
                 firecrawl_configured=APIKeyType.FIRECRAWL in key_types,
                 all_required_configured=APIKeyType.GEMINI in key_types,  # Only Gemini is required
@@ -401,12 +403,15 @@ class APIKeyService:
             
         except Exception as e:
             logger.error(f"Error getting API key status for user {user_id}: {str(e)}")
+            from datetime import datetime, timezone
             return APIKeyStatus(
                 user_id=user_id,
                 gemini_configured=False,
+                openai_configured=False,
                 tavily_configured=False,
                 firecrawl_configured=False,
-                all_required_configured=False
+                all_required_configured=False,
+                last_validation_check=datetime.now(timezone.utc)
             )
     
     def _log_operation(

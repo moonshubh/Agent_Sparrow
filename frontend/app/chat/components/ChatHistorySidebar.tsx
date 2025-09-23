@@ -192,14 +192,15 @@ export function ChatHistorySidebar({ sessionId, onSelect }: Props) {
                     {/* Overflow menu */}
                     <DropdownMenu>
                       <DropdownMenuTrigger asChild>
-                        <SidebarMenuAction
-                          className="absolute right-1"
-                          showOnHover
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="absolute right-1 h-6 w-6 opacity-0 group-hover/menu-item:opacity-100 transition-opacity"
                           title="More actions"
                         >
                           <MoreHorizontal className="h-4 w-4" />
                           <span className="sr-only">Actions</span>
-                        </SidebarMenuAction>
+                        </Button>
                       </DropdownMenuTrigger>
                       <DropdownMenuContent align="end" side="right">
                         <DropdownMenuItem

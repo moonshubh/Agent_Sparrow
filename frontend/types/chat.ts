@@ -159,7 +159,7 @@ export interface ThinkingTrace {
   /** Overall confidence score (0 to 1) */
   confidence: ConfidenceScore;
   /** Sequential thinking steps */
-  thinking_steps: ThinkingStep[];
+  thinking_steps?: ThinkingStep[];
   /** Tool usage decision */
   tool_decision?: ToolDecision;
   /** Confidence level for tool decision */

@@ -18,6 +18,7 @@ from app.api_keys.schemas import (
     APIKeyStatus, APIKeyAuditLog
 )
 from app.core.encryption import encryption_service
+from app.core.settings import settings
 from app.db.supabase_client import get_supabase_client
 
 logger = logging.getLogger(__name__)
@@ -25,6 +26,14 @@ logger = logging.getLogger(__name__)
 
 class SupabaseAPIKeyService:
     """Service for managing user API keys with Supabase backend."""
+
+    @staticmethod
+    def _is_valid_uuid(val: str) -> bool:
+        try:
+            uuid.UUID(str(val))
+            return True
+        except Exception:
+            return False
     
     def __init__(self):
         self.supabase = get_supabase_client()
@@ -52,11 +61,13 @@ class SupabaseAPIKeyService:
             # Check if key already exists (check both user_uuid and user_id for compatibility)
             api_key_type_str = request.api_key_type.value if isinstance(request.api_key_type, APIKeyType) else request.api_key_type
             
-            existing_response = self.supabase.client.table("user_api_keys")\
-                .select("*")\
-                .or_(f"user_uuid.eq.{user_id},user_id.eq.{user_id}")\
-                .eq("api_key_type", api_key_type_str)\
-                .execute()
+            # Avoid invalid UUID errors in PostgREST for non-UUID dev IDs
+            query = self.supabase.client.table("user_api_keys").select("*")
+            if self._is_valid_uuid(user_id):
+                query = query.or_(f"user_uuid.eq.{user_id},user_id.eq.{user_id}")
+            else:
+                query = query.eq("user_id", user_id)
+            existing_response = query.eq("api_key_type", api_key_type_str).execute()
             
             current_time = datetime.now(timezone.utc).isoformat()
             
@@ -70,11 +81,12 @@ class SupabaseAPIKeyService:
                     "is_active": True
                 }
                 
-                response = self.supabase.client.table("user_api_keys")\
-                    .update(update_data)\
-                    .or_(f"user_uuid.eq.{user_id},user_id.eq.{user_id}")\
-                    .eq("api_key_type", api_key_type_str)\
-                    .execute()
+                update_q = self.supabase.client.table("user_api_keys").update(update_data)
+                if self._is_valid_uuid(user_id):
+                    update_q = update_q.or_(f"user_uuid.eq.{user_id},user_id.eq.{user_id}")
+                else:
+                    update_q = update_q.eq("user_id", user_id)
+                response = update_q.eq("api_key_type", api_key_type_str).execute()
                 
                 operation = APIKeyOperation.UPDATE
                 api_key_data = existing_response.data[0]
@@ -193,12 +205,13 @@ class SupabaseAPIKeyService:
             # Convert enum to string value for database query
             api_key_type_str = api_key_type.value if isinstance(api_key_type, APIKeyType) else api_key_type
             
-            response = self.supabase.client.table("user_api_keys")\
-                .select("encrypted_key, is_active")\
-                .or_(f"user_uuid.eq.{user_id},user_id.eq.{user_id}")\
-                .eq("api_key_type", api_key_type_str)\
-                .eq("is_active", True)\
-                .execute()
+            select_q = self.supabase.client.table("user_api_keys")\
+                .select("encrypted_key, is_active")
+            if self._is_valid_uuid(user_id):
+                select_q = select_q.or_(f"user_uuid.eq.{user_id},user_id.eq.{user_id}")
+            else:
+                select_q = select_q.eq("user_id", user_id)
+            response = select_q.eq("api_key_type", api_key_type_str).eq("is_active", True).execute()
             
             logger.info(f"Database query returned {len(response.data)} results")
             
@@ -232,11 +245,12 @@ class SupabaseAPIKeyService:
         """Delete an API key."""
         try:
             api_key_type_str = api_key_type.value if isinstance(api_key_type, APIKeyType) else api_key_type
-            response = self.supabase.client.table("user_api_keys")\
-                .delete()\
-                .or_(f"user_uuid.eq.{user_id},user_id.eq.{user_id}")\
-                .eq("api_key_type", api_key_type_str)\
-                .execute()
+            delete_q = self.supabase.client.table("user_api_keys").delete()
+            if self._is_valid_uuid(user_id):
+                delete_q = delete_q.or_(f"user_uuid.eq.{user_id},user_id.eq.{user_id}")
+            else:
+                delete_q = delete_q.eq("user_id", user_id)
+            response = delete_q.eq("api_key_type", api_key_type_str).execute()
             
             if not response.data:
                 return APIKeyDeleteResponse(
@@ -268,21 +282,27 @@ class SupabaseAPIKeyService:
     async def get_api_key_status(self, user_id: str) -> APIKeyStatus:
         """Get status of all API key types for a user."""
         try:
-            response = self.supabase.client.table("user_api_keys")\
+            response_q = self.supabase.client.table("user_api_keys")\
                 .select("api_key_type, is_active")\
-                .or_(f"user_uuid.eq.{user_id},user_id.eq.{user_id}")\
-                .eq("is_active", True)\
-                .execute()
+                .eq("is_active", True)
+            if self._is_valid_uuid(user_id):
+                response_q = response_q.or_(f"user_uuid.eq.{user_id},user_id.eq.{user_id}")
+            else:
+                response_q = response_q.eq("user_id", user_id)
+            response = response_q.execute()
             
-            configured_types = {item["api_key_type"] for item in response.data}
+            # Normalize configured types to simple strings
+            configured_types = {str(item.get("api_key_type")).lower() for item in (response.data or [])}
             
-            gemini_configured = APIKeyType.GEMINI in configured_types
-            tavily_configured = APIKeyType.TAVILY in configured_types
-            firecrawl_configured = APIKeyType.FIRECRAWL in configured_types
+            gemini_configured = "gemini" in configured_types
+            openai_configured = "openai" in configured_types
+            tavily_configured = "tavily" in configured_types
+            firecrawl_configured = "firecrawl" in configured_types
             
             return APIKeyStatus(
                 user_id=user_id,
                 gemini_configured=gemini_configured,
+                openai_configured=openai_configured,
                 tavily_configured=tavily_configured,
                 firecrawl_configured=firecrawl_configured,
                 all_required_configured=gemini_configured,  # Only Gemini is required
@@ -294,6 +314,7 @@ class SupabaseAPIKeyService:
             return APIKeyStatus(
                 user_id=user_id,
                 gemini_configured=False,
+                openai_configured=False,
                 tavily_configured=False,
                 firecrawl_configured=False,
                 all_required_configured=False,
@@ -319,11 +340,13 @@ class SupabaseAPIKeyService:
         """Update last used timestamp for an API key."""
         try:
             api_key_type_str = api_key_type.value if isinstance(api_key_type, APIKeyType) else api_key_type
-            self.supabase.client.table("user_api_keys")\
-                .update({"last_used_at": datetime.now(timezone.utc).isoformat()})\
-                .or_(f"user_uuid.eq.{user_id},user_id.eq.{user_id}")\
-                .eq("api_key_type", api_key_type_str)\
-                .execute()
+            last_used_q = self.supabase.client.table("user_api_keys")\
+                .update({"last_used_at": datetime.now(timezone.utc).isoformat()})
+            if self._is_valid_uuid(user_id):
+                last_used_q = last_used_q.or_(f"user_uuid.eq.{user_id},user_id.eq.{user_id}")
+            else:
+                last_used_q = last_used_q.eq("user_id", user_id)
+            last_used_q.eq("api_key_type", api_key_type_str).execute()
         except Exception as e:
             logger.debug(f"Failed to update last_used timestamp: {e}")
     
@@ -349,6 +372,12 @@ class SupabaseAPIKeyService:
             if additional_details:
                 operation_details.update(additional_details)
             
+            # Dev guard: skip audit log if auth is skipped or user_id is not a UUID
+            if getattr(settings, "skip_auth", False) or not self._is_valid_uuid(user_id):
+                # In development or when user_id is not a UUID, avoid Supabase 400 errors
+                # by skipping external audit log insert.
+                return
+
             self.supabase.client.table("api_key_audit_log").insert({
                 "user_uuid": user_id,
                 "user_id": user_id,  # Also set user_id for backward compatibility

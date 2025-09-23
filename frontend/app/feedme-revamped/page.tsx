@@ -5,7 +5,7 @@ import dynamic from 'next/dynamic'
 import { useRouter } from 'next/navigation'
 import Dock from '@/components/feedme-revamped/Dock'
 import { Home, FolderOpen, Upload, MessageCircle, BarChart3 } from 'lucide-react'
-import CenterHero from '@/components/feedme-revamped/CenterHero'
+import EnhancedAnimatedLogo from '@/components/feedme-revamped/EnhancedAnimatedLogo'
 import FoldersDialog from '@/components/feedme-revamped/FoldersDialog'
 import UploadDialog from '@/components/feedme-revamped/UploadDialog'
 import UnassignedDialog from '@/components/feedme-revamped/UnassignedDialog'
@@ -52,10 +52,15 @@ export default function FeedMeRevampedPage() {
           />
         </div>
 
-        {/* Optional center FeedMe logo (hidden after first dock interaction) */}
+        {/* Enhanced FeedMe animated logo - positioned higher and larger */}
         {showCenter && (
-          <div className="absolute inset-0 z-5 flex items-center justify-center pointer-events-none">
-            <CenterHero src="/center-feedme.png" className="w-[300px] h-[300px] hero-offset" />
+          <div className="absolute inset-0 z-5 flex items-center justify-center pointer-events-none -mt-20">
+            <EnhancedAnimatedLogo
+              className="w-[400px] h-[400px]"
+              animationDuration={5000}
+              loop={true}
+              autoPlay={true}
+            />
           </div>
         )}
 

@@ -10,6 +10,7 @@ from enum import Enum
 class APIKeyType(str, Enum):
     """Supported API key types."""
     GEMINI = "gemini"
+    OPENAI = "openai"
     TAVILY = "tavily"
     FIRECRAWL = "firecrawl"
 
@@ -160,6 +161,7 @@ class DecryptedAPIKey(BaseModel):
 class APIKeyConfiguration(BaseModel):
     """Configuration for API key requirements."""
     gemini_required: bool = True
+    openai_required: bool = False
     tavily_required: bool = False
     firecrawl_required: bool = False
     allow_empty_keys: bool = False
@@ -168,6 +170,7 @@ class APIKeyStatus(BaseModel):
     """Overall API key status for a user."""
     user_id: str
     gemini_configured: bool
+    openai_configured: bool
     tavily_configured: bool
     firecrawl_configured: bool
     all_required_configured: bool

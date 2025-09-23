@@ -112,26 +112,32 @@ interface RealtimeActions {
   connect: (url?: string) => Promise<void>
   disconnect: () => void
   reconnect: () => Promise<void>
-  
+
   // Configuration
   updateReconnectionConfig: (config: Partial<ReconnectionConfig>) => void
   updateHeartbeatConfig: (config: Partial<HeartbeatConfig>) => void
-  
+
   // Processing Updates
   handleProcessingUpdate: (update: ProcessingUpdate) => void
   clearProcessingUpdate: (conversationId: number) => void
   getProcessingStatus: (conversationId: number) => ProcessingUpdate | null
-  
+
   // Notifications
   addNotification: (notification: Omit<Notification, 'id' | 'timestamp'>) => void
   markNotificationRead: (id: string) => void
   removeNotification: (id: string) => void
   clearNotifications: () => void
-  
+
   // Internal Methods
   cleanup: () => void
   resetReconnectionState: () => void
-  updateConnectionStatus: (status: RealtimeState['connectionStatus']) => void
+  updateConnectionStatus: (status: ConnectionStatus) => void
+  startHeartbeat: () => void
+  cleanupHeartbeat: () => void
+  cleanupTimers: () => void
+  scheduleReconnection: () => void
+  throttledErrorLog: (error: any) => void
+  handleMessage: (data: any) => void
 }
 
 export interface RealtimeStore extends RealtimeState {

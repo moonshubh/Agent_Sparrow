@@ -16,6 +16,7 @@ from app.agents_v2.primary_agent.schemas import PrimaryAgentState
 from app.agents_v2.primary_agent.tools import mailbird_kb_search, tavily_web_search
 from app.agents_v2.primary_agent.reasoning import ReasoningEngine, ReasoningConfig
 from app.agents_v2.primary_agent.prompts import AgentSparrowV9Prompts
+from app.agents_v2.primary_agent.adapter_bridge import get_primary_agent_model
 
 # Standard logger setup
 logger = logging.getLogger(__name__)
@@ -159,41 +160,90 @@ async def run_primary_agent(state: PrimaryAgentState) -> AsyncIterator[AIMessage
                 yield AIMessageChunk(content="Your query is too long. Please shorten it and try again.", role="assistant")
                 return
 
-            # Get user-specific API key
-            from app.core.user_context import get_user_gemini_key, get_current_user_context
-            gemini_api_key = await get_user_gemini_key()
-            
-            # Log API key source for debugging
-            user_context = get_current_user_context()
-            if user_context and gemini_api_key:
-                # Check if this is a user key or fallback
-                import os
-                fallback_key = os.getenv("GEMINI_API_KEY")
-                is_fallback = (fallback_key and gemini_api_key == fallback_key)
-                
-                logger.debug(f"API Key Source: {'FALLBACK (Railway env)' if is_fallback else 'USER (Frontend configured)'}")
-                parent_span.set_attribute("api_key_source", "fallback" if is_fallback else "user")
-            
-            if not gemini_api_key:
-                error_msg = "No Gemini API key available for user"
-                logger.warning(f"{error_msg} - user_query: {user_query[:100]}...")
-                parent_span.set_attribute("error", error_msg)
-                parent_span.set_status(Status(StatusCode.ERROR, "No API key"))
-                
-                detailed_guidance = (
-                    "To use Agent Sparrow, please configure your Gemini API key:\n\n"
-                    "1. Go to Settings in the application\n"
-                    "2. Navigate to the API Keys section\n"
-                    "3. Enter your Google Gemini API key (get one at https://makersuite.google.com/app/apikey)\n"
-                    "4. Save your settings and try again\n\n"
-                    "Your API key should start with 'AIza' and be 39 characters long."
-                )
-                yield AIMessageChunk(content=detailed_guidance, role="error")
-                return
-            
-            # Create user-specific model (will determine thinking budget later)
-            logger.debug(f"Creating model with API key")
-            model_with_tools = create_user_specific_model(gemini_api_key)
+            # Determine provider/model with request override via state
+            from app.core.settings import settings as app_settings
+            # Prefer provider/model from state if available; otherwise use env/settings defaults
+            state_provider = getattr(state, "provider", None)
+            state_model = getattr(state, "model", None)
+
+            provider = (state_provider or os.getenv("PRIMARY_AGENT_PROVIDER") or getattr(app_settings, "primary_agent_provider", "google")).lower()
+            model_name = (state_model or getattr(app_settings, "primary_agent_model", "gemini-2.5-flash"))
+            logger.info(f"[primary_agent] selected provider={provider}, model={model_name}")
+
+            # Branch per provider
+            if provider == "google":
+                logger.debug("[primary_agent] entering Google/Gemini branch")
+                # Get user-specific API key (with env fallback when no user context)
+                from app.core.user_context import get_user_gemini_key, get_current_user_context
+                user_key = await get_user_gemini_key()
+                env_key = os.getenv("GEMINI_API_KEY")
+                selected_key = user_key or env_key
+
+                # Log key source
+                user_context = get_current_user_context()
+                if selected_key:
+                    is_fallback = (env_key and selected_key == env_key and (not user_key))
+                    source = "fallback_env" if is_fallback else ("user" if user_key else "env")
+                    logger.debug(f"[primary_agent] Gemini API key source: {source}")
+                    parent_span.set_attribute("api_key_source", source)
+
+                if not selected_key:
+                    error_msg = "No Gemini API key available (user or env)"
+                    logger.warning(f"{error_msg} - user_query: {user_query[:100]}...")
+                    parent_span.set_attribute("error", error_msg)
+                    parent_span.set_status(Status(StatusCode.ERROR, "No API key"))
+                    detailed_guidance = (
+                        "To use Agent Sparrow, please configure your Gemini API key:\n\n"
+                        "1. Go to Settings in the application\n"
+                        "2. Navigate to the API Keys section\n"
+                        "3. Enter your Google Gemini API key (get one at https://makersuite.google.com/app/apikey)\n"
+                        "4. Save your settings and try again\n\n"
+                        "Your API key should start with 'AIza' and be 39 characters long."
+                    )
+                    yield AIMessageChunk(content=detailed_guidance, role="error")
+                    return
+
+                # Helper to detect auth errors that imply invalid/expired key
+                def _is_auth_error(exc: Exception) -> bool:
+                    msg = str(exc).lower()
+                    keywords = [
+                        "api key", "key invalid", "invalid api key", "permission denied",
+                        "unauthorized", "401", "403", "forbidden", "expired", "authentication"
+                    ]
+                    return any(k in msg for k in keywords)
+
+                # Try with selected key; on auth error, fallback to env key once if different
+                used_key = selected_key
+                try:
+                    logger.debug("Creating Gemini model with tools and rate limiting")
+                    model_with_tools = create_user_specific_model(selected_key)
+                except Exception as e:
+                    if _is_auth_error(e) and env_key and selected_key != env_key:
+                        logger.warning(f"[primary_agent] Gemini auth error with user key, retrying with env key: {e}")
+                        model_with_tools = create_user_specific_model(env_key)
+                        used_key = env_key
+                        parent_span.set_attribute("api_key_source_retry", "fallback_env_after_auth_error")
+                    else:
+                        raise
+
+            elif provider == "openai":
+                logger.debug("[primary_agent] entering OpenAI branch")
+                # Prefer user context key with env fallback
+                from app.core.user_context import get_user_openai_key
+                openai_key = await get_user_openai_key()
+                if not openai_key:
+                    openai_key = os.getenv("OPENAI_API_KEY") or os.getenv("OpenAI_API_KEY")
+                if not openai_key:
+                    error_msg = "OpenAI provider selected but OPENAI_API_KEY not configured (user/env)."
+                    logger.warning(error_msg)
+                    parent_span.set_attribute("error", error_msg)
+                    parent_span.set_status(Status(StatusCode.ERROR, "No OpenAI API key"))
+                    yield AIMessageChunk(content="OpenAI API key missing. Please set it in Settings or as OPENAI_API_KEY and try again.", role="error")
+                    return
+
+                # Load model via providers registry (tools binding is optional here)
+                logger.debug(f"Loading OpenAI model via providers registry: {model_name}")
+                model_with_tools = await get_primary_agent_model(api_key=openai_key, provider="openai", model=model_name)
 
             parent_span.set_attribute("input.query", user_query)
             parent_span.set_attribute("state.message_count", len(state.messages))
@@ -210,8 +260,9 @@ async def run_primary_agent(state: PrimaryAgentState) -> AsyncIterator[AIMessage
                 debug_mode=settings.reasoning_debug_mode
             )
             reasoning_engine = ReasoningEngine(model=model_with_tools, config=reasoning_config)
-            # Store API key for creating models with thinking budgets
-            reasoning_engine._api_key = gemini_api_key
+            # Store API key for creating models with thinking budgets (Gemini only)
+            if provider == "google":
+                reasoning_engine._api_key = used_key
 
             # Perform comprehensive reasoning with optimized LLM calls
             reasoning_state = await reasoning_engine.reason_about_query(

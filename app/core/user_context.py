@@ -86,6 +86,10 @@ class UserContext:
     async def get_firecrawl_api_key(self) -> Optional[str]:
         """Get Firecrawl API key (with system fallback)."""
         return await self.get_api_key(APIKeyType.FIRECRAWL, "FIRECRAWL_API_KEY")
+
+    async def get_openai_api_key(self) -> Optional[str]:
+        """Get OpenAI API key (with system fallback)."""
+        return await self.get_api_key(APIKeyType.OPENAI, "OPENAI_API_KEY")
     
     def clear_api_key_cache(self):
         """Clear the API key cache (useful after key updates)."""
@@ -208,6 +212,21 @@ async def get_user_firecrawl_key() -> Optional[str]:
         return None
     
     return await user_context.get_firecrawl_api_key()
+
+async def get_user_openai_key() -> Optional[str]:
+    """Get OpenAI API key for current user."""
+    user_context = get_current_user_context()
+    if not user_context:
+        # Fall back to environment variable (support both common casings)
+        import os
+        return os.getenv("OPENAI_API_KEY") or os.getenv("OpenAI_API_KEY")
+    # When using per-user storage, the service itself falls back to env via "OPENAI_API_KEY"
+    # so add a direct secondary check here as well if needed.
+    key = await user_context.get_openai_api_key()
+    if not key:
+        import os
+        key = os.getenv("OPENAI_API_KEY") or os.getenv("OpenAI_API_KEY")
+    return key
 
 
 def get_current_user_id() -> Optional[str]:

@@ -1,0 +1,58 @@
+.animatedLogo {
+  position: relative;
+  width: 100%;
+  height: 100%;
+}
+
+.frameContainer {
+  position: relative;
+  width: 100%;
+  height: 100%;
+}
+
+.frame {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  opacity: 0;
+}
+
+.frame.playing {
+  animation-name: fadeInOut;
+  animation-duration: var(--animation-duration);
+  animation-timing-function: ease-in-out;
+  animation-fill-mode: both;
+}
+
+.frame.playing.loop {
+  animation-iteration-count: infinite;
+}
+
+@keyframes fadeInOut {
+  0%, 100% {
+    opacity: 0;
+  }
+
+  12.5% {
+    opacity: 1;
+  }
+
+  25% {
+    opacity: 0;
+  }
+}
+
+.staticLogo {
+  position: relative;
+  width: 100%;
+  height: 100%;
+}
+
+.staticLogo img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}

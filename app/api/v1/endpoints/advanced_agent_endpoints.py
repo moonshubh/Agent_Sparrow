@@ -19,6 +19,7 @@ import json
 import uuid
 import re
 import asyncio
+import os
 
 # Use the new in-memory session store instead of Redis
 from app.core.session_store import store_session, get_session, delete_session, get_session_store
@@ -94,6 +95,9 @@ class ReasoningRequest(BaseModel):
     """Request model for reasoning analysis with validation."""
     query: str = Field(..., description="The user query to analyze", min_length=1, max_length=10000)
     context: Optional[Dict[str, Any]] = Field(default_factory=dict, description="Additional context")
+    # Optional provider/model selection (Phase 2)
+    provider: Optional[Literal["google", "openai"]] = Field(None, description="LLM provider override for this request")
+    model: Optional[str] = Field(None, description="Model ID override for this request")
     enable_chain_of_thought: bool = Field(default=True, description="Enable chain-of-thought reasoning")
     enable_problem_solving: bool = Field(default=True, description="Enable problem-solving framework")
     enable_tool_intelligence: bool = Field(default=True, description="Enable intelligent tool selection")
@@ -315,14 +319,40 @@ async def analyze_with_reasoning(
         # Create user context
         user_context = await create_user_context_from_user_id(user_id)
         
-        # Check for API key
-        gemini_key = await user_context.get_gemini_api_key()
-        if not gemini_key:
-            raise HTTPException(
-                status_code=400,
-                detail="API Key Required: Please configure your Gemini API key in settings."
-            )
-        
+        # Determine provider/model (per-request override or defaults)
+        from app.agents_v2.primary_agent.adapter_bridge import get_primary_agent_model
+        from app.providers.registry import default_provider, default_model_for_provider
+        provider = (request.provider or default_provider()).lower()
+        model_id = (request.model or default_model_for_provider(provider)).lower()
+
+        # Resolve API key and basic access validation
+        # Note: For Phase 2, Google uses user key; OpenAI uses env or user key if available.
+        openai_key: Optional[str] = None
+        gemini_key: Optional[str] = None
+
+        if provider == "google":
+            gemini_key = await user_context.get_gemini_api_key()
+            if not gemini_key:
+                raise HTTPException(
+                    status_code=400,
+                    detail="API Key Required: Please configure your Gemini API key in settings."
+                )
+        elif provider == "openai":
+            # Try user-specific OpenAI key via Supabase API key service
+            # Fallback to environment variable OPENAI_API_KEY
+            openai_key = None
+            if hasattr(user_context, "get_openai_api_key"):
+                openai_key = await user_context.get_openai_api_key()
+
+            openai_key = openai_key or os.getenv("OPENAI_API_KEY")
+            if not openai_key:
+                raise HTTPException(
+                    status_code=400,
+                    detail="OpenAI API key missing. Please configure your OpenAI key in settings or set OPENAI_API_KEY."
+                )
+        else:
+            raise HTTPException(status_code=400, detail=f"Unsupported provider: {provider}")
+
         async with user_context_scope(user_context):
             # Calculate timeout based on quality level
             timeout = get_timeout_for_operation(
@@ -330,7 +360,7 @@ async def analyze_with_reasoning(
                 request.quality_level
             )
             
-            # Initialize reasoning engine with quality-adjusted config
+            # Initialize reasoning engine config
             config = ReasoningConfig(
                 enable_chain_of_thought=request.enable_chain_of_thought,
                 enable_problem_solving_framework=request.enable_problem_solving,
@@ -339,8 +369,13 @@ async def analyze_with_reasoning(
                 enable_reasoning_transparency=True,
                 thinking_budget=request.thinking_budget
             )
-            
-            reasoning_engine = ReasoningEngine(config)
+
+            # Load model via provider registry
+            api_key = gemini_key if provider == "google" else openai_key
+            model = await get_primary_agent_model(api_key=api_key, provider=provider, model=model_id)
+
+            # Instantiate reasoning engine with model (fix incorrect ctor)
+            reasoning_engine = ReasoningEngine(model=model, config=config)
             
             # Generate session ID if not provided
             session_id = request.session_id or str(uuid.uuid4())

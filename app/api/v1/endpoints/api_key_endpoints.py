@@ -246,6 +246,15 @@ async def test_api_key_connectivity(
             success = resp.status_code == 200
             details = {"status_code": resp.status_code}
             message = "Gemini key is valid" if success else f"Gemini API responded {resp.status_code}"
+        elif api_key_type == APIKeyType.OPENAI:
+            # Minimal OpenAI connectivity test: list models endpoint
+            test_url = "https://api.openai.com/v1/models"
+            headers = {"Authorization": f"Bearer {api_key}"}
+            async with httpx.AsyncClient(timeout=5) as client:
+                resp = await client.get(test_url, headers=headers)
+            success = resp.status_code == 200
+            details = {"status_code": resp.status_code}
+            message = "OpenAI key is valid" if success else f"OpenAI API responded {resp.status_code}"
         elif api_key_type == APIKeyType.TAVILY:
             test_url = "https://api.tavily.com/search"
             params = {"query": "ping", "api_key": api_key, "num_results": 1}
@@ -304,6 +313,7 @@ async def get_api_key_internal(
     # Define fallback environment variables
     fallback_map = {
         APIKeyType.GEMINI: "GEMINI_API_KEY",
+        APIKeyType.OPENAI: "OPENAI_API_KEY",
         APIKeyType.TAVILY: "TAVILY_API_KEY", 
         APIKeyType.FIRECRAWL: "FIRECRAWL_API_KEY"
     }

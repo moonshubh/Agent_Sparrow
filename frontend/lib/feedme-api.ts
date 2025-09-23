@@ -1183,16 +1183,6 @@ export async function getAnalytics(): Promise<ApprovalWorkflowStats> {
 
 // Folder Management API Functions
 
-export interface FeedMeFolder {
-  id: number
-  name: string
-  color: string
-  description?: string
-  created_by?: string
-  created_at: string
-  updated_at: string
-  conversation_count: number
-}
 
 export interface FolderCreate {
   name: string

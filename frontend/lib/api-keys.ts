@@ -79,6 +79,7 @@ export class APIError extends Error {
 
 export enum APIKeyType {
   GEMINI = "gemini",
+  OPENAI = "openai",
   TAVILY = "tavily", 
   FIRECRAWL = "firecrawl"
 }
@@ -263,6 +264,8 @@ export function getAPIKeyDisplayName(type: APIKeyType): string {
   switch (type) {
     case APIKeyType.GEMINI:
       return 'Google Gemini'
+    case APIKeyType.OPENAI:
+      return 'OpenAI'
     case APIKeyType.TAVILY:
       return 'Tavily Search'
     case APIKeyType.FIRECRAWL:
@@ -276,6 +279,8 @@ export function getAPIKeyDescription(type: APIKeyType): string {
   switch (type) {
     case APIKeyType.GEMINI:
       return 'Required for AI model access (primary agent and log analysis)'
+    case APIKeyType.OPENAI:
+      return 'Optional for OpenAI provider support in chat'
     case APIKeyType.TAVILY:
       return 'Optional for web search functionality (research agent)'
     case APIKeyType.FIRECRAWL:
@@ -289,6 +294,8 @@ export function getAPIKeyFormatRequirements(type: APIKeyType): string {
   switch (type) {
     case APIKeyType.GEMINI:
       return 'Should start with "AIza" and be 39 characters long'
+    case APIKeyType.OPENAI:
+      return 'Should start with "sk-" and be at least 20 characters'
     case APIKeyType.TAVILY:
       return 'Should be 32-40 alphanumeric characters'
     case APIKeyType.FIRECRAWL:

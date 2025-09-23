@@ -157,20 +157,63 @@ class ChatRequest(BaseModel):
     message: str
     messages: list[dict] | None = None  # Full conversation history
     session_id: str | None = None  # Session identifier for context
+    provider: str | None = None  # "google" or "openai"
+    model: str | None = None     # model id like "gemini-2.5-flash" or "gpt5-mini"
     # trace_id: str | None = None # Optional, if you plan to propagate trace IDs
 
-async def primary_agent_stream_generator(query: str, user_id: str, message_history: list[dict] | None = None, session_id: str | None = None) -> AsyncIterable[str]:
+async def primary_agent_stream_generator(
+    query: str,
+    user_id: str,
+    message_history: list[dict] | None = None,
+    session_id: str | None = None,
+    provider: str | None = None,
+    model: str | None = None
+) -> AsyncIterable[str]:
     """Wraps the primary agent's streaming output with user-specific API configuration."""
     try:
         # Create user context
         user_context = await create_user_context_from_user_id(user_id)
         
-        # Check if user has required API keys
-        gemini_key = await user_context.get_gemini_api_key()
-        if not gemini_key:
+        # Determine provider/model, default to google if not provided
+        try:
+            from app.providers.registry import default_provider, default_model_for_provider
+            req_provider = (provider or default_provider()).lower()
+            req_model = (model or default_model_for_provider(req_provider)).lower()
+        except Exception:
+            req_provider = (provider or "google").lower()
+            req_model = (model or "gemini-2.5-flash").lower()
+        logger.info(f"[chat_stream] request provider={provider}, model={model} -> resolved provider={req_provider}, model={req_model}")
+
+        # Check required API key for selected provider
+        if req_provider == "google":
+            gemini_key = await user_context.get_gemini_api_key()
+            if not gemini_key:
+                error_payload = json.dumps({
+                    "role": "error", 
+                    "content": "API Key Required: Please add your Google Gemini API key in Settings."
+                }, ensure_ascii=False)
+                yield f"data: {error_payload}\n\n"
+                return
+        elif req_provider == "openai":
+            openai_key = None
+            if hasattr(user_context, "get_openai_api_key"):
+                try:
+                    openai_key = await user_context.get_openai_api_key()
+                except Exception:
+                    openai_key = None
+            import os
+            openai_key = openai_key or os.getenv("OPENAI_API_KEY")
+            if not openai_key:
+                error_payload = json.dumps({
+                    "role": "error", 
+                    "content": "OpenAI API key missing. Add it in Settings or set OPENAI_API_KEY."
+                }, ensure_ascii=False)
+                yield f"data: {error_payload}\n\n"
+                return
+        else:
             error_payload = json.dumps({
                 "role": "error", 
-                "content": "🔑 **API Key Required**: To use the AI assistant, please add your Google Gemini API key in Settings.\n\n**How to configure:**\n1. Click the ⚙️ Settings button in the top-right corner\n2. Navigate to the 'API Keys' section\n3. Add your Google Gemini API key (starts with 'AIza')\n4. Get your free API key at: https://makersuite.google.com/app/apikey"
+                "content": f"Unsupported provider: {req_provider}"
             }, ensure_ascii=False)
             yield f"data: {error_payload}\n\n"
             return
@@ -193,8 +236,12 @@ async def primary_agent_stream_generator(query: str, user_id: str, message_histo
             
             initial_state = PrimaryAgentState(
                 messages=messages,
-                session_id=session_id
+                session_id=session_id,
+                # pass provider/model through to the agent
+                provider=req_provider,
+                model=req_model
             )
+            logger.info(f"[chat_stream] initial_state provider={initial_state.provider}, model={initial_state.model}")
             
             async for chunk in run_primary_agent(initial_state):
                 json_payload = ""
@@ -253,7 +300,9 @@ async def chat_stream_v1_legacy(
             request.message, 
             user_id=user_id,
             message_history=request.messages,
-            session_id=request.session_id
+            session_id=request.session_id,
+            provider=request.provider,
+            model=request.model
         ),
         media_type="text/event-stream",
         headers={
@@ -287,7 +336,9 @@ async def chat_stream_v2_authenticated(
             request.message, 
             user_id,
             message_history=request.messages,
-            session_id=request.session_id
+            session_id=request.session_id,
+            provider=request.provider,
+            model=request.model
         ),
         media_type="text/event-stream",
         headers={
@@ -437,10 +488,8 @@ async def research_query(
             # To avoid blocking the event loop, we should run the graph.invoke in a thread pool.
             # However, for now, let's make a direct call and note this as a point for future improvement.
 
-            import asyncio # Make sure to import asyncio if not already
-            # To run synchronous graph.invoke in an async endpoint without blocking:
-            loop = asyncio.get_event_loop()
-            result_state = await loop.run_in_executor(None, research_graph.invoke, initial_graph_state)
+            # Use async graph invocation (synthesize_node is async)
+            result_state = await research_graph.ainvoke(initial_graph_state)
 
         answer = result_state.get("answer", "No answer provided.")
         citations = result_state.get("citations", [])
@@ -604,9 +653,8 @@ async def unified_agent_stream_generator(request: UnifiedAgentRequest) -> AsyncI
                 "citations": None,
             }
             
-            import asyncio
-            loop = asyncio.get_event_loop()
-            result = await loop.run_in_executor(None, research_graph.invoke, initial_state)
+            # Use async graph invocation (synthesize_node is async)
+            result = await research_graph.ainvoke(initial_state)
             
             answer = result.get("answer", "No answer provided.")
             citations = result.get("citations", [])
@@ -665,7 +713,9 @@ async def unified_agent_stream_generator(request: UnifiedAgentRequest) -> AsyncI
                 
                 initial_state = PrimaryAgentState(
                     messages=messages,
-                    session_id=request.session_id
+                    session_id=request.session_id,
+                    provider=request.provider,
+                    model=request.model
                 )
                 
                 # Note: Routing message already sent earlier (lines 521-527)
@@ -745,10 +795,35 @@ async def research_agent_stream_generator(query: str, trace_id: str | None = Non
             "citations": None,
         }
         
-        # Execute research (this should be made async in the future)
-        import asyncio
-        loop = asyncio.get_event_loop()
-        result = await loop.run_in_executor(None, research_graph.invoke, initial_state)
+        # Execute research via async graph invocation (synthesize_node is async)
+        result = await research_graph.ainvoke(initial_state)
+
+        # Stream a progress update after synthesize
+        yield f"data: {json.dumps({'type': 'step', 'data': {'type': 'Synthesize', 'description': 'Synthesizing answer from sources...', 'status': 'complete'}})}\n\n"
+
+        # Emit final result
+        final_payload = {
+            'type': 'result',
+            'data': {
+                'answer': result.get('answer', 'No answer provided.'),
+                'citations': result.get('citations', []),
+                'trace_id': trace_id
+            }
+        }
+        yield f"data: {json.dumps(final_payload)}\n\n"
+
+        # Completion sentinel
+        yield f"data: {json.dumps({'type': 'done'})}\n\n"
+    except Exception as e:
+        logger.error(f"Error in research_agent_stream_generator: {e}", exc_info=True)
+        err_payload = {
+            'type': 'error',
+            'data': {
+                'message': f'Error running research: {str(e)}',
+                'trace_id': trace_id
+            }
+        }
+        yield f"data: {json.dumps(err_payload)}\n\n"
         
         # Send research completion step
         yield f"data: {json.dumps({'type': 'step', 'data': {'type': 'Research Complete', 'description': 'Research analysis finished', 'status': 'completed'}})}\n\n"

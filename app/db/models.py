@@ -31,7 +31,7 @@ class UserAPIKey(Base):
     # Constraints
     __table_args__ = (
         CheckConstraint(
-            "api_key_type IN ('gemini', 'tavily', 'firecrawl')",
+            "api_key_type IN ('gemini', 'openai', 'tavily', 'firecrawl')",
             name="valid_api_key_type"
         ),
         CheckConstraint(

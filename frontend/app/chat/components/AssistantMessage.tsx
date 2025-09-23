@@ -14,11 +14,15 @@ export function AssistantMessage({ content }: { content: string }) {
       <div className="mt-1 text-sm text-foreground/90 prose prose-sm dark:prose-invert max-w-none">
         <ReactMarkdown remarkPlugins={[remarkGfm]}
           components={{
-            code({ inline, className, children, ...props }) {
+            code({ className, children, ...props }) {
               const text = String(children)
-              if (inline) {
+              // Check if this is an inline code block based on the presence of a parent
+              const match = /language-(\w+)/.exec(className || '')
+              const isCodeBlock = match !== null
+
+              if (!isCodeBlock && !className) {
                 return (
-                  <code className={`px-1.5 py-0.5 rounded bg-muted text-[0.9em] ${className || ''}`} {...props}>
+                  <code className={`px-1.5 py-0.5 rounded bg-muted text-[0.9em]`} {...props}>
                     {text}
                   </code>
                 )

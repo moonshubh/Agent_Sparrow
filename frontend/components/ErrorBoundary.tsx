@@ -59,7 +59,7 @@ export class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoun
   componentDidCatch(error: Error, errorInfo: React.ErrorInfo) {
     // Log error with proper service
     logger.error('Component Error Boundary triggered', error, {
-      component: errorInfo.componentStack,
+      component: errorInfo.componentStack || undefined,
       errorBoundary: {
         variant: this.props.variant || 'full',
         isolate: this.props.isolate,

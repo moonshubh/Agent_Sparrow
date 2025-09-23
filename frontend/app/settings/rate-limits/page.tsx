@@ -207,8 +207,8 @@ export default function RateLimitsSettingsPage() {
 
           {/* Rate Limit Indicators */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <RateLimitIndicator model="gemini-2.5-flash" showLabels animated />
-            <RateLimitIndicator model="gemini-2.5-pro" showLabels animated />
+            <RateLimitIndicator model="gemini-2.5-flash" />
+            <RateLimitIndicator model="gemini-2.5-pro" />
           </div>
 
           {/* Countdown Timers */}
@@ -234,7 +234,7 @@ export default function RateLimitsSettingsPage() {
           {usageStats && (
             <>
               <RateLimitStatus />
-              <RateLimitMetrics model="gemini-2.5-flash" />
+              <RateLimitMetrics />
               
               <Card className="glass-effect">
                 <CardHeader>
@@ -284,7 +284,7 @@ export default function RateLimitsSettingsPage() {
           {usageStats && (
             <>
               <RateLimitStatus />
-              <RateLimitMetrics model="gemini-2.5-pro" />
+              <RateLimitMetrics />
               
               <Card className="glass-effect">
                 <CardHeader>

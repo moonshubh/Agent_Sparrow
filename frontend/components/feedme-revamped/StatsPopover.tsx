@@ -6,7 +6,7 @@
  */
 
 import React, { useState, useCallback } from 'react'
-import { Dialog, DialogContent } from '@/components/ui/dialog'
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Separator } from '@/components/ui/separator'
 import { Button } from '@/components/ui/button'
@@ -81,6 +81,10 @@ export function StatsPopover({
           className
         )}
       >
+        <DialogHeader className="sr-only">
+          <DialogTitle>FeedMe Statistics</DialogTitle>
+        </DialogHeader>
+
         {/* Header */}
         <div className="flex items-center justify-between p-4 pb-0">
           <div className="flex items-center gap-2">

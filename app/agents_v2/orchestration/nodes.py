@@ -94,17 +94,54 @@ def post_process(state: GraphState) -> Dict[str, Any]:
     logger.info("post_process", session_id=session_id)
     return {"qa_retry_count": 0}
 
-def run_researcher(state: GraphState):
+from langchain_core.messages import HumanMessage, AIMessage
+
+async def run_researcher(state: GraphState):
     """
-    Runs the research agent graph.
+    Runs the research agent graph asynchronously using the last user query,
+    and appends a synthesized answer + citations to the messages.
     """
-    print("---RUNNING RESEARCHER---")
-    # The research agent graph expects a specific input format
-    research_input = {"messages": state.messages}
-    # Invoke the research agent graph
-    final_research_state = research_agent_graph.invoke(research_input)
-    # Return the final messages from the research agent to update the main graph state
-    return {"messages": final_research_state.messages}
+    print("---RUNNING RESEARCHER (async)---")
+    # Extract the latest user query (prefer last HumanMessage)
+    query_text = None
+    if state.messages:
+        last_msg = state.messages[-1]
+        if isinstance(last_msg, HumanMessage):
+            query_text = last_msg.content
+        else:
+            for m in reversed(state.messages):
+                if isinstance(m, HumanMessage):
+                    query_text = m.content
+                    break
+    if not query_text:
+        return {"messages": state.messages}
+
+    # Prepare initial state for the research agent
+    initial_state = {
+        "query": query_text,
+        "urls": [],
+        "documents": [],
+        "answer": None,
+        "citations": None,
+    }
+
+    # Invoke the research graph asynchronously (synthesize node is async)
+    final_state = await research_agent_graph.ainvoke(initial_state)
+
+    answer = final_state.get("answer") or "I'm sorry, I couldn't find relevant information to answer your question."
+    citations = final_state.get("citations") or []
+
+    # Build assistant response including simple citation rendering
+    citation_text = ""
+    try:
+        refs = [f"[{c.get('id')}] {c.get('url')}" for c in citations if isinstance(c, dict)]
+        if refs:
+            citation_text = "\n\nSources:\n" + "\n".join(refs)
+    except Exception:
+        pass
+
+    new_message = AIMessage(content=answer + citation_text)
+    return {"messages": state.messages + [new_message]}
 
 # Helper function to decide what to do after an agent is called
 def should_continue(state: GraphState):

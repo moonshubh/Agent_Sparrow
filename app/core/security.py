@@ -14,6 +14,7 @@ import httpx
 import json
 from jose import jwk
 from jose.utils import base64url_decode
+from app.core.settings import get_settings
 
 # Configure logging if not already configured
 if not logging.getLogger().handlers:
@@ -25,13 +26,14 @@ if not logging.getLogger().handlers:
 logger = logging.getLogger(__name__)
 
 load_dotenv()  # Load environment variables from .env file
+settings = get_settings()
 
-# Configuration from environment variables
-SECRET_KEY = os.getenv("JWT_SECRET_KEY")
-ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256")
-ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("JWT_ACCESS_TOKEN_EXPIRE_MINUTES", 30))
+# Configuration from environment variables with settings fallbacks
+SECRET_KEY = os.getenv("JWT_SECRET_KEY") or getattr(settings, "jwt_secret_key", None)
+ALGORITHM = os.getenv("JWT_ALGORITHM", getattr(settings, "jwt_algorithm", "HS256"))
+ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("JWT_ACCESS_TOKEN_EXPIRE_MINUTES", getattr(settings, "jwt_access_token_expire_minutes", 30)))
 # Skip authentication entirely (local dev/testing)
-SKIP_AUTH: bool = os.getenv("SKIP_AUTH", "false").lower() in {"1", "true", "yes"}
+SKIP_AUTH: bool = (os.getenv("SKIP_AUTH", "false").lower() in {"1", "true", "yes"}) or getattr(settings, "skip_auth", False)
 
 # -----------------------------------------------------------------------------
 # Supabase JWT verification configuration (production)
@@ -39,7 +41,7 @@ SKIP_AUTH: bool = os.getenv("SKIP_AUTH", "false").lower() in {"1", "true", "yes"
 # If SUPABASE_URL is provided, we will verify incoming Bearer tokens against the
 # Supabase project's JWKS endpoint and validate the audience/issuer.
 # NOTE: Full validation logic will be added in a subsequent commit.
-SUPABASE_URL: str | None = os.getenv("SUPABASE_URL")
+SUPABASE_URL: str | None = os.getenv("SUPABASE_URL") or getattr(settings, "supabase_url", None)
 SUPABASE_JWT_AUD: str | None = os.getenv("SUPABASE_JWT_AUD", "authenticated")
 
 # JWKS cache (module-level singletons)
@@ -47,13 +49,14 @@ _SUPABASE_JWKS: dict | None = None
 _SUPABASE_JWKS_FETCHED_AT: datetime | None = None
 _SUPABASE_JWKS_TTL_SECONDS: int = 24 * 60 * 60  # 24 hours
 
+# Allow local/dev bypass: if SKIP_AUTH=true or SUPABASE_URL configured, do not hard-fail on missing SECRET_KEY
 if not SECRET_KEY and not SUPABASE_URL and not SKIP_AUTH:
     raise EnvironmentError(
         "Either JWT_SECRET_KEY or SUPABASE_URL must be configured."
     )
 
-if not SECRET_KEY:
-    raise EnvironmentError("JWT_SECRET_KEY environment variable not set.")
+# SECRET_KEY already falls back to settings.jwt_secret_key for local dev
+# In production, ensure a strong key via env or secrets manager.
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/token", auto_error=not SKIP_AUTH)
 

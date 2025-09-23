@@ -16,6 +16,7 @@ import { CommandBar } from "./components/CommandBar";
 import { FileDropZone } from "./components/FileDropZone";
 import { Attachments, formatBytes } from "./components/Attachments";
 import { useChat, type UIMessage } from "@ai-sdk/react";
+import { type FileUIPart } from "ai";
 import { z } from "zod";
 import type { ThinkingTrace } from "@/types/chat";
 import { sessionsAPI } from "@/lib/api/sessions";
@@ -60,18 +61,48 @@ function ChatContent() {
         thinking_steps: z
           .array(
             z.object({
-              phase: z.string(),
+              phase: z.enum([
+                'QUERY_ANALYSIS',
+                'CONTEXT_RECOGNITION',
+                'SOLUTION_MAPPING',
+                'TOOL_ASSESSMENT',
+                'RESPONSE_STRATEGY',
+                'QUALITY_ASSESSMENT'
+              ]),
               thought: z.string(),
               confidence: z.number(),
             }),
           )
           .optional(),
-        tool_decision: z.string().optional(),
-        tool_confidence: z.string().optional(),
+        tool_decision: z.enum([
+          'NO_TOOLS_NEEDED',
+          'INTERNAL_KB_ONLY',
+          'WEB_SEARCH_REQUIRED',
+          'BOTH_SOURCES_NEEDED',
+          'ESCALATION_REQUIRED'
+        ]).optional(),
+        tool_confidence: z.enum(['HIGH', 'MEDIUM', 'LOW']).optional(),
         knowledge_gaps: z.array(z.string()).optional(),
-        emotional_state: z.string().optional(),
-        problem_category: z.string().optional(),
-        complexity: z.string().optional(),
+        emotional_state: z.enum([
+          'FRUSTRATED',
+          'CONFUSED',
+          'ANXIOUS',
+          'URGENT',
+          'PROFESSIONAL',
+          'SATISFIED',
+          'NEUTRAL',
+          'OTHER'
+        ]).optional(),
+        problem_category: z.enum([
+          'EMAIL_CONNECTIVITY',
+          'ACCOUNT_SETUP',
+          'SYNC_ISSUES',
+          'PERFORMANCE',
+          'FEATURE_EDUCATION',
+          'TECHNICAL_ERROR',
+          'OTHER'
+        ]).optional(),
+        complexity: z.enum(['LOW', 'MEDIUM', 'HIGH', 'VERY_HIGH']).optional(),
         critique_score: z.number().optional(),
         passed_critique: z.boolean().optional(),
       }),
@@ -182,8 +213,29 @@ function ChatContent() {
       console.warn("Failed to auto-create session:", e);
     }
 
+    // Convert File[] to FileUIPart[]
+    const fileUIParts: FileUIPart[] = await Promise.all(
+      mediaFiles.map(async (file) => {
+        const dataUrl = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = (readerEvent) => {
+            resolve(readerEvent.target?.result as string);
+          };
+          reader.onerror = (error) => reject(error);
+          reader.readAsDataURL(file);
+        });
+
+        return {
+          type: 'file' as const,
+          mediaType: file.type,
+          filename: file.name,
+          url: dataUrl,
+        };
+      })
+    );
+
     await sendMessage(
-      { text, files: mediaFiles.length ? mediaFiles : undefined },
+      { text, files: fileUIParts.length ? fileUIParts : undefined },
       {
         body: {
           data: {
@@ -248,7 +300,7 @@ function ChatContent() {
               {/* Right section with action buttons */}
               <div className="flex items-center gap-3">
                 {sessionId && <SessionStatusChip sessionId={sessionId} />}
-                {status === "streaming" && <AutoSaveIndicator isSaving={true} />}
+                {status === "streaming" && <AutoSaveIndicator status="saving" />}
                 <APIKeyStatusBadge />
                 <FeedMeButton mode="navigate" />
                 <SettingsButtonV2 />
@@ -442,7 +494,7 @@ function ChatContent() {
                 model={model}
                 onChangeProvider={(p) => {
                   setProvider(p);
-                  setModel(p === "openai" ? "gpt-4o-mini" : "gemini-2.5-flash");
+                  // Model will be set by ModelSelector component based on validation
                 }}
                 onChangeModel={(m) => setModel(m)}
               />

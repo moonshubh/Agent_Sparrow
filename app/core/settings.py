@@ -40,6 +40,8 @@ class Settings(BaseSettings):
     router_conf_threshold: float = Field(default=0.6, alias="ROUTER_CONF_THRESHOLD")
     use_enhanced_log_analysis: bool = Field(default=True, alias="USE_ENHANCED_LOG_ANALYSIS")
     enhanced_log_model: str = Field(default="gemini-2.5-pro", alias="ENHANCED_LOG_MODEL")
+    # Provider/model selection for primary agent
+    primary_agent_provider: str = Field(default="google", alias="PRIMARY_AGENT_PROVIDER")
     primary_agent_model: str = Field(default="gemini-2.5-flash", alias="PRIMARY_AGENT_MODEL")
     
     # FeedMe Configuration

@@ -80,8 +80,8 @@ export function CommandBar({
           </div>
 
           {/* Voice button */}
-          <VoiceButton 
-            onFinalText={(t) => onChange((prev) => (prev ? prev + ' ' : '') + t)} 
+          <VoiceButton
+            onFinalText={(t) => onChange(value ? value + ' ' + t : t)}
             onInterimText={onInterim}
             className="flex-shrink-0"
           />
