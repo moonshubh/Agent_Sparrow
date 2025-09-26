@@ -151,6 +151,20 @@ class SolutionCandidate:
     fallback_options: List[str] = field(default_factory=list)
     risk_factors: List[str] = field(default_factory=list)
     success_indicators: List[str] = field(default_factory=list)
+    _detailed_approach_override: Optional[str] = field(default=None, repr=False, init=False)
+
+    @property
+    def detailed_approach(self) -> str:
+        """Return a rich text description of the solution steps."""
+        if self._detailed_approach_override:
+            return self._detailed_approach_override
+        if isinstance(self.detailed_steps, str):
+            return self.detailed_steps
+        return "\n".join(self.detailed_steps)
+
+    @detailed_approach.setter
+    def detailed_approach(self, value: str) -> None:
+        self._detailed_approach_override = value
 
 
 @dataclass
@@ -394,3 +408,7 @@ class ReasoningConfig:
     urgency_weight: float = 0.2
     complexity_weight: float = 0.3
     confidence_weight: float = 0.2
+    
+    # Thinking budget controls
+    thinking_budget_override: Optional[int] = None
+    quality_level: str = "balanced"

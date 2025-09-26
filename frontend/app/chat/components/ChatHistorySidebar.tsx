@@ -84,7 +84,7 @@ export function ChatHistorySidebar({ sessionId, onSelect }: Props) {
     try {
       const s = await sessionsAPI.create("primary")
       setSessions(prev => [s, ...prev].slice(0, 10))
-      onSelect(s.id)
+      onSelect(String(s.id))
     } catch (e) {
       console.error("Failed to create session", e)
     }
@@ -98,7 +98,7 @@ export function ChatHistorySidebar({ sessionId, onSelect }: Props) {
       const title = editingTitle.trim()
       try {
         const updated = await sessionsAPI.rename(editingId, title || "Untitled")
-        setSessions(prev => prev.map(s => (s.id === editingId ? updated : s)))
+        setSessions(prev => prev.map(s => (String(s.id) === editingId ? updated : s)))
       } catch (e) {
         console.error('Failed to rename session', e)
       }
@@ -121,7 +121,12 @@ export function ChatHistorySidebar({ sessionId, onSelect }: Props) {
 
       <SidebarContent className="flex-1 px-2 py-2">
         <div className="px-1 pb-2">
-          <Button size="sm" className="w-full justify-center gap-2" onClick={onCreate}>
+          <Button
+            size="sm"
+            className="w-full justify-center gap-2"
+            onClick={onCreate}
+            data-testid="new-chat-button"
+          >
             <Plus className="h-4 w-4" /> New Chat
           </Button>
         </div>
@@ -143,15 +148,17 @@ export function ChatHistorySidebar({ sessionId, onSelect }: Props) {
               )}
               {sessions.map((s) => {
                 const label = s.title?.trim() || (s.agent_type === "log_analysis" ? "Log analysis session" : "Conversation")
-                const isActive = s.id === sessionId
+                const sessionKey = String(s.id)
+                const isActive = sessionKey === sessionId
                 return (
                   <SidebarMenuItem key={s.id} className="group/menu-item">
                     <SidebarMenuButton
                       asChild
                       isActive={isActive}
+                      data-testid={`chat-session-${sessionKey}`}
                       onClick={(e: any) => {
                         e.preventDefault()
-                        onSelect(s.id)
+                        onSelect(sessionKey)
                       }}
                     >
                       <a href="#" className="gap-2 pr-8">
@@ -160,7 +167,7 @@ export function ChatHistorySidebar({ sessionId, onSelect }: Props) {
                         ) : (
                           <MessageSquare className="h-4 w-4" />
                         )}
-                        {editingId === s.id ? (
+                        {editingId === sessionKey ? (
                           <Input
                             autoFocus
                             value={editingTitle}
@@ -205,7 +212,7 @@ export function ChatHistorySidebar({ sessionId, onSelect }: Props) {
                       <DropdownMenuContent align="end" side="right">
                         <DropdownMenuItem
                           onClick={() => {
-                            setEditingId(s.id)
+                            setEditingId(sessionKey)
                             setEditingTitle(label)
                           }}
                         >
@@ -213,7 +220,7 @@ export function ChatHistorySidebar({ sessionId, onSelect }: Props) {
                         </DropdownMenuItem>
                         <DropdownMenuItem
                           className="text-destructive focus:text-destructive"
-                          onClick={() => setConfirmDeleteId(s.id)}
+                          onClick={() => setConfirmDeleteId(sessionKey)}
                         >
                           Delete
                         </DropdownMenuItem>
@@ -243,8 +250,8 @@ export function ChatHistorySidebar({ sessionId, onSelect }: Props) {
                 const id = confirmDeleteId!
                 try {
                   await sessionsAPI.remove(id)
-                  setSessions(prev => prev.filter(s => s.id !== id))
-                  if (sessionId === id) onSelect(undefined)
+                  setSessions(prev => prev.filter(s => String(s.id) !== String(id)))
+                  if (sessionId === String(id)) onSelect(undefined)
                 } catch (e) {
                   console.error('Failed to delete session', e)
                 } finally {

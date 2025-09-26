@@ -1,7 +1,7 @@
 from fastapi import APIRouter, HTTPException, Depends
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from typing import AsyncIterable, List, Annotated
+from typing import Annotated, AsyncIterable, List, Pattern
 from datetime import datetime
 
 from app.agents_v2.primary_agent.agent import run_primary_agent
@@ -33,6 +33,28 @@ router = APIRouter()
 
 # Precompiled regex patterns for performance
 SELF_CRITIQUE_RE = re.compile(r'<self_critique>.*?</self_critique>', flags=re.DOTALL)
+
+SYSTEM_PATTERNS: list[Pattern[str]] = [
+    re.compile(r"<system>.*?</system>", flags=re.DOTALL | re.IGNORECASE),
+    re.compile(r"<internal>.*?</internal>", flags=re.DOTALL | re.IGNORECASE),
+    re.compile(r"<self_critique>.*?</self_critique>", flags=re.DOTALL | re.IGNORECASE),
+    re.compile(r".*loyalty relationship.*", flags=re.IGNORECASE),
+]
+
+
+def _filter_system_text(text: str | None) -> str:
+    """Strip internal/system markers before they reach the UI stream."""
+    if not text:
+        return ""
+
+    filtered = text
+    # Handle legacy critique pattern as well as the consolidated regexes above.
+    filtered = SELF_CRITIQUE_RE.sub("", filtered)
+
+    for pattern in SYSTEM_PATTERNS:
+        filtered = pattern.sub("", filtered)
+
+    return filtered
 
 # --- Helper Functions ---
 
@@ -161,6 +183,9 @@ class ChatRequest(BaseModel):
     model: str | None = None     # model id like "gemini-2.5-flash" or "gpt5-mini"
     # trace_id: str | None = None # Optional, if you plan to propagate trace IDs
 
+import uuid
+
+
 async def primary_agent_stream_generator(
     query: str,
     user_id: str,
@@ -189,8 +214,8 @@ async def primary_agent_stream_generator(
             gemini_key = await user_context.get_gemini_api_key()
             if not gemini_key:
                 error_payload = json.dumps({
-                    "role": "error", 
-                    "content": "API Key Required: Please add your Google Gemini API key in Settings."
+                    "type": "error",
+                    "errorText": "API Key Required: Please add your Google Gemini API key in Settings."
                 }, ensure_ascii=False)
                 yield f"data: {error_payload}\n\n"
                 return
@@ -205,15 +230,15 @@ async def primary_agent_stream_generator(
             openai_key = openai_key or os.getenv("OPENAI_API_KEY")
             if not openai_key:
                 error_payload = json.dumps({
-                    "role": "error", 
-                    "content": "OpenAI API key missing. Add it in Settings or set OPENAI_API_KEY."
+                    "type": "error",
+                    "errorText": "OpenAI API key missing. Add it in Settings or set OPENAI_API_KEY."
                 }, ensure_ascii=False)
                 yield f"data: {error_payload}\n\n"
                 return
         else:
             error_payload = json.dumps({
-                "role": "error", 
-                "content": f"Unsupported provider: {req_provider}"
+                "type": "error",
+                "errorText": f"Unsupported provider: {req_provider}"
             }, ensure_ascii=False)
             yield f"data: {error_payload}\n\n"
             return
@@ -243,27 +268,89 @@ async def primary_agent_stream_generator(
             )
             logger.info(f"[chat_stream] initial_state provider={initial_state.provider}, model={initial_state.model}")
             
+            stream_id = f"assistant-{uuid.uuid4().hex}"
+            text_started = False
+
             async for chunk in run_primary_agent(initial_state):
-                json_payload = ""
+                payloads: list[dict] = []
+
                 if hasattr(chunk, 'content') and chunk.content is not None:
-                    role = getattr(chunk, 'role', 'assistant') or 'assistant'
-                    json_payload = json.dumps({"role": role, "content": chunk.content}, ensure_ascii=False)
-                elif hasattr(chunk, 'additional_kwargs') and chunk.additional_kwargs.get('metadata'):
-                    # Send metadata (including follow-up questions) as a separate event
-                    metadata = chunk.additional_kwargs['metadata']
-                    json_payload = json.dumps({
-                        "role": "metadata", 
-                        "metadata": metadata
-                    }, ensure_ascii=False)
-                
-                if json_payload:
-                    yield f"data: {json_payload}\n\n"
-                    
+                    content_piece = chunk.content
+                    if not isinstance(content_piece, str):
+                        try:
+                            content_piece = json.dumps(content_piece, ensure_ascii=False)
+                        except TypeError:
+                            content_piece = str(content_piece)
+
+                    content_piece = _filter_system_text(content_piece)
+
+                    if content_piece:
+                        if not text_started:
+                            payloads.append({
+                                "type": "text-start",
+                                "id": stream_id,
+                            })
+                            text_started = True
+
+                        payloads.append({
+                            "type": "text-delta",
+                            "id": stream_id,
+                            "delta": content_piece,
+                        })
+
+                metadata = getattr(chunk, "additional_kwargs", {}).get("metadata") if hasattr(chunk, "additional_kwargs") else None
+                if metadata:
+                    # Follow-up questions
+                    followups = metadata.get("followUpQuestions")
+                    if followups:
+                        payloads.append({
+                            "type": "data-followups",
+                            "data": followups,
+                            "transient": True,
+                        })
+
+                    # Thinking trace
+                    thinking_trace = metadata.get("thinking_trace")
+                    if thinking_trace:
+                        payloads.append({
+                            "type": "data-thinking",
+                            "data": thinking_trace,
+                        })
+
+                    tool_results = metadata.get("toolResults")
+                    if tool_results:
+                        payloads.append({
+                            "type": "data-tool-result",
+                            "data": tool_results,
+                        })
+
+                    # Any remaining metadata keys that haven't been emitted yet
+                    leftover = {
+                        key: value for key, value in metadata.items()
+                        if key not in {"followUpQuestions", "thinking_trace", "toolResults"}
+                    }
+                    if leftover:
+                        payloads.append({
+                            "type": "message-metadata",
+                            "messageMetadata": leftover,
+                        })
+
+                for payload in payloads:
+                    yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+            if text_started:
+                finish_payloads = [
+                    {"type": "text-end", "id": stream_id},
+                    {"type": "finish"},
+                ]
+                for payload in finish_payloads:
+                    yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
     except Exception as e:
         # Use logger for consistency if available, otherwise print
         # logger.error(f"Error in primary_agent_stream_generator calling run_primary_agent: {e}", exc_info=True)
         logger.error(f"Error in primary_agent_stream_generator calling run_primary_agent: {e}", exc_info=True)
-        error_payload = json.dumps({"role": "error", "content": f"An error occurred in the agent: {str(e)}"}, ensure_ascii=False)
+        error_payload = json.dumps({"type": "error", "errorText": f"An error occurred in the agent: {str(e)}"}, ensure_ascii=False)
         yield f"data: {error_payload}\n\n"
 
 # Legacy v1 endpoint - DEPRECATED but maintained for backward compatibility

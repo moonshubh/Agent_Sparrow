@@ -367,7 +367,8 @@ async def analyze_with_reasoning(
                 enable_tool_intelligence=request.enable_tool_intelligence,
                 enable_quality_assessment=request.enable_quality_assessment,
                 enable_reasoning_transparency=True,
-                thinking_budget=request.thinking_budget
+                thinking_budget_override=request.thinking_budget,
+                quality_level=request.quality_level
             )
 
             # Load model via provider registry
@@ -375,7 +376,13 @@ async def analyze_with_reasoning(
             model = await get_primary_agent_model(api_key=api_key, provider=provider, model=model_id)
 
             # Instantiate reasoning engine with model (fix incorrect ctor)
-            reasoning_engine = ReasoningEngine(model=model, config=config)
+            reasoning_engine = ReasoningEngine(
+                model=model,
+                config=config,
+                provider=provider,
+                model_name=model_id,
+            )
+            reasoning_engine._api_key = api_key
             
             # Generate session ID if not provided
             session_id = request.session_id or str(uuid.uuid4())

@@ -17,7 +17,7 @@ class GoogleGeminiFlashAdapter(ProviderAdapter):
     provider = "google"
     model_name = "gemini-2.5-flash"
 
-    def get_system_prompt(self) -> str:
+    def get_system_prompt(self, version: str = "latest") -> str:
         # Load colocated system prompt
         prompt_path = os.path.join(os.path.dirname(__file__), "system-prompt.md")
         try:
@@ -39,9 +39,33 @@ class GoogleGeminiFlashAdapter(ProviderAdapter):
             model=self.model_name,
             temperature=temperature,
             google_api_key=key,
-            safety_settings=safety_settings
+            safety_settings=safety_settings,
+            convert_system_message_to_human=True
         )
         return model
+
+    async def load_reasoning_model(
+        self,
+        *,
+        api_key: Optional[str] = None,
+        thinking_budget: Optional[int] = None,
+        **kwargs,
+    ) -> BaseChatModel:
+        key = api_key or os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_GENERATIVE_AI_API_KEY")
+        if not key:
+            raise ValueError("Missing Google Gemini API key")
+        temperature = float(os.getenv("PRIMARY_AGENT_TEMPERATURE", "0.2"))
+        safety_settings = kwargs.get("safety_settings", None)
+        model_kwargs = {
+            "model": self.model_name,
+            "temperature": temperature,
+            "google_api_key": key,
+            "safety_settings": safety_settings,
+            "convert_system_message_to_human": True,
+        }
+        if thinking_budget is not None:
+            model_kwargs["thinking_budget"] = thinking_budget
+        return _GeminiModelWrapper(**model_kwargs)
 
 # Registration
 from app.providers.registry import register_adapter

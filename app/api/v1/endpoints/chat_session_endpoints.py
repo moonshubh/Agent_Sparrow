@@ -17,6 +17,8 @@ import os
 import uuid
 import hashlib
 import secrets
+import itertools
+from collections import defaultdict
 
 from app.core.constants import AGENT_SESSION_LIMITS
 
@@ -51,6 +53,65 @@ GUEST_USER_COOKIE_NAME = "guest_user_id"
 GUEST_USER_COOKIE_MAX_AGE = 60 * 60 * 24 * 30  # 30 days
 GUEST_USER_PREFIX = "guest_"
 
+# Local in-memory fallback stores for development when Postgres is unavailable
+LOCAL_CHAT_SESSIONS: dict[str, List[dict[str, Any]]] = defaultdict(list)
+LOCAL_CHAT_MESSAGES: dict[int, List[dict[str, Any]]] = defaultdict(list)
+LOCAL_MESSAGE_ID_COUNTER = itertools.count(1)
+
+
+def _get_local_session(user_id: str, session_id: int) -> Optional[dict[str, Any]]:
+    for session in LOCAL_CHAT_SESSIONS.get(user_id, []):
+        if session['id'] == session_id:
+            return session
+    return None
+
+
+def _persist_local_session(user_id: str, session: dict[str, Any]) -> dict[str, Any]:
+    sessions = LOCAL_CHAT_SESSIONS[user_id]
+    sessions[:] = [existing for existing in sessions if existing['id'] != session['id']]
+    sessions.append(session)
+    sessions.sort(key=lambda s: s['last_message_at'], reverse=True)
+    _enforce_local_session_limit(user_id, session['agent_type'])
+    return session
+
+
+def _enforce_local_session_limit(user_id: str, agent_type: str) -> None:
+    sessions = LOCAL_CHAT_SESSIONS[user_id]
+    limit = AGENT_SESSION_LIMITS.get(agent_type, AGENT_SESSION_LIMITS['primary'])
+    active_sessions = [s for s in sessions if s['is_active'] and s['agent_type'] == agent_type]
+    display_user = hashlib.sha256(user_id.encode()).hexdigest()[:8]
+    while len(active_sessions) > limit:
+        oldest = min(active_sessions, key=lambda s: s['last_message_at'])
+        sessions[:] = [s for s in sessions if s['id'] != oldest['id']]
+        LOCAL_CHAT_MESSAGES.pop(oldest['id'], None)
+        logger.info("Evicted local chat session %s for user %s (agent_type=%s limit=%s)", oldest['id'], display_user, agent_type, limit)
+        active_sessions = [s for s in sessions if s['is_active'] and s['agent_type'] == agent_type]
+    sessions.sort(key=lambda s: s['last_message_at'], reverse=True)
+
+
+def _store_local_message(
+    user_id: str,
+    session_id: int,
+    message: dict[str, Any],
+) -> dict[str, Any]:
+    session = _get_local_session(user_id, session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Chat session not found")
+
+    messages = LOCAL_CHAT_MESSAGES[session_id]
+    messages.append(message)
+    messages.sort(key=lambda m: m['created_at'])
+
+    session['message_count'] = len(messages)
+    session['last_message_at'] = message['created_at']
+    session['updated_at'] = message['created_at']
+    _persist_local_session(user_id, session)
+    return message
+
+
+def _enum_value(value: Any) -> Any:
+    return value.value if hasattr(value, "value") else value
+
 class ChatMessageAppendRequest(BaseModel):
     """Payload for appending content to an existing chat message"""
     delta: str = Field(..., min_length=1, description="Text to append to the message content")
@@ -58,17 +119,21 @@ class ChatMessageAppendRequest(BaseModel):
 
 # Database connection setup
 def get_db_connection():
-    """Get a database connection using Supabase credentials"""
-    # In local mode with auth bypass, skip database connection
-    if settings.skip_auth or os.getenv("SKIP_AUTH", "false").lower() in {"1", "true", "yes"}:
+    """Get a database connection using Supabase credentials.
+
+    Falls back to None (mock mode) when authentication is skipped or a connection
+    cannot be established. This keeps local development usable without requiring
+    Postgres while preserving production behaviour.
+    """
+
+    skip_auth_flag = settings.skip_auth or os.getenv("SKIP_AUTH", "false").lower() in {"1", "true", "yes"}
+    if skip_auth_flag:
         logger.info("Skipping database connection in local auth bypass mode")
         return None
-    
-    # Try to get DATABASE_URL first
+
     database_url = os.getenv("DATABASE_URL")
-    
+
     if not database_url:
-        # Build from Supabase settings
         supabase_url = settings.supabase_url
         if supabase_url and supabase_url.startswith("https://"):
             project_id = supabase_url.split("//")[1].split(".")[0]
@@ -76,10 +141,17 @@ def get_db_connection():
             if supabase_db_password:
                 database_url = f"postgresql://postgres:{supabase_db_password}@db.{project_id}.supabase.co:5432/postgres"
             else:
-                # Fallback to local development
                 database_url = "postgresql://postgres:postgres@localhost:5432/postgres"
-    
-    return psycopg2.connect(database_url, cursor_factory=RealDictCursor)
+
+    if not database_url:
+        logger.warning("DATABASE_URL not configured; operating without persistent storage")
+        return None
+
+    try:
+        return psycopg2.connect(database_url, cursor_factory=RealDictCursor)
+    except psycopg2.Error as exc:
+        logger.error("Failed to connect to database (%s). Falling back to mock mode.", exc)
+        return None
 
 
 # Database helper functions
@@ -467,21 +539,22 @@ async def create_chat_session(
         if conn is None:
             from datetime import datetime
             import uuid
+
+            now = datetime.utcnow()
             mock_session = {
-                'id': abs(hash(str(uuid.uuid4()))) % (10**8),  # Generate a random int ID
+                'id': abs(hash(str(uuid.uuid4()))) % (10**8),
                 'user_id': user_id,
-                'agent_type': session_data.agent_type.value if session_data.agent_type else 'primary',
-                'session_key': str(uuid.uuid4()),
+                'agent_type': _enum_value(session_data.agent_type) or 'primary',
                 'title': session_data.title or 'New Chat',
-                'summary': session_data.summary,
                 'metadata': session_data.metadata or {},
                 'is_active': True,
-                'created_at': datetime.utcnow(),
-                'updated_at': datetime.utcnow(),
-                'last_activity': datetime.utcnow(),
-                'message_count': 0
+                'created_at': now,
+                'updated_at': now,
+                'last_message_at': now,
+                'message_count': 0,
             }
-            logger.info(f"Created mock chat session in local mode: {mock_session['id']}")
+            _persist_local_session(user_id, mock_session)
+            logger.info("Created mock chat session in local mode: %s", mock_session['id'])
             return ChatSession(**mock_session)
         
         session_dict = create_chat_session_in_db(conn, session_data, user_id)
@@ -523,21 +596,36 @@ async def list_chat_sessions(
         else:
             user_id = get_or_create_guest_user_id(request, response)
         
+        effective_is_active = True if is_active is None else is_active
+
         conn = get_db_connection()
-        
-        # If no database connection (local mode), return empty list
+
         if conn is None:
+            sessions = LOCAL_CHAT_SESSIONS.get(user_id, [])
+            agent_filter = agent_type.value if agent_type else None
+            filtered = [
+                session for session in sessions
+                if (agent_filter is None or session['agent_type'] == agent_filter)
+                and (effective_is_active is None or session['is_active'] == effective_is_active)
+            ]
+
+            filtered.sort(key=lambda s: s['last_message_at'], reverse=True)
+
+            start = (page - 1) * page_size
+            end = start + page_size
+            window = filtered[start:end]
+
             return ChatSessionListResponse(
-                sessions=[],
-                total_count=0,
+                sessions=[ChatSession(**session) for session in window],
+                total_count=len(filtered),
                 page=page,
                 page_size=page_size,
-                has_more=False
+                has_next=end < len(filtered),
+                has_previous=start > 0
             )
         
         # Always fetch active sessions only by default unless explicitly requested otherwise
-        if is_active is None:
-            is_active = True
+        is_active = effective_is_active
             
         request = ChatSessionListRequest(
             agent_type=agent_type,
@@ -673,17 +761,31 @@ async def create_chat_message(
         message_data.session_id = session_id
         
         conn = get_db_connection()
-        logger.debug(f"[MESSAGE SAVE] Database connection established")
-        
+
+        if conn is None:
+            now = datetime.utcnow()
+            message_dict = {
+                'id': next(LOCAL_MESSAGE_ID_COUNTER),
+                'session_id': session_id,
+                'content': message_data.content,
+                'message_type': _enum_value(message_data.message_type),
+                'agent_type': _enum_value(message_data.agent_type),
+                'metadata': message_data.metadata or {},
+                'created_at': now,
+            }
+            stored = _store_local_message(user_id, session_id, message_dict)
+            return ChatMessage(**stored)
+
+        logger.debug("[MESSAGE SAVE] Database connection established")
+
         message_dict = create_chat_message_in_db(conn, message_data, user_id)
         logger.debug(f"[MESSAGE SAVE] Message saved to database with ID: {message_dict.get('id')}")
-        
-        # Verify full content was stored
+
         if message_data.content and len(message_data.content) != len(message_dict.get('content', '')):
-            logger.error(f"[MESSAGE SAVE] Content length mismatch detected")
+            logger.error("[MESSAGE SAVE] Content length mismatch detected")
         else:
-            logger.debug(f"[MESSAGE SAVE] Content verification passed")
-        
+            logger.debug("[MESSAGE SAVE] Content verification passed")
+
         return ChatMessage(**message_dict)
     except HTTPException as e:
         logger.error(f"[MESSAGE SAVE] HTTP Exception: {e.detail}")
@@ -721,6 +823,23 @@ async def append_chat_message(
             raise HTTPException(status_code=400, detail="Delta cannot be empty")
 
         conn = get_db_connection()
+
+        if conn is None:
+            messages = LOCAL_CHAT_MESSAGES.get(session_id, [])
+            target = next((m for m in messages if m['id'] == message_id), None)
+            if target is None:
+                raise HTTPException(status_code=404, detail="Message not found")
+
+            target['content'] = f"{target.get('content', '')}{append_data.delta}"
+            now = datetime.utcnow()
+            session = _get_local_session(user_id, session_id)
+            if session:
+                session['last_message_at'] = now
+                session['updated_at'] = now
+                _persist_local_session(user_id, session)
+
+            return ChatMessage(**target)
+
         message = append_chat_message_content_in_db(conn, session_id, message_id, user_id, append_data.delta)
         return ChatMessage(**message)
     except HTTPException:
@@ -753,22 +872,42 @@ async def list_chat_messages(
             user_id = get_or_create_guest_user_id(request, response)
         
         conn = get_db_connection()
+
+        if conn is None:
+            session = _get_local_session(user_id, session_id)
+            if session is None:
+                raise HTTPException(status_code=404, detail="Chat session not found")
+
+            stored_messages = LOCAL_CHAT_MESSAGES.get(session_id, [])
+            if message_type is not None:
+                stored_messages = [m for m in stored_messages if m['message_type'] == message_type.value]
+
+            chat_messages = [ChatMessage(**msg) for msg in stored_messages]
+
+            return ChatMessageListResponse(
+                messages=chat_messages,
+                total_count=len(chat_messages),
+                page=1,
+                page_size=len(chat_messages) if chat_messages else page_size,
+                has_next=False,
+                has_previous=False
+            )
+
         request = ChatMessageListRequest(
             page=page,
             page_size=page_size,  # Increased default to ensure all messages are loaded
             message_type=message_type
         )
-        
+
         result = get_chat_messages_for_session(conn, session_id, user_id, request)
         messages = [ChatMessage(**msg) for msg in result["messages"]]
-        
-        # Log if any messages seem truncated
+
         for msg in messages:
             if msg.content and len(msg.content) > 100 and msg.content.endswith('...'):
                 logger.warning(f"Message {msg.id} may be truncated in retrieval")
-        
+
         logger.info(f"Retrieved {len(messages)} messages for session {session_id} for user {user_id}")
-        
+
         return ChatMessageListResponse(
             messages=messages,
             total_count=result["total_count"],

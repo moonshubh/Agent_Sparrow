@@ -257,12 +257,20 @@ async def run_primary_agent(state: PrimaryAgentState) -> AsyncIterator[AIMessage
                 enable_tool_intelligence=settings.reasoning_enable_tool_intelligence,
                 enable_quality_assessment=settings.reasoning_enable_quality_assessment,
                 enable_reasoning_transparency=settings.reasoning_enable_reasoning_transparency,
-                debug_mode=settings.reasoning_debug_mode
+                debug_mode=settings.reasoning_debug_mode,
+                quality_level=getattr(settings, "primary_agent_quality_level", "balanced")
             )
-            reasoning_engine = ReasoningEngine(model=model_with_tools, config=reasoning_config)
-            # Store API key for creating models with thinking budgets (Gemini only)
+            reasoning_engine = ReasoningEngine(
+                model=model_with_tools,
+                config=reasoning_config,
+                provider=provider,
+                model_name=model_name,
+            )
+            # Store API key for provider-specific reasoning models
             if provider == "google":
                 reasoning_engine._api_key = used_key
+            elif provider == "openai":
+                reasoning_engine._api_key = openai_key
 
             # Perform comprehensive reasoning with optimized LLM calls
             reasoning_state = await reasoning_engine.reason_about_query(
@@ -321,6 +329,18 @@ async def run_primary_agent(state: PrimaryAgentState) -> AsyncIterator[AIMessage
             if follow_up_questions:
                 metadata_to_send["followUpQuestions"] = follow_up_questions[:5]  # Limit to 5 questions
                 metadata_to_send["followUpQuestionsUsed"] = 0
+
+            # Surface tool decision details for UI consumption
+            if reasoning_state and reasoning_state.tool_reasoning:
+                tool_reasoning = reasoning_state.tool_reasoning
+                metadata_to_send["toolResults"] = {
+                    "decision": tool_reasoning.decision_type.value,
+                    "reasoning": tool_reasoning.reasoning,
+                    "confidence": tool_reasoning.confidence,
+                    "required_information": tool_reasoning.required_information,
+                    "knowledge_gaps": tool_reasoning.knowledge_gaps,
+                    "expected_sources": tool_reasoning.expected_sources,
+                }
             
             # Add thinking trace if enabled
             if settings.should_enable_thinking_trace() and reasoning_state:

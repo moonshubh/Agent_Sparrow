@@ -22,5 +22,12 @@ class ProviderAdapter(Protocol):
     provider: str
     model_name: str
 
-    def get_system_prompt(self) -> str: ...
+    def get_system_prompt(self, version: str = "latest") -> str: ...
     async def load_model(self, *, api_key: Optional[str] = None, **kwargs) -> BaseChatModel: ...
+    async def load_reasoning_model(
+        self,
+        *,
+        api_key: Optional[str] = None,
+        thinking_budget: Optional[int] = None,
+        **kwargs,
+    ) -> BaseChatModel: ...

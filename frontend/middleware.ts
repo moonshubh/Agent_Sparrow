@@ -30,50 +30,12 @@ export async function middleware(request: NextRequest) {
 
   // In local auth bypass mode, check for local token
   if (isLocalAuthBypass) {
-    // Special handling for /api/chat in local mode
-    if (pathname === '/api/chat') {
-      // In local dev mode, allow requests without authentication
-      if (process.env.NODE_ENV === 'development') {
-        console.log('Middleware - /api/chat: Local auth bypass enabled - allowing request')
-      }
-      return NextResponse.next()
-    }
-
-    // Skip auth checks for other routes in local mode
     if (!pathname.startsWith('/api')) {
       if (process.env.NODE_ENV === 'development') {
         console.log('Middleware - Local auth bypass mode, skipping auth checks for:', pathname)
       }
       return NextResponse.next()
     }
-  }
-
-  // Special handling for /api/chat - requires authentication
-  if (pathname === '/api/chat') {
-    const authHeader = request.headers.get('authorization')
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
-      if (process.env.NODE_ENV === 'development') {
-        console.log('Middleware - /api/chat: No authorization header')
-      }
-      return new Response('Unauthorized: Authentication required', { status: 401 })
-    }
-
-    // Use Edge Runtime compatible auth verification
-    const token = authHeader.replace('Bearer ', '')
-    const { user, error } = await getUserFromToken(token)
-
-    if (error || !user) {
-      if (process.env.NODE_ENV === 'development') {
-        console.log('Middleware - /api/chat: Invalid token')
-      }
-      return new Response('Unauthorized: Invalid authentication token', { status: 401 })
-    }
-
-    if (process.env.NODE_ENV === 'development') {
-      console.log('Middleware - /api/chat: User authenticated')
-    }
-    // Continue with the request
-    return NextResponse.next()
   }
 
   // Skip middleware for other API routes that don't need frontend middleware

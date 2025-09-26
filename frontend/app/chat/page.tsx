@@ -1,15 +1,15 @@
 "use client";
 
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import dynamic from "next/dynamic";
-import { initializeLocalAuth } from "@/lib/local-auth";
+import { getAuthToken, initializeLocalAuth } from "@/lib/local-auth";
 import {
   SidebarProvider,
   SidebarTrigger,
   SidebarInset,
   useSidebar,
 } from "@/components/ui/sidebar";
-import { PanelLeft } from "lucide-react";
+import { PanelLeft, ChevronDown } from "lucide-react";
 import { ChatHistorySidebar } from "@/app/chat/components/ChatHistorySidebar";
 import { AssistantMessage } from "./components/AssistantMessage";
 import { CommandBar } from "./components/CommandBar";
@@ -17,8 +17,6 @@ import { FileDropZone } from "./components/FileDropZone";
 import { Attachments, formatBytes } from "./components/Attachments";
 import { useChat, type UIMessage } from "@ai-sdk/react";
 import { type FileUIPart } from "ai";
-import { z } from "zod";
-import type { ThinkingTrace } from "@/types/chat";
 import { sessionsAPI } from "@/lib/api/sessions";
 import { rateLimitApi } from "@/lib/api/rateLimitApi";
 import { APIKeyStatusBadge } from "@/components/api-keys/APIKeyStatusBadge";
@@ -27,6 +25,18 @@ import { AutoSaveIndicator } from "@/components/sessions/AutoSaveIndicator";
 import { SettingsButtonV2 } from "@/components/ui/SettingsButtonV2";
 import { FeedMeButton } from "@/components/ui/FeedMeButton";
 import ShinyText from "@/components/ShinyText";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { Button } from "@/components/ui/button";
+import { createBackendChatTransport } from "@/lib/providers/unified-client";
 
 // Defer LightRays to client only to avoid SSR/WebGL mismatches
 const LightRays = dynamic(() => import("@/components/LightRays"), {
@@ -34,11 +44,15 @@ const LightRays = dynamic(() => import("@/components/LightRays"), {
 });
 
 // Main chat content component
-function ChatContent() {
+type ChatContentProps = {
+  sessionId: string;
+  setSessionId: React.Dispatch<React.SetStateAction<string>>;
+};
+
+function ChatContent({ sessionId, setSessionId }: ChatContentProps) {
   const [input, setInput] = useState("");
   const [provider, setProvider] = useState<"google" | "openai">("google");
   const [model, setModel] = useState<string>("gemini-2.5-flash");
-  const [sessionId, setSessionId] = useState<string>("");
   const [mediaFiles, setMediaFiles] = useState<File[]>([]);
   const [logFile, setLogFile] = useState<File | null>(null);
   const [attachError, setAttachError] = useState<string | null>(null);
@@ -47,65 +61,83 @@ function ChatContent() {
   const [enableFx, setEnableFx] = useState<boolean>(true);
   const [reducedMotion, setReducedMotion] = useState<boolean>(false);
   const [history, setHistory] = useState<Array<{ role: 'user' | 'assistant'; content: string }>>([]);
+  const [toolDecision, setToolDecision] = useState<any>(null);
+  const [followUpQuestions, setFollowUpQuestions] = useState<string[] | null>(null);
   const { state, toggleSidebar } = useSidebar();
+  const fallbackSessionRef = useRef<string>(crypto.randomUUID());
+  const previousSessionIdRef = useRef<string>("");
+  const lastPersistedSessionIdRef = useRef<string>("");
 
-  type DataParts = { followups: string[]; thinking: ThinkingTrace };
-  type ClientMessage = UIMessage<unknown, DataParts>;
+  if (!sessionId && previousSessionIdRef.current) {
+    fallbackSessionRef.current = crypto.randomUUID();
+  }
+  previousSessionIdRef.current = sessionId;
+
+  const effectiveSessionId = sessionId || fallbackSessionRef.current;
+
+  const getMessageText = (m: any) =>
+    (m?.parts || [])
+      .filter((p: any) => p.type === "text")
+      .map((p: any) => p.text)
+      .join("");
+
+  type ClientMessage = UIMessage<any, any>;
+
+  const transport = useMemo(
+    () =>
+      createBackendChatTransport({
+        provider,
+        model,
+        sessionId: effectiveSessionId,
+        getAuthToken: async () => getAuthToken(),
+      }),
+    [provider, model, effectiveSessionId],
+  );
 
   const { messages, sendMessage, status, error } = useChat<ClientMessage>({
+    id: effectiveSessionId,
+    transport,
     onError: (e) => console.error("AI chat error:", e),
-    dataPartSchemas: {
-      followups: z.array(z.string()).max(10),
-      thinking: z.object({
-        confidence: z.number(),
-        thinking_steps: z
-          .array(
-            z.object({
-              phase: z.enum([
-                'QUERY_ANALYSIS',
-                'CONTEXT_RECOGNITION',
-                'SOLUTION_MAPPING',
-                'TOOL_ASSESSMENT',
-                'RESPONSE_STRATEGY',
-                'QUALITY_ASSESSMENT'
-              ]),
-              thought: z.string(),
-              confidence: z.number(),
-            }),
-          )
-          .optional(),
-        tool_decision: z.enum([
-          'NO_TOOLS_NEEDED',
-          'INTERNAL_KB_ONLY',
-          'WEB_SEARCH_REQUIRED',
-          'BOTH_SOURCES_NEEDED',
-          'ESCALATION_REQUIRED'
-        ]).optional(),
-        tool_confidence: z.enum(['HIGH', 'MEDIUM', 'LOW']).optional(),
-        knowledge_gaps: z.array(z.string()).optional(),
-        emotional_state: z.enum([
-          'FRUSTRATED',
-          'CONFUSED',
-          'ANXIOUS',
-          'URGENT',
-          'PROFESSIONAL',
-          'SATISFIED',
-          'NEUTRAL',
-          'OTHER'
-        ]).optional(),
-        problem_category: z.enum([
-          'EMAIL_CONNECTIVITY',
-          'ACCOUNT_SETUP',
-          'SYNC_ISSUES',
-          'PERFORMANCE',
-          'FEATURE_EDUCATION',
-          'TECHNICAL_ERROR',
-          'OTHER'
-        ]).optional(),
-        complexity: z.enum(['LOW', 'MEDIUM', 'HIGH', 'VERY_HIGH']).optional(),
-        critique_score: z.number().optional(),
-        passed_critique: z.boolean().optional(),
-      }),
+    onFinish: async ({ message: assistantMessage, messages: chatMessages, isAbort, isError }) => {
+      const activeSessionId = sessionId || lastPersistedSessionIdRef.current;
+      if (!activeSessionId) return;
+
+      try {
+        const lastUser = [...chatMessages].reverse().find((m) => m.role === 'user');
+        const userText = lastUser ? getMessageText(lastUser).trim() : "";
+        const assistantText = getMessageText(assistantMessage).trim();
+
+        if (userText) {
+          await sessionsAPI.postMessage(activeSessionId, {
+            message_type: 'user',
+            agent_type: 'primary',
+            content: userText,
+          });
+        }
+
+        if (!isAbort && !isError && assistantText) {
+          const metadataPayload: Record<string, any> = {};
+          const messageMetadata = (assistantMessage as any)?.metadata;
+          if (messageMetadata && Object.keys(messageMetadata).length > 0) {
+            metadataPayload.messageMetadata = messageMetadata;
+          }
+          const dataParts = Array.isArray((assistantMessage as any)?.data)
+            ? (assistantMessage as any).data
+            : [];
+          if (dataParts.length > 0) {
+            metadataPayload.dataParts = dataParts;
+          }
+
+          await sessionsAPI.postMessage(activeSessionId, {
+            message_type: 'assistant',
+            agent_type: 'primary',
+            content: assistantText,
+            ...(Object.keys(metadataPayload).length > 0 ? { metadata: metadataPayload } : {}),
+          });
+        }
+      } catch (persistError) {
+        console.error('Failed to persist messages:', persistError);
+      }
     },
   });
 
@@ -160,6 +192,30 @@ function ChatContent() {
     return () => { mounted = false };
   }, [sessionId]);
 
+  useEffect(() => {
+    if (sessionId) {
+      lastPersistedSessionIdRef.current = sessionId;
+    } else {
+      lastPersistedSessionIdRef.current = "";
+    }
+  }, [sessionId]);
+
+  useEffect(() => {
+    const lastAssistant = [...messages].reverse().find((m) => m.role === 'assistant');
+    if (!lastAssistant) {
+      setFollowUpQuestions(null);
+      setToolDecision(null);
+      return;
+    }
+    const dataParts = ((lastAssistant as any).data ?? []) as Array<{ type: string; data?: any }>;
+    const followupsPart = dataParts.find((part) => part.type === 'data-followups');
+    setFollowUpQuestions(
+      Array.isArray(followupsPart?.data) ? (followupsPart!.data as string[]) : null,
+    );
+    const toolPart = dataParts.find((part) => part.type === 'data-tool-result' || part.type === 'tool-result');
+    setToolDecision(toolPart?.data ?? null);
+  }, [messages]);
+
   const onSend = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     if (
@@ -202,15 +258,22 @@ function ChatContent() {
     setInterimVoice("");
 
     // Auto-create session on first send if none exists
-    let effectiveSessionId = sessionId;
+    let nextSessionId = sessionId;
     try {
       if (!sessionId) {
         const session = await sessionsAPI.create("primary");
-        effectiveSessionId = session.id;
-        setSessionId(session.id);
+        const createdId = String(session.id);
+        nextSessionId = createdId;
+        setSessionId(createdId);
+        fallbackSessionRef.current = createdId;
+        lastPersistedSessionIdRef.current = createdId;
       }
     } catch (e) {
       console.warn("Failed to auto-create session:", e);
+    }
+
+    if (nextSessionId) {
+      lastPersistedSessionIdRef.current = nextSessionId;
     }
 
     // Convert File[] to FileUIPart[]
@@ -242,7 +305,7 @@ function ChatContent() {
             ...(attachedLogText ? { attachedLogText } : {}),
             modelProvider: provider,
             model,
-            sessionId: effectiveSessionId || undefined,
+            sessionId: nextSessionId || fallbackSessionRef.current,
             useServerMemory: true,
           },
         },
@@ -253,17 +316,33 @@ function ChatContent() {
     setLogFile(null);
   };
 
-  const getMessageText = (m: any) =>
-    (m.parts || [])
-      .filter((p: any) => p.type === "text")
-      .map((p: any) => p.text)
-      .join("");
-
   const hasContent = messages.length > 0;
   // Cap total rendered messages to 100 by reducing history slice
   const maxTotal = 100;
   const displayedHistory = history.slice(-Math.max(0, maxTotal - messages.length));
   const showFx = enableFx && !reducedMotion;
+  const primaryModelLabel = model.startsWith('gpt') ? 'GPT-5 Mini' : 'Gemini 2.5 Flash';
+
+  const handleModelSelect = (nextProvider: 'google' | 'openai', nextModel: string) => {
+    setProvider(nextProvider);
+    setModel(nextModel);
+  };
+
+  const handleLogAnalysisSelect = () => {
+    setProvider('google');
+    setModel('gemini-2.5-flash');
+    if (!input) {
+      setInput('Please analyze the attached log file and highlight any critical errors.');
+    }
+  };
+
+  const handleResearchSelect = () => {
+    setProvider('openai');
+    setModel('gpt-5-mini-2025-08-07');
+    if (!input) {
+      setInput('Research the latest Mailbird updates and provide key insights.');
+    }
+  };
 
   return (
     <div className="relative min-h-svh">
@@ -293,11 +372,63 @@ function ChatContent() {
         {/* Header */}
         <header className="sticky top-0 z-50 backdrop-blur-lg border-b border-border/40 bg-[hsl(0_0%_9%/0.90)]">
           <div className="w-full px-4 py-3">
-            <div className="flex items-center">
-              {/* Left spacer to balance layout; no icons on top */}
-              <div className="flex-1" />
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <SidebarTrigger className="rounded-full border border-border/40 bg-background/60 hover:bg-background/80" />
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button
+                      variant="ghost"
+                      className="flex items-center gap-2 px-3 py-2 text-sm font-medium"
+                    >
+                      <span>Primary Agent</span>
+                      <span className="text-xs text-muted-foreground">{primaryModelLabel}</span>
+                      <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="start" className="w-56">
+                    <DropdownMenuSub>
+                      <DropdownMenuSubTrigger>Primary Agent</DropdownMenuSubTrigger>
+                      <DropdownMenuSubContent>
+                        <DropdownMenuItem
+                          onSelect={(event) => {
+                            event.preventDefault();
+                            handleModelSelect('google', 'gemini-2.5-flash');
+                          }}
+                        >
+                          Gemini 2.5 Flash
+                        </DropdownMenuItem>
+                        <DropdownMenuItem
+                          onSelect={(event) => {
+                            event.preventDefault();
+                            handleModelSelect('openai', 'gpt-5-mini-2025-08-07');
+                          }}
+                        >
+                          GPT-5 Mini
+                        </DropdownMenuItem>
+                      </DropdownMenuSubContent>
+                    </DropdownMenuSub>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem
+                      onSelect={(event) => {
+                        event.preventDefault();
+                        handleLogAnalysisSelect();
+                      }}
+                    >
+                      Log Analysis
+                    </DropdownMenuItem>
+                    <DropdownMenuItem
+                      onSelect={(event) => {
+                        event.preventDefault();
+                        handleResearchSelect();
+                      }}
+                    >
+                      Research
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              </div>
 
-              {/* Right section with action buttons */}
               <div className="flex items-center gap-3">
                 {sessionId && <SessionStatusChip sessionId={sessionId} />}
                 {status === "streaming" && <AutoSaveIndicator status="saving" />}
@@ -407,6 +538,26 @@ function ChatContent() {
               </div>
             )}
 
+            {toolDecision && (
+              <div className="mt-6 rounded-2xl border border-border/40 bg-secondary/40 p-4 text-sm text-muted-foreground">
+                <p className="font-semibold text-foreground">Tool decision</p>
+                <p className="mt-1 text-foreground/80">{toolDecision.decision}</p>
+                {toolDecision.reasoning && (
+                  <p className="mt-2 leading-relaxed">{toolDecision.reasoning}</p>
+                )}
+                {Array.isArray(toolDecision.required_information) && toolDecision.required_information.length > 0 && (
+                  <div className="mt-3">
+                    <p className="text-xs uppercase tracking-wide text-muted-foreground">Required information</p>
+                    <ul className="mt-1 list-disc list-inside space-y-1">
+                      {toolDecision.required_information.map((item: string, idx: number) => (
+                        <li key={idx}>{item}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </div>
+            )}
+
             {/* Error message */}
             {error && (
               <div className="mt-4 p-4 rounded-xl bg-destructive/10 border border-destructive/20 text-destructive">
@@ -443,6 +594,21 @@ function ChatContent() {
         {/* Input area - fixed at bottom */}
         <div className="sticky bottom-0 bg-gradient-to-t from-background via-background to-transparent">
           <div className="max-w-4xl mx-auto px-4 pb-6 pt-4">
+            {followUpQuestions && followUpQuestions.length > 0 && (
+              <div className="mb-3 flex flex-wrap gap-2">
+                {followUpQuestions.map((question, idx) => (
+                  <Button
+                    key={idx}
+                    variant="outline"
+                    size="sm"
+                    className="rounded-full border-border/40 text-xs"
+                    onClick={() => setInput(question)}
+                  >
+                    {question}
+                  </Button>
+                ))}
+              </div>
+            )}
             <FileDropZone
               onFiles={(files) => {
                 setAttachError(null);
@@ -529,7 +695,7 @@ export default function AIChatPage() {
       />
       {/* Inset ensures main content is offset and centered */}
       <SidebarInset>
-        <ChatContent />
+        <ChatContent sessionId={sessionId} setSessionId={setSessionId} />
       </SidebarInset>
     </SidebarProvider>
   );

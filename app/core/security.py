@@ -59,6 +59,7 @@ if not SECRET_KEY and not SUPABASE_URL and not SKIP_AUTH:
 # In production, ensure a strong key via env or secrets manager.
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/token", auto_error=not SKIP_AUTH)
+optional_oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/token", auto_error=False)
 
 class TokenPayload(BaseModel):
     sub: Optional[str] = None # Subject (usually user identifier)
@@ -244,7 +245,7 @@ async def get_current_user(token: Optional[str] = Depends(oauth2_scheme)) -> Tok
         logger.error(f"[AUTH] JWT validation error: {e}")
         raise credentials_exception
 
-async def get_optional_current_user(token: Optional[str] = Depends(oauth2_scheme)) -> Optional[TokenPayload]:
+async def get_optional_current_user(token: Optional[str] = Depends(optional_oauth2_scheme)) -> Optional[TokenPayload]:
     """Get current user if token is provided, otherwise return None.
     
     This is useful for endpoints that should work both with and without authentication.

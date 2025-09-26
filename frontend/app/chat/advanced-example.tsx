@@ -7,15 +7,15 @@
 
 'use client'
 
-import { useState, useEffect } from 'react'
-import { useChat, type CreateUIMessage } from '@ai-sdk/react'
-import { type UIMessage, DefaultChatTransport } from 'ai'
+import { useState, useMemo } from 'react'
+import { useChat } from '@ai-sdk/react'
 import { ReasoningTrace, TroubleshootingWorkflow } from '@/components/chat/advanced'
 import { Card } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Brain, Wrench } from 'lucide-react'
 import { ModelSelector } from './components/ModelSelector'
 import { getAuthToken } from '@/lib/local-auth'
+import { createBackendChatTransport } from '@/lib/providers/unified-client'
 
 // Example: Handling advanced agent data parts in the chat interface
 export default function AdvancedChatExample() {
@@ -29,27 +29,61 @@ export default function AdvancedChatExample() {
 
   const [input, setInput] = useState('')
 
+  const [toolDecision, setToolDecision] = useState<any>(null)
+  const [followUpQuestions, setFollowUpQuestions] = useState<string[] | null>(null)
+  const [sessionId] = useState(() => crypto.randomUUID())
+
+  const transport = useMemo(() => (
+    createBackendChatTransport({
+      provider,
+      model,
+      sessionId,
+      getAuthToken,
+    })
+  ), [provider, model, sessionId])
+
   const {
     messages,
     sendMessage,
     status,
   } = useChat({
-    transport: new DefaultChatTransport({ api: '/api/chat' }),
+    id: sessionId,
+    transport,
     onFinish: (message) => {
-      // Process data parts when message finishes
-      const dataParts = (message as any).data
-      if (dataParts) {
-        // Look for reasoning data
-        const reasoning = dataParts.find((d: any) => d.type === 'data-reasoning')
-        if (reasoning) {
-          setReasoningData(reasoning.data)
-        }
+      const dataParts: Array<{ type: string; data?: any; transient?: boolean }> = (message as any).data ?? []
 
-        // Look for troubleshooting data
-        const troubleshooting = dataParts.find((d: any) => d.type === 'data-troubleshooting')
-        if (troubleshooting) {
-          setTroubleshootingData(troubleshooting.data)
-        }
+      const thinkingPart = dataParts.find((part) => part.type === 'data-thinking')
+      if (thinkingPart?.data) {
+        const trace = thinkingPart.data
+        setReasoningData({
+          confidence_score: trace.confidence,
+          thinking_steps: trace.thinking_steps?.map((step: any) => ({
+            phase: step.phase,
+            thought: step.thought,
+            confidence: step.confidence,
+          })),
+          query_analysis: trace.emotional_state ? {
+            emotional_state: trace.emotional_state,
+            problem_category: trace.problem_category,
+            intent: trace.intent,
+            urgency_level: trace.complexity ?? trace.urgency,
+          } : undefined,
+          tool_reasoning: trace.tool_decision ? {
+            decision_type: trace.tool_decision,
+            confidence: trace.tool_confidence,
+            reasoning: trace.knowledge_gaps?.join(', '),
+          } : undefined,
+        })
+      }
+
+      const followupsPart = dataParts.find((part) => part.type === 'data-followups')
+      setFollowUpQuestions(followupsPart?.data ?? null)
+
+      const toolPart = dataParts.find((part) => part.type === 'data-tool-result' || part.type === 'tool-result')
+      if (toolPart?.data) {
+        setToolDecision(toolPart.data)
+      } else {
+        setToolDecision(null)
       }
     },
   })
@@ -61,6 +95,10 @@ export default function AdvancedChatExample() {
     if (input.trim()) {
       sendMessage({ text: input })
       setInput('')
+      setReasoningData(null)
+      setTroubleshootingData(null)
+      setToolDecision(null)
+      setFollowUpQuestions(null)
     }
   }
 
@@ -196,17 +234,56 @@ export default function AdvancedChatExample() {
               {message.role === 'assistant' && index === messages.length - 1 && reasoningData && (
                 <ReasoningTrace reasoning={reasoningData} />
               )}
-              
+
               {/* Show troubleshooting workflow if active */}
               {message.role === 'assistant' && index === messages.length - 1 && troubleshootingData && (
                 <TroubleshootingWorkflow
                   troubleshooting={troubleshootingData}
                   onStepExecute={(stepId, result, feedback) => {
-                    // Pass-through to the same handler with session id
-                    const sessionId = troubleshootingData?.session_id || ''
-                    handleStepComplete(sessionId, result as any, feedback)
+                    const tsession = troubleshootingData?.session_id || ''
+                    handleStepComplete(tsession, result as any, feedback)
                   }}
                 />
+              )}
+
+              {/* Suggested follow-up questions */}
+              {message.role === 'assistant' && index === messages.length - 1 && followUpQuestions && followUpQuestions.length > 0 && (
+                <Card className="bg-zinc-900/40 border border-zinc-800">
+                  <div className="p-3 space-y-2">
+                    <p className="text-xs font-semibold text-muted-foreground">Suggested follow-up questions</p>
+                    <div className="flex flex-col gap-2">
+                      {followUpQuestions.map((question, qIndex) => (
+                        <Button
+                          key={qIndex}
+                          variant="secondary"
+                          size="sm"
+                          className="justify-start"
+                          onClick={() => setInput(question)}
+                        >
+                          {question}
+                        </Button>
+                      ))}
+                    </div>
+                  </div>
+                </Card>
+              )}
+
+              {/* Tool decision insight */}
+              {message.role === 'assistant' && index === messages.length - 1 && toolDecision && (
+                <Card className="bg-zinc-900/40 border border-zinc-800">
+                  <div className="p-3 space-y-1 text-sm text-muted-foreground">
+                    <p className="text-xs font-semibold text-muted-foreground">Tool decision</p>
+                    <p className="text-foreground font-medium">{toolDecision.decision}</p>
+                    {toolDecision.reasoning && <p>{toolDecision.reasoning}</p>}
+                    {toolDecision.required_information && toolDecision.required_information.length > 0 && (
+                      <ul className="list-disc list-inside text-xs space-y-1">
+                        {toolDecision.required_information.map((info: string, infoIndex: number) => (
+                          <li key={infoIndex}>{info}</li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                </Card>
               )}
             </div>
           ))}

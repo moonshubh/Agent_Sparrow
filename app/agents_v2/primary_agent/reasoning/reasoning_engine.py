@@ -13,6 +13,7 @@ from typing import Dict, List, Optional, Any, Tuple
 from datetime import datetime
 import asyncio
 import re
+from textwrap import dedent
 
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 from opentelemetry import trace
@@ -30,6 +31,11 @@ from .problem_solver import ProblemSolvingFramework
 from .tool_intelligence import ToolIntelligence
 from app.agents_v2.primary_agent.prompts import EmotionTemplates, AgentSparrowV9Prompts
 from app.agents_v2.primary_agent.prompts.emotion_templates import EmotionalState
+from app.providers.registry import (
+    get_adapter,
+    default_provider,
+    default_model_for_provider,
+)
 
 logger = logging.getLogger(__name__)
 tracer = trace.get_tracer(__name__)
@@ -50,7 +56,13 @@ class ReasoningEngine:
     - Emotional intelligence integration
     """
     
-    def __init__(self, model: BaseChatModel, config: Optional[ReasoningConfig] = None):
+    def __init__(
+        self,
+        model: BaseChatModel,
+        config: Optional[ReasoningConfig] = None,
+        provider: Optional[str] = None,
+        model_name: Optional[str] = None,
+    ):
         """
         Initialize the ReasoningEngine with optional configuration.
         
@@ -58,8 +70,80 @@ class ReasoningEngine:
         """
         self.model = model
         self.config = config or ReasoningConfig()
+        self.provider = (provider or default_provider()).lower()
+        self.model_name = (model_name or default_model_for_provider(self.provider)).lower()
+        self._provider_prompt_cache: Dict[str, str] = {}
         self.problem_solver = ProblemSolvingFramework(self.config)
         self.tool_intelligence = ToolIntelligence(self.config)
+
+    def _coerce_to_text(self, content: Any) -> str:
+        """Normalize provider responses to plain text."""
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            parts: List[str] = []
+            for item in content:
+                if isinstance(item, str):
+                    parts.append(item)
+                elif isinstance(item, dict):
+                    candidate = item.get("text") or item.get("content")
+                    parts.append(str(candidate) if candidate is not None else str(item))
+                else:
+                    parts.append(str(item))
+            return "\n".join(part for part in parts if part)
+        return str(content)
+
+    def _get_provider_system_prompt(self, version: str = "latest") -> str:
+        if not self.provider or not self.model_name:
+            return ""
+
+        if version in self._provider_prompt_cache:
+            return self._provider_prompt_cache[version]
+
+        prompt = ""
+        try:
+            adapter = get_adapter(self.provider, self.model_name)
+            prompt = adapter.get_system_prompt(version=version) or ""
+        except Exception as exc:
+            logger.warning(
+                "Failed to load provider system prompt for %s/%s: %s",
+                self.provider,
+                self.model_name,
+                exc,
+            )
+            prompt = ""
+
+        self._provider_prompt_cache[version] = prompt
+        return prompt
+
+    def _compose_system_prompt(self, prompt_config: PromptV9Config, version: str = "latest") -> str:
+        provider_prompt = self._get_provider_system_prompt(version=version).strip()
+        agent_prompt = AgentSparrowV9Prompts.build_system_prompt(config=prompt_config).strip()
+
+        if provider_prompt and agent_prompt:
+            return f"{provider_prompt}\n\n{agent_prompt}"
+        if provider_prompt:
+            return provider_prompt
+        return agent_prompt
+
+    def _compose_system_prompt_with_instructions(
+        self,
+        instructions: str,
+        *,
+        prompt_config: Optional[PromptV9Config] = None,
+        version: str = "latest",
+    ) -> str:
+        """Combine provider + Agent Sparrow prompts with call-specific instructions."""
+
+        base_prompt = self._compose_system_prompt(
+            prompt_config or PromptV9Config(),
+            version=version,
+        ).strip()
+        instruction_text = dedent(instructions).strip()
+
+        if base_prompt and instruction_text:
+            return f"{base_prompt}\n\n{instruction_text}"
+        return base_prompt or instruction_text
         
     def get_thinking_budget(self, complexity: str) -> int:
         """
@@ -70,13 +154,25 @@ class ReasoningEngine:
         - Use -1 for dynamic allocation (model decides)
         - Higher budgets for complex reasoning tasks
         """
-        budgets = {
-            "simple": 2048,     # Quick questions - minimal reasoning
-            "medium": 8192,     # Standard support - moderate reasoning
-            "complex": 16384,   # Technical issues - extensive reasoning
-            "dynamic": -1       # Let model decide based on task
+        if getattr(self.config, "thinking_budget_override", None) is not None:
+            return int(self.config.thinking_budget_override)
+
+        quality = getattr(self.config, "quality_level", "balanced") or "balanced"
+        quality = quality.lower()
+        quality_budgets = {
+            "fast": 2048,
+            "balanced": 8192,
+            "thorough": 16384,
         }
-        return budgets.get(complexity, 8192)
+        base_budget = quality_budgets.get(quality, quality_budgets["balanced"])
+
+        if complexity == "dynamic":
+            return -1
+        if complexity == "simple":
+            return max(1024, base_budget // 2)
+        if complexity == "complex":
+            return min(24576, int(base_budget * 1.5))
+        return base_budget
         
         
     async def reason_about_query(
@@ -473,7 +569,7 @@ Now, create a response that feels like it's from Agent Sparrow - your email-savv
                     include_premium_elements=True,
                     include_success_directives=True
                 )
-                system_prompt = AgentSparrowV9Prompts.build_system_prompt(config=prompt_config)
+                system_prompt = self._compose_system_prompt(prompt_config)
                 
                 messages: List[BaseMessage] = [
                     SystemMessage(content=system_prompt),
@@ -840,7 +936,12 @@ Now, create a response that feels like it's from Agent Sparrow - your email-savv
             return 0.5
         
         emotion = reasoning_state.query_analysis.emotional_state
-        strategy = reasoning_state.response_strategy.lower()
+        strategy_value = reasoning_state.response_strategy
+        if isinstance(strategy_value, list):
+            strategy = " ".join(str(s) for s in strategy_value)
+        else:
+            strategy = str(strategy_value)
+        strategy = strategy.lower()
         
         # Check for appropriate emotional responses
         if emotion == EmotionalState.FRUSTRATED and 'apology' in strategy:
@@ -974,7 +1075,7 @@ Now, create a response that feels like it's from Agent Sparrow - your email-savv
             ))
 
             prompt_config = PromptV9Config(include_self_critique=True)
-            system_prompt = AgentSparrowV9Prompts.build_system_prompt(config=prompt_config)
+            system_prompt = self._compose_system_prompt(prompt_config)
             
             critique_request_prompt = f"Here is the response I have drafted. Please provide your internal self-critique based on the framework provided in your system instructions:\n\n<draft_response>\n{draft_response}\n</draft_response>"
 
@@ -1039,7 +1140,20 @@ Now, create a response that feels like it's from Agent Sparrow - your email-savv
             span.set_attribute("thinking_budget", thinking_budget)
             
             # Create comprehensive analysis prompt
-            system_prompt = f"""You are Agent Sparrow, an advanced AI customer success expert for Mailbird email client.
+            analysis_prompt_config = PromptV9Config(
+                include_self_critique=False,
+                include_reasoning=True,
+                include_emotional_resonance=True,
+                include_technical_excellence=True,
+                include_conversational_excellence=False,
+                include_solution_delivery=False,
+                include_knowledge_integration=True,
+                include_premium_elements=False,
+                include_success_directives=False,
+            )
+
+            system_prompt = self._compose_system_prompt_with_instructions(
+                f"""You are Agent Sparrow, an advanced AI customer success expert for Mailbird email client.
 
 ## Your Task: Comprehensive Query Analysis
 
@@ -1078,7 +1192,9 @@ You have a thinking budget of {thinking_budget} tokens. Use this internal reason
 This is your private thinking space - the customer won't see this reasoning process.
 </thinking>
 
-Provide your analysis in a structured format with clear sections."""
+Provide your analysis in a structured format with clear sections.""",
+                prompt_config=analysis_prompt_config,
+            )
 
             user_prompt = f"""Customer Query: {query}
 
@@ -1096,7 +1212,8 @@ Provide comprehensive analysis following the structure outlined in your instruct
                 # Use the model's ainvoke with thinking budget
                 # Note: For Gemini 2.5 Flash, we need to configure thinking budget properly
                 response = await self.model.ainvoke(messages)
-                response_content = response.content if hasattr(response, 'content') else str(response)
+                response_content_raw = response.content if hasattr(response, 'content') else response
+                response_content = self._coerce_to_text(response_content_raw)
                 
                 span.set_attribute("response_length", len(response_content))
                 return response_content
@@ -1274,6 +1391,40 @@ Provide comprehensive analysis following the structure outlined in your instruct
         else:
             return "medium"
     
+    async def _load_reasoning_model_instance(
+        self,
+        thinking_budget: Optional[int],
+    ) -> Optional[BaseChatModel]:
+        """Load a provider-specific model tuned for response generation."""
+        try:
+            adapter = get_adapter(self.provider, self.model_name)
+        except Exception as exc:
+            logger.debug(
+                "No provider adapter available for %s/%s: %s",
+                self.provider,
+                self.model_name,
+                exc,
+            )
+            return None
+
+        api_key = getattr(self, "_api_key", None)
+        try:
+            return await adapter.load_reasoning_model(
+                api_key=api_key,
+                thinking_budget=thinking_budget,
+            )
+        except TypeError:
+            # Adapter may not accept thinking_budget yet; retry without it.
+            return await adapter.load_reasoning_model(api_key=api_key)
+        except Exception as exc:
+            logger.warning(
+                "Failed to load reasoning model for %s/%s: %s",
+                self.provider,
+                self.model_name,
+                exc,
+            )
+            return None
+
     async def generate_enhanced_response(
         self, 
         reasoning_state: ReasoningState,
@@ -1295,28 +1446,26 @@ Provide comprehensive analysis following the structure outlined in your instruct
             
             span.set_attribute("thinking_budget", thinking_budget)
             
-            # Create a new model with thinking budget if we have the API key
-            # Important: Create model WITHOUT tools for response generation
-            model_to_use = self.model
-            if hasattr(self, '_api_key') and self._api_key:
-                from app.agents_v2.primary_agent.agent import create_user_specific_model
-                model_to_use = create_user_specific_model(self._api_key, thinking_budget=thinking_budget, bind_tools=False)
-            else:
-                # If no API key, try to remove tools from existing model
-                if hasattr(self.model, 'bind_tools'):
-                    # Create a copy without tools
-                    model_to_use = self.model.__class__(
-                        model=self.model.model,
-                        google_api_key=self.model.google_api_key,
-                        temperature=self.model.temperature,
-                        streaming=self.model.streaming
-                    )
+            model_to_use = await self._load_reasoning_model_instance(thinking_budget) or self.model
             
             # Build context from reasoning state
             context_summary = self._build_context_summary(reasoning_state)
             
             # Create enhanced response prompt
-            system_prompt = """You are Agent Sparrow, Mailbird's friendly and knowledgeable AI customer support expert.
+            enhanced_prompt_config = PromptV9Config(
+                include_self_critique=False,
+                include_reasoning=True,
+                include_emotional_resonance=True,
+                include_technical_excellence=True,
+                include_conversational_excellence=True,
+                include_solution_delivery=True,
+                include_knowledge_integration=True,
+                include_premium_elements=True,
+                include_success_directives=True,
+            )
+
+            system_prompt = self._compose_system_prompt_with_instructions(
+                """You are Agent Sparrow, Mailbird's friendly and knowledgeable AI customer support expert.
 
 ## Your Task: Generate a Helpful Response
 
@@ -1334,7 +1483,9 @@ Based on the analysis provided, craft a response that:
 - Offer alternative solutions when available
 - End with a helpful follow-up question if appropriate
 
-Remember: Quality over speed. Take time to craft a thoughtful response."""
+Remember: Quality over speed. Take time to craft a thoughtful response.""",
+                prompt_config=enhanced_prompt_config,
+            )
 
             user_prompt = f"""Customer Query: {reasoning_state.query_text}
 
@@ -1353,12 +1504,13 @@ Note: You have a thinking budget of {thinking_budget} tokens available for inter
                 
                 # Use the model's ainvoke for response generation
                 response = await model_to_use.ainvoke(messages)
-                
+
                 # Debug logging
                 logger.info(f"Raw response type: {type(response)}")
                 logger.info(f"Response attributes: {dir(response)}")
-                
-                response_content = response.content if hasattr(response, 'content') else str(response)
+
+                response_content_raw = response.content if hasattr(response, 'content') else response
+                response_content = self._coerce_to_text(response_content_raw)
                 
                 # Check if response is empty (common when model returns tool calls)
                 if not response_content or response_content.strip() == '':
@@ -1457,7 +1609,20 @@ Note: You have a thinking budget of {thinking_budget} tokens available for inter
             current_response = reasoning_state.response_orchestration.final_response_preview
             
             # Create refinement prompt
-            system_prompt = """You are Agent Sparrow, tasked with improving a response that has low confidence.
+            refinement_prompt_config = PromptV9Config(
+                include_self_critique=False,
+                include_reasoning=True,
+                include_emotional_resonance=True,
+                include_technical_excellence=True,
+                include_conversational_excellence=True,
+                include_solution_delivery=True,
+                include_knowledge_integration=True,
+                include_premium_elements=False,
+                include_success_directives=True,
+            )
+
+            system_prompt = self._compose_system_prompt_with_instructions(
+                """You are Agent Sparrow, tasked with improving a response that has low confidence.
 
 ## Your Task: Refine the Response
 
@@ -1467,7 +1632,9 @@ Review the current response and the analysis context, then improve it by:
 3. Ensuring all aspects of the query are addressed
 4. Maintaining a warm, helpful tone
 
-Focus on accuracy and completeness while keeping the conversational style."""
+Focus on accuracy and completeness while keeping the conversational style.""",
+                prompt_config=refinement_prompt_config,
+            )
 
             user_prompt = f"""Original Query: {reasoning_state.query_text}
 
