@@ -498,6 +498,8 @@ export default function FeedMeConversationManager() {
                   <UnifiedTextCanvas
                     conversationId={selectedConversation.id}
                     title={selectedConversation.title}
+                    ticketId={(selectedConversation as any).metadata?.ticket_id ?? null}
+                    metadata={(selectedConversation as any).metadata ?? null}
                     extractedText={selectedConversation.extracted_text || ''}
                     processingMetadata={{
                       processing_method: selectedConversation.processing_method,
@@ -510,6 +512,7 @@ export default function FeedMeConversationManager() {
                     approvalStatus={selectedConversation.approval_status}
                     approvedBy={selectedConversation.approved_by}
                     approvedAt={selectedConversation.approved_at}
+                    folderId={(selectedConversation as any).folder_id ?? null}
                     onTextUpdate={handleTextUpdate}
                     onApprovalAction={handleApprovalAction}
                     readOnly={false}

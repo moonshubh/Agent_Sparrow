@@ -30,13 +30,11 @@ import { cn } from '@/lib/utils'
 
 // Import the FeedMe components
 import { FileGridView } from './FileGridViewSimple'
-import { ConversationEditor } from './ConversationEditorSimple'
 import { AnalyticsDashboard } from './AnalyticsDashboardSimple'
 import { EnhancedFeedMeModal } from './EnhancedFeedMeModal'
 import { FeedMeErrorBoundary } from './ErrorBoundary'
 
 // Import new two-panel components
-import { SidebarNav } from './SidebarNav'
 import { SecondaryFolderPanel } from './SecondaryFolderPanel'
 
 // Import modular store hooks
@@ -93,19 +91,7 @@ export function FeedMePageManager() {
   return (
     <FeedMeErrorBoundary>
       <div className="h-screen flex bg-background">
-        {/* Main Sidebar (Desktop Only) */}
-        {!isMobile && (
-          <SidebarNav
-            activeTab={rightPanel === 'editor' ? 'conversations' : rightPanel}
-            onTabChange={(tab) => {
-              if (tab === 'conversations') uiActions.setRightPanel('conversations')
-              else if (tab === 'analytics') uiActions.setRightPanel('analytics')
-              else if (tab === 'folders') uiActions.setLeftPanel('folders')
-            }}
-            conversationCount={conversations.totalCount || 0}
-            folderCount={Object.keys(folders.folders).length}
-          />
-        )}
+        {/* Sidebar removed in new layout; navigation is now in top-right header */}
 
         {/* Secondary Folder Panel */}
         <SecondaryFolderPanel
@@ -116,10 +102,7 @@ export function FeedMePageManager() {
 
         {/* Main Content */}
         <main className="flex-1 overflow-hidden flex flex-col transition-all duration-300">
-          {/* Search Bar */}
-          <div className="border-b px-4 py-3 bg-card/50">
-            {/* Search bar removed - not required */}
-          </div>
+          {/* Top bar handled in page.tsx; keep content clean */}
 
           {/* Content Area */}
           <div className="flex-1 overflow-hidden">
@@ -136,13 +119,7 @@ export function FeedMePageManager() {
               <AnalyticsDashboard />
             )}
             
-            {rightPanel === 'editor' && selectedConversationId && (
-              <ConversationEditor
-                conversationId={selectedConversationId}
-                isOpen={true}
-                onClose={handleConversationClose}
-              />
-            )}
+            {/* Legacy modal editor removed in unified canvas flow */}
           </div>
         </main>
 

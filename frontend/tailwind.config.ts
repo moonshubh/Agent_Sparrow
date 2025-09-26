@@ -17,19 +17,24 @@ const config: Config = {
     'hover:bg-mb-blue-300/20',
     'focus:bg-mb-blue-300/20',
     'ring-mb-blue-300',
-    'focus-visible:ring-mb-blue-300'
+    'focus-visible:ring-mb-blue-300',
+    'text-mb-blue-400',
+    'text-mb-blue-500',
+    'hover:text-mb-blue-400'
   ],
   theme: {
-  	extend: {
-  		colors: {
+	extend: {
+			colors: {
   			background: 'hsl(var(--background))',
   			foreground: 'hsl(var(--foreground))',
   			card: {
   				DEFAULT: 'hsl(var(--card))',
   				foreground: 'hsl(var(--card-foreground))'
   			},
-  			// Mailbird Blue-300 for hover states
+  			// Mailbird Blues for hover/links
   			'mb-blue-300': 'hsl(211.7 96.4% 78.4%)',
+  			'mb-blue-400': 'hsl(211.7 96.4% 68%)',
+  			'mb-blue-500': 'hsl(var(--accent))',
   			// Zen neutral base colors
   			neutral: {
   				base: 'hsl(var(--neutral-base))', // zinc-900 equivalent

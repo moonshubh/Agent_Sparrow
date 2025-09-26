@@ -14,7 +14,7 @@ interface AuthContextType {
   loginWithOAuth: (provider: 'google' | 'github') => Promise<void>
   logout: () => Promise<void>
   refreshToken: () => Promise<void>
-  updateProfile: (data: { full_name?: string; metadata?: any }) => Promise<void>
+  updateProfile: (data: { full_name?: string; avatar_url?: string; metadata?: any }) => Promise<void>
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined)
@@ -191,7 +191,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   }, [logout])
 
-  const updateProfile = useCallback(async (data: { full_name?: string; metadata?: any }) => {
+  const updateProfile = useCallback(async (data: { full_name?: string; avatar_url?: string; metadata?: any }) => {
     try {
       setIsLoading(true)
       

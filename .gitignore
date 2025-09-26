@@ -702,3 +702,11 @@ frontend/tsconfig.tsbuildinfo
 *.md
 *.xml
 *.bak
+
+# Exclude sensitive and unnecessary folders
+Sample_PDFs/
+supabase/
+# Zendesk PDFs - contain sensitive customer data
+Zendesk PDF/
+*.pdf
+!**/public/*.pdf

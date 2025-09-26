@@ -40,8 +40,8 @@ celery_app.conf.update(
     # Task routing
     task_routes={
         'app.feedme.tasks.process_transcript': {'queue': 'feedme_processing'},
-        'app.feedme.tasks.generate_embeddings': {'queue': 'feedme_embeddings'},
-        'app.feedme.tasks.parse_conversation': {'queue': 'feedme_parsing'},
+        'app.feedme.tasks.generate_text_chunks_and_embeddings': {'queue': 'feedme_embeddings'},
+        'app.feedme.tasks.generate_ai_tags': {'queue': 'feedme_processing'},
         'app.feedme.tasks.health_check': {'queue': 'feedme_health'},
     },
     
@@ -51,7 +51,7 @@ celery_app.conf.update(
         Queue('feedme_default', routing_key='feedme_default'),
         Queue('feedme_processing', routing_key='feedme_processing'),
         Queue('feedme_embeddings', routing_key='feedme_embeddings'),
-        Queue('feedme_parsing', routing_key='feedme_parsing'),
+        # 'feedme_parsing' queue removed with deprecation of parse_conversation
         Queue('feedme_health', routing_key='feedme_health'),
     ),
     
@@ -213,5 +213,5 @@ if __name__ == "__main__":
         "worker",
         "--loglevel=info",
         "--concurrency=2",
-        "--queues=feedme_default,feedme_processing,feedme_embeddings,feedme_parsing,feedme_health"
+        "--queues=feedme_default,feedme_processing,feedme_embeddings,feedme_health"
     ])

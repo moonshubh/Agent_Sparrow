@@ -2,6 +2,8 @@ import os
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import Optional, Annotated, List, Union
+import re
+import html
 
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
@@ -262,3 +264,46 @@ async def get_optional_current_user(token: Optional[str] = Depends(oauth2_scheme
 # @router.get("/users/me")
 # async def read_users_me(current_user: Annotated[TokenPayload, Depends(get_current_user)]):
 #     return {"user_id": current_user.sub, "roles": current_user.roles}
+
+
+# -----------------------------------------------------------------------------
+# Input Sanitization Functions
+# -----------------------------------------------------------------------------
+
+def sanitize_input(text: str, max_length: int = 10000) -> str:
+    """
+    Sanitize user input to prevent XSS and injection attacks.
+    
+    Args:
+        text: The input text to sanitize
+        max_length: Maximum allowed length
+        
+    Returns:
+        Sanitized text safe for storage and display
+    """
+    if not text:
+        return ""
+    
+    # Truncate to max length
+    text = text[:max_length]
+    
+    # HTML escape to prevent XSS
+    text = html.escape(text)
+    
+    # Remove any potential script tags or javascript
+    text = re.sub(r'<script[^>]*>.*?</script>', '', text, flags=re.IGNORECASE | re.DOTALL)
+    text = re.sub(r'javascript:', '', text, flags=re.IGNORECASE)
+    text = re.sub(r'on\w+\s*=', '', text, flags=re.IGNORECASE)
+    
+    # Remove SQL injection attempts
+    sql_patterns = [
+        r'\b(union|select|insert|update|delete|drop|create|alter|exec|execute)\b',
+        r'--',
+        r'/\*.*?\*/',
+        r'\x00',  # Null bytes
+    ]
+    
+    for pattern in sql_patterns:
+        text = re.sub(pattern, '', text, flags=re.IGNORECASE)
+    
+    return text.strip()

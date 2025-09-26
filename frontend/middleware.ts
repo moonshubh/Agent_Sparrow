@@ -15,14 +15,60 @@ const authRoutes = ['/login']
 export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl
 
-  // Skip middleware for static files and certain API routes
+  // Skip middleware for static files and health check
   if (
     pathname.startsWith('/_next') ||
     pathname.startsWith('/static') ||
     pathname.includes('.') ||
-    pathname === '/api/health' ||
-    (pathname.startsWith('/api') && !pathname.startsWith('/api/v1'))
+    pathname === '/api/health'
   ) {
+    return NextResponse.next()
+  }
+
+  // Special handling for /api/chat - requires authentication
+  if (pathname === '/api/chat') {
+    const authHeader = request.headers.get('authorization')
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      if (process.env.NODE_ENV === 'development') {
+        console.log('Middleware - /api/chat: No authorization header')
+      }
+      return new Response('Unauthorized: Authentication required', { status: 401 })
+    }
+
+    // Create a Supabase client to verify the token
+    const supabase = createServerClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL!,
+      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+      {
+        cookies: {
+          get(name: string) {
+            return request.cookies.get(name)?.value
+          },
+          set() {},
+          remove() {},
+        },
+      }
+    )
+
+    const token = authHeader.replace('Bearer ', '')
+    const { data: { user }, error } = await supabase.auth.getUser(token)
+
+    if (error || !user) {
+      if (process.env.NODE_ENV === 'development') {
+        console.log('Middleware - /api/chat: Invalid token')
+      }
+      return new Response('Unauthorized: Invalid authentication token', { status: 401 })
+    }
+
+    if (process.env.NODE_ENV === 'development') {
+      console.log('Middleware - /api/chat: User authenticated')
+    }
+    // Continue with the request
+    return NextResponse.next()
+  }
+
+  // Skip middleware for other API routes that don't need frontend middleware
+  if (pathname.startsWith('/api') && !pathname.startsWith('/api/v1')) {
     return NextResponse.next()
   }
 
@@ -65,10 +111,12 @@ export async function middleware(request: NextRequest) {
 
   // Get the user session
   const { data: { user }, error } = await supabase.auth.getUser()
-
-  console.log('Middleware - Path:', pathname, 'User:', user?.email || 'none', 'Error:', error?.message)
-
+  
   const isAuthenticated = !!user && !error
+
+  if (process.env.NODE_ENV === 'development') {
+    console.log('Middleware - Path:', pathname, 'Auth:', isAuthenticated ? 'yes' : 'no')
+  }
 
   // Handle authentication logic
   if (!isAuthenticated && !isPublicRoute) {
