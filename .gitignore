@@ -715,3 +715,6 @@ Zendesk PDF/
 
 # Codex configuration - never track
 .codex/
+
+# Local authentication scripts - never track
+enable-local-auth.sh
