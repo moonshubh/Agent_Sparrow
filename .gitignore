@@ -712,3 +712,6 @@ supabase/
 Zendesk PDF/
 *.pdf
 !**/public/*.pdf
+
+# Codex configuration - never track
+.codex/
