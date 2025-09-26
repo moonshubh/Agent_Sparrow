@@ -1,0 +1,1 @@
+"""Prompts for log analysis agent."""

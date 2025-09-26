@@ -1,0 +1,167 @@
+# Codex CLI Configuration File
+# Version: 2025.1.0
+
+[model]
+provider = "openai"
+default = "gpt-5-codex"
+reasoning_effort = "medium"
+temperature = 0.7
+max_tokens = 8192
+stream = true
+
+[model.fallback]
+enabled = true
+models = ["gpt-4-turbo", "gpt-4", "gpt-3.5-turbo"]
+
+[sandbox]
+default_mode = "workspace-write"
+workspace_root = "/Users/shubhpatel/Downloads/Agent_Sparrow-Frontend-2.0"
+permissions = [
+    "disk-read-access",
+    "disk-write-access",
+    "network-access",
+    "process-spawn"
+]
+allowed_paths = [
+    "./app",
+    "./frontend",
+    "./scripts",
+    "./config",
+    "./.codex"
+]
+blocked_paths = [
+    "./node_modules",
+    "./.git/objects",
+    "./venv"
+]
+
+[mcp_servers.supabase]
+enabled = true
+command = "npx"
+args = [
+    "-y",
+    "@supabase/mcp-server-supabase@latest",
+    "--read-only",
+    "--project-ref=uqvzawiggqjnfgupeubs"
+]
+env = { SUPABASE_ACCESS_TOKEN = "sbp_e463213a8dc11d5964220f42b3f8329c0a05c66c" }
+startup_timeout_sec = 20
+tool_timeout_sec = 60
+
+[mcp_servers.playwright]
+enabled = true
+command = "npx"
+args = [
+    "-y",
+    "@playwright/mcp@latest"
+]
+env = {
+    PLAYWRIGHT_HEADLESS = "false",
+    PLAYWRIGHT_BROWSER = "chromium",
+    PLAYWRIGHT_TIMEOUT = "30000"
+}
+startup_timeout_sec = 15
+tool_timeout_sec = 60
+
+[mcp_servers.context7]
+enabled = false
+command = "npx"
+args = [
+    "-y",
+    "@upstash/context7-mcp",
+    "--api-key",
+    "YOUR_API_KEY_HERE"
+]
+startup_timeout_ms = 20000
+
+[approval]
+policy = "trusted"
+trusted_commands = [
+    "ls",
+    "cat",
+    "grep",
+    "find",
+    "git",
+    "npm",
+    "node",
+    "python",
+    "pip",
+    "yarn",
+    "pnpm"
+]
+require_approval = [
+    "rm -rf",
+    "sudo",
+    "chmod 777",
+    "kill -9",
+    "pkill"
+]
+auto_approve_timeout_ms = 5000
+
+[git]
+auto_commit = false
+branch_protection = true
+default_branch = "main"
+commit_message_format = "conventional"
+sign_commits = false
+auto_stage = false
+
+[testing]
+enabled = true
+auto_run = false
+framework = "jest"
+coverage_threshold = 80
+test_command = "npm test"
+watch_mode = false
+
+[linting]
+enabled = true
+auto_fix = true
+fix_on_save = true
+eslint_config = ".eslintrc.json"
+prettier_config = ".prettierrc"
+
+[environment]
+OPENAI_API_KEY = "${OPENAI_API_KEY}"
+ANTHROPIC_API_KEY = "${ANTHROPIC_API_KEY}"
+NODE_ENV = "development"
+PROJECT_ROOT = "/Users/shubhpatel/Downloads/Agent_Sparrow-Frontend-2.0"
+CODEX_LOG_LEVEL = "info"
+
+[features]
+auto_import = true
+code_completion = true
+inline_suggestions = true
+error_diagnostics = true
+refactoring_tools = true
+ai_code_review = true
+semantic_search = true
+context_awareness = true
+multi_file_edit = true
+test_generation = false
+
+[output]
+format = "markdown"
+verbosity = "normal"
+show_progress = true
+log_file = "${PROJECT_ROOT}/logs/codex.log"
+error_format = "detailed"
+syntax_highlighting = true
+
+[performance]
+max_concurrent_requests = 3
+cache_responses = true
+cache_ttl_seconds = 3600
+lazy_load_mcp_servers = false
+
+[security]
+sanitize_outputs = true
+mask_secrets = true
+audit_log_enabled = true
+audit_log_path = "${PROJECT_ROOT}/logs/codex-audit.log"
+
+[experimental]
+use_reasoning_models = true
+parallel_processing = false
+advanced_context_window = true
+smart_retries = true
