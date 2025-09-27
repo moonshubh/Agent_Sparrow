@@ -1,8 +1,16 @@
 """
-Comprehensive Log Analysis Agent for Mailbird
+Comprehensive Log Analysis Agent for Mailbird with Paranoid Security
 
 This module implements the main agent that orchestrates all components
-for intelligent log analysis with empathetic user communication.
+for intelligent log analysis with empathetic user communication and
+paranoid-level security for handling sensitive data.
+
+Security Features:
+- Complete data sanitization before processing
+- Guaranteed cleanup of sensitive data
+- Security validation for all inputs
+- Compliance with data protection requirements
+- Zero persistent storage of raw logs
 """
 
 import logging
@@ -12,6 +20,7 @@ from typing import Dict, List, Optional, Any, Tuple, Union
 from pathlib import Path
 import hashlib
 from uuid import uuid4
+import asyncio
 
 from app.providers.registry import load_model
 from app.agents_v2.primary_agent.reasoning.schemas import ReasoningConfig
@@ -33,6 +42,24 @@ from .reasoning.root_cause_classifier import RootCauseClassifier
 from .context.context_ingestor import ContextIngestor
 from .formatters.response_formatter import LogResponseFormatter, FormattingConfig
 from app.agents_v2.primary_agent.prompts.emotion_templates import EmotionalState
+
+# Import security components
+from .privacy import (
+    LogSanitizer,
+    SanitizationConfig,
+    RedactionLevel,
+    LogCleanupManager,
+    CleanupConfig,
+    AttachmentSanitizer
+)
+from .security import (
+    SecurityValidator,
+    ValidationConfig,
+    ValidationStatus,
+    ThreatLevel,
+    ComplianceManager,
+    ComplianceConfig
+)
 
 logger = logging.getLogger(__name__)
 
@@ -57,19 +84,24 @@ class LogAnalysisAgent:
         model_name: str = "gemini-2.5-pro",
         api_key: Optional[str] = None,
         config: Optional[ReasoningConfig] = None,
+        enable_security: bool = True,
+        security_level: RedactionLevel = RedactionLevel.HIGH,
     ):
         """
-        Initialize the log analysis agent.
+        Initialize the log analysis agent with security features.
 
         Args:
             provider: Model provider (default: google)
             model_name: Model to use (default: gemini-2.5-pro)
             api_key: Optional API key
             config: Optional reasoning configuration
+            enable_security: Enable paranoid security features
+            security_level: Level of data redaction
         """
         self.provider = provider
         self.model_name = model_name
         self.api_key = api_key
+        self.enable_security = enable_security
         self.config = config or ReasoningConfig(
             enable_chain_of_thought=True,
             enable_problem_solving_framework=True,
@@ -87,6 +119,60 @@ class LogAnalysisAgent:
         self.root_cause_classifier = RootCauseClassifier()
         self.context_ingestor = ContextIngestor()
 
+        # Initialize security components if enabled
+        if self.enable_security:
+            # Data sanitizer with paranoid settings
+            self.sanitizer = LogSanitizer(
+                SanitizationConfig(
+                    redaction_level=security_level,
+                    preserve_structure=True,
+                    hash_sensitive_data=True,
+                    validate_completeness=True,
+                    paranoid_mode=(security_level == RedactionLevel.PARANOID)
+                )
+            )
+
+            # Cleanup manager for guaranteed data removal
+            self.cleanup_manager = LogCleanupManager(
+                CleanupConfig(
+                    max_memory_items=100,
+                    cleanup_delay_seconds=5.0,
+                    force_gc_after_cleanup=True,
+                    paranoid_mode=True
+                )
+            )
+
+            # Security validator for input validation
+            self.security_validator = SecurityValidator(
+                ValidationConfig(
+                    max_file_size=10 * 1024 * 1024,  # 10MB
+                    enable_injection_detection=True,
+                    enable_rate_limiting=True,
+                    paranoid_mode=True
+                )
+            )
+
+            # Compliance manager for data protection
+            self.compliance_manager = ComplianceManager(
+                ComplianceConfig(
+                    enforce_zero_log_storage=True,
+                    require_audit_trail=True,
+                    paranoid_mode=True
+                )
+            )
+
+            # Attachment sanitizer
+            self.attachment_sanitizer = AttachmentSanitizer()
+
+            logger.info(f"Security features enabled with {security_level.value} redaction level")
+        else:
+            self.sanitizer = None
+            self.cleanup_manager = None
+            self.security_validator = None
+            self.compliance_manager = None
+            self.attachment_sanitizer = None
+            logger.warning("Security features disabled - NOT RECOMMENDED for production")
+
         # Initialize response formatter with config
         formatter_config = FormattingConfig(
             enable_quality_check=True,
@@ -98,7 +184,7 @@ class LogAnalysisAgent:
         self._model = None
         self._reasoning_engine = None
 
-        # Cache for analysis results
+        # Cache for analysis results (sanitized only)
         self._analysis_cache: Dict[str, LogAnalysisResult] = {}
 
     async def _initialize_model(self):
@@ -124,23 +210,40 @@ class LogAnalysisAgent:
         user_query: Optional[str] = None,
         user_context_input: Optional[str] = None,
         use_cache: bool = True,
+        attachments: Optional[List[Path]] = None,
     ) -> Tuple[LogAnalysisResult, str]:
         """
-        Analyze a log file and generate a user-friendly response.
+        Analyze a log file with paranoid security and generate a user-friendly response.
 
         Args:
             log_file_path: Path to the log file
             user_query: Optional specific query about the logs
             user_context_input: Optional user description of the issue
             use_cache: Whether to use cached results
+            attachments: Optional list of attachment paths
 
         Returns:
             Tuple of (analysis_result, user_response)
         """
         log_file_path = Path(log_file_path)
 
-        # Check cache
-        cache_key = self._generate_cache_key(log_file_path, user_query, user_context_input)
+        # Security validation if enabled
+        if self.enable_security:
+            validation_result = self.security_validator.validate_file(log_file_path)
+
+            if validation_result.status == ValidationStatus.FAILED:
+                logger.error(f"Security validation failed: {validation_result.issues}")
+                raise ValueError(f"File failed security validation: {', '.join(validation_result.issues)}")
+
+            if validation_result.threat_level == ThreatLevel.CRITICAL:
+                logger.critical(f"Critical security threat detected in {log_file_path}")
+                raise ValueError("Critical security threat detected in file")
+
+            if validation_result.status == ValidationStatus.SUSPICIOUS:
+                logger.warning(f"Suspicious content detected: {validation_result.issues}")
+
+        # Check cache (using sanitized key)
+        cache_key = self._generate_secure_cache_key(log_file_path, user_query, user_context_input)
         if use_cache and cache_key in self._analysis_cache:
             logger.info(f"Using cached analysis for {log_file_path}")
             cached_result = self._analysis_cache[cache_key]
@@ -149,24 +252,117 @@ class LogAnalysisAgent:
             )
             return cached_result, response
 
-        # Read log file
-        log_content = await self._read_log_file(log_file_path)
+        # Process with security wrapper if enabled
+        if self.enable_security:
+            result = await self._analyze_with_security(
+                log_file_path, user_query, user_context_input, attachments
+            )
+        else:
+            # Legacy non-secure path (not recommended)
+            log_content = await self._read_log_file(log_file_path)
+            analysis_result = await self.analyze_log_content(
+                log_content, user_query, user_context_input
+            )
+            # Properly await the coroutine before unpacking
+            response_tuple = await self._generate_response(
+                analysis_result, user_query, user_context_input
+            )
+            result = (analysis_result, response_tuple[1])
 
-        # Analyze logs
-        analysis_result = await self.analyze_log_content(
-            log_content, user_query, user_context_input
-        )
+        # Cache sanitized result
+        if use_cache and self.enable_security:
+            # Only cache if compliant
+            session_data = {'analysis_result': result[0]}
+            is_compliant, _ = self.compliance_manager.validate_for_storage(session_data)
+            if is_compliant:
+                self._analysis_cache[cache_key] = result[0]
 
-        # Cache result
-        if use_cache:
-            self._analysis_cache[cache_key] = analysis_result
+        return result
 
-        # Generate response
-        _, response = await self._generate_response(
-            analysis_result, user_query, user_context_input
-        )
+    async def _analyze_with_security(
+        self,
+        log_file_path: Path,
+        user_query: Optional[str],
+        user_context_input: Optional[str],
+        attachments: Optional[List[Path]],
+    ) -> Tuple[LogAnalysisResult, str]:
+        """
+        Analyze logs with full security wrapper.
 
-        return analysis_result, response
+        Args:
+            log_file_path: Path to log file
+            user_query: User query
+            user_context_input: User context
+            attachments: Optional attachments
+
+        Returns:
+            Secure analysis result and response
+        """
+        session_id = str(uuid4())
+
+        try:
+            # Use cleanup manager for guaranteed cleanup
+            async with self.cleanup_manager.process_with_cleanup(
+                data=None, identifier=session_id
+            ):
+                # Read and immediately sanitize log content
+                raw_content = await self._read_log_file(log_file_path)
+                sanitized_content, redaction_stats = self.sanitizer.sanitize(raw_content)
+
+                # Log redaction summary
+                logger.info(f"Sanitization complete: {self.sanitizer.get_redaction_summary(redaction_stats)}")
+
+                # Process attachments if any
+                attachment_summaries = []
+                if attachments and self.attachment_sanitizer:
+                    for attachment_path in attachments:
+                        attachment_result = self.attachment_sanitizer.process_attachment(
+                            attachment_path, attachment_type="auto"
+                        )
+                        if attachment_result['status'] == 'success':
+                            attachment_summaries.append(attachment_result)
+
+                # Analyze sanitized content
+                analysis_result = await self.analyze_log_content(
+                    sanitized_content, user_query, user_context_input
+                )
+
+                # Add security metadata
+                analysis_result.metadata = analysis_result.metadata or LogMetadata()
+                analysis_result.metadata.security_info = {
+                    'sanitized': True,
+                    'redaction_count': sum(redaction_stats.values()),
+                    'redaction_types': list(redaction_stats.keys()),
+                    'attachments_processed': len(attachment_summaries),
+                    'session_id': session_id[:8]  # Truncated for privacy
+                }
+
+                # Generate response with sanitized data
+                _, response = await self._generate_response(
+                    analysis_result, user_query, user_context_input
+                )
+
+                # Ensure response is also sanitized for display
+                response = self.sanitizer.sanitize_for_display(response)
+
+                # Validate compliance before returning
+                session_data = {
+                    'session_id': session_id,
+                    'analysis_summary': self.compliance_manager._create_safe_summary(analysis_result)
+                }
+                is_compliant, issues = self.compliance_manager.validate_for_storage(session_data)
+
+                if not is_compliant:
+                    logger.warning(f"Compliance issues detected: {issues}")
+
+                return analysis_result, response
+
+        except Exception as e:
+            logger.error(f"Secure analysis failed for session {session_id}: {e}")
+            # Ensure cleanup even on error
+            if self.cleanup_manager:
+                await self.cleanup_manager._immediate_cleanup(session_id)
+            raise
 
     async def analyze_log_content(
         self,
@@ -818,6 +1014,33 @@ class LogAnalysisAgent:
         except Exception as e:
             logger.error(f"Failed to read log file {file_path}: {e}")
             raise
+
+    def _generate_secure_cache_key(
+        self, file_path: Path, query: Optional[str], context: Optional[str]
+    ) -> str:
+        """Generate a secure cache key without storing sensitive data."""
+        key_parts = [
+            hashlib.sha256(str(file_path).encode()).hexdigest()[:16],
+            hashlib.sha256((query or "").encode()).hexdigest()[:8],
+            hashlib.sha256((context or "").encode()).hexdigest()[:8],
+        ]
+        return "_".join(key_parts)
+
+    def get_security_audit(self) -> Dict[str, Any]:
+        """Get comprehensive security audit information."""
+        if not self.enable_security:
+            return {"security_enabled": False}
+
+        audit = {
+            "security_enabled": True,
+            "redaction_level": self.sanitizer.config.redaction_level.value,
+            "cleanup_stats": self.cleanup_manager.get_cleanup_statistics(),
+            "compliance_report": self.compliance_manager.run_compliance_check(),
+            "recent_validations": self.security_validator._audit_log.get_recent_entries(10)
+            if hasattr(self.security_validator, '_audit_log') else [],
+        }
+
+        return audit
 
     def _generate_cache_key(self, file_path: Path, query: Optional[str], context: Optional[str]) -> str:
         """Generate cache key for analysis results."""

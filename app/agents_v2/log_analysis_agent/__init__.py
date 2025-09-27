@@ -26,6 +26,24 @@ from .schemas.log_schemas import (
     UserContext,
     PerformanceMetrics,
 )
+from .privacy import (
+    LogSanitizer,
+    RedactionLevel,
+    SanitizationConfig,
+    LogCleanupManager,
+    CleanupConfig,
+    AttachmentSanitizer,
+)
+from .security import (
+    SecurityValidator,
+    ValidationConfig,
+    ValidationResult,
+    ValidationStatus,
+    ThreatLevel,
+    ComplianceManager,
+    ComplianceConfig,
+    ComplianceReport,
+)
 
 __all__ = [
     # Simplified implementation
@@ -46,6 +64,21 @@ __all__ = [
     "Severity",
     "UserContext",
     "PerformanceMetrics",
+    # Security & privacy modules
+    "LogSanitizer",
+    "RedactionLevel",
+    "SanitizationConfig",
+    "LogCleanupManager",
+    "CleanupConfig",
+    "AttachmentSanitizer",
+    "SecurityValidator",
+    "ValidationConfig",
+    "ValidationResult",
+    "ValidationStatus",
+    "ThreatLevel",
+    "ComplianceManager",
+    "ComplianceConfig",
+    "ComplianceReport",
 ]
 
 __version__ = "1.0.0"
