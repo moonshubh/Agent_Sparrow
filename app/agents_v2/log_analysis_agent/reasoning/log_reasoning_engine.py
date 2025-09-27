@@ -34,6 +34,8 @@ from ..schemas.log_schemas import (
     UserContext,
 )
 from .root_cause_classifier import RootCauseClassifier
+from ..tools import LogToolOrchestrator, ToolResults
+from ..formatters.response_formatter import LogResponseFormatter, FormattingConfig
 
 logger = logging.getLogger(__name__)
 
@@ -67,7 +69,18 @@ class LogReasoningEngine(ReasoningEngine):
         """
         super().__init__(model, config, provider, model_name)
         self.root_cause_classifier = RootCauseClassifier()
+        self.tool_orchestrator = LogToolOrchestrator()
+
+        # Initialize response formatter
+        formatter_config = FormattingConfig(
+            enable_quality_check=True,
+            min_quality_score=config.quality_score_threshold if config else 0.7
+        )
+        self.response_formatter = LogResponseFormatter(formatter_config)
+
         self._analysis_cache: Dict[str, LogAnalysisResult] = {}
+        self._tool_results_cache: Dict[str, ToolResults] = {}
+        self._max_cache_size = 100  # Prevent unbounded cache growth
 
     async def analyze_logs_with_reasoning(
         self,
@@ -206,9 +219,47 @@ class LogReasoningEngine(ReasoningEngine):
             )
             reasoning_state.add_reasoning_step(step)
 
+        # Phase 6: Tool Context Gathering - Search for additional context
+        if log_analysis.error_patterns:
+            tool_results = await self._gather_tool_context(
+                log_analysis.error_patterns,
+                log_analysis.metadata
+            )
+
+            if tool_results and tool_results.has_results:
+                step = ReasoningStep(
+                    phase=ReasoningPhase.CONTEXT_RECOGNITION,
+                    description="Gathered additional context from knowledge sources",
+                    reasoning=self._summarize_tool_results(tool_results),
+                    confidence=0.8,
+                    evidence=self._extract_tool_evidence(tool_results),
+                )
+                reasoning_state.add_reasoning_step(step)
+
+                # Store tool results for response generation
+                self._manage_cache_size()
+                self._tool_results_cache[log_analysis.analysis_id] = tool_results
+            else:
+                # Clear stale cache entry when no results are found
+                # This prevents stale data from persisting
+                self._tool_results_cache.pop(log_analysis.analysis_id, None)
+
         # Update overall confidence
         if log_analysis.confidence_score > reasoning_state.overall_confidence:
             reasoning_state.overall_confidence = log_analysis.confidence_score
+
+    def _manage_cache_size(self) -> None:
+        """
+        Manage cache size to prevent unbounded growth.
+
+        Uses FIFO (First In, First Out) strategy when cache exceeds max size.
+        """
+        if len(self._tool_results_cache) >= self._max_cache_size:
+            # Remove the oldest entry (first item in dict)
+            # In Python 3.7+, dict maintains insertion order
+            oldest_key = next(iter(self._tool_results_cache))
+            del self._tool_results_cache[oldest_key]
+            logger.debug(f"Evicted oldest cache entry: {oldest_key}")
 
     def _summarize_log_findings(self, log_analysis: LogAnalysisResult) -> str:
         """Create a summary of log analysis findings."""
@@ -284,6 +335,42 @@ class LogReasoningEngine(ReasoningEngine):
         # Determine emotional tone
         emotional_state = self._determine_emotional_tone(log_analysis, user_context)
 
+        # Try to use the new response formatter if available
+        if hasattr(self, 'response_formatter'):
+            try:
+                # Get tool results from cache
+                tool_results = self._tool_results_cache.get(log_analysis.analysis_id)
+
+                # Extract user name if possible
+                user_name = None
+                if user_context and user_context.reported_issue:
+                    words = user_context.reported_issue.split()
+                    if words and words[0][0].isupper():
+                        user_name = words[0]
+
+                # Use the new formatter for high-quality responses
+                formatted_response, validation_result = await self.response_formatter.format_response(
+                    analysis=log_analysis,
+                    emotional_state=emotional_state,
+                    user_context=user_context,
+                    tool_results=tool_results,
+                    attachment_data=None,
+                    user_name=user_name
+                )
+
+                # Log quality metrics
+                logger.info(
+                    f"Response quality score: {validation_result.score.overall_score:.2f} "
+                    f"for analysis {log_analysis.analysis_id}"
+                )
+
+                return formatted_response
+
+            except Exception as e:
+                logger.warning(f"Failed to use response formatter: {e}, falling back to basic formatting")
+                # Fall through to basic formatting
+
+        # Fallback to basic formatting if formatter not available or failed
         # Get empathy template
         issue_summary = (
             log_analysis.top_priority_cause.title
@@ -310,6 +397,11 @@ class LogReasoningEngine(ReasoningEngine):
         # Add additional recommendations
         if log_analysis.recommendations:
             response_parts.append(self._format_recommendations(log_analysis))
+
+        # Add resources from tools if available
+        tool_results = self._tool_results_cache.get(log_analysis.analysis_id)
+        if tool_results and tool_results.has_results:
+            response_parts.append(self._format_tool_resources(tool_results))
 
         # Add reassurance and next steps
         response_parts.append(self._generate_closing(log_analysis, emotional_state))
@@ -490,3 +582,159 @@ Reflect on this log analysis response for quality improvement:
 - Confirm clarity for non-technical users
 """
         return reflection
+
+    async def _gather_tool_context(
+        self,
+        error_patterns: List[ErrorPattern],
+        metadata: LogMetadata
+    ) -> Optional[ToolResults]:
+        """
+        Gather additional context from tools (KB, FeedMe, Tavily).
+
+        Args:
+            error_patterns: List of detected error patterns
+            metadata: Log metadata
+
+        Returns:
+            ToolResults with gathered context or None
+        """
+        try:
+            logger.info("Gathering tool context for log analysis")
+
+            # Execute parallel tool searches
+            tool_results = await self.tool_orchestrator.search_all(
+                patterns=error_patterns,
+                metadata=metadata,
+                use_cache=True
+            )
+
+            if tool_results.has_results:
+                logger.info(
+                    f"Tool context gathered - KB: {len(tool_results.kb_articles)}, "
+                    f"FeedMe: {len(tool_results.feedme_conversations)}, "
+                    f"Web: {len(tool_results.web_resources)}"
+                )
+            else:
+                logger.warning("No tool results found")
+
+            return tool_results
+
+        except Exception as e:
+            logger.error(f"Error gathering tool context: {e}", exc_info=True)
+            return None
+
+    def _summarize_tool_results(self, tool_results: ToolResults) -> str:
+        """Summarize tool search results."""
+        parts = []
+
+        if tool_results.kb_articles:
+            parts.append(
+                f"Found {len(tool_results.kb_articles)} relevant KB articles"
+            )
+
+        if tool_results.feedme_conversations:
+            resolved = sum(
+                1 for c in tool_results.feedme_conversations
+                if c.resolution_status == "resolved"
+            )
+            parts.append(
+                f"Found {resolved} resolved similar issues in past conversations"
+            )
+
+        if tool_results.web_resources:
+            official = sum(
+                1 for r in tool_results.web_resources
+                if "mailbird" in r.source_domain.lower()
+            )
+            parts.append(
+                f"Found {len(tool_results.web_resources)} web resources "
+                f"({official} from official sources)"
+            )
+
+        summary = ". ".join(parts) if parts else "No additional context found"
+
+        # Add cache status
+        if tool_results.cache_hit:
+            summary += " (cached)"
+        else:
+            summary += f" (search took {tool_results.execution_time_ms}ms)"
+
+        return summary
+
+    def _extract_tool_evidence(self, tool_results: ToolResults) -> List[str]:
+        """Extract key evidence from tool results."""
+        evidence = []
+
+        # Add top KB article
+        if tool_results.kb_articles:
+            top_article = tool_results.kb_articles[0]
+            evidence.append(
+                f"KB: {top_article.title} (relevance: {top_article.relevance_score:.0%})"
+            )
+
+        # Add top FeedMe conversation
+        if tool_results.feedme_conversations:
+            top_conv = tool_results.feedme_conversations[0]
+            evidence.append(
+                f"Similar issue: {top_conv.title} - {top_conv.resolution_status}"
+            )
+
+        # Add top web resource
+        if tool_results.web_resources:
+            top_resource = tool_results.web_resources[0]
+            evidence.append(
+                f"Web: {top_resource.title} from {top_resource.source_domain}"
+            )
+
+        return evidence[:5]  # Limit to 5 pieces of evidence
+
+    def _format_tool_resources(self, tool_results: ToolResults) -> str:
+        """Format tool resources section for user response."""
+        resource_parts = ["**📚 Helpful Resources:**"]
+
+        # Add KB articles
+        if tool_results.kb_articles:
+            resource_parts.append("\n*Knowledge Base Articles:*")
+            for article in tool_results.kb_articles[:2]:
+                resource_parts.append(
+                    f"• [{article.title}]({article.url}) - "
+                    f"Relevance: {article.relevance_score:.0%}"
+                )
+
+        # Add resolved conversations
+        if tool_results.feedme_conversations:
+            resolved = [
+                c for c in tool_results.feedme_conversations
+                if c.resolution_status == "resolved"
+            ][:2]
+
+            if resolved:
+                resource_parts.append("\n*Previously Resolved Similar Issues:*")
+                for conv in resolved:
+                    # Ensure resolution is not None
+                    resolution_text = conv.resolution or "Resolution details not available"
+                    if len(resolution_text) > 100:
+                        resource_parts.append(
+                            f"• {conv.title} - "
+                            f"Resolution: {resolution_text[:100]}..."
+                        )
+                    else:
+                        resource_parts.append(
+                            f"• {conv.title} - Resolution: {resolution_text}"
+                        )
+
+        # Add web resources
+        if tool_results.web_resources:
+            resource_parts.append("\n*Additional Resources:*")
+            for resource in tool_results.web_resources[:2]:
+                if "mailbird" in resource.source_domain.lower():
+                    resource_parts.append(
+                        f"• [Official: {resource.title}]({resource.url})"
+                    )
+                else:
+                    resource_parts.append(
+                        f"• [{resource.title}]({resource.url}) "
+                        f"from {resource.source_domain}"
+                    )
+
+        return "\n".join(resource_parts) if len(resource_parts) > 1 else ""

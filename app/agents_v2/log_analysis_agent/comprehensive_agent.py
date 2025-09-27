@@ -31,6 +31,8 @@ from .extractors.pattern_analyzer import PatternAnalyzer
 from .reasoning.log_reasoning_engine import LogReasoningEngine
 from .reasoning.root_cause_classifier import RootCauseClassifier
 from .context.context_ingestor import ContextIngestor
+from .formatters.response_formatter import LogResponseFormatter, FormattingConfig
+from app.agents_v2.primary_agent.prompts.emotion_templates import EmotionalState
 
 logger = logging.getLogger(__name__)
 
@@ -84,6 +86,13 @@ class LogAnalysisAgent:
         self.pattern_analyzer = PatternAnalyzer()
         self.root_cause_classifier = RootCauseClassifier()
         self.context_ingestor = ContextIngestor()
+
+        # Initialize response formatter with config
+        formatter_config = FormattingConfig(
+            enable_quality_check=True,
+            min_quality_score=self.config.quality_score_threshold
+        )
+        self.response_formatter = LogResponseFormatter(formatter_config)
 
         # Model and reasoning engine will be initialized on first use
         self._model = None
@@ -723,18 +732,83 @@ class LogAnalysisAgent:
         user_query: Optional[str],
         user_context_input: Optional[str],
     ) -> Tuple[Any, str]:
-        """Generate user-friendly response using the reasoning engine."""
+        """Generate user-friendly response using the reasoning engine and formatter."""
         # Reuse enriched user context when available
         user_context = analysis_result.user_context
         if user_context is None and user_context_input:
             user_context = self.context_ingestor.ingest_user_input(user_context_input)
 
-        # Use reasoning engine to generate response
-        reasoning_state, user_response = await self._reasoning_engine.analyze_logs_with_reasoning(
+        # Use reasoning engine for analysis and tool gathering
+        reasoning_state, initial_response = await self._reasoning_engine.analyze_logs_with_reasoning(
             analysis_result, user_query, user_context
         )
 
-        return reasoning_state, user_response
+        # Detect emotional state from user context or query
+        emotional_state = self._detect_emotional_state(user_context, user_context_input, user_query)
+
+        # Get tool results if available from reasoning engine
+        tool_results = None
+        if hasattr(self._reasoning_engine, '_tool_results_cache'):
+            tool_results = self._reasoning_engine._tool_results_cache.get(analysis_result.analysis_id)
+
+        # Get user name from dedicated field if available
+        user_name = getattr(user_context, 'user_name', None) if user_context else None
+
+        # Format the response using the new formatter
+        formatted_response, validation_result = await self.response_formatter.format_response(
+            analysis=analysis_result,
+            emotional_state=emotional_state,
+            user_context=user_context,
+            tool_results=tool_results,
+            attachment_data=None,  # Could be added if attachments are processed
+            user_name=user_name
+        )
+
+        # Log quality metrics
+        if validation_result.score.overall_score < self.config.quality_score_threshold:
+            logger.warning(
+                f"Response quality below threshold: {validation_result.score.overall_score:.2f} "
+                f"for analysis {analysis_result.analysis_id}"
+            )
+
+        return reasoning_state, formatted_response
+
+    def _detect_emotional_state(
+        self,
+        user_context: Optional[UserContext],
+        user_input: Optional[str],
+        query: Optional[str]
+    ) -> EmotionalState:
+        """Detect emotional state from user input and context."""
+        # Use emotional state from user context if available
+        if user_context and hasattr(user_context, 'emotional_state') and user_context.emotional_state:
+            # Handle both string and enum types
+            if isinstance(user_context.emotional_state, EmotionalState):
+                return user_context.emotional_state
+            elif isinstance(user_context.emotional_state, str):
+                emotion_map = {
+                    'frustrated': EmotionalState.FRUSTRATED,
+                    'anxious': EmotionalState.ANXIOUS,
+                    'confused': EmotionalState.CONFUSED,
+                    'professional': EmotionalState.PROFESSIONAL,
+                    'urgent': EmotionalState.URGENT,
+                    'neutral': EmotionalState.NEUTRAL
+                }
+                return emotion_map.get(user_context.emotional_state.lower(), EmotionalState.NEUTRAL)
+
+        # Simple keyword detection for emotional state
+        combined_text = f"{user_input or ''} {query or ''}".lower()
+
+        if any(word in combined_text for word in ['frustrated', 'annoying', 'broken', 'stupid']):
+            return EmotionalState.FRUSTRATED
+        elif any(word in combined_text for word in ['urgent', 'asap', 'critical', 'worried']):
+            return EmotionalState.ANXIOUS
+        elif any(word in combined_text for word in ['confused', "don't understand", 'help me']):
+            return EmotionalState.CONFUSED
+        elif any(word in combined_text for word in ['kindly', 'please assist', 'regarding']):
+            return EmotionalState.PROFESSIONAL
+        else:
+            return EmotionalState.NEUTRAL
 
     async def _read_log_file(self, file_path: Path) -> str:
         """Read log file content."""
