@@ -147,7 +147,13 @@ export function ChatHistorySidebar({ sessionId, onSelect }: Props) {
                 <div className="px-3 py-2 text-xs text-muted-foreground">No conversations yet</div>
               )}
               {sessions.map((s) => {
-                const label = s.title?.trim() || (s.agent_type === "log_analysis" ? "Log analysis session" : "Conversation")
+                // Extract metadata for log analysis sessions
+                const isLogAnalysis = s.agent_type === "log_analysis"
+                const logMetadata = isLogAnalysis && s.metadata ? s.metadata : null
+                const errorCount = logMetadata?.error_count
+                const label = s.title?.trim() || (isLogAnalysis
+                  ? `Log Analysis${errorCount ? ` - ${errorCount} errors` : ''}`
+                  : "Conversation")
                 const sessionKey = String(s.id)
                 const isActive = sessionKey === sessionId
                 return (
@@ -162,8 +168,8 @@ export function ChatHistorySidebar({ sessionId, onSelect }: Props) {
                       }}
                     >
                       <a href="#" className="gap-2 pr-8">
-                        {s.agent_type === "log_analysis" ? (
-                          <FolderGit2 className="h-4 w-4" />
+                        {isLogAnalysis ? (
+                          <FolderGit2 className={`h-4 w-4 ${errorCount > 0 ? 'text-orange-500' : ''}`} />
                         ) : (
                           <MessageSquare className="h-4 w-4" />
                         )}
@@ -188,7 +194,22 @@ export function ChatHistorySidebar({ sessionId, onSelect }: Props) {
                                 </span>
                               </TooltipTrigger>
                               <TooltipContent side="right">
-                                <span className="text-xs">{label}</span>
+                                <div className="text-xs space-y-1">
+                                  <div>{label}</div>
+                                  {isLogAnalysis && logMetadata && (
+                                    <>
+                                      {errorCount !== undefined && (
+                                        <div className="text-orange-500">Errors: {errorCount}</div>
+                                      )}
+                                      {logMetadata.warning_count !== undefined && (
+                                        <div className="text-yellow-500">Warnings: {logMetadata.warning_count}</div>
+                                      )}
+                                      {logMetadata.health_status && (
+                                        <div>Status: {logMetadata.health_status}</div>
+                                      )}
+                                    </>
+                                  )}
+                                </div>
                               </TooltipContent>
                             </Tooltip>
                           </TooltipProvider>

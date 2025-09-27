@@ -56,6 +56,7 @@ function ChatContent({ sessionId, setSessionId }: ChatContentProps) {
   const [mediaFiles, setMediaFiles] = useState<File[]>([]);
   const [logFile, setLogFile] = useState<File | null>(null);
   const [attachError, setAttachError] = useState<string | null>(null);
+  const [isLogAnalysis, setIsLogAnalysis] = useState<boolean>(false);
   const [interimVoice, setInterimVoice] = useState<string>("");
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const [enableFx, setEnableFx] = useState<boolean>(true);
@@ -247,7 +248,8 @@ function ChatContent({ sessionId, setSessionId }: ChatContentProps) {
     let attachedLogText: string | undefined;
     if (logFile) {
       try {
-        attachedLogText = await logFile.text();
+        const rawText = await logFile.text();
+        attachedLogText = sanitizeLogContent(rawText);
       } catch (err) {
         console.error("Failed to read log file:", err);
       }
@@ -261,7 +263,9 @@ function ChatContent({ sessionId, setSessionId }: ChatContentProps) {
     let nextSessionId = sessionId;
     try {
       if (!sessionId) {
-        const session = await sessionsAPI.create("primary");
+        // Create log_analysis session if we have a log file, otherwise primary
+        const agentType = logFile ? "log_analysis" : "primary";
+        const session = await sessionsAPI.create(agentType);
         const createdId = String(session.id);
         nextSessionId = createdId;
         setSessionId(createdId);
@@ -302,7 +306,15 @@ function ChatContent({ sessionId, setSessionId }: ChatContentProps) {
       {
         body: {
           data: {
-            ...(attachedLogText ? { attachedLogText } : {}),
+            ...(attachedLogText ? {
+              attachedLogText,
+              isLogAnalysis: true,
+              logMetadata: {
+                filename: logFile?.name,
+                size: logFile?.size,
+                lastModified: logFile?.lastModified,
+              }
+            } : {}),
             modelProvider: provider,
             model,
             sessionId: nextSessionId || fallbackSessionRef.current,
@@ -314,6 +326,7 @@ function ChatContent({ sessionId, setSessionId }: ChatContentProps) {
 
     setMediaFiles([]);
     setLogFile(null);
+    setIsLogAnalysis(false);
   };
 
   const hasContent = messages.length > 0;
@@ -331,8 +344,9 @@ function ChatContent({ sessionId, setSessionId }: ChatContentProps) {
   const handleLogAnalysisSelect = () => {
     setProvider('google');
     setModel('gemini-2.5-flash');
+    setIsLogAnalysis(true);
     if (!input) {
-      setInput('Please analyze the attached log file and highlight any critical errors.');
+      setInput('Please analyze the attached log file and highlight any critical errors, performance issues, and provide recommendations.');
     }
   };
 
@@ -499,7 +513,11 @@ function ChatContent({ sessionId, setSessionId }: ChatContentProps) {
                       }`}
                     >
                       {m.role === "assistant" ? (
-                        <AssistantMessage content={getMessageText(m)} />
+                        <AssistantMessage
+                          content={getMessageText(m)}
+                          metadata={(m as any).metadata}
+                          isLogAnalysis={isLogAnalysis}
+                        />
                       ) : (
                         <div className="text-[15px] leading-relaxed whitespace-pre-wrap">
                           {getMessageText(m)}
@@ -610,18 +628,28 @@ function ChatContent({ sessionId, setSessionId }: ChatContentProps) {
               </div>
             )}
             <FileDropZone
-              onFiles={(files) => {
+              onFiles={async (files) => {
                 setAttachError(null);
                 const f = files[0];
                 if (!f) return;
-                if (/(\.txt|\.log|\.csv|\.html?)$/i.test(f.name)) {
-                  if (f.size > 2 * 1024 * 1024) {
+
+                // Enhanced log file detection
+                const isLog = await detectLogFile(f);
+
+                if (isLog) {
+                  // Max 50MB for log files
+                  if (f.size > 50 * 1024 * 1024) {
                     setAttachError(
-                      `Log file too large: ${formatBytes(f.size)}. Max 2MB.`,
+                      `Log file too large: ${formatBytes(f.size)}. Max 50MB.`,
                     );
                     return;
                   }
                   setLogFile(f);
+                  setIsLogAnalysis(true);
+                  // Auto-set agent to log analysis mode
+                  if (!input) {
+                    setInput('Please analyze this log file and identify any critical issues, errors, or performance problems.');
+                  }
                 } else {
                   const max = 10 * 1024 * 1024;
                   if (f.size > max) {
@@ -644,12 +672,21 @@ function ChatContent({ sessionId, setSessionId }: ChatContentProps) {
                   setInput(v);
                 }}
                 onSubmit={() => onSend()}
-                onPickFiles={(fileList) => {
+                onPickFiles={async (fileList) => {
                   if (!fileList || fileList.length === 0) return;
                   const files = Array.from(fileList);
                   const f = files[0];
-                  if (/\.(txt|log|csv|html?)$/i.test(f.name)) {
+                  const isLog = await detectLogFile(f);
+                  if (isLog) {
+                    if (f.size > 50 * 1024 * 1024) {
+                      setAttachError(`Log file too large: ${formatBytes(f.size)}. Max 50MB.`);
+                      return;
+                    }
                     setLogFile(f);
+                    setIsLogAnalysis(true);
+                    if (!input) {
+                      setInput('Please analyze this log file and identify any critical issues, errors, or performance problems.');
+                    }
                   } else {
                     setMediaFiles(files);
                   }
@@ -683,15 +720,60 @@ function ChatContent({ sessionId, setSessionId }: ChatContentProps) {
   );
 }
 
+// Helper to normalize log content before sending to backend
+function sanitizeLogContent(raw: string): string {
+  if (!raw) return raw;
+  let sanitized = raw.replace(/\r\n/g, '\n');
+  sanitized = sanitized.replace(/\u0000/g, '\n');
+  sanitized = sanitized.replace(/[\u0001-\u0008\u000B\u000C\u000E-\u001F]/g, '');
+  if (sanitized.charCodeAt(0) === 0xfeff) {
+    sanitized = sanitized.slice(1);
+  }
+  const MAX_CHAR_COUNT = 50 * 1024 * 1024; // Mirror backend limit (approximate)
+  if (sanitized.length > MAX_CHAR_COUNT) {
+    sanitized = sanitized.slice(0, MAX_CHAR_COUNT);
+  }
+  return sanitized;
+}
+
+// Helper function to detect log files
+async function detectLogFile(file: File): Promise<boolean> {
+  // Check file extension
+  const logExtensions = ['.log', '.txt', '.logs', '.json', '.csv', '.html', '.htm', '.xml'];
+  const hasLogExtension = logExtensions.some(ext => file.name.toLowerCase().endsWith(ext));
+
+  if (hasLogExtension) return true;
+
+  // Check file content for log patterns if text file
+  if (file.type.startsWith('text/') || file.type === 'application/json') {
+    try {
+      const sample = await file.slice(0, 1024).text();
+      // Look for common log patterns
+      const logPatterns = [
+        /\d{4}-\d{2}-\d{2}[T\s]\d{2}:\d{2}:\d{2}/,  // Timestamps
+        /\[(ERROR|WARN|INFO|DEBUG|TRACE)\]/i,  // Log levels
+        /^\[.*?\]\s+/m,  // Bracketed prefixes
+        /Exception|Error|Failed|Warning/i,  // Common log keywords
+      ];
+      return logPatterns.some(pattern => pattern.test(sample));
+    } catch {
+      // If we can't read it, assume it's not a log
+      return false;
+    }
+  }
+
+  return false;
+}
+
 export default function AIChatPage() {
   const [sessionId, setSessionId] = useState<string>("");
 
   return (
     <SidebarProvider defaultOpen={true}>
       {/* Sidebar reserves gap and stays fixed on the left */}
-      <ChatHistorySidebar 
-        sessionId={sessionId} 
-        onSelect={(id) => setSessionId(id || '')} 
+      <ChatHistorySidebar
+        sessionId={sessionId}
+        onSelect={(id) => setSessionId(id || '')}
       />
       {/* Inset ensures main content is offset and centered */}
       <SidebarInset>

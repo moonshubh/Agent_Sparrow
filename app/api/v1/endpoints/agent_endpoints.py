@@ -1,7 +1,7 @@
 from fastapi import APIRouter, HTTPException, Depends
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from typing import Annotated, AsyncIterable, List, Pattern
+from typing import Annotated, AsyncIterable, Dict, List, Pattern, Any, Optional
 from datetime import datetime
 
 from app.agents_v2.primary_agent.agent import run_primary_agent
@@ -10,6 +10,11 @@ from app.agents_v2.log_analysis_agent.simplified_schemas import SimplifiedLogAna
 from langchain_core.messages import HumanMessage, AIMessage
 import json
 import re
+from app.api.v1.middleware.log_analysis_middleware import (
+    log_analysis_request_middleware,
+    log_analysis_rate_limiter,
+    log_analysis_session_manager
+)
 
 from app.agents_v2.log_analysis_agent.agent import run_log_analysis_agent
 from app.agents_v2.research_agent.research_agent import get_research_graph, ResearchState
@@ -435,30 +440,56 @@ async def chat_stream_v2_authenticated(
         }
     )
 
-# --- Log Analysis Agent Endpoint ---
+# --- Log Analysis Agent Endpoint with Session Management ---
 @router.post("/agent/logs", response_model=LogAnalysisV2Response)
 async def analyze_logs(
     request: LogAnalysisRequest,
     user_id: str = Depends(get_current_user_id)
 ):
-    """Endpoint for analyzing logs with the Log Analysis Agent."""
+    """Endpoint for analyzing logs with the Log Analysis Agent (with session management)."""
     # Determine which field contains the log content (new `content` or legacy `log_text`)
     log_body = request.content or request.log_text
     if not log_body:
         raise HTTPException(status_code=400, detail="Log text cannot be empty")
 
+    # Generate session ID if not provided
+    session_id = request.trace_id or f"log-session-{uuid.uuid4().hex[:8]}"
+
+    # Track whether we've acquired a concurrent slot
+    concurrent_slot_acquired = False
+
     try:
+        # Apply middleware for validation and rate limiting
+        from fastapi import Request as FastAPIRequest
+        fake_request = type('Request', (), {'headers': {}})()  # Create minimal request object
+        middleware_result = await log_analysis_request_middleware(
+            fake_request,
+            user_id,
+            log_body,
+            file_name="analysis.log"
+        )
+
+        # Mark that we've acquired a concurrent slot (middleware increments the counter)
+        concurrent_slot_acquired = True
+
+        # Create session for this analysis
+        session_data = await log_analysis_session_manager.create_session(
+            user_id=user_id,
+            session_id=session_id,
+            metadata=middleware_result
+        )
+
         # Create user context
         user_context = await create_user_context_from_user_id(user_id)
-        
+
         # Check if user has required API keys
         gemini_key = await user_context.get_gemini_api_key()
         if not gemini_key:
             raise HTTPException(
-                status_code=400, 
+                status_code=400,
                 detail="API Key Required: To use log analysis, please add your Google Gemini API key in Settings. Steps: (1) Click Settings ⚙️ in the top-right (2) Go to 'API Keys' section (3) Add your Gemini API key (starts with 'AIza') (4) Get a free key at: https://makersuite.google.com/app/apikey"
             )
-        
+
         # Use user-specific context
         async with user_context_scope(user_context):
             initial_state = {
@@ -470,7 +501,7 @@ async def analyze_logs(
             # Add question if provided (for simplified agent)
             if hasattr(request, 'question') and request.question:
                 initial_state['question'] = request.question
-            
+
             # Pass trace_id as a keyword argument if the agent function supports it for logging/tracing
             # The run_log_analysis_agent in agent.py is designed to pick up trace_id from the state dict if present,
             # or generate one. For explicit passing for the endpoint, let's ensure it's part of the initial call.
@@ -490,7 +521,7 @@ async def analyze_logs(
         # Use safe serialization for consistent handling
         response_dict = serialize_analysis_results(final_report)
         response_dict["trace_id"] = returned_trace_id or request.trace_id
-        
+
         try:
             return LogAnalysisV2Response(**response_dict)
         except Exception as validation_error:
@@ -524,6 +555,10 @@ async def analyze_logs(
         logger.error(f"Error in Log Analysis Agent endpoint: {e}", exc_info=True)
         # Consider how to propagate trace_id in error responses if needed
         raise HTTPException(status_code=500, detail=f"Error processing log analysis request: {str(e)}")
+    finally:
+        # Always release the concurrent slot if we acquired one
+        if concurrent_slot_acquired:
+            await log_analysis_rate_limiter.release_concurrent_slot(user_id)
 
 # --- Research Agent Endpoint ---
 @router.post("/agent/research", response_model=ResearchResponse)
@@ -622,13 +657,20 @@ async def research_query(
 # --- Unified Agent Endpoint with LangGraph Orchestration ---
 class UnifiedAgentRequest(BaseModel):
     message: str
-    agent_type: str | None = None  # Optional: "primary", "log_analyst", "researcher", or None for auto-routing
+    agent_type: str | None = None  # Optional: "primary", "log_analyst", "log_analysis", "researcher", or None for auto-routing
     log_content: str | None = None  # For log analysis
+    log_metadata: Optional[Dict[str, Any]] = None  # Optional metadata about uploaded log file
     trace_id: str | None = None
     messages: list[dict] | None = None  # Full conversation history
     session_id: str | None = None  # Session identifier for context
 
-async def unified_agent_stream_generator(request: UnifiedAgentRequest) -> AsyncIterable[str]:
+LOG_AGENT_ALIASES = {"log_analyst", "log_analysis"}
+
+
+async def unified_agent_stream_generator(
+    request: UnifiedAgentRequest,
+    user_id: Optional[str] = None,
+) -> AsyncIterable[str]:
     """Unified agent endpoint with intelligent routing and fallback."""
     try:
         # Send routing notification
@@ -653,11 +695,15 @@ async def unified_agent_stream_generator(request: UnifiedAgentRequest) -> AsyncI
         else:
             agent_type = "primary"
         
+        if agent_type in LOG_AGENT_ALIASES:
+            agent_type = "log_analysis"
+
         # Send agent selection notification
         agent_name = {
             "primary": "Primary Support",
             "primary_agent": "Primary Support",
-            "log_analyst": "Log Analysis", 
+            "log_analyst": "Log Analysis",
+            "log_analysis": "Log Analysis",
             "researcher": "Research"
         }.get(agent_type, "Primary Support")
         
@@ -670,63 +716,161 @@ async def unified_agent_stream_generator(request: UnifiedAgentRequest) -> AsyncI
         yield f"data: {agent_payload}\n\n"
         
         # Route to appropriate agent endpoint
-        if agent_type == "log_analyst" and request.log_content:
-            # Handle log analysis
+        if agent_type in LOG_AGENT_ALIASES and request.log_content:
             from app.agents_v2.log_analysis_agent.agent import run_log_analysis_agent
-            
-            initial_state = {
-                "raw_log_content": request.log_content,
-                "question": request.message if request.message else None,
-                "trace_id": None
-            }
-            
-            result = await run_log_analysis_agent(initial_state)
-            final_report = result.get('final_report')
-            
-            if final_report:
-                # Handle both Pydantic models and dictionaries for overall_summary
-                if hasattr(final_report, 'overall_summary'):
-                    summary = final_report.overall_summary
-                elif isinstance(final_report, dict):
-                    summary = final_report.get('overall_summary', 'Analysis complete')
-                else:
-                    summary = str(final_report)
-                
-                content = f"Log analysis complete! {summary}"
-                
-                # Use safe serialization for analysis_results
-                analysis_results = serialize_analysis_results(final_report)
-                
-                # Additional debug logging
-                logger.debug(f"Serialized analysis results keys: {list(analysis_results.keys()) if isinstance(analysis_results, dict) else 'not a dict'}")
-                
+            from app.core.settings import get_settings
+
+            settings = get_settings()
+            resolved_user_id = user_id or _get_user_id_for_dev_mode(settings)
+            file_metadata = request.log_metadata or {}
+            file_name = str(file_metadata.get("filename") or "analysis.log")
+            concurrent_slot_acquired = False
+            session_id = request.session_id or request.trace_id or f"log-session-{uuid.uuid4().hex[:8]}"
+
+            try:
+                fake_request = type('Request', (), {'headers': {}})()
+                middleware_metadata = await log_analysis_request_middleware(
+                    fake_request,
+                    resolved_user_id,
+                    request.log_content,
+                    file_name=file_name
+                )
+                concurrent_slot_acquired = True
+            except HTTPException as exc:
+                detail = exc.detail
+                message = detail.get('message') if isinstance(detail, dict) else str(detail or exc)
+                error_payload = json.dumps({
+                    "role": "error",
+                    "content": f"Unable to start log analysis: {message}",
+                    "agent_type": "log_analysis",
+                    "trace_id": request.trace_id
+                }, ensure_ascii=False)
+                yield f"data: {error_payload}\n\n"
+                return
+            except Exception as middleware_error:
+                logger.error(f"Middleware failure for log analysis: {middleware_error}", exc_info=True)
+                error_payload = json.dumps({
+                    "role": "error",
+                    "content": "Unexpected error while preparing log analysis. Please try again shortly.",
+                    "agent_type": "log_analysis",
+                    "trace_id": request.trace_id
+                }, ensure_ascii=False)
+                yield f"data: {error_payload}\n\n"
+                return
+
+            try:
+                session_metadata = {**middleware_metadata}
+                if file_metadata:
+                    session_metadata["uploaded_file"] = file_metadata
+
                 try:
-                    json_payload = json.dumps({
-                        "role": "assistant", 
-                        "content": content,
-                        "agent_type": agent_type,
-                        "trace_id": request.trace_id,
-                        "analysis_results": analysis_results
+                    await log_analysis_session_manager.create_session(
+                        user_id=resolved_user_id,
+                        session_id=session_id,
+                        metadata=session_metadata
+                    )
+                except Exception as session_error:
+                    logger.warning(
+                        "Failed to persist log analysis session %s for user %s: %s",
+                        session_id,
+                        resolved_user_id,
+                        session_error,
+                    )
+
+                user_context = await create_user_context_from_user_id(resolved_user_id)
+                gemini_key = await user_context.get_gemini_api_key()
+                if not gemini_key:
+                    error_payload = json.dumps({
+                        "role": "error",
+                        "content": "🔑 **API Key Required**: To analyze logs, please add your Google Gemini API key in Settings.",
+                        "agent_type": "log_analysis",
+                        "trace_id": request.trace_id
                     }, ensure_ascii=False)
-                    yield f"data: {json_payload}\n\n"
-                except Exception as json_error:
-                    logger.error(f"JSON serialization error: {json_error}")
-                    # Send a fallback response
-                    fallback_payload = json.dumps({
-                        "role": "assistant", 
-                        "content": f"Log analysis complete! {summary}",
-                        "agent_type": agent_type,
-                        "trace_id": request.trace_id,
-                        "analysis_results": {
-                            "overall_summary": summary,
-                            "error": f"Serialization failed: {str(json_error)}",
-                            "system_metadata": {},
-                            "identified_issues": [],
-                            "proposed_solutions": []
+                    yield f"data: {error_payload}\n\n"
+                    return
+
+                result: Optional[Dict[str, Any]] = None
+                try:
+                    async with user_context_scope(user_context):
+                        initial_state = {
+                            "raw_log_content": request.log_content,
+                            "question": request.message or None,
+                            "trace_id": request.trace_id,
+                            "session_id": session_id
                         }
+                        result = await run_log_analysis_agent(initial_state)
+                except Exception as agent_error:
+                    logger.error("Log analysis agent failed: %s", agent_error, exc_info=True)
+                    error_payload = json.dumps({
+                        "role": "error",
+                        "content": "Log analysis failed while processing the file. Please try again after a short break.",
+                        "agent_type": "log_analysis",
+                        "trace_id": request.trace_id
                     }, ensure_ascii=False)
-                    yield f"data: {fallback_payload}\n\n"
-            
+                    yield f"data: {error_payload}\n\n"
+                    return
+
+                final_report = result.get('final_report') if isinstance(result, dict) else None
+
+                if final_report:
+                    if hasattr(final_report, 'overall_summary'):
+                        summary = final_report.overall_summary
+                    elif isinstance(final_report, dict):
+                        summary = final_report.get('overall_summary', 'Analysis complete')
+                    else:
+                        summary = str(final_report)
+
+                    content = f"Log analysis complete! {summary}"
+                    analysis_results = serialize_analysis_results(final_report)
+                    if isinstance(analysis_results, dict):
+                        analysis_results.setdefault('ingestion_metadata', middleware_metadata)
+                        analysis_results.setdefault('session_id', session_id)
+
+                    logger.debug(
+                        "Serialized analysis results keys: %s",
+                        list(analysis_results.keys()) if isinstance(analysis_results, dict) else 'not a dict'
+                    )
+
+                    try:
+                        json_payload = json.dumps({
+                            "role": "assistant",
+                            "content": content,
+                            "agent_type": "log_analysis",
+                            "trace_id": request.trace_id,
+                            "analysis_results": analysis_results,
+                            "session_id": session_id
+                        }, ensure_ascii=False)
+                        yield f"data: {json_payload}\n\n"
+                    except Exception as json_error:
+                        logger.error(f"JSON serialization error: {json_error}")
+                        fallback_payload = json.dumps({
+                            "role": "assistant",
+                            "content": f"Log analysis complete! {summary}",
+                            "agent_type": "log_analysis",
+                            "trace_id": request.trace_id,
+                            "analysis_results": {
+                                "overall_summary": summary,
+                                "error": f"Serialization failed: {str(json_error)}",
+                                "system_metadata": {},
+                                "identified_issues": [],
+                                "proposed_solutions": []
+                            },
+                            "session_id": session_id
+                        }, ensure_ascii=False)
+                        yield f"data: {fallback_payload}\n\n"
+                else:
+                    error_payload = json.dumps({
+                        "role": "error",
+                        "content": "Log analysis completed without producing a final report.",
+                        "agent_type": "log_analysis",
+                        "trace_id": request.trace_id
+                    }, ensure_ascii=False)
+                    yield f"data: {error_payload}\n\n"
+
+                return
+            finally:
+                if concurrent_slot_acquired and resolved_user_id:
+                    await log_analysis_rate_limiter.release_concurrent_slot(resolved_user_id)
         elif agent_type == "researcher":
             # Handle research queries
             from app.agents_v2.research_agent.research_agent import get_research_graph
@@ -849,14 +993,190 @@ async def unified_agent_stream_generator(request: UnifiedAgentRequest) -> AsyncI
         }, ensure_ascii=False)
         yield f"data: {error_payload}\n\n"
 
-@router.post("/agent/unified/stream")
-async def unified_agent_stream(request: UnifiedAgentRequest):
-    """Unified streaming endpoint that routes to appropriate agents using LangGraph."""
-    if not request.message:
-        raise HTTPException(status_code=400, detail="Message cannot be empty")
-    
+if AUTH_AVAILABLE:
+    @router.post("/agent/unified/stream")
+    async def unified_agent_stream(
+        request: UnifiedAgentRequest,
+        user_id: str = Depends(get_current_user_id),
+    ):
+        """Unified streaming endpoint that routes to appropriate agents using LangGraph."""
+        if not request.message:
+            raise HTTPException(status_code=400, detail="Message cannot be empty")
+
+        return StreamingResponse(
+            unified_agent_stream_generator(request, user_id),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no"  # Disable nginx buffering
+            }
+        )
+else:
+    @router.post("/agent/unified/stream")
+    async def unified_agent_stream(request: UnifiedAgentRequest):
+        """Unified streaming endpoint that routes to appropriate agents using LangGraph."""
+        if not request.message:
+            raise HTTPException(status_code=400, detail="Message cannot be empty")
+
+        return StreamingResponse(
+            unified_agent_stream_generator(request),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no"  # Disable nginx buffering
+            }
+        )
+
+# --- Log Analysis Agent Streaming Endpoint ---
+async def log_analysis_stream_generator(
+    log_content: str,
+    question: str | None = None,
+    trace_id: str | None = None,
+    user_id: str | None = None
+) -> AsyncIterable[str]:
+    """Streaming log analysis that sends progress updates and final results."""
+    concurrent_slot_acquired = False
+
+    try:
+        # Apply rate limiting and validation first if user_id is provided
+        if user_id:
+            # Apply middleware for validation and rate limiting
+            from fastapi import Request as FastAPIRequest
+            fake_request = type('Request', (), {'headers': {}})()  # Create minimal request object
+            try:
+                await log_analysis_request_middleware(
+                    fake_request,
+                    user_id,
+                    log_content,
+                    file_name="analysis.log"
+                )
+                concurrent_slot_acquired = True
+            except HTTPException as rate_limit_error:
+                # Convert HTTPException detail to proper format
+                detail = rate_limit_error.detail
+                if isinstance(detail, dict):
+                    message = detail.get('message', str(detail))
+                else:
+                    message = str(detail)
+                error_payload = json.dumps({
+                    'type': 'error',
+                    'data': {
+                        'message': f'Rate limit exceeded: {message}',
+                        'trace_id': trace_id
+                    }
+                })
+                yield f"data: {error_payload}\n\n"
+                return
+
+        # Continue with original logic
+        # Create user context if user_id is provided
+        if user_id:
+            user_context = await create_user_context_from_user_id(user_id)
+
+            # Check if user has required API keys
+            gemini_key = await user_context.get_gemini_api_key()
+            if not gemini_key:
+                error_payload = json.dumps({
+                    'type': 'error',
+                    'data': {
+                        'message': 'API Key Required: Please add your Google Gemini API key in Settings.',
+                        'trace_id': trace_id
+                    }
+                })
+                yield f"data: {error_payload}\n\n"
+                return
+        else:
+            # Use default settings for anonymous users
+            from app.core.settings import get_settings
+            settings = get_settings()
+            user_id = _get_user_id_for_dev_mode(settings)
+            user_context = await create_user_context_from_user_id(user_id)
+
+        # Send initial status
+        yield f"data: {json.dumps({'type': 'step', 'data': {'type': 'Starting Analysis', 'description': 'Initializing log analysis...', 'status': 'in-progress'}})}\n\n"
+
+        # Use user-specific context
+        async with user_context_scope(user_context):
+            initial_state = {
+                "raw_log_content": log_content,
+                "question": question,
+                "trace_id": trace_id
+            }
+
+            # Send parsing status
+            yield f"data: {json.dumps({'type': 'step', 'data': {'type': 'Parsing', 'description': 'Parsing log entries...', 'status': 'in-progress'}})}\n\n"
+
+            # Run the log analysis agent
+            result = await run_log_analysis_agent(initial_state)
+
+            # Send analysis status
+            yield f"data: {json.dumps({'type': 'step', 'data': {'type': 'Analyzing', 'description': 'Analyzing patterns and issues...', 'status': 'complete'}})}\n\n"
+
+            final_report = result.get('final_report')
+            returned_trace_id = result.get('trace_id')
+
+            if final_report:
+                # Serialize the analysis results
+                analysis_results = serialize_analysis_results(final_report)
+
+                # Send final result
+                final_payload = {
+                    'type': 'result',
+                    'data': {
+                        'analysis': analysis_results,
+                        'trace_id': returned_trace_id or trace_id
+                    }
+                }
+                yield f"data: {json.dumps(final_payload)}\n\n"
+            else:
+                # Send error if no report
+                error_payload = {
+                    'type': 'error',
+                    'data': {
+                        'message': 'Log analysis did not produce a report',
+                        'trace_id': trace_id
+                    }
+                }
+                yield f"data: {json.dumps(error_payload)}\n\n"
+
+        # Completion sentinel
+        yield f"data: {json.dumps({'type': 'done'})}\n\n"
+
+    except Exception as e:
+        logger.error(f"Error in log_analysis_stream_generator: {e}", exc_info=True)
+        err_payload = {
+            'type': 'error',
+            'data': {
+                'message': f'Error during log analysis: {str(e)}',
+                'trace_id': trace_id
+            }
+        }
+        yield f"data: {json.dumps(err_payload)}\n\n"
+    finally:
+        # Always release the concurrent slot if we acquired one
+        if concurrent_slot_acquired and user_id:
+            await log_analysis_rate_limiter.release_concurrent_slot(user_id)
+
+@router.post("/agent/logs/stream")
+async def log_analysis_stream(
+    request: LogAnalysisRequest,
+    user_id: str = Depends(get_current_user_id)
+):
+    """Streaming log analysis endpoint for real-time feedback."""
+    # Determine which field contains the log content
+    log_body = request.content or request.log_text
+    if not log_body:
+        raise HTTPException(status_code=400, detail="Log text cannot be empty")
+
     return StreamingResponse(
-        unified_agent_stream_generator(request),
+        log_analysis_stream_generator(
+            log_content=log_body,
+            question=request.question,
+            trace_id=request.trace_id,
+            user_id=user_id
+        ),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
@@ -946,7 +1266,7 @@ async def research_agent_stream(request: ResearchRequest):
     """Streaming research endpoint that matches frontend expectations."""
     if not request.query:
         raise HTTPException(status_code=400, detail="Query cannot be empty")
-    
+
     return StreamingResponse(
         research_agent_stream_generator(request.query, request.trace_id),
         media_type="text/event-stream",
@@ -956,3 +1276,81 @@ async def research_agent_stream(request: ResearchRequest):
             "X-Accel-Buffering": "no"
         }
     )
+
+# --- Log Analysis Session Management Endpoints ---
+
+class LogAnalysisSessionResponse(BaseModel):
+    """Response model for log analysis sessions."""
+    session_id: str
+    user_id: str
+    created_at: datetime
+    updated_at: datetime
+    metadata: dict
+    insights: list
+    conversation: list
+
+@router.get("/agent/logs/sessions")
+async def list_log_analysis_sessions(
+    user_id: str = Depends(get_current_user_id)
+):
+    """List all log analysis sessions for the current user."""
+    sessions = await log_analysis_session_manager.list_sessions(user_id)
+    return {"sessions": sessions, "count": len(sessions)}
+
+@router.get("/agent/logs/sessions/{session_id}")
+async def get_log_analysis_session(
+    session_id: str,
+    user_id: str = Depends(get_current_user_id)
+):
+    """Retrieve a specific log analysis session."""
+    session = await log_analysis_session_manager.get_session(user_id, session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return session
+
+@router.post("/agent/logs/sessions/{session_id}/insights")
+async def add_session_insight(
+    session_id: str,
+    insight: dict,
+    user_id: str = Depends(get_current_user_id)
+):
+    """Add an insight to a log analysis session."""
+    success = await log_analysis_session_manager.add_insight(user_id, session_id, insight)
+    if not success:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return {"status": "success", "message": "Insight added"}
+
+@router.get("/agent/logs/rate-limits")
+async def get_log_analysis_rate_limits(
+    user_id: str = Depends(get_current_user_id)
+):
+    """Get current rate limit status for log analysis."""
+    from app.api.v1.middleware.log_analysis_middleware import LOG_ANALYSIS_RATE_LIMITS
+
+    # Get user's current usage
+    user_requests = log_analysis_rate_limiter._user_requests.get(user_id, [])
+    concurrent = log_analysis_rate_limiter._concurrent_analyses.get(user_id, 0)
+
+    now = datetime.utcnow()
+    from datetime import timedelta
+
+    # Count requests in different time windows
+    requests_last_minute = len([r for r in user_requests if now - r < timedelta(minutes=1)])
+    requests_last_hour = len([r for r in user_requests if now - r < timedelta(hours=1)])
+    requests_today = len(user_requests)
+
+    return {
+        "limits": LOG_ANALYSIS_RATE_LIMITS,
+        "usage": {
+            "requests_last_minute": requests_last_minute,
+            "requests_last_hour": requests_last_hour,
+            "requests_today": requests_today,
+            "concurrent_analyses": concurrent
+        },
+        "remaining": {
+            "per_minute": max(0, LOG_ANALYSIS_RATE_LIMITS["requests_per_minute"] - requests_last_minute),
+            "per_hour": max(0, LOG_ANALYSIS_RATE_LIMITS["requests_per_hour"] - requests_last_hour),
+            "per_day": max(0, LOG_ANALYSIS_RATE_LIMITS["requests_per_day"] - requests_today),
+            "concurrent": max(0, LOG_ANALYSIS_RATE_LIMITS["max_concurrent_analyses"] - concurrent)
+        }
+    }

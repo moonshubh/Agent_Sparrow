@@ -8,6 +8,12 @@ export interface ChatSession {
   agent_type?: AgentType
   created_at?: string
   updated_at?: string
+  metadata?: {
+    error_count?: number
+    warning_count?: number
+    health_status?: string
+    [key: string]: any
+  }
 }
 
 export interface ChatSessionListResponse {

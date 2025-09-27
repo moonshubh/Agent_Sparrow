@@ -73,6 +73,12 @@ export function createBackendChatTransport({
       const resolvedBody = (await resolve(body)) as Record<string, unknown> | undefined
       const resolvedHeaders = (await resolve(headers)) as Record<string, string> | undefined
 
+      // Extract log-specific data from body
+      const dataPayload = (resolvedBody?.data as Record<string, any>) ?? {}
+      const isLogAnalysis = dataPayload.isLogAnalysis ?? false
+      const attachedLogText = dataPayload.attachedLogText
+      const logMetadata = dataPayload.logMetadata
+
       return {
         api: api ?? resolvedEndpoint,
         credentials,
@@ -83,6 +89,14 @@ export function createBackendChatTransport({
           provider: (resolvedBody?.provider as string | undefined) ?? provider,
           model: (resolvedBody?.model as string | undefined) ?? model,
           session_id: (resolvedBody?.session_id as string | undefined) ?? sessionId,
+          // Add log-specific fields
+          ...(isLogAnalysis ? {
+            agent_type: 'log_analysis',
+            log_content: attachedLogText,
+            log_metadata: logMetadata,
+          } : {}),
+          // Include any additional data
+          ...(dataPayload.useServerMemory ? { use_server_memory: true } : {}),
         },
       }
     },

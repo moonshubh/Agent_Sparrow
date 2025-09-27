@@ -11,7 +11,7 @@ type Props = {
   onInterim?: (t: string) => void
   onChange: (v: string) => void
   onSubmit: () => void
-  onPickFiles: (files: FileList | null) => void
+  onPickFiles: (files: FileList | null) => void | Promise<void>
   disabled?: boolean
   placeholder?: string
   provider: 'google' | 'openai'
