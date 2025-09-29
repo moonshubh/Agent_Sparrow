@@ -16,7 +16,13 @@ from datetime import datetime, timedelta
 from enum import Enum
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-from ..schemas.log_schemas import ErrorPattern, LogMetadata
+try:
+    from ..schemas.log_schemas import ErrorPattern, LogMetadata
+except ImportError:
+    try:
+        from schemas.log_schemas import ErrorPattern, LogMetadata
+    except ImportError:
+        from app.agents_v2.log_analysis_agent.schemas.log_schemas import ErrorPattern, LogMetadata
 
 logger = logging.getLogger(__name__)
 

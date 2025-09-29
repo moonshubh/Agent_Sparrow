@@ -42,7 +42,7 @@ class Settings(BaseSettings):
     enhanced_log_model: str = Field(default="gemini-2.5-pro", alias="ENHANCED_LOG_MODEL")
     # Provider/model selection for primary agent
     primary_agent_provider: str = Field(default="google", alias="PRIMARY_AGENT_PROVIDER")
-    primary_agent_model: str = Field(default="gemini-2.5-flash", alias="PRIMARY_AGENT_MODEL")
+    primary_agent_model: str = Field(default="gemini-2.5-flash-preview-09-2025", alias="PRIMARY_AGENT_MODEL")
     primary_agent_quality_level: str = Field(default="balanced", alias="PRIMARY_AGENT_QUALITY_LEVEL")
     reflection_default_provider: Optional[str] = Field(default=None, alias="DEFAULT_REFLECTION_PROVIDER")
     reflection_default_model: Optional[str] = Field(default=None, alias="DEFAULT_REFLECTION_MODEL")

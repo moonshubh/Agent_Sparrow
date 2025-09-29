@@ -14,14 +14,40 @@ from app.agents_v2.primary_agent.prompts.emotion_templates import (
     EmotionTemplates,
 )
 
-from ..schemas.log_schemas import (
-    LogAnalysisResult,
-    UserContext,
-    ErrorPattern,
-    RootCause,
-    LogEntry,
-)
-from ..tools import ToolResults, ToolStatus
+# Import with fallbacks to support both package and top-level test imports
+try:
+    from ..schemas.log_schemas import (
+        LogAnalysisResult,
+        UserContext,
+        ErrorPattern,
+        RootCause,
+        LogEntry,
+    )
+except ImportError:  # When imported as top-level `formatters.*` in tests
+    try:
+        from schemas.log_schemas import (
+            LogAnalysisResult,
+            UserContext,
+            ErrorPattern,
+            RootCause,
+            LogEntry,
+        )
+    except ImportError:
+        from app.agents_v2.log_analysis_agent.schemas.log_schemas import (
+            LogAnalysisResult,
+            UserContext,
+            ErrorPattern,
+            RootCause,
+            LogEntry,
+        )
+
+try:
+    from ..tools import ToolResults, ToolStatus
+except ImportError:
+    try:
+        from tools import ToolResults, ToolStatus
+    except ImportError:
+        from app.agents_v2.log_analysis_agent.tools import ToolResults, ToolStatus
 
 from .markdown_builder import MarkdownBuilder, AlertLevel, TableRow
 from .error_formatter import ErrorBlockFormatter, ErrorContext
@@ -29,8 +55,21 @@ from .metadata_formatter import MetadataFormatter
 from .solution_formatter import SolutionFormatter, Solution, SolutionType, Difficulty
 from .natural_language import NaturalLanguageGenerator, ToneProfile
 
-from ..templates.response_templates import ResponseTemplates, TemplateContext
-from ..quality.quality_validator import QualityValidator, ValidationResult
+try:
+    from ..templates.response_templates import ResponseTemplates, TemplateContext
+except ImportError:
+    try:
+        from templates.response_templates import ResponseTemplates, TemplateContext
+    except ImportError:
+        from app.agents_v2.log_analysis_agent.templates.response_templates import ResponseTemplates, TemplateContext
+
+try:
+    from ..quality.quality_validator import QualityValidator, ValidationResult
+except ImportError:
+    try:
+        from quality.quality_validator import QualityValidator, ValidationResult
+    except ImportError:
+        from app.agents_v2.log_analysis_agent.quality.quality_validator import QualityValidator, ValidationResult
 
 logger = logging.getLogger(__name__)
 
@@ -137,7 +176,13 @@ class LogResponseFormatter:
                     # Could trigger revision here if needed
             else:
                 # Create dummy passing validation
-                from ..quality.quality_validator import QualityScore
+                try:
+                    from ..quality.quality_validator import QualityScore
+                except ImportError:
+                    try:
+                        from quality.quality_validator import QualityScore
+                    except ImportError:
+                        from app.agents_v2.log_analysis_agent.quality.quality_validator import QualityScore
                 validation = ValidationResult(
                     score=QualityScore(overall_score=1.0, passed=True),
                     is_acceptable=True,
@@ -150,7 +195,13 @@ class LogResponseFormatter:
             logger.error(f"Error formatting response: {e}")
             # Return fallback response
             fallback = self._create_fallback_response(analysis, str(e))
-            from ..quality.quality_validator import QualityScore
+            try:
+                from ..quality.quality_validator import QualityScore
+            except ImportError:
+                try:
+                    from quality.quality_validator import QualityScore
+                except ImportError:
+                    from app.agents_v2.log_analysis_agent.quality.quality_validator import QualityScore
             validation = ValidationResult(
                 score=QualityScore(overall_score=0.5, passed=False),
                 is_acceptable=False,  # Fallback response is not acceptable
@@ -476,7 +527,13 @@ class LogResponseFormatter:
 
     def _get_alert_level_for_impact(self, impact) -> AlertLevel:
         """Convert impact level to alert level"""
-        from ..schemas.log_schemas import IssueImpact
+        try:
+            from ..schemas.log_schemas import IssueImpact
+        except ImportError:
+            try:
+                from schemas.log_schemas import IssueImpact
+            except ImportError:
+                from app.agents_v2.log_analysis_agent.schemas.log_schemas import IssueImpact
         mapping = {
             IssueImpact.CRITICAL: AlertLevel.CRITICAL,
             IssueImpact.HIGH: AlertLevel.ERROR,

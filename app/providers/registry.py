@@ -151,4 +151,4 @@ def default_model_for_provider(provider: str) -> str:
     # Reasonable defaults
     if provider.lower() == "openai":
         return "gpt5-mini"
-    return "gemini-2.5-flash"
+    return "gemini-2.5-flash-preview-09-2025"

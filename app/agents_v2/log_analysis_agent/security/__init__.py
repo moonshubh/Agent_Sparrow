@@ -19,7 +19,7 @@ from .validator import (
     ValidationStatus,
     ThreatLevel,
 )
-from .compliance import ComplianceManager, ComplianceConfig, ComplianceReport
+from .compliance import ComplianceManager, ComplianceConfig, ComplianceReport, ComplianceStatus
 
 __all__ = [
     'SecurityValidator',
@@ -30,4 +30,5 @@ __all__ = [
     'ComplianceManager',
     'ComplianceConfig',
     'ComplianceReport',
+    'ComplianceStatus',
 ]

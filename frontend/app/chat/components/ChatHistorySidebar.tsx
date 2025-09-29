@@ -17,6 +17,7 @@ import {
   SidebarRail,
 } from "@/components/ui/sidebar"
 import { Button } from "@/components/ui/button"
+import { GradientButton } from "@/components/ui/gradient-button"
 import { Input } from "@/components/ui/input"
 import { Plus, MessageSquare, FolderGit2, MoreHorizontal } from "lucide-react"
 import {
@@ -121,14 +122,14 @@ export function ChatHistorySidebar({ sessionId, onSelect }: Props) {
 
       <SidebarContent className="flex-1 px-2 py-2">
         <div className="px-1 pb-2">
-          <Button
+          <GradientButton
             size="sm"
-            className="w-full justify-center gap-2"
+            className="w-full justify-center gap-2 text-white"
             onClick={onCreate}
             data-testid="new-chat-button"
           >
             <Plus className="h-4 w-4" /> New Chat
-          </Button>
+          </GradientButton>
         </div>
 
         <SidebarSeparator />

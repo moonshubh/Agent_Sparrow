@@ -15,13 +15,22 @@ from app.agents_v2.primary_agent.prompts.emotion_templates import (
     EmotionalState,
     EmotionTemplates,
 )
-from ..schemas.log_schemas import (
-    LogAnalysisResult,
-    RootCause,
-    ErrorCategory,
-    IssueImpact,
-    UserContext,
-)
+try:
+    from ..schemas.log_schemas import (
+        LogAnalysisResult,
+        RootCause,
+        ErrorCategory,
+        IssueImpact,
+        UserContext,
+    )
+except ImportError:
+    from app.agents_v2.log_analysis_agent.schemas.log_schemas import (
+        LogAnalysisResult,
+        RootCause,
+        ErrorCategory,
+        IssueImpact,
+        UserContext,
+    )
 
 
 @dataclass

@@ -4,7 +4,7 @@ from __future__ import annotations
 Gemini PDF → Markdown processor (LLM vision, no OCR)
 
 Renders PDF pages to images, sends small batches of pages to
-`gemini-2.5-flash-lite` and requests strict Markdown output.
+`gemini-2.5-flash-lite-preview-09-2025` and requests strict Markdown output.
 Concatenates chunk outputs into a final Markdown transcript.
 
 Budget controls:
@@ -77,7 +77,7 @@ def _final_merge_prompt() -> str:
 
 def _ensure_model(api_key: str):
     genai.configure(api_key=api_key)
-    return genai.GenerativeModel("gemini-2.5-flash-lite")
+    return genai.GenerativeModel("gemini-2.5-flash-lite-preview-09-2025")
 
 
 def process_pdf_to_markdown(

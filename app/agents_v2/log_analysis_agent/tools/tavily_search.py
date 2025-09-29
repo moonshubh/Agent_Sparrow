@@ -12,7 +12,13 @@ from urllib.parse import urlparse
 
 from app.tools.user_research_tools import UserTavilySearchTool
 from app.core.user_context import get_current_user_context
-from ..schemas.log_schemas import ErrorPattern, LogMetadata
+try:
+    from ..schemas.log_schemas import ErrorPattern, LogMetadata, ErrorCategory
+except ModuleNotFoundError:
+    try:
+        from schemas.log_schemas import ErrorPattern, LogMetadata, ErrorCategory
+    except ModuleNotFoundError:
+        from app.agents_v2.log_analysis_agent.schemas.log_schemas import ErrorPattern, LogMetadata, ErrorCategory
 from .orchestrator import WebResource
 
 logger = logging.getLogger(__name__)
@@ -105,7 +111,6 @@ class TavilyLogSearch:
 
     def _get_category_search_terms(self, category) -> List[str]:
         """Get search terms for specific error category"""
-        from ..schemas.log_schemas import ErrorCategory
 
         category_terms = {
             ErrorCategory.AUTHENTICATION: ["authentication error", "login failed"],

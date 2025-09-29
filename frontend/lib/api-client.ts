@@ -103,9 +103,25 @@ class APIClient {
 
     if (!response.ok) {
       const errorData = await response.json().catch(() => null)
-      throw new Error(
-        errorData?.detail || errorData?.message || `HTTP error! status: ${response.status}`
-      )
+
+      const statusLine = `${response.status} ${response.statusText || ''}`.trim()
+      let errorMessage = `HTTP error: ${statusLine}`
+      if (errorData) {
+        const detail = (errorData as any)?.detail
+        const message = (errorData as any)?.message
+
+        if (typeof detail === 'string') {
+          errorMessage = `${statusLine} - ${detail}`
+        } else if (typeof message === 'string') {
+          errorMessage = `${statusLine} - ${message}`
+        } else if (detail && typeof detail === 'object') {
+          errorMessage = `${statusLine} - ${JSON.stringify(detail)}`
+        } else {
+          errorMessage = `${statusLine} - ${JSON.stringify(errorData)}`
+        }
+      }
+
+      throw new Error(errorMessage)
     }
 
     // Enhanced response type handling

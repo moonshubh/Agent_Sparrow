@@ -13,7 +13,13 @@ from app.agents_v2.primary_agent.feedme_knowledge_tool import (
     enhanced_mailbird_kb_search,
     get_feedme_connector
 )
-from ..schemas.log_schemas import ErrorPattern, ErrorCategory
+try:
+    from ..schemas.log_schemas import ErrorPattern, ErrorCategory
+except ImportError:
+    try:
+        from schemas.log_schemas import ErrorPattern, ErrorCategory
+    except ImportError:
+        from app.agents_v2.log_analysis_agent.schemas.log_schemas import ErrorPattern, ErrorCategory
 from .orchestrator import KBArticle
 
 logger = logging.getLogger(__name__)

@@ -23,7 +23,11 @@ import tempfile
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Any
 from PIL import Image
-import magic
+
+try:
+    import magic  # type: ignore
+except ImportError:  # pragma: no cover - optional dependency
+    magic = None
 from dataclasses import dataclass
 from contextlib import contextmanager
 
@@ -98,7 +102,15 @@ class AttachmentSanitizer:
         )
 
         self.cleanup_manager = cleanup_manager or LogCleanupManager()
-        self._magic = magic.Magic(mime=True) if self.config.validate_magic_bytes else None
+
+        self._magic = None
+        if self.config.validate_magic_bytes and magic is not None:
+            try:
+                self._magic = magic.Magic(mime=True)
+            except Exception as exc:  # pragma: no cover - defensive
+                logger.warning("python-magic unavailable (%s); falling back to basic header checks", exc)
+        elif self.config.validate_magic_bytes and magic is None:
+            logger.warning("python-magic not installed; magic byte validation will use limited checks")
 
         logger.info("AttachmentSanitizer initialized with secure defaults")
 

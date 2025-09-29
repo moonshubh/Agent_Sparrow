@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class ExtractionConfig:
     """Configuration for AI extraction engine with intelligent rate limiting"""
-    model_name: str = "gemini-2.5-flash-lite"  # Use Google's Gemini 2.5 Flash Lite model
+    model_name: str = "gemini-2.5-flash-lite-preview-09-2025"  # Latest Gemini 2.5 Flash Lite preview (Sep 2025)
     temperature: float = 0.3                
     max_output_tokens: int = 8192
     confidence_threshold: float = 0.7

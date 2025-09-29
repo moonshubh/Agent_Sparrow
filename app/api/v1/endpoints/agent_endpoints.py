@@ -61,6 +61,164 @@ def _filter_system_text(text: str | None) -> str:
 
     return filtered
 
+# --- Formatting helpers ---
+
+def _format_log_analysis_content(analysis: dict | Any, question: str | None) -> str:
+    """
+    Build a single, cohesive markdown answer for log analysis that:
+    1) Acknowledges the user's question (empathy)
+    2) Summarizes the problem clearly
+    3) Provides step-by-step solutions
+    """
+    try:
+        if not isinstance(analysis, dict):
+            # Best-effort conversion for pydantic models or objects
+            if hasattr(analysis, 'model_dump'):
+                analysis = analysis.model_dump()  # type: ignore
+            elif hasattr(analysis, 'dict'):
+                analysis = analysis.dict()  # type: ignore
+            else:
+                analysis = {"overall_summary": str(analysis)}
+
+        overall_summary = analysis.get("overall_summary") or analysis.get("summary") or "Log analysis complete."
+        issues = analysis.get("identified_issues") or analysis.get("issues") or []
+        solutions = analysis.get("proposed_solutions") or analysis.get("solutions") or analysis.get("actions") or []
+
+        parts: list[str] = []
+
+        # 1) Empathetic opening
+        if question:
+            parts.append(
+                f"Thanks for sharing the log file. I reviewed it in the context of your question: \"{question}\". Here's what I found and how to fix it."
+            )
+        else:
+            parts.append(
+                "Thanks for sharing the log file. I’ve completed the analysis — here’s what’s going on and how to fix it."
+            )
+
+        # 2) Problem analysis
+        parts.append("## Problem analysis\n" + str(overall_summary))
+
+        if isinstance(issues, list) and len(issues) > 0:
+            findings: list[str] = []
+            for issue in issues[:3]:
+                title = issue.get("title") if isinstance(issue, dict) else None
+                details = issue.get("details") if isinstance(issue, dict) else None
+                severity = issue.get("severity") if isinstance(issue, dict) else None
+                bullet = "- "
+                if severity:
+                    bullet += f"[{severity}] "
+                if title:
+                    bullet += f"{title}"
+                if details:
+                    bullet += f": {details}"
+                findings.append(bullet)
+            if findings:
+                parts.append("### Critical findings\n" + "\n".join(findings))
+
+        # 3) Step-by-step solutions
+        step_sections: list[str] = []
+        if isinstance(solutions, list) and len(solutions) > 0:
+            for idx, sol in enumerate(solutions[:3], start=1):
+                if not isinstance(sol, dict):
+                    continue
+                title = sol.get("title") or f"Solution {idx}"
+                steps = sol.get("steps") or []
+                expected = sol.get("expected_outcome") or sol.get("outcome")
+                section_lines: list[str] = [f"### Solution {idx}: {title}"]
+                if isinstance(steps, list) and steps:
+                    section_lines.append("**Steps to resolve:**")
+                    for j, step in enumerate(steps, start=1):
+                        section_lines.append(f"{j}. {step}")
+                if expected:
+                    section_lines.append(f"\n**Expected outcome**: {expected}")
+                step_sections.append("\n".join(section_lines))
+
+        if step_sections:
+            parts.append("## Step-by-step solution\n" + "\n\n".join(step_sections))
+
+        return "\n\n".join(parts)
+    except Exception:
+        # Fallback: keep current short content on unexpected errors
+        summary = analysis.get("overall_summary") if isinstance(analysis, dict) else None
+        return f"Log analysis complete! {summary or ''}".strip()
+
+def _augment_analysis_metadata(
+    analysis_results: dict,
+    raw_log: str | None,
+    issues: list | None,
+    ingestion_metadata: dict | None,
+) -> dict:
+    """Best-effort enrichment of analysis metadata for the overview card.
+
+    - database_size: parsed from log (e.g., "Store.db 485.0 MB" or "Database size: 2.4 GB")
+    - account_count: rough unique email count (not exposed as list to avoid PII)
+    - accounts_with_errors: unique accounts referenced in issue details
+    - error_count / warning_count / total_entries: derived when available
+    - time_range: preserved from ingestion_metadata
+    """
+    try:
+        if not isinstance(analysis_results, dict):
+            return analysis_results
+
+        # Ensure dicts for metadata containers
+        if not isinstance(analysis_results.get("system_metadata"), dict):
+            analysis_results["system_metadata"] = {}
+        if not isinstance(analysis_results.get("ingestion_metadata"), dict):
+            analysis_results["ingestion_metadata"] = {}
+
+        system_meta = analysis_results["system_metadata"]
+        ingest_meta = analysis_results["ingestion_metadata"]
+
+        # Preserve time_range if middleware provided it
+        if ingestion_metadata and isinstance(ingestion_metadata, dict):
+            if ingestion_metadata.get("time_range") and not ingest_meta.get("time_range"):
+                ingest_meta["time_range"] = ingestion_metadata.get("time_range")
+            if ingestion_metadata.get("line_count") and not ingest_meta.get("line_count"):
+                ingest_meta["line_count"] = ingestion_metadata.get("line_count")
+
+        # Derive counts from raw log
+        if isinstance(raw_log, str) and raw_log:
+            lines = raw_log.splitlines()
+            # Only populate when missing
+            if ingest_meta.get("line_count") is None:
+                ingest_meta["line_count"] = len(lines)
+
+            if system_meta.get("error_count") is None:
+                system_meta["error_count"] = sum(1 for ln in lines if "|ERROR|" in ln or " ERROR " in ln)
+            if system_meta.get("warning_count") is None:
+                system_meta["warning_count"] = sum(1 for ln in lines if "|WARN|" in ln or " WARNING " in ln)
+
+            # Database size
+            if system_meta.get("database_size") is None:
+                import re as _re
+                m = _re.search(r"(?:Store\.db\s+|Database size:\s*)([\d,.]+\s*[KMGTP]B)", raw_log, _re.IGNORECASE)
+                if m:
+                    system_meta["database_size"] = m.group(1).replace(",", "")
+
+            # Account count (unique emails) — number only (no PII exposure)
+            if system_meta.get("account_count") is None:
+                import re as _re
+                emails = set(_re.findall(r"[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9.-]{1,255}\.[A-Za-z]{2,10}", raw_log))
+                system_meta["account_count"] = len(emails) if emails else None
+
+        # Accounts with errors from issues
+        if system_meta.get("accounts_with_errors") is None and isinstance(issues, list) and issues:
+            import re as _re
+            accs: set[str] = set()
+            for it in issues:
+                if not isinstance(it, dict):
+                    continue
+                text = " ".join(str(it.get(k, "")) for k in ("details", "description", "title"))
+                for m in _re.findall(r"Account[:\s]+([^\s|]+@[^\s|]+)", text):
+                    accs.add(m)
+            if accs:
+                system_meta["accounts_with_errors"] = len(accs)
+
+        return analysis_results
+    except Exception:
+        return analysis_results
+
 # --- Helper Functions ---
 
 def _get_user_id_for_dev_mode(settings) -> str:
@@ -820,11 +978,21 @@ async def unified_agent_stream_generator(
                     else:
                         summary = str(final_report)
 
-                    content = f"Log analysis complete! {summary}"
+                    # Build cohesive markdown content instead of a fragment
                     analysis_results = serialize_analysis_results(final_report)
                     if isinstance(analysis_results, dict):
-                        analysis_results.setdefault('ingestion_metadata', middleware_metadata)
-                        analysis_results.setdefault('session_id', session_id)
+                        if middleware_metadata is not None:
+                            analysis_results['ingestion_metadata'] = middleware_metadata
+                        if session_id is not None:
+                            analysis_results['session_id'] = session_id
+                        # Enrich overview metadata for the UI card
+                        issues_list = analysis_results.get('identified_issues') or analysis_results.get('issues') or []
+                        analysis_results = _augment_analysis_metadata(
+                            analysis_results,
+                            request.log_content,
+                            issues_list,
+                            middleware_metadata,
+                        )
 
                     logger.debug(
                         "Serialized analysis results keys: %s",
@@ -832,9 +1000,10 @@ async def unified_agent_stream_generator(
                     )
 
                     try:
+                        content_md = _format_log_analysis_content(analysis_results, request.message)
                         json_payload = json.dumps({
                             "role": "assistant",
-                            "content": content,
+                            "content": content_md,
                             "agent_type": "log_analysis",
                             "trace_id": request.trace_id,
                             "analysis_results": analysis_results,

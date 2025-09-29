@@ -52,11 +52,11 @@ type ChatContentProps = {
 function ChatContent({ sessionId, setSessionId }: ChatContentProps) {
   const [input, setInput] = useState("");
   const [provider, setProvider] = useState<"google" | "openai">("google");
-  const [model, setModel] = useState<string>("gemini-2.5-flash");
+  const [model, setModel] = useState<string>("gemini-2.5-flash-preview-09-2025");
   const [mediaFiles, setMediaFiles] = useState<File[]>([]);
   const [logFile, setLogFile] = useState<File | null>(null);
   const [attachError, setAttachError] = useState<string | null>(null);
-  const [isLogAnalysis, setIsLogAnalysis] = useState<boolean>(false);
+  const [activeAgent, setActiveAgent] = useState<'primary' | 'log_analysis' | 'research'>('primary');
   const [interimVoice, setInterimVoice] = useState<string>("");
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const [enableFx, setEnableFx] = useState<boolean>(true);
@@ -66,6 +66,7 @@ function ChatContent({ sessionId, setSessionId }: ChatContentProps) {
   const [followUpQuestions, setFollowUpQuestions] = useState<string[] | null>(null);
   const { state, toggleSidebar } = useSidebar();
   const fallbackSessionRef = useRef<string>(crypto.randomUUID());
+  const chatIdRef = useRef<string>(crypto.randomUUID());
   const previousSessionIdRef = useRef<string>("");
   const lastPersistedSessionIdRef = useRef<string>("");
 
@@ -82,6 +83,10 @@ function ChatContent({ sessionId, setSessionId }: ChatContentProps) {
       .map((p: any) => p.text)
       .join("");
 
+  const getFileParts = (m: any) =>
+    (m?.parts || [])
+      .filter((p: any) => p.type === "file");
+
   type ClientMessage = UIMessage<any, any>;
 
   const transport = useMemo(
@@ -96,7 +101,8 @@ function ChatContent({ sessionId, setSessionId }: ChatContentProps) {
   );
 
   const { messages, sendMessage, status, error } = useChat<ClientMessage>({
-    id: effectiveSessionId,
+    // Use a stable client-side chat id to avoid UI resets during initial send
+    id: chatIdRef.current,
     transport,
     onError: (e) => console.error("AI chat error:", e),
     onFinish: async ({ message: assistantMessage, messages: chatMessages, isAbort, isError }) => {
@@ -138,6 +144,15 @@ function ChatContent({ sessionId, setSessionId }: ChatContentProps) {
         }
       } catch (persistError) {
         console.error('Failed to persist messages:', persistError);
+      }
+
+      // Ensure UI session state is linked to the created/persisted session
+      try {
+        if (!sessionId && lastPersistedSessionIdRef.current) {
+          setSessionId(lastPersistedSessionIdRef.current);
+        }
+      } catch (e) {
+        console.warn('Failed to sync session id after finish:', e);
       }
     },
   });
@@ -263,14 +278,16 @@ function ChatContent({ sessionId, setSessionId }: ChatContentProps) {
     let nextSessionId = sessionId;
     try {
       if (!sessionId) {
-        // Create log_analysis session if we have a log file, otherwise primary
-        const agentType = logFile ? "log_analysis" : "primary";
-        const session = await sessionsAPI.create(agentType);
+        const desiredAgent = logFile
+          ? 'log_analysis'
+          : activeAgent === 'research'
+            ? 'research'
+            : 'primary';
+        const session = await sessionsAPI.create(desiredAgent);
         const createdId = String(session.id);
         nextSessionId = createdId;
-        setSessionId(createdId);
-        fallbackSessionRef.current = createdId;
         lastPersistedSessionIdRef.current = createdId;
+        fallbackSessionRef.current = createdId;
       }
     } catch (e) {
       console.warn("Failed to auto-create session:", e);
@@ -301,6 +318,17 @@ function ChatContent({ sessionId, setSessionId }: ChatContentProps) {
       })
     );
 
+    // Also include the log file as a UI attachment so it appears in the user bubble
+    if (logFile) {
+      fileUIParts.push({
+        type: 'file',
+        mediaType: 'text/plain',
+        filename: logFile.name,
+        // Empty payload; we only need filename for UI display
+        url: 'data:text/plain;base64,',
+      } as FileUIPart);
+    }
+
     await sendMessage(
       { text, files: fileUIParts.length ? fileUIParts : undefined },
       {
@@ -326,7 +354,6 @@ function ChatContent({ sessionId, setSessionId }: ChatContentProps) {
 
     setMediaFiles([]);
     setLogFile(null);
-    setIsLogAnalysis(false);
   };
 
   const hasContent = messages.length > 0;
@@ -334,28 +361,34 @@ function ChatContent({ sessionId, setSessionId }: ChatContentProps) {
   const maxTotal = 100;
   const displayedHistory = history.slice(-Math.max(0, maxTotal - messages.length));
   const showFx = enableFx && !reducedMotion;
-  const primaryModelLabel = model.startsWith('gpt') ? 'GPT-5 Mini' : 'Gemini 2.5 Flash';
+  const isLogAnalysis = activeAgent === 'log_analysis';
+  const agentLabel = activeAgent === 'log_analysis'
+    ? 'Log Analysis'
+    : activeAgent === 'research'
+      ? 'Research'
+      : 'Primary Agent';
+  const modelLabel = (() => {
+    if (activeAgent === 'log_analysis') return 'Gemini 2.5 Pro';
+    if (activeAgent === 'research') return 'GPT-5 Mini';
+    return model.startsWith('gpt') ? 'GPT-5 Mini' : 'Gemini 2.5 Flash (09-2025 preview)';
+  })();
 
   const handleModelSelect = (nextProvider: 'google' | 'openai', nextModel: string) => {
     setProvider(nextProvider);
     setModel(nextModel);
+    setActiveAgent('primary');
   };
 
   const handleLogAnalysisSelect = () => {
     setProvider('google');
-    setModel('gemini-2.5-flash');
-    setIsLogAnalysis(true);
-    if (!input) {
-      setInput('Please analyze the attached log file and highlight any critical errors, performance issues, and provide recommendations.');
-    }
+    setModel('gemini-2.5-pro');
+    setActiveAgent('log_analysis');
   };
 
   const handleResearchSelect = () => {
     setProvider('openai');
     setModel('gpt-5-mini-2025-08-07');
-    if (!input) {
-      setInput('Research the latest Mailbird updates and provide key insights.');
-    }
+    setActiveAgent('research');
   };
 
   return (
@@ -395,8 +428,8 @@ function ChatContent({ sessionId, setSessionId }: ChatContentProps) {
                       variant="ghost"
                       className="flex items-center gap-2 px-3 py-2 text-sm font-medium"
                     >
-                      <span>Primary Agent</span>
-                      <span className="text-xs text-muted-foreground">{primaryModelLabel}</span>
+                      <span>{agentLabel}</span>
+                      <span className="text-xs text-muted-foreground">{modelLabel}</span>
                       <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
                     </Button>
                   </DropdownMenuTrigger>
@@ -407,7 +440,7 @@ function ChatContent({ sessionId, setSessionId }: ChatContentProps) {
                         <DropdownMenuItem
                           onSelect={(event) => {
                             event.preventDefault();
-                            handleModelSelect('google', 'gemini-2.5-flash');
+                            handleModelSelect('google', 'gemini-2.5-flash-preview-09-2025');
                           }}
                         >
                           Gemini 2.5 Flash
@@ -519,8 +552,20 @@ function ChatContent({ sessionId, setSessionId }: ChatContentProps) {
                           isLogAnalysis={isLogAnalysis}
                         />
                       ) : (
-                        <div className="text-[15px] leading-relaxed whitespace-pre-wrap">
-                          {getMessageText(m)}
+                        <div className="space-y-2">
+                          <div className="text-[15px] leading-relaxed whitespace-pre-wrap">
+                            {getMessageText(m)}
+                          </div>
+                          {getFileParts(m).length > 0 && (
+                            <div className="flex flex-wrap gap-2 pt-1">
+                              {getFileParts(m).map((fp: any, i: number) => (
+                                <span key={i} className="inline-flex items-center gap-2 rounded-full border border-border/40 bg-background/60 px-3 py-1 text-xs text-muted-foreground">
+                                  <span className="inline-block w-2 h-2 rounded-full bg-primary/60" />
+                                  {fp.filename || 'attachment'}
+                                </span>
+                              ))}
+                            </div>
+                          )}
                         </div>
                       )}
                     </div>
@@ -594,7 +639,14 @@ function ChatContent({ sessionId, setSessionId }: ChatContentProps) {
                   onRemoveMedia={(idx) =>
                     setMediaFiles((prev) => prev.filter((_, i) => i !== idx))
                   }
-                  onRemoveLog={() => setLogFile(null)}
+                  onRemoveLog={() => {
+                    setLogFile(null);
+                    if (activeAgent === 'log_analysis') {
+                      setActiveAgent('primary');
+                      setProvider('google');
+                      setModel('gemini-2.5-flash');
+                    }
+                  }}
                 />
               </div>
             )}
@@ -645,11 +697,10 @@ function ChatContent({ sessionId, setSessionId }: ChatContentProps) {
                     return;
                   }
                   setLogFile(f);
-                  setIsLogAnalysis(true);
-                  // Auto-set agent to log analysis mode
-                  if (!input) {
-                    setInput('Please analyze this log file and identify any critical issues, errors, or performance problems.');
-                  }
+                  setActiveAgent('log_analysis');
+                  setProvider('google');
+                  setModel('gemini-2.5-pro');
+                  // Do not override user's input; keep it free-form
                 } else {
                   const max = 10 * 1024 * 1024;
                   if (f.size > max) {
@@ -683,16 +734,16 @@ function ChatContent({ sessionId, setSessionId }: ChatContentProps) {
                       return;
                     }
                     setLogFile(f);
-                    setIsLogAnalysis(true);
-                    if (!input) {
-                      setInput('Please analyze this log file and identify any critical issues, errors, or performance problems.');
-                    }
+                    setActiveAgent('log_analysis');
+                    setProvider('google');
+                    setModel('gemini-2.5-pro');
+                    // Do not auto-insert any prompt; let user type freely
                   } else {
                     setMediaFiles(files);
                   }
                 }}
                 disabled={status === "submitted" || status === "streaming"}
-                placeholder="Ask anything..."
+                placeholder={logFile ? `Log attached: ${logFile.name} — ask your question…` : "Ask anything..."}
                 provider={provider}
                 model={model}
                 onChangeProvider={(p) => {

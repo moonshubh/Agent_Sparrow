@@ -10,7 +10,14 @@ from dataclasses import dataclass
 from datetime import datetime
 import re
 
-from ..schemas.log_schemas import LogEntry, ErrorPattern, Severity
+# Import with fallbacks to support both package and top-level test imports
+try:
+    from ..schemas.log_schemas import LogEntry, ErrorPattern, Severity
+except ImportError:
+    try:
+        from schemas.log_schemas import LogEntry, ErrorPattern, Severity
+    except ImportError:
+        from app.agents_v2.log_analysis_agent.schemas.log_schemas import LogEntry, ErrorPattern, Severity
 
 
 @dataclass

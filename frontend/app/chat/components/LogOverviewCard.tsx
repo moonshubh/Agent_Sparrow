@@ -22,6 +22,7 @@ export type LogMetadata = {
   platform?: string
   database_size?: string
   account_count?: number
+  accounts_with_errors?: number
   total_entries?: number
   error_count?: number
   warning_count?: number
@@ -60,6 +61,14 @@ interface LogOverviewCardProps {
 export function LogOverviewCard({ metadata, errorSnippets, rootCause }: LogOverviewCardProps) {
   const [copiedIndex, setCopiedIndex] = React.useState<number | null>(null)
   const copyTimeoutRef = React.useRef<NodeJS.Timeout | null>(null)
+
+  const formatNumber = (value: number | string | null | undefined) => {
+    if (value === null || value === undefined) return 'N/A'
+    if (typeof value === 'number') {
+      return Number.isFinite(value) ? value.toLocaleString() : 'N/A'
+    }
+    return String(value)
+  }
 
   // Cleanup timeout on unmount
   React.useEffect(() => {
@@ -166,7 +175,18 @@ ${error.stackTrace ? `Stack: ${error.stackTrace}` : ''}`
                 <Users className="w-4 h-4 text-muted-foreground mt-0.5" />
                 <div>
                   <div className="text-xs text-muted-foreground">Accounts</div>
-                  <div className="text-sm font-medium">{metadata.account_count.toLocaleString()}</div>
+                  <div className="text-sm font-medium">{formatNumber(metadata.account_count)}</div>
+                </div>
+              </div>
+            )}
+
+            {/* Accounts With Errors */}
+            {metadata.accounts_with_errors !== undefined && (
+              <div className="flex items-start gap-2">
+                <AlertTriangle className="w-4 h-4 text-orange-500 mt-0.5" />
+                <div>
+                  <div className="text-xs text-muted-foreground">Accounts w/ errors</div>
+                  <div className="text-sm font-medium text-orange-500">{formatNumber(metadata.accounts_with_errors)}</div>
                 </div>
               </div>
             )}
@@ -177,7 +197,7 @@ ${error.stackTrace ? `Stack: ${error.stackTrace}` : ''}`
                 <AlertTriangle className="w-4 h-4 text-red-500 mt-0.5" />
                 <div>
                   <div className="text-xs text-muted-foreground">Errors</div>
-                  <div className="text-sm font-medium text-red-500">{metadata.error_count}</div>
+                  <div className="text-sm font-medium text-red-500">{formatNumber(metadata.error_count)}</div>
                 </div>
               </div>
             )}
@@ -188,7 +208,7 @@ ${error.stackTrace ? `Stack: ${error.stackTrace}` : ''}`
                 <FileText className="w-4 h-4 text-muted-foreground mt-0.5" />
                 <div>
                   <div className="text-xs text-muted-foreground">Log Entries</div>
-                  <div className="text-sm font-medium">{metadata.total_entries.toLocaleString()}</div>
+                  <div className="text-sm font-medium">{formatNumber(metadata.total_entries)}</div>
                 </div>
               </div>
             )}
@@ -200,7 +220,9 @@ ${error.stackTrace ? `Stack: ${error.stackTrace}` : ''}`
                 <div>
                   <div className="text-xs text-muted-foreground">Time Range</div>
                   <div className="text-sm font-medium">
-                    {metadata.time_range.start ? new Date(metadata.time_range.start).toLocaleDateString() : 'N/A'}
+                    {metadata.time_range.start ? new Date(metadata.time_range.start).toLocaleString() : 'N/A'}
+                    {` `}
+                    {metadata.time_range.end ? `→ ${new Date(metadata.time_range.end).toLocaleString()}` : ''}
                   </div>
                 </div>
               </div>

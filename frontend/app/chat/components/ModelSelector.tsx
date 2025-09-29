@@ -15,12 +15,12 @@ interface ModelSelectorProps {
 }
 
 const MODELS_BY_PROVIDER: Record<Provider, string[]> = {
-  google: ['gemini-2.5-flash'],
+  google: ['gemini-2.5-flash-preview-09-2025', 'gemini-2.5-flash'],
   openai: ['gpt-5-mini', 'gpt5-mini'],
 }
 
 const DEFAULT_MODELS: Record<Provider, string> = {
-  google: 'gemini-2.5-flash',
+  google: 'gemini-2.5-flash-preview-09-2025',
   openai: 'gpt-5-mini',
 }
 

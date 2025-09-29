@@ -17,10 +17,12 @@ export function AssistantMessage({ content, metadata, isLogAnalysis }: Assistant
   const logMetadata: LogMetadata | undefined = metadata?.logMetadata
   const errorSnippets: ErrorSnippet[] | undefined = metadata?.errorSnippets
   const rootCause = metadata?.rootCause
+  // Derive log-analysis mode from metadata when available so UI remains correct
+  const derivedIsLog = Boolean(isLogAnalysis || logMetadata || errorSnippets || rootCause)
   return (
     <div className="space-y-3">
       {/* Log Overview Card - displayed before the main message */}
-      {(isLogAnalysis || logMetadata || errorSnippets || rootCause) && (
+      {derivedIsLog && (
         <LogOverviewCard
           metadata={logMetadata}
           errorSnippets={errorSnippets}
@@ -31,7 +33,7 @@ export function AssistantMessage({ content, metadata, isLogAnalysis }: Assistant
       {/* Main Assistant Message */}
       <div className="relative rounded-lg border border-border/60 bg-gradient-to-br from-background to-muted/30 p-3">
         <div className="absolute -top-3 left-3 bg-background px-2 text-[10px] uppercase tracking-wider text-muted-foreground flex items-center gap-1">
-          {isLogAnalysis ? (
+          {derivedIsLog ? (
             <>
               <FileText className="w-3 h-3 text-orange-500" /> Log Analysis
             </>

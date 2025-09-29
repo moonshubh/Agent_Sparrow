@@ -9,7 +9,13 @@ from typing import List, Optional, Dict, Any, Tuple
 from dataclasses import dataclass
 from enum import Enum
 
-from ..schemas.log_schemas import RootCause, IssueImpact
+try:
+    from ..schemas.log_schemas import RootCause, IssueImpact
+except ImportError:
+    try:
+        from schemas.log_schemas import RootCause, IssueImpact
+    except ImportError:
+        from app.agents_v2.log_analysis_agent.schemas.log_schemas import RootCause, IssueImpact
 
 
 class SolutionType(Enum):

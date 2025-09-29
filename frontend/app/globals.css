@@ -92,12 +92,46 @@
   .citation-hover {
     transition: all 0.2s ease;
   }
-  
+
   .citation-hover:hover {
     transform: translateY(-1px);
     box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
   }
-  
+
+  /* Gradient glow button with cursor tracking */
+  .gradient-glow-button {
+    position: relative;
+    overflow: hidden;
+    background: hsl(0 0% 14.9%);
+    /* Establish proper stacking context */
+    z-index: 0;
+  }
+
+  .gradient-glow-button::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: radial-gradient(
+      150px circle at var(--mouse-x, 50%) var(--mouse-y, 50%),
+      hsl(217.2 83.2% 53.3% / 0.6) 0%,
+      hsl(225.9 70.7% 40.2% / 0.4) 40%,
+      hsl(226.2 57% 21% / 0.2) 70%,
+      transparent 100%
+    );
+    opacity: 0;
+    transition: opacity 0.3s ease;
+    pointer-events: none;
+    /* Use negative z-index to ensure gradient stays behind content */
+    z-index: -1;
+  }
+
+  .gradient-glow-button:hover::before {
+    opacity: 1;
+  }
+
   /* Screen reader only content */
   .sr-only {
     position: absolute;

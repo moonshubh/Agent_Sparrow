@@ -11,7 +11,13 @@ from typing import List, Optional, Dict, Any
 
 from app.agents_v2.primary_agent.feedme_knowledge_tool import get_feedme_connector
 from app.core.settings import settings
-from ..schemas.log_schemas import ErrorPattern, LogMetadata
+try:
+    from ..schemas.log_schemas import ErrorPattern, LogMetadata
+except ModuleNotFoundError:
+    try:
+        from schemas.log_schemas import ErrorPattern, LogMetadata
+    except ModuleNotFoundError:
+        from app.agents_v2.log_analysis_agent.schemas.log_schemas import ErrorPattern, LogMetadata
 from .orchestrator import FeedMeConversation
 
 logger = logging.getLogger(__name__)

@@ -70,3 +70,5 @@ class GoogleGeminiFlashAdapter(ProviderAdapter):
 # Registration
 from app.providers.registry import register_adapter
 register_adapter("google", "gemini-2.5-flash", GoogleGeminiFlashAdapter)
+# Also register latest preview alias (September 2025)
+register_adapter("google", "gemini-2.5-flash-preview-09-2025", GoogleGeminiFlashAdapter)

@@ -5,6 +5,7 @@
   },
   "model_mappings": {
     "gemini-2.5-flash": "Gemini-2.5-Flash",
+    "gemini-2.5-flash-preview-09-2025": "Gemini-2.5-Flash",
     "gemini-2.5-pro": "Gemini-2.5-Pro",
     "gemini-pro": "Gemini-Pro",
     "gpt5-mini": "GPT-5-Mini",
