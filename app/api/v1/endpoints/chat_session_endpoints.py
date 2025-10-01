@@ -747,11 +747,31 @@ async def update_chat_session(
 ):
     """Update a chat session"""
     try:
-        updated_session = update_chat_session_in_db(session_id, current_user.sub, updates)
-        if not updated_session:
+        conn = get_db_connection()
+        if conn is not None:
+            try:
+                updated_session = update_chat_session_in_db(conn, session_id, current_user.sub, updates)
+                if not updated_session:
+                    raise HTTPException(status_code=404, detail="Chat session not found")
+                return ChatSession(**updated_session)
+            finally:
+                conn.close()
+
+        # Fallback to in-memory store when DB is unavailable
+        session = _get_local_session(current_user.sub, session_id)
+        if session is None:
             raise HTTPException(status_code=404, detail="Chat session not found")
-        
-        return ChatSession(**updated_session)
+
+        if updates.title is not None:
+            session['title'] = updates.title
+        if updates.is_active is not None:
+            session['is_active'] = updates.is_active
+        if updates.metadata is not None:
+            session['metadata'] = updates.metadata
+
+        session['updated_at'] = datetime.utcnow()
+        _persist_local_session(current_user.sub, session)
+        return ChatSession(**session)
     except HTTPException:
         raise
     except Exception as e:
@@ -808,6 +828,7 @@ async def create_chat_message(
         # Ensure session_id matches
         message_data.session_id = session_id
         
+        use_database = current_user is not None
         conn = get_db_connection() if use_database else None
 
         if conn is not None:

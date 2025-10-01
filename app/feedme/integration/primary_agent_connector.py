@@ -5,6 +5,7 @@ Provides integration between the Primary Agent and FeedMe knowledge retrieval sy
 """
 
 import logging
+import asyncio
 from typing import List, Dict, Any, Optional
 from datetime import datetime
 
@@ -107,3 +108,77 @@ class PrimaryAgentConnector:
             formatted_parts.extend(parts)
             
         return "\n".join(formatted_parts)
+
+    async def retrieve_knowledge(
+        self,
+        query: Dict[str, Any],
+        max_results: int = 5,
+        track_performance: bool = False,
+    ) -> List[Dict[str, Any]]:
+        """Unified knowledge retrieval for Enhanced KB search.
+
+        Currently returns FeedMe examples via Supabase vector search.
+        """
+        if not self.enabled:
+            logger.debug("FeedMe integration disabled; returning empty results")
+            return []
+
+        try:
+            from app.db.supabase_client import SupabaseClient
+            from app.db.embedding_utils import get_embedding_model
+
+            text = str(query.get("query_text") or query.get("query") or "").strip()
+            if not text:
+                return []
+
+            # Build embedding
+            emb_model = get_embedding_model()
+            loop = asyncio.get_running_loop()
+            query_vec = await loop.run_in_executor(None, emb_model.embed_query, text)
+
+            # Search Supabase examples
+            client = SupabaseClient()
+            rows = await client.search_examples(
+                query_embedding=query_vec,
+                limit=max_results,
+                similarity_threshold=getattr(self, "similarity_threshold", 0.7),
+            )
+
+            def _safe_float(val: Any) -> float:
+                try:
+                    return float(val)
+                except (TypeError, ValueError):
+                    return 0.0
+
+            results: List[Dict[str, Any]] = []
+            for r in rows:
+                # Normalize fields defensively
+                title = r.get("conversation_title") or r.get("title") or "Support Example"
+                answer = r.get("answer_text") or ""
+                question = r.get("question_text") or ""
+                confidence = _safe_float(r.get("similarity", r.get("similarity_score", 0.0)))
+
+                results.append(
+                    {
+                        "source": "feedme",
+                        "title": title,
+                        "content": f"Q: {question}\n\nA: {answer}",
+                        "relevance_score": confidence,
+                        "metadata": {
+                            "conversation_id": r.get("conversation_id"),
+                            "example_id": r.get("id"),
+                            "issue_type": r.get("issue_type"),
+                            "resolution_type": r.get("resolution_type"),
+                            "tags": r.get("tags") or [],
+                        },
+                        "quality_indicators": {
+                            "high_confidence": confidence >= 0.8,
+                        },
+                    }
+                )
+
+            return results
+
+        except Exception as e:
+            logger.error(f"retrieve_knowledge failed: {e}")
+            return []

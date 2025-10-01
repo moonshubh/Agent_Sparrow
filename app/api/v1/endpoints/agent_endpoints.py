@@ -130,8 +130,6 @@ def _format_log_analysis_content(analysis: dict | Any, question: str | None) -> 
                     section_lines.append("**Steps to resolve:**")
                     for j, step in enumerate(steps, start=1):
                         section_lines.append(f"{j}. {step}")
-                if expected:
-                    section_lines.append(f"\n**Expected outcome**: {expected}")
                 step_sections.append("\n".join(section_lines))
 
         if step_sections:
@@ -315,6 +313,9 @@ class LogAnalysisRequest(BaseModel):
     content: str | None = None  # Preferred new field name
     question: str | None = None  # Optional question for focused analysis
     trace_id: str | None = None
+    # Optional Mailbird settings (Windows): provide either content or a path
+    settings_content: str | None = None
+    settings_path: str | None = None
 
 
 
@@ -653,7 +654,9 @@ async def analyze_logs(
             initial_state = {
                 "raw_log_content": log_body,
                 "question": None,
-                "trace_id": None
+                "trace_id": None,
+                "settings_content": request.settings_content,
+                "settings_path": request.settings_path,
             }
 
             # Add question if provided (for simplified agent)

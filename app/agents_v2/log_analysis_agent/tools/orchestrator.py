@@ -248,7 +248,12 @@ class LogToolOrchestrator:
         Args:
             timeout_seconds: Timeout for tool execution
         """
-        self.timeout = timeout_seconds
+        import os
+        # Allow override via env to favor quality (longer timeouts)
+        try:
+            self.timeout = int(os.getenv("LOG_ANALYSIS_TOOL_TIMEOUT_SEC", str(timeout_seconds)))
+        except Exception:
+            self.timeout = timeout_seconds
         self.cache = ToolResultCache()
 
         # Lazy import tools to avoid circular dependencies

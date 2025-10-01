@@ -369,6 +369,7 @@ class LogAnalysisAgent:
         log_content: str,
         user_query: Optional[str] = None,
         user_context_input: Optional[str] = None,
+        settings_dict: Optional[Dict[str, Any]] = None,
     ) -> LogAnalysisResult:
         """
         Analyze raw log content.
@@ -393,6 +394,13 @@ class LogAnalysisAgent:
         # Also extract from raw text for additional context
         metadata_from_text = self.metadata_extractor.extract_from_text(log_content)
         metadata = self._merge_metadata(metadata, metadata_from_text)
+
+        # Optionally merge Mailbird settings metadata
+        try:
+            if settings_dict and isinstance(settings_dict, dict):
+                metadata = self._merge_settings_metadata(metadata, settings_dict)
+        except Exception as e:
+            logger.debug(f"Ignoring settings merge error: {e}")
 
         # Analyze patterns
         error_patterns = self.pattern_analyzer.analyze_entries(log_entries)
@@ -469,6 +477,52 @@ class LogAnalysisAgent:
             )
 
         return analysis_result
+
+    def _merge_settings_metadata(self, primary: LogMetadata, settings_dict: Dict[str, Any]) -> LogMetadata:
+        """Merge Mailbird Windows settings YAML data into LogMetadata.
+
+        Best-effort parsing: extract account providers, counts, proxy configuration, and any
+        server types we can infer. Avoid crashing on unexpected schemas.
+        """
+        try:
+            # Flatten keys for simple probing
+            import json
+            flat = json.dumps(settings_dict).lower()
+
+            # Proxy detection (best-effort)
+            if "proxy" in flat:
+                # Naive check for enabled flags
+                if any(x in flat for x in [": true", "enabled", "on"]):
+                    primary.proxy_configured = True
+
+            # Email providers (naive):
+            providers = [
+                ("gmail", "Gmail"),
+                ("outlook", "Outlook"),
+                ("yahoo", "Yahoo"),
+                ("exchange", "Exchange"),
+                ("imap", "IMAP"),
+                ("office 365", "Office 365"),
+                ("hotmail", "Outlook"),
+                ("icloud", "iCloud"),
+                ("pop3", "POP3"),
+                ("smtp", "SMTP"),
+            ]
+            detected = set(primary.account_providers or [])
+            for needle, label in providers:
+                if needle in flat:
+                    detected.add(label)
+            primary.account_providers = list(detected)[:10]
+
+            # Account count via email regex inside YAML text
+            import re
+            emails = set(re.findall(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,10}", flat))
+            if emails:
+                primary.account_count = max(primary.account_count or 0, len(emails))
+
+            return primary
+        except Exception:
+            return primary
 
     def _parse_log_entries(self, log_content: str) -> List[LogEntry]:
         """Parse raw log content into structured entries."""
