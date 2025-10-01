@@ -174,10 +174,14 @@ async def check_rate_limit(model: str):
     This is a dry-run check that doesn't consume tokens.
     Useful for preemptive checking before making API calls.
     """
-    if model not in ["gemini-2.5-flash", "gemini-2.5-pro"]:
+    try:
+        RateLimitConfig.normalize_model_name(model)
+    except ValueError:
         raise HTTPException(
             status_code=400,
-            detail=f"Unsupported model: {model}. Must be 'gemini-2.5-flash' or 'gemini-2.5-pro'"
+            detail=(
+                "Unsupported model: {model}. Must be a Gemini 2.5 Flash or Pro variant."
+            ).format(model=model)
         )
     
     try:

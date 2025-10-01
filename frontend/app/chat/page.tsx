@@ -61,7 +61,15 @@ function ChatContent({ sessionId, setSessionId }: ChatContentProps) {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const [enableFx, setEnableFx] = useState<boolean>(true);
   const [reducedMotion, setReducedMotion] = useState<boolean>(false);
-  const [history, setHistory] = useState<Array<{ role: 'user' | 'assistant'; content: string }>>([]);
+  type HistoryMessage = {
+    id: string;
+    role: 'user' | 'assistant';
+    content: string;
+    metadata?: Record<string, any> | null;
+    agentType?: 'primary' | 'log_analysis' | 'research';
+  };
+
+  const [history, setHistory] = useState<HistoryMessage[]>([]);
   const [toolDecision, setToolDecision] = useState<any>(null);
   const [followUpQuestions, setFollowUpQuestions] = useState<string[] | null>(null);
   const { state, toggleSidebar } = useSidebar();
@@ -69,6 +77,7 @@ function ChatContent({ sessionId, setSessionId }: ChatContentProps) {
   const chatIdRef = useRef<string>(crypto.randomUUID());
   const previousSessionIdRef = useRef<string>("");
   const lastPersistedSessionIdRef = useRef<string>("");
+  const hasRenamedRef = useRef<boolean>(Boolean(sessionId));
 
   if (!sessionId && previousSessionIdRef.current) {
     fallbackSessionRef.current = crypto.randomUUID();
@@ -88,6 +97,15 @@ function ChatContent({ sessionId, setSessionId }: ChatContentProps) {
       .filter((p: any) => p.type === "file");
 
   type ClientMessage = UIMessage<any, any>;
+
+  const normalizeAssistantMetadata = (meta: any) => {
+    if (!meta || typeof meta !== 'object') return undefined;
+    const nested = (meta as any).messageMetadata;
+    if (nested && typeof nested === 'object') {
+      return nested;
+    }
+    return meta;
+  };
 
   const transport = useMemo(
     () =>
@@ -117,9 +135,32 @@ function ChatContent({ sessionId, setSessionId }: ChatContentProps) {
         if (userText) {
           await sessionsAPI.postMessage(activeSessionId, {
             message_type: 'user',
-            agent_type: 'primary',
+            agent_type: activeAgent,
             content: userText,
           });
+
+          if (!hasRenamedRef.current) {
+            const nextTitle = deriveChatTitle(userText);
+            try {
+              const updatedSession = await sessionsAPI.rename(activeSessionId, nextTitle);
+              hasRenamedRef.current = true;
+
+              if (typeof window !== 'undefined') {
+                window.dispatchEvent(
+                  new CustomEvent('chat-session-updated', {
+                    detail: {
+                      sessionId: String(updatedSession.id ?? activeSessionId),
+                      title: updatedSession.title ?? nextTitle,
+                      metadata: updatedSession.metadata,
+                      agentType: updatedSession.agent_type,
+                    },
+                  }),
+                );
+              }
+            } catch (renameError) {
+              console.error('Failed to auto-name session:', renameError);
+            }
+          }
         }
 
         if (!isAbort && !isError && assistantText) {
@@ -137,10 +178,14 @@ function ChatContent({ sessionId, setSessionId }: ChatContentProps) {
 
           await sessionsAPI.postMessage(activeSessionId, {
             message_type: 'assistant',
-            agent_type: 'primary',
+            agent_type: activeAgent,
             content: assistantText,
             ...(Object.keys(metadataPayload).length > 0 ? { metadata: metadataPayload } : {}),
           });
+
+          if (typeof window !== 'undefined') {
+            window.dispatchEvent(new Event('chat-sessions:refresh'));
+          }
         }
       } catch (persistError) {
         console.error('Failed to persist messages:', persistError);
@@ -196,9 +241,15 @@ function ChatContent({ sessionId, setSessionId }: ChatContentProps) {
       try {
         const items = await sessionsAPI.listMessages(sessionId, 100, 0);
         if (!mounted) return;
-        const mapped = items
+        const mapped: HistoryMessage[] = items
           .filter((m) => m.message_type === 'user' || m.message_type === 'assistant')
-          .map((m) => ({ role: m.message_type as 'user' | 'assistant', content: m.content }));
+          .map((m, index) => ({
+            id: String(m.id ?? `${m.message_type}-${index}`),
+            role: m.message_type as 'user' | 'assistant',
+            content: m.content,
+            metadata: m.metadata ?? undefined,
+            agentType: (m.agent_type as HistoryMessage['agentType']) || 'primary',
+          }));
         setHistory(mapped);
       } catch (e) {
         console.warn('Failed to load history', e);
@@ -210,10 +261,21 @@ function ChatContent({ sessionId, setSessionId }: ChatContentProps) {
 
   useEffect(() => {
     if (sessionId) {
+      hasRenamedRef.current = true;
       lastPersistedSessionIdRef.current = sessionId;
     } else {
+      hasRenamedRef.current = false;
+      fallbackSessionRef.current = crypto.randomUUID();
       lastPersistedSessionIdRef.current = "";
     }
+
+    // Reset per-session UI state to avoid showing stale data when switching chats
+    chatIdRef.current = crypto.randomUUID();
+    setHistory([]);
+    setFollowUpQuestions(null);
+    setToolDecision(null);
+    setMediaFiles([]);
+    setLogFile(null);
   }, [sessionId]);
 
   useEffect(() => {
@@ -356,10 +418,12 @@ function ChatContent({ sessionId, setSessionId }: ChatContentProps) {
     setLogFile(null);
   };
 
-  const hasContent = messages.length > 0;
   // Cap total rendered messages to 100 by reducing history slice
   const maxTotal = 100;
   const displayedHistory = history.slice(-Math.max(0, maxTotal - messages.length));
+  const hasLiveMessages = messages.length > 0;
+  const hasHistoryContent = displayedHistory.length > 0;
+  const hasContent = hasLiveMessages || hasHistoryContent;
   const showFx = enableFx && !reducedMotion;
   const isLogAnalysis = activeAgent === 'log_analysis';
   const agentLabel = activeAgent === 'log_analysis'
@@ -508,22 +572,44 @@ function ChatContent({ sessionId, setSessionId }: ChatContentProps) {
             {/* History */}
             {displayedHistory.length > 0 && (
               <div className="space-y-6 opacity-90">
-                {displayedHistory.map((m, idx) => (
-                  <div
-                    key={`h-${idx}`}
-                    className={`flex gap-4 ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}
-                  >
+                {displayedHistory.map((m) => {
+                  const assistantMetadata = normalizeAssistantMetadata(m.metadata);
+                  const isLogHistory =
+                    m.role === 'assistant' && (
+                      m.agentType === 'log_analysis' ||
+                      Boolean(
+                        assistantMetadata &&
+                          (assistantMetadata.logMetadata ||
+                            assistantMetadata.errorSnippets ||
+                            assistantMetadata.rootCause),
+                      )
+                    );
+
+                  return (
                     <div
-                      className={`max-w-[85%] rounded-2xl px-5 py-3 ${
-                        m.role === 'user'
-                          ? 'bg-primary/10 dark:bg-primary/20 text-foreground border border-primary/20'
-                          : 'bg-secondary/50 dark:bg-zinc-800/50 border border-border/50'
-                      }`}
+                      key={`h-${m.id}`}
+                      className={`flex gap-4 ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}
                     >
-                      <div className="text-[15px] leading-relaxed whitespace-pre-wrap">{m.content}</div>
+                      <div
+                        className={`max-w-[85%] rounded-2xl px-5 py-3 ${
+                          m.role === 'user'
+                            ? 'bg-primary/10 dark:bg-primary/20 text-foreground border border-primary/20'
+                            : 'bg-secondary/50 dark:bg-zinc-800/50 border border-border/50'
+                        }`}
+                      >
+                        {m.role === 'assistant' ? (
+                          <AssistantMessage
+                            content={m.content}
+                            metadata={assistantMetadata}
+                            isLogAnalysis={isLogHistory}
+                          />
+                        ) : (
+                          <div className="text-[15px] leading-relaxed whitespace-pre-wrap">{m.content}</div>
+                        )}
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             )}
 
@@ -548,7 +634,7 @@ function ChatContent({ sessionId, setSessionId }: ChatContentProps) {
                       {m.role === "assistant" ? (
                         <AssistantMessage
                           content={getMessageText(m)}
-                          metadata={(m as any).metadata}
+                          metadata={normalizeAssistantMetadata((m as any).metadata)}
                           isLogAnalysis={isLogAnalysis}
                         />
                       ) : (
@@ -817,19 +903,35 @@ async function detectLogFile(file: File): Promise<boolean> {
 }
 
 export default function AIChatPage() {
-  const [sessionId, setSessionId] = useState<string>("");
+  const [sessionId, setSessionId] = useState<string>('');
+  const [viewKey, setViewKey] = useState(0);
+
+  const handleSelectSession = (id?: string) => {
+    setSessionId(id || '');
+    setViewKey((prev) => prev + 1);
+  };
+
+  const activeSessionId = sessionId || undefined;
 
   return (
     <SidebarProvider defaultOpen={true}>
       {/* Sidebar reserves gap and stays fixed on the left */}
-      <ChatHistorySidebar
-        sessionId={sessionId}
-        onSelect={(id) => setSessionId(id || '')}
-      />
+      <ChatHistorySidebar sessionId={activeSessionId} onSelect={handleSelectSession} />
       {/* Inset ensures main content is offset and centered */}
       <SidebarInset>
-        <ChatContent sessionId={sessionId} setSessionId={setSessionId} />
+        <ChatContent
+          key={`chat-${viewKey}-${sessionId || 'draft'}`}
+          sessionId={sessionId}
+          setSessionId={setSessionId}
+        />
       </SidebarInset>
     </SidebarProvider>
   );
+}
+
+function deriveChatTitle(raw: string): string {
+  const normalized = raw.replace(/\s+/g, ' ').trim();
+  if (!normalized) return 'New Chat';
+  if (normalized.length <= 40) return normalized;
+  return `${normalized.slice(0, 37).trimEnd()}...`;
 }

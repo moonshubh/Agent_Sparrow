@@ -5,6 +5,7 @@ Configuration for rate limiting system.
 from dataclasses import dataclass
 from typing import Optional
 import os
+
 from app.core.settings import settings
 
 def parse_boolean_env(value: str) -> bool:
@@ -92,16 +93,28 @@ class RateLimitConfig:
     
     def get_effective_limits(self, model: str) -> tuple[int, int]:
         """Get effective RPM and RPD limits for a model."""
-        if model == "gemini-2.5-flash":
+        normalized = self.normalize_model_name(model)
+
+        if normalized == "gemini-2.5-flash":
             return self.flash_rpm_limit, self.flash_rpd_limit
-        elif model == "gemini-2.5-pro":
+        elif normalized == "gemini-2.5-pro":
             return self.pro_rpm_limit, self.pro_rpd_limit
         else:
             raise ValueError(f"Unknown model: {model}")
-    
+
     def get_redis_keys(self, model: str) -> tuple[str, str]:
         """Get Redis keys for RPM and RPD tracking."""
         model_key = model.replace(".", "_").replace("-", "_")
         rpm_key = f"{self.redis_key_prefix}:{model_key}:rpm"
         rpd_key = f"{self.redis_key_prefix}:{model_key}:rpd"
         return rpm_key, rpd_key
+
+    @staticmethod
+    def normalize_model_name(model: str) -> str:
+        """Normalize Gemini model variants to their base family names."""
+        candidate = (model or "").strip().lower()
+        if candidate.startswith("gemini-2.5-flash"):
+            return "gemini-2.5-flash"
+        if candidate.startswith("gemini-2.5-pro"):
+            return "gemini-2.5-pro"
+        raise ValueError(f"Unsupported Gemini model: {model}")
