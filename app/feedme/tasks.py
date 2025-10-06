@@ -702,8 +702,23 @@ def generate_ai_tags(self, conversation_id: int, max_input_chars: int = 4000) ->
             return { 'success': True, 'conversation_id': conversation_id, 'tags': [] }
 
         # Configure Gemini
-        genai.configure(api_key=getattr(get_cached_settings(), 'gemini_api_key', None) or getattr(get_settings(), 'gemini_api_key', None))
-        model = genai.GenerativeModel('gemini-2.5-flash-lite')
+        cached_settings = get_cached_settings()
+        fallback_settings = get_settings()
+        api_key = (
+            getattr(cached_settings, 'gemini_api_key', None)
+            or getattr(fallback_settings, 'gemini_api_key', None)
+        )
+        if not api_key:
+            logger.error("Gemini API key missing for AI tag generation task")
+            raise MissingAPIKeyError("Gemini API key missing for AI tag generation")
+        genai.configure(api_key=api_key)
+
+        model_name = (
+            getattr(cached_settings, 'feedme_model_name', None)
+            or getattr(fallback_settings, 'feedme_model_name', None)
+            or 'gemini-2.5-flash-lite'
+        )
+        model = genai.GenerativeModel(model_name)
         prompt = (
             "You are tagging customer support threads. "
             "Read the following Q/A flow and output concise JSON with keys tags (array of 5-7 short tags) and comment (<=120 chars).\n\n"

@@ -67,6 +67,14 @@ class GoogleGeminiFlashAdapter(ProviderAdapter):
             model_kwargs["thinking_budget"] = thinking_budget
         return _GeminiModelWrapper(**model_kwargs)
 
+
+class GoogleGeminiFlashPreviewAdapter(GoogleGeminiFlashAdapter):
+    """Adapter for preview aliases that should call the preview model id."""
+
+    model_name = "gemini-2.5-flash-preview-09-2025"
+
 # Registration
 from app.providers.registry import register_adapter
 register_adapter("google", "gemini-2.5-flash", GoogleGeminiFlashAdapter)
+# Also register latest preview alias (September 2025)
+register_adapter("google", "gemini-2.5-flash-preview-09-2025", GoogleGeminiFlashPreviewAdapter)

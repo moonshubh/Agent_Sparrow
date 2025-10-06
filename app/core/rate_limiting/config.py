@@ -3,8 +3,9 @@ Configuration for rate limiting system.
 """
 
 from dataclasses import dataclass
-from typing import Optional
 import os
+import re
+
 from app.core.settings import settings
 
 def parse_boolean_env(value: str) -> bool:
@@ -92,16 +93,53 @@ class RateLimitConfig:
     
     def get_effective_limits(self, model: str) -> tuple[int, int]:
         """Get effective RPM and RPD limits for a model."""
-        if model == "gemini-2.5-flash":
+        normalized = self.normalize_model_name(model)
+
+        if normalized in {"gemini-2.5-flash", "gemini-2.5-flash-lite"}:
             return self.flash_rpm_limit, self.flash_rpd_limit
-        elif model == "gemini-2.5-pro":
+        elif normalized == "gemini-2.5-pro":
             return self.pro_rpm_limit, self.pro_rpd_limit
         else:
             raise ValueError(f"Unknown model: {model}")
-    
+
     def get_redis_keys(self, model: str) -> tuple[str, str]:
         """Get Redis keys for RPM and RPD tracking."""
-        model_key = model.replace(".", "_").replace("-", "_")
+        normalized = self.normalize_model_name(model)
+        model_key = normalized.replace(".", "_").replace("-", "_")
         rpm_key = f"{self.redis_key_prefix}:{model_key}:rpm"
         rpd_key = f"{self.redis_key_prefix}:{model_key}:rpd"
         return rpm_key, rpd_key
+
+    @staticmethod
+    def normalize_model_name(model: str) -> str:
+        """Normalize Gemini model variants to their base family names."""
+        candidate = (model or "").strip().lower()
+        if not candidate:
+            raise ValueError("Model name is required for normalization")
+
+        candidate = candidate.replace(" ", "")
+        if candidate.startswith("models/"):
+            candidate = candidate[len("models/"):]
+
+        base_candidates = (
+            "gemini-2.5-flash-lite",
+            "gemini-2.5-flash",
+            "gemini-2.5-pro",
+        )
+
+        for base in base_candidates:
+            if candidate.startswith(base):
+                return base
+
+        # Strip common variant suffixes (preview tags, numbered builds, fine-tunes, etc.)
+        stripped = re.sub(
+            r"-(preview(?:-[0-9a-z]+)*|beta|alpha|exp(?:erimental)?|test(?:ing)?|staging|v\d+|r\d+|ft[0-9a-z-]*|\d{3}|ga|rc).*",
+            "",
+            candidate,
+        )
+
+        for base in base_candidates:
+            if stripped.startswith(base):
+                return base
+
+        raise ValueError(f"Unsupported Gemini model: {model}")

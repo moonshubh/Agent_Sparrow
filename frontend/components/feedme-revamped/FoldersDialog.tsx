@@ -25,9 +25,10 @@ const ANIMATION_RESET_DELAY = 300
 interface Props {
   isOpen: boolean
   onClose: () => void
+  onSubDialogClose?: () => void // Callback when sub-dialogs (like FolderConversationsDialog) are closed
 }
 
-const FoldersDialog = React.memo(function FoldersDialog({ isOpen, onClose }: Props) {
+const FoldersDialog = React.memo(function FoldersDialog({ isOpen, onClose, onSubDialogClose }: Props) {
   const actions = useFoldersStore(s => s.actions)
   const folderTree = useFoldersStore(s => s.folderTree)
   const isLoading = useFoldersStore(s => s.isLoading)
@@ -281,6 +282,7 @@ const FoldersDialog = React.memo(function FoldersDialog({ isOpen, onClose }: Pro
               setSelectedFolder(null)
               setConversationsOpen(false)
               setClickedFolderId(null)
+              onSubDialogClose?.() // Trigger logo frame advance when folder dialog closes
             }}
             folderId={selectedFolder.id}
             folderName={selectedFolder.name}

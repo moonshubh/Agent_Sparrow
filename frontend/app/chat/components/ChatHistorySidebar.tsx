@@ -1,6 +1,6 @@
 "use client"
 
-import React, { useEffect, useMemo, useState } from "react"
+import React, { useCallback, useEffect, useState } from "react"
 import Image from "next/image"
 import {
   Sidebar,
@@ -17,6 +17,7 @@ import {
   SidebarRail,
 } from "@/components/ui/sidebar"
 import { Button } from "@/components/ui/button"
+import { GradientButton } from "@/components/ui/gradient-button"
 import { Input } from "@/components/ui/input"
 import { Plus, MessageSquare, FolderGit2, MoreHorizontal } from "lucide-react"
 import {
@@ -48,6 +49,13 @@ type Props = {
   onSelect: (sessionId: string | undefined) => void
 }
 
+type SessionUpdatedDetail = {
+  sessionId: string
+  title?: string
+  metadata?: Record<string, any>
+  agentType?: string
+}
+
 export function ChatHistorySidebar({ sessionId, onSelect }: Props) {
   const [sessions, setSessions] = useState<ChatSession[]>([])
   const [loading, setLoading] = useState(false)
@@ -57,28 +65,47 @@ export function ChatHistorySidebar({ sessionId, onSelect }: Props) {
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null)
   const [renameTimer, setRenameTimer] = useState<NodeJS.Timeout | null>(null)
 
-  useEffect(() => {
-    let mounted = true
-    const load = async () => {
-      setLoading(true)
-      setError(null)
-      try {
-        // Load the most recent 10 sessions
-        const items = await sessionsAPI.list(10, 0)
-        if (!mounted) return
-        setSessions(items.slice(0, 10))
-      } catch (e: any) {
-        if (!mounted) return
-        setError(e?.message || "Failed to load sessions")
-      } finally {
-        if (mounted) setLoading(false)
+  const refreshSessions = useCallback(
+    async (
+      {
+        silent = false,
+        aborted,
+      }: { silent?: boolean; aborted?: () => boolean } = {}
+    ) => {
+      const isAborted = () => (aborted ? aborted() : false)
+
+      if (!silent) {
+        setLoading(true)
+        setError(null)
       }
-    }
-    load()
+
+      try {
+        const items = await sessionsAPI.list(10, 0)
+        if (isAborted()) return
+        setSessions(items.slice(0, 10))
+      } catch (refreshError: any) {
+        if (isAborted()) return
+        if (silent) {
+          console.error('Failed to refresh chat sessions', refreshError)
+        } else {
+          setError(refreshError?.message || 'Failed to load sessions')
+        }
+      } finally {
+        if (!silent && !isAborted()) {
+          setLoading(false)
+        }
+      }
+    },
+    []
+  )
+
+  useEffect(() => {
+    let cancelled = false
+    refreshSessions({ silent: false, aborted: () => cancelled })
     return () => {
-      mounted = false
+      cancelled = true
     }
-  }, [])
+  }, [refreshSessions])
 
   const onCreate = async () => {
     try {
@@ -107,6 +134,47 @@ export function ChatHistorySidebar({ sessionId, onSelect }: Props) {
     return () => clearTimeout(t)
   }, [editingId, editingTitle])
 
+  useEffect(() => {
+    const handleSessionUpdated = (event: Event) => {
+      const detail = (event as CustomEvent<SessionUpdatedDetail>).detail
+      if (!detail?.sessionId) return
+
+      const nowIso = new Date().toISOString()
+
+      setSessions((prev) => {
+        const updated = prev.map((s) => {
+          if (String(s.id) !== detail.sessionId) return s
+          return {
+            ...s,
+            title: detail.title ?? s.title,
+            metadata: detail.metadata ?? s.metadata,
+            agent_type: (detail.agentType as ChatSession['agent_type']) ?? s.agent_type,
+            updated_at: nowIso,
+            last_message_at: nowIso,
+          }
+        })
+
+        return updated.sort((a, b) => {
+          const aTime = a.updated_at ? new Date(a.updated_at).getTime() : 0
+          const bTime = b.updated_at ? new Date(b.updated_at).getTime() : 0
+          return bTime - aTime
+        })
+      })
+    }
+
+    const handleRefreshRequest = () => {
+      refreshSessions({ silent: true })
+    }
+
+    window.addEventListener('chat-session-updated', handleSessionUpdated as EventListener)
+    window.addEventListener('chat-sessions:refresh', handleRefreshRequest)
+
+    return () => {
+      window.removeEventListener('chat-session-updated', handleSessionUpdated as EventListener)
+      window.removeEventListener('chat-sessions:refresh', handleRefreshRequest)
+    }
+  }, [refreshSessions])
+
   return (
     <Sidebar collapsible="offcanvas" variant="sidebar" side="left" className="border-r h-full">
       <SidebarHeader className="px-3 py-3 border-b">
@@ -121,14 +189,14 @@ export function ChatHistorySidebar({ sessionId, onSelect }: Props) {
 
       <SidebarContent className="flex-1 px-2 py-2">
         <div className="px-1 pb-2">
-          <Button
+          <GradientButton
             size="sm"
-            className="w-full justify-center gap-2"
+            className="w-full justify-center gap-2 text-white"
             onClick={onCreate}
             data-testid="new-chat-button"
           >
             <Plus className="h-4 w-4" /> New Chat
-          </Button>
+          </GradientButton>
         </div>
 
         <SidebarSeparator />
@@ -147,11 +215,17 @@ export function ChatHistorySidebar({ sessionId, onSelect }: Props) {
                 <div className="px-3 py-2 text-xs text-muted-foreground">No conversations yet</div>
               )}
               {sessions.map((s) => {
-                const label = s.title?.trim() || (s.agent_type === "log_analysis" ? "Log analysis session" : "Conversation")
+                // Extract metadata for log analysis sessions
+                const isLogAnalysis = s.agent_type === "log_analysis"
+                const logMetadata = isLogAnalysis && s.metadata ? s.metadata : null
+                const errorCount = logMetadata?.error_count
+                const label = s.title?.trim() || (isLogAnalysis
+                  ? `Log Analysis${errorCount ? ` - ${errorCount} errors` : ''}`
+                  : "Conversation")
                 const sessionKey = String(s.id)
                 const isActive = sessionKey === sessionId
                 return (
-                  <SidebarMenuItem key={s.id} className="group/menu-item">
+                  <SidebarMenuItem key={s.id} className="group/menu-item relative">
                     <SidebarMenuButton
                       asChild
                       isActive={isActive}
@@ -161,9 +235,9 @@ export function ChatHistorySidebar({ sessionId, onSelect }: Props) {
                         onSelect(sessionKey)
                       }}
                     >
-                      <a href="#" className="gap-2 pr-8">
-                        {s.agent_type === "log_analysis" ? (
-                          <FolderGit2 className="h-4 w-4" />
+                      <a href="#" className="gap-2 pr-12">
+                        {isLogAnalysis ? (
+                          <FolderGit2 className={`h-4 w-4 ${errorCount > 0 ? 'text-orange-500' : ''}`} />
                         ) : (
                           <MessageSquare className="h-4 w-4" />
                         )}
@@ -188,7 +262,22 @@ export function ChatHistorySidebar({ sessionId, onSelect }: Props) {
                                 </span>
                               </TooltipTrigger>
                               <TooltipContent side="right">
-                                <span className="text-xs">{label}</span>
+                                <div className="text-xs space-y-1">
+                                  <div>{label}</div>
+                                  {isLogAnalysis && logMetadata && (
+                                    <>
+                                      {errorCount !== undefined && (
+                                        <div className="text-orange-500">Errors: {errorCount}</div>
+                                      )}
+                                      {logMetadata.warning_count !== undefined && (
+                                        <div className="text-yellow-500">Warnings: {logMetadata.warning_count}</div>
+                                      )}
+                                      {logMetadata.health_status && (
+                                        <div>Status: {logMetadata.health_status}</div>
+                                      )}
+                                    </>
+                                  )}
+                                </div>
                               </TooltipContent>
                             </Tooltip>
                           </TooltipProvider>
@@ -202,7 +291,7 @@ export function ChatHistorySidebar({ sessionId, onSelect }: Props) {
                         <Button
                           variant="ghost"
                           size="icon"
-                          className="absolute right-1 h-6 w-6 opacity-0 group-hover/menu-item:opacity-100 transition-opacity"
+                          className="absolute right-2 top-1/2 h-6 w-6 -translate-y-1/2 opacity-0 group-hover/menu-item:opacity-100 transition-opacity"
                           title="More actions"
                         >
                           <MoreHorizontal className="h-4 w-4" />

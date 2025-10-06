@@ -191,11 +191,36 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -
     encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
     return encoded_jwt
 
+def _dev_user_id() -> str:
+    from uuid import UUID
+
+    dev_id = getattr(settings, "development_user_id", "00000000-0000-0000-0000-000000000000")
+    dev_id = (dev_id or "").strip()
+
+    if not dev_id:
+        return "00000000-0000-0000-0000-000000000000"
+
+    try:
+        # Validate UUID format (raises ValueError if invalid)
+        UUID(dev_id)
+        return dev_id
+    except Exception:
+        logger.warning(
+            "[AUTH] DEVELOPMENT_USER_ID is not a valid UUID. Using default development user id instead."
+        )
+        return "00000000-0000-0000-0000-000000000000"
+
+
 async def get_current_user(token: Optional[str] = Depends(oauth2_scheme)) -> TokenPayload:
     if SKIP_AUTH:
-        # Return a dummy user payload if authentication is skipped
+        # Return a deterministic development user payload when auth is bypassed
         logger.debug("[AUTH] Skipping authentication - SKIP_AUTH=true")
-        return TokenPayload(sub="dev-user-123", exp=int((datetime.now(timezone.utc) + timedelta(hours=1)).timestamp()), roles=["admin"])
+        dev_user = _dev_user_id()
+        return TokenPayload(
+            sub=dev_user,
+            exp=int((datetime.now(timezone.utc) + timedelta(hours=1)).timestamp()),
+            roles=["admin"],
+        )
     
     if not token:
         raise HTTPException(
@@ -253,9 +278,14 @@ async def get_optional_current_user(token: Optional[str] = Depends(optional_oaut
     When not authenticated, a default/anonymous experience is provided.
     """
     if SKIP_AUTH:
-        # Return a dummy user payload if authentication is skipped
+        # Return a deterministic development user payload when auth is bypassed
         logger.debug("[AUTH-OPTIONAL] Skipping authentication - SKIP_AUTH=true")
-        return TokenPayload(sub="dev-user-123", exp=int((datetime.now(timezone.utc) + timedelta(hours=1)).timestamp()), roles=["admin"])
+        dev_user = _dev_user_id()
+        return TokenPayload(
+            sub=dev_user,
+            exp=int((datetime.now(timezone.utc) + timedelta(hours=1)).timestamp()),
+            roles=["admin"],
+        )
     
     if not token:
         logger.debug("[AUTH-OPTIONAL] No token provided, returning None")

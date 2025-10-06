@@ -21,7 +21,13 @@ export default function FeedMeRevampedPage() {
   const [uploadOpen, setUploadOpen] = useState(false)
   const [unassignedOpen, setUnassignedOpen] = useState(false)
   const [statsOpen, setStatsOpen] = useState(false)
+  const [frameAdvanceTrigger, setFrameAdvanceTrigger] = useState(0)
   const router = useRouter()
+
+  // Function to advance logo frame on user actions
+  const advanceLogoFrame = () => {
+    setFrameAdvanceTrigger(prev => prev + 1)
+  }
 
   return (
     <ErrorBoundary>
@@ -59,7 +65,8 @@ export default function FeedMeRevampedPage() {
               className="w-[400px] h-[400px]"
               animationDuration={5000}
               loop={true}
-              autoPlay={true}
+              autoPlay={false}
+              triggerAdvance={frameAdvanceTrigger}
             />
           </div>
         )}
@@ -93,10 +100,41 @@ export default function FeedMeRevampedPage() {
         </div>
 
         {/* Dialogs */}
-        <FoldersDialog isOpen={foldersOpen} onClose={() => setFoldersOpen(false)} />
-        <UploadDialog isOpen={uploadOpen} onClose={() => setUploadOpen(false)} />
-        <UnassignedDialog isOpen={unassignedOpen} onClose={() => setUnassignedOpen(false)} />
-        <StatsPopover open={statsOpen} onOpenChange={setStatsOpen} />
+        <FoldersDialog
+          isOpen={foldersOpen}
+          onClose={() => {
+            setFoldersOpen(false)
+            setShowCenter(true)
+            advanceLogoFrame()
+          }}
+          onSubDialogClose={advanceLogoFrame}
+        />
+        <UploadDialog
+          isOpen={uploadOpen}
+          onClose={() => {
+            setUploadOpen(false)
+            setShowCenter(true)
+            advanceLogoFrame()
+          }}
+        />
+        <UnassignedDialog
+          isOpen={unassignedOpen}
+          onClose={() => {
+            setUnassignedOpen(false)
+            setShowCenter(true)
+            advanceLogoFrame()
+          }}
+        />
+        <StatsPopover
+          open={statsOpen}
+          onOpenChange={(open) => {
+            setStatsOpen(open)
+            if (!open) {
+              setShowCenter(true)
+              advanceLogoFrame()
+            }
+          }}
+        />
       </section>
     </ErrorBoundary>
   )

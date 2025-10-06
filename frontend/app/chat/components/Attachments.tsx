@@ -116,8 +116,9 @@ export function Attachments({
         )
       })}
       {logFile && (
-        <div className="group flex items-center gap-2 px-2 py-1.5 rounded-full border border-border/60 bg-muted/30 text-xs">
+        <div className="group flex items-center gap-2 px-2 py-1.5 rounded-full border border-orange-500/40 dark:border-orange-500/60 bg-orange-500/10 dark:bg-orange-500/20 text-xs">
           <FileText className="w-3.5 h-3.5 text-orange-500" />
+          <span className="font-medium text-orange-600 dark:text-orange-300">Log Analysis</span>
           <span className="max-w-[200px] truncate" title={logFile.name}>{logFile.name}</span>
           <span className="text-muted-foreground">{formatBytes(logFile.size)}</span>
           <button

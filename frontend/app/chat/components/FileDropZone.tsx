@@ -3,7 +3,7 @@
 import React, { PropsWithChildren, useCallback, useState } from 'react'
 
 type Props = PropsWithChildren<{
-  onFiles: (files: File[]) => void
+  onFiles: (files: File[]) => void | Promise<void>
   accept?: string
   className?: string
 }>

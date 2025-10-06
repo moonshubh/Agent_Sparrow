@@ -9,6 +9,7 @@ interface EnhancedAnimatedLogoProps {
   animationDuration?: number
   loop?: boolean
   autoPlay?: boolean
+  triggerAdvance?: number // Counter to trigger frame advancement - increment this to advance frame
 }
 
 const KEYFRAMES = [
@@ -24,9 +25,10 @@ const KEYFRAMES = [
 
 export default function EnhancedAnimatedLogo({
   className = '',
-  animationDuration = 6000, // Increased from 2400 to 6000 for slower transitions
+  animationDuration = 6000,
   loop = true,
-  autoPlay = true,
+  autoPlay = false, // Changed default to false - only advance on user actions
+  triggerAdvance = 0,
 }: EnhancedAnimatedLogoProps) {
   const [currentFrame, setCurrentFrame] = useState(0)
   const [isPlaying, setIsPlaying] = useState(autoPlay)
@@ -35,6 +37,19 @@ export default function EnhancedAnimatedLogo({
 
   // Slower frame duration for smoother transitions
   const frameDuration = animationDuration / KEYFRAMES.length
+
+  // Advance frame when triggerAdvance changes (parent increments this value)
+  useEffect(() => {
+    if (triggerAdvance > 0) {
+      setCurrentFrame((prev) => {
+        const nextFrame = prev + 1
+        if (nextFrame >= KEYFRAMES.length) {
+          return loop ? 0 : prev
+        }
+        return nextFrame
+      })
+    }
+  }, [triggerAdvance, loop])
 
   useEffect(() => {
     const loadImages = async () => {

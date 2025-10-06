@@ -22,9 +22,13 @@ logger = logging.getLogger(__name__)
 class SupabaseConfig:
     """Configuration for Supabase connection"""
     def __init__(self):
-        self.url = os.environ.get('SUPABASE_URL')
-        self.anon_key = os.environ.get('SUPABASE_ANON_KEY')
-        self.service_key = os.environ.get('SUPABASE_SERVICE_KEY')  # Optional for admin operations
+        raw_url = os.environ.get('SUPABASE_URL', '')
+        raw_anon = os.environ.get('SUPABASE_ANON_KEY', '')
+        raw_service = os.environ.get('SUPABASE_SERVICE_KEY', '')
+
+        self.url = raw_url.strip() or None
+        self.anon_key = raw_anon.strip() or None
+        self.service_key = raw_service.strip() or None  # Optional for admin operations
         
         if not self.url or not self.anon_key:
             logger.warning(

@@ -712,3 +712,9 @@ supabase/
 Zendesk PDF/
 *.pdf
 !**/public/*.pdf
+
+# Codex configuration - never track
+.codex/
+
+# Local authentication scripts - never track
+enable-local-auth.sh

@@ -83,14 +83,16 @@ class GeminiRateLimiter:
         Raises:
             ValueError: If model is not supported
         """
-        if model not in ["gemini-2.5-flash", "gemini-2.5-pro"]:
-            raise ValueError(f"Unsupported model: {model}")
-        
-        # Get effective limits for the model
-        rpm_limit, rpd_limit = self.config.get_effective_limits(model)
-        
+        try:
+            base_model = self.config.normalize_model_name(model)
+        except ValueError as exc:
+            raise ValueError(f"Unsupported model: {model}") from exc
+
+        # Get effective limits for the model family
+        rpm_limit, rpd_limit = self.config.get_effective_limits(base_model)
+
         # Determine identifier for Redis keys
-        identifier = "flash" if "flash" in model else "pro"
+        identifier = "flash" if base_model == "gemini-2.5-flash" else "pro"
         
         try:
             # Check rate limits
@@ -143,6 +145,7 @@ class GeminiRateLimiter:
         """
         # First check rate limits
         rate_limit_result = await self.check_and_consume(model)
+        base_model = self.config.normalize_model_name(model)
         
         if not rate_limit_result.allowed:
             raise RateLimitExceededException(
@@ -153,7 +156,7 @@ class GeminiRateLimiter:
             )
         
         # Get circuit breaker for the model
-        circuit_breaker = self.circuit_breakers[model]
+        circuit_breaker = self.circuit_breakers[base_model]
         
         # Execute with circuit breaker protection
         try:

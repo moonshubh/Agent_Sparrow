@@ -8,6 +8,12 @@ export interface ChatSession {
   agent_type?: AgentType
   created_at?: string
   updated_at?: string
+  metadata?: {
+    error_count?: number
+    warning_count?: number
+    health_status?: string
+    [key: string]: any
+  }
 }
 
 export interface ChatSessionListResponse {
@@ -24,6 +30,16 @@ export interface ChatMessagePayload {
   metadata?: Record<string, any>
   environmental_context?: Record<string, any>
   correlation_analysis?: Record<string, any>
+}
+
+export type ChatMessageRecord = {
+  id: string | number
+  session_id?: string | number
+  message_type: 'user' | 'assistant' | 'system' | 'tool'
+  agent_type?: AgentType
+  content: string
+  metadata?: Record<string, any> | null
+  created_at?: string
 }
 
 export const sessionsAPI = {
@@ -50,7 +66,7 @@ export const sessionsAPI = {
   },
 
   // Messages
-  async listMessages(sessionId: string | number, limit = 100, offset = 0): Promise<Array<{ id: string | number; message_type: 'user'|'assistant'|'system'|'tool'; content: string; created_at?: string }>> {
+  async listMessages(sessionId: string | number, limit = 100, offset = 0): Promise<ChatMessageRecord[]> {
     const qs = new URLSearchParams({ limit: String(limit), offset: String(offset) })
     const res = await apiClient.get<any>(`/api/v1/chat-sessions/${sessionId}/messages?${qs.toString()}`)
     if (Array.isArray(res?.messages)) return res.messages

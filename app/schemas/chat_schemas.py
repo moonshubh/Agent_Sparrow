@@ -76,7 +76,17 @@ class ChatSessionCreate(ChatSessionBase):
 
 class ChatMessageCreate(ChatMessageBase):
     """Model for creating new chat messages"""
-    session_id: int = Field(..., description="ID of the parent chat session")
+    session_id: Optional[int] = Field(
+        default=None,
+        description="ID of the parent chat session. Optional when provided via URL path."
+    )
+
+    @validator('session_id')
+    def validate_session_id(cls, v):
+        """Ensure explicit session IDs are positive when supplied."""
+        if v is not None and v <= 0:
+            raise ValueError("session_id must be a positive integer")
+        return v
 
 
 # Update Models
