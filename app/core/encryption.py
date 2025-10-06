@@ -25,7 +25,9 @@ class APIKeyEncryption:
         self.master_secret = self._get_master_secret()
     
     def _get_master_secret(self) -> bytes:
-        """Get or generate master secret for encryption."""
+        """Get or derive master secret for encryption.
+        Strictly use env/settings when provided; otherwise derive an ephemeral dev key without hardcoded secrets.
+        """
         # Prefer environment variable; fallback to settings (which loads .env)
         secret = os.getenv('API_KEY_ENCRYPTION_SECRET')
         if not secret:
@@ -35,17 +37,23 @@ class APIKeyEncryption:
             except Exception:
                 secret = None
 
-        if not secret:
-            # If production security is enforced, fail fast instead of using default
-            if getattr(settings, 'force_production_security', True):
-                raise EnvironmentError(
-                    'API_KEY_ENCRYPTION_SECRET environment variable must be set in production.'
-                )
-            # Development convenience fallback (NOT safe for production)
-            secret = 'MB_SPARROW_DEV_SECRET_CHANGE_IN_PRODUCTION'
-        
-        # Ensure we have a 32-byte key
-        return hashlib.sha256(str(secret).encode()).digest()
+        if secret:
+            return hashlib.sha256(str(secret).encode()).digest()
+
+        # If production security is enforced, fail fast instead of using any fallback
+        if getattr(settings, 'force_production_security', True):
+            raise EnvironmentError('API_KEY_ENCRYPTION_SECRET environment variable must be set in production.')
+
+        # Development-only fallback: derive a deterministic but machine-scoped key
+        try:
+            user = os.getenv('USER') or os.getenv('USERNAME') or 'dev'
+            cwd = os.getcwd()
+            node = getattr(os, 'uname')().nodename if hasattr(os, 'uname') else 'unknown-node'
+            seed = f"mb_sparrow_dev::{user}::{node}::{cwd}"
+        except Exception:
+            seed = 'mb_sparrow_dev_default_seed'
+
+        return hashlib.sha256(seed.encode()).digest()
     
     def _derive_user_key(self, user_id: str) -> bytes:
         """Derive a unique encryption key for each user."""

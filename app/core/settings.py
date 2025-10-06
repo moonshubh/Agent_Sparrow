@@ -163,12 +163,14 @@ class Settings(BaseSettings):
     circuit_breaker_success_threshold: int = Field(default=3, alias="CIRCUIT_BREAKER_SUCCESS_THRESHOLD")
     
     # JWT Configuration  
-    jwt_secret_key: str = Field(default="change-this-in-production", alias="JWT_SECRET_KEY")
+    # Do not ship default secrets; require explicit configuration via environment
+    jwt_secret_key: Optional[str] = Field(default=None, alias="JWT_SECRET_KEY")
     jwt_algorithm: str = Field(default="HS256", alias="JWT_ALGORITHM")
     jwt_access_token_expire_minutes: int = Field(default=30, alias="JWT_ACCESS_TOKEN_EXPIRE_MINUTES")
     
     # API Key Encryption
-    api_key_encryption_secret: str = Field(default="change-this-secret-key-exactly32", alias="API_KEY_ENCRYPTION_SECRET")
+    # No hardcoded default; set via env only. In dev without FORCE_PRODUCTION_SECURITY, a derived ephemeral key will be used.
+    api_key_encryption_secret: Optional[str] = Field(default=None, alias="API_KEY_ENCRYPTION_SECRET")
     
     # Authentication
     skip_auth: bool = Field(default=False, alias="SKIP_AUTH")
@@ -218,7 +220,11 @@ class Settings(BaseSettings):
     @field_validator('api_key_encryption_secret')
     @classmethod
     def validate_api_key_encryption_secret(cls, v: str) -> str:
-        """Validate that API key encryption secret is at least 32 bytes when UTF-8 encoded"""
+        """Validate that API key encryption secret is at least 32 bytes when UTF-8 encoded.
+        Allow None so that development environments can derive an ephemeral key instead of shipping a default secret.
+        """
+        if v is None:
+            return v
         if len(v.encode('utf-8')) < 32:
             raise ValueError("api_key_encryption_secret must be at least 32 bytes long when UTF-8 encoded")
         return v

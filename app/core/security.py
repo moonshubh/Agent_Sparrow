@@ -28,8 +28,8 @@ logger = logging.getLogger(__name__)
 load_dotenv()  # Load environment variables from .env file
 settings = get_settings()
 
-# Configuration from environment variables with settings fallbacks
-SECRET_KEY = os.getenv("JWT_SECRET_KEY") or getattr(settings, "jwt_secret_key", None)
+# Configuration from environment variables
+# Do NOT fallback to default or settings-derived secrets to avoid committing any hardcoded values.
 ALGORITHM = os.getenv("JWT_ALGORITHM", getattr(settings, "jwt_algorithm", "HS256"))
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("JWT_ACCESS_TOKEN_EXPIRE_MINUTES", getattr(settings, "jwt_access_token_expire_minutes", 30)))
 # Skip authentication entirely (local dev/testing)
@@ -49,11 +49,14 @@ _SUPABASE_JWKS: dict | None = None
 _SUPABASE_JWKS_FETCHED_AT: datetime | None = None
 _SUPABASE_JWKS_TTL_SECONDS: int = 24 * 60 * 60  # 24 hours
 
-# Allow local/dev bypass: if SKIP_AUTH=true or SUPABASE_URL configured, do not hard-fail on missing SECRET_KEY
-if not SECRET_KEY and not SUPABASE_URL and not SKIP_AUTH:
-    raise EnvironmentError(
-        "Either JWT_SECRET_KEY or SUPABASE_URL must be configured."
-    )
+# Helper to fetch JWT signing key strictly from environment
+def _jwt_signing_key() -> Optional[str]:
+    key = os.getenv("JWT_SECRET_KEY")
+    return key if key else None
+
+# Allow local/dev bypass: if SKIP_AUTH=true or SUPABASE_URL configured, do not hard-fail on missing key
+if not _jwt_signing_key() and not SUPABASE_URL and not SKIP_AUTH:
+    raise EnvironmentError("Either JWT_SECRET_KEY or SUPABASE_URL must be configured.")
 
 # SECRET_KEY already falls back to settings.jwt_secret_key for local dev
 # In production, ensure a strong key via env or secrets manager.
@@ -188,7 +191,10 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -
     else:
         expire = datetime.now(timezone.utc) + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     to_encode.update({"exp": int(expire.timestamp())}) # Ensure exp is an int timestamp
-    encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+    key = _jwt_signing_key()
+    if not key:
+        raise EnvironmentError("JWT_SECRET_KEY must be set to create access tokens.")
+    encoded_jwt = jwt.encode(to_encode, key, algorithm=ALGORITHM)
     return encoded_jwt
 
 def _dev_user_id() -> str:
@@ -252,7 +258,10 @@ async def get_current_user(token: Optional[str] = Depends(oauth2_scheme)) -> Tok
     # Fallback to local JWT validation
     try:
         logger.debug("[AUTH] Attempting local JWT validation")
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        key = _jwt_signing_key()
+        if not key:
+            raise credentials_exception
+        payload = jwt.decode(token, key, algorithms=[ALGORITHM])
         token_data = TokenPayload(**payload)
         if token_data.sub is None or token_data.exp is None:
             logger.warning("[AUTH] Token missing sub or exp claim")
