@@ -124,12 +124,17 @@
     opacity: 0;
     transition: opacity 0.3s ease;
     pointer-events: none;
-    /* Use negative z-index to ensure gradient stays behind content */
-    z-index: -1;
+    /* Keep glow above the base background but behind interactive content */
+    z-index: 0;
   }
 
   .gradient-glow-button:hover::before {
     opacity: 1;
+  }
+
+  .gradient-glow-button > * {
+    position: relative;
+    z-index: 1;
   }
 
   /* Screen reader only content */

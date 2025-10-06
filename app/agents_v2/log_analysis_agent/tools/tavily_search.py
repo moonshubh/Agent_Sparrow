@@ -85,12 +85,14 @@ class TavilyLogSearch:
             )
 
             # Clean up the description for search
-            description = top_pattern.description
-            # Remove technical jargon
-            description = description.replace("System.", "")
-            description = description.replace("Exception", "error")
+            description = top_pattern.description or ""
+            if description:
+                # Remove technical jargon
+                description = description.replace("System.", "")
+                description = description.replace("Exception", "error")
 
-            query_parts.append(description)
+            if description:
+                query_parts.append(description)
 
             # Add category-specific terms
             if top_pattern.category:

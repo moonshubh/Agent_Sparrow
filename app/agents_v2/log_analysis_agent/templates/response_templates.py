@@ -5,6 +5,7 @@ Emotion-specific and context-aware templates for log analysis responses.
 Provides structured templates that adapt to user emotional states and situations.
 """
 
+import random
 from typing import Dict, List, Optional, Any
 from dataclasses import dataclass
 from enum import Enum
@@ -251,7 +252,6 @@ class ResponseTemplates:
             )
 
         # Select template
-        import random
         template = random.choice(templates)
 
         # Format with name
@@ -273,7 +273,6 @@ class ResponseTemplates:
             self.ROOT_CAUSE_TEMPLATES[EmotionalState.NEUTRAL]
         )
 
-        import random
         return random.choice(templates)
 
     def get_solution_intro(self, emotional_state: EmotionalState) -> str:
@@ -291,7 +290,6 @@ class ResponseTemplates:
             self.SOLUTION_INTRO_TEMPLATES[EmotionalState.NEUTRAL]
         )
 
-        import random
         return random.choice(templates)
 
     def get_escalation_template(self, emotional_state: EmotionalState) -> str:
@@ -309,7 +307,6 @@ class ResponseTemplates:
             self.ESCALATION_TEMPLATES[EmotionalState.NEUTRAL]
         )
 
-        import random
         return random.choice(templates)
 
     def get_closing_template(
@@ -321,7 +318,7 @@ class ResponseTemplates:
         Get closing message based on resolution and emotional state.
 
         Args:
-            resolution_status: Status of resolution (success/partial/failed)
+            resolution_status: Status of resolution (success/partial)
             emotional_state: User's emotional state
 
         Returns:
@@ -338,7 +335,6 @@ class ResponseTemplates:
                 "Let me know if you need any clarification!"
             ]
 
-        import random
         return random.choice(templates)
 
     def get_resource_intro(self, emotional_state: EmotionalState) -> str:

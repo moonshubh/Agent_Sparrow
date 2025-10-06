@@ -314,23 +314,13 @@ async def run_primary_agent(state: PrimaryAgentState) -> AsyncIterator[AIMessage
                     emotion=reasoning_state.query_analysis.emotional_state,
                     solution_provided=final_response
                 )
-            
-            # Stream the final, cleaned response chunk by chunk to the client.
-            chunk_size = 200  # Increased for better performance
-            for i in range(0, len(final_response), chunk_size):
-                chunk_content = final_response[i:i+chunk_size]
-                yield AIMessageChunk(content=chunk_content, role="assistant")
-                await anyio.sleep(0.005)  # Reduced delay for smoother streaming
-            
-            # After streaming the response, send metadata including thinking trace
+            # Prepare metadata (thinking trace, follow-ups, tool decisions) before streaming
             metadata_to_send = {}
-            
-            # Add follow-up questions if available
+
             if follow_up_questions:
-                metadata_to_send["followUpQuestions"] = follow_up_questions[:5]  # Limit to 5 questions
+                metadata_to_send["followUpQuestions"] = follow_up_questions[:5]
                 metadata_to_send["followUpQuestionsUsed"] = 0
 
-            # Surface tool decision details for UI consumption
             if reasoning_state and reasoning_state.tool_reasoning:
                 tool_reasoning = reasoning_state.tool_reasoning
                 metadata_to_send["toolResults"] = {
@@ -341,50 +331,68 @@ async def run_primary_agent(state: PrimaryAgentState) -> AsyncIterator[AIMessage
                     "knowledge_gaps": tool_reasoning.knowledge_gaps,
                     "expected_sources": tool_reasoning.expected_sources,
                 }
-            
-            # Add thinking trace if enabled
+
             if settings.should_enable_thinking_trace() and reasoning_state:
+                logger.debug(
+                    "[primary_agent] thinking trace enabled=%s, reasoning_steps=%d",
+                    settings.should_enable_thinking_trace(),
+                    len(getattr(reasoning_state, "reasoning_steps", []) or []),
+                )
                 thinking_trace = {
                     "confidence": reasoning_state.overall_confidence,
                     "thinking_steps": [],
                     "tool_decision": None,
                     "knowledge_gaps": []
                 }
-                
-                # Extract thinking steps from reasoning steps
+
                 for step in reasoning_state.reasoning_steps:
                     thinking_trace["thinking_steps"].append({
                         "phase": step.phase.value,
                         "thought": step.reasoning,
                         "confidence": step.confidence
                     })
-                
-                # Add query analysis details
+
                 if reasoning_state.query_analysis:
                     thinking_trace["emotional_state"] = reasoning_state.query_analysis.emotional_state.value
                     thinking_trace["problem_category"] = reasoning_state.query_analysis.problem_category.value
                     thinking_trace["complexity"] = reasoning_state.query_analysis.complexity_score
-                
-                # Add tool decision reasoning
+
                 if reasoning_state.tool_reasoning:
                     thinking_trace["tool_decision"] = reasoning_state.tool_reasoning.decision_type.value
                     thinking_trace["tool_confidence"] = reasoning_state.tool_reasoning.confidence
                     thinking_trace["knowledge_gaps"] = reasoning_state.tool_reasoning.knowledge_gaps
-                
-                # Add self-critique results if available
+
                 if reasoning_state.self_critique_result:
                     thinking_trace["critique_score"] = reasoning_state.self_critique_result.critique_score
                     thinking_trace["passed_critique"] = reasoning_state.self_critique_result.passed_critique
-                
+
                 metadata_to_send["thinking_trace"] = thinking_trace
+
+            if metadata_to_send:
+                preface_metadata_chunk = AIMessageChunk(
+                    content="",
+                    role="assistant",
+                    additional_kwargs={
+                        "metadata": metadata_to_send,
+                        "metadata_stage": "reasoning_snapshot"
+                    }
+                )
+                yield preface_metadata_chunk
+
+            # Stream the final, cleaned response chunk by chunk to the client.
+            chunk_size = 200  # Increased for better performance
+            for i in range(0, len(final_response), chunk_size):
+                chunk_content = final_response[i:i+chunk_size]
+                yield AIMessageChunk(content=chunk_content, role="assistant")
+                await anyio.sleep(0.005)  # Reduced delay for smoother streaming
             
-            # Send metadata chunk if we have any metadata to send
             if metadata_to_send:
                 metadata_chunk = AIMessageChunk(
                     content="",
                     role="assistant",
                     additional_kwargs={
-                        "metadata": metadata_to_send
+                        "metadata": metadata_to_send,
+                        "metadata_stage": "final_snapshot"
                     }
                 )
                 yield metadata_chunk

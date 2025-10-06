@@ -63,9 +63,7 @@ class MetadataFormatter:
 
     def __init__(self):
         """Initialize the metadata formatter"""
-        self.show_empty_values = False
-        self.compact_mode = False
-
+        
     def format_metadata_overview(self, metadata: LogMetadata) -> str:
         """
         Format complete metadata overview.
@@ -88,12 +86,15 @@ class MetadataFormatter:
             sections.append(session_section)
 
         # Account information
-        if metadata.account_count > 0:
+        account_count = getattr(metadata, "account_count", 0) or 0
+        if account_count > 0:
             account_section = self._format_account_info(metadata)
             sections.append(account_section)
 
         # Performance indicators
-        if metadata.error_count > 0 or metadata.warning_count > 0:
+        error_count = getattr(metadata, "error_count", 0) or 0
+        warning_count = getattr(metadata, "warning_count", 0) or 0
+        if error_count > 0 or warning_count > 0:
             health_section = self._format_health_indicators(metadata)
             sections.append(health_section)
 
@@ -124,18 +125,20 @@ class MetadataFormatter:
             lines.append(f"Build: {metadata.build_number}")
 
         lines.append(f"OS: {metadata.os_version} ({metadata.os_architecture})")
-        lines.append(f"Accounts: {metadata.account_count}")
+        lines.append(f"Accounts: {account_count}")
 
         if metadata.account_providers:
             providers = ", ".join(metadata.account_providers)
             lines.append(f"Providers: {providers}")
 
         lines.append(f"Total Log Entries: {metadata.total_entries:,}")
-        lines.append(f"Errors: {metadata.error_count:,}")
-        lines.append(f"Warnings: {metadata.warning_count:,}")
+        lines.append(f"Errors: {error_count:,}")
+        lines.append(f"Warnings: {warning_count:,}")
 
-        if metadata.session_duration_hours:
-            lines.append(f"Session Duration: {self._format_duration(metadata.session_duration_hours)}")
+        if metadata.session_duration_hours is not None:
+            lines.append(
+                f"Session Duration: {self._format_duration(metadata.session_duration_hours)}"
+            )
 
         lines.append("```")
         return "\n".join(lines)
@@ -168,9 +171,12 @@ class MetadataFormatter:
             )
 
         # Database performance
-        if metrics.slow_queries > 0:
-            status = self.STATUS_INDICATORS["warning" if metrics.slow_queries > 10 else "healthy"]
-            lines.append(f"- **Slow Queries**: {status} {metrics.slow_queries} detected")
+        if metrics.slow_queries is not None:
+            slow_queries = metrics.slow_queries
+            if slow_queries > 0:
+                status_key = "warning" if slow_queries > 10 else "healthy"
+                status = self.STATUS_INDICATORS[status_key]
+                lines.append(f"- **Slow Queries**: {status} {slow_queries} detected")
 
         # Sync performance
         if metrics.sync_duration_seconds is not None:
@@ -183,10 +189,10 @@ class MetadataFormatter:
             lines.append(f"- **Network Latency**: {status} {metrics.network_latency_ms:.1f}ms")
 
         # Critical issues
-        if metrics.ui_freezes > 0:
+        if metrics.ui_freezes is not None and metrics.ui_freezes > 0:
             lines.append(f"- **UI Freezes**: {self.STATUS_INDICATORS['error']} {metrics.ui_freezes} occurrences")
 
-        if metrics.crash_events > 0:
+        if metrics.crash_events is not None and metrics.crash_events > 0:
             lines.append(f"- **Crashes**: {self.STATUS_INDICATORS['error']} {metrics.crash_events} events")
 
         # Memory peaks
@@ -241,7 +247,7 @@ class MetadataFormatter:
             end_time = metadata.session_end.strftime("%Y-%m-%d %H:%M:%S")
             lines.append(f"- **Ended**: {end_time}")
 
-        if metadata.session_duration_hours:
+        if metadata.session_duration_hours is not None:
             duration = self._format_duration(metadata.session_duration_hours)
             lines.append(f"- **Duration**: {duration}")
 
@@ -289,29 +295,33 @@ class MetadataFormatter:
         lines.append("")
 
         # Error breakdown
-        if metadata.error_count > 0:
-            lines.append(f"- **Errors**: {self.CATEGORY_ICONS['errors']} {metadata.error_count:,} "
-                        f"({metadata.error_rate:.1f}% of entries)")
+        if metadata.error_count is not None and metadata.error_count > 0:
+            lines.append(
+                f"- **Errors**: {self.CATEGORY_ICONS['errors']} {metadata.error_count:,} "
+                f"({metadata.error_rate:.1f}% of entries)"
+            )
 
-        if metadata.warning_count > 0:
-            lines.append(f"- **Warnings**: {self.CATEGORY_ICONS['warnings']} {metadata.warning_count:,}")
+        if metadata.warning_count is not None and metadata.warning_count > 0:
+            lines.append(
+                f"- **Warnings**: {self.CATEGORY_ICONS['warnings']} {metadata.warning_count:,}"
+            )
 
         return "\n".join(lines)
 
     def _format_resource_usage(self, metadata: LogMetadata) -> Optional[str]:
         """Format resource usage section"""
-        if not metadata.memory_usage_mb and not metadata.cpu_usage_percent:
+        if metadata.memory_usage_mb is None and metadata.cpu_usage_percent is None:
             return None
 
         lines = []
         lines.append("### 🖥️ Resource Usage")
         lines.append("")
 
-        if metadata.memory_usage_mb:
+        if metadata.memory_usage_mb is not None:
             memory_status = self._get_memory_status(metadata.memory_usage_mb)
             lines.append(f"- **Memory**: {memory_status} {metadata.memory_usage_mb:.1f} MB average")
 
-        if metadata.cpu_usage_percent:
+        if metadata.cpu_usage_percent is not None:
             cpu_status = self._get_cpu_status(metadata.cpu_usage_percent)
             lines.append(f"- **CPU**: {cpu_status} {metadata.cpu_usage_percent:.1f}% average")
 

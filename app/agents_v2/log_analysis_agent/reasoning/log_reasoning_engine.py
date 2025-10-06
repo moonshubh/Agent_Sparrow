@@ -342,11 +342,21 @@ class LogReasoningEngine(ReasoningEngine):
                 tool_results = self._tool_results_cache.get(log_analysis.analysis_id)
 
                 # Extract user name if possible
-                user_name = None
-                if user_context and user_context.reported_issue:
-                    words = user_context.reported_issue.split()
-                    if words and words[0][0].isupper():
-                        user_name = words[0]
+                user_name = getattr(user_context, "user_name", None) if user_context else None
+                if not user_name and user_context and user_context.reported_issue:
+                    tokens = user_context.reported_issue.split()
+                    stoplist = {"My", "The", "Email", "I", "A"}
+                    if tokens:
+                        candidate = tokens[0]
+                        if (
+                            candidate
+                            and candidate not in stoplist
+                            and candidate[0].isupper()
+                            and candidate[1:].islower()
+                            and candidate.isalpha()
+                            and len(candidate) > 1
+                        ):
+                            user_name = candidate
 
                 # Use the new formatter for high-quality responses
                 formatted_response, validation_result = await self.response_formatter.format_response(
@@ -366,9 +376,12 @@ class LogReasoningEngine(ReasoningEngine):
 
                 return formatted_response
 
-            except Exception as e:
-                logger.warning(f"Failed to use response formatter: {e}, falling back to basic formatting")
+            except (ValueError, TypeError) as exc:
+                logger.warning("Response formatter rejected input: %s", exc, exc_info=True)
                 # Fall through to basic formatting
+            except Exception as exc:
+                logger.exception("Unexpected formatter failure", exc_info=True)
+                raise
 
         # Fallback to basic formatting if formatter not available or failed
         # Get empathy template
@@ -643,8 +656,9 @@ Reflect on this log analysis response for quality improvement:
 
         if tool_results.web_resources:
             official = sum(
-                1 for r in tool_results.web_resources
-                if "mailbird" in r.source_domain.lower()
+                1
+                for r in tool_results.web_resources
+                if (getattr(r, "source_domain", None) or "").lower().find("mailbird") != -1
             )
             parts.append(
                 f"Found {len(tool_results.web_resources)} web resources "
@@ -683,7 +697,7 @@ Reflect on this log analysis response for quality improvement:
         if tool_results.web_resources:
             top_resource = tool_results.web_resources[0]
             evidence.append(
-                f"Web: {top_resource.title} from {top_resource.source_domain}"
+                f"Web: {top_resource.title} from {getattr(top_resource, 'source_domain', 'unknown source')}"
             )
 
         return evidence[:5]  # Limit to 5 pieces of evidence
@@ -727,14 +741,16 @@ Reflect on this log analysis response for quality improvement:
         if tool_results.web_resources:
             resource_parts.append("\n*Additional Resources:*")
             for resource in tool_results.web_resources[:2]:
-                if "mailbird" in resource.source_domain.lower():
+                domain = getattr(resource, "source_domain", None)
+                domain_lower = domain.lower() if domain else ""
+                if domain_lower and "mailbird" in domain_lower:
                     resource_parts.append(
                         f"• [Official: {resource.title}]({resource.url})"
                     )
                 else:
                     resource_parts.append(
                         f"• [{resource.title}]({resource.url}) "
-                        f"from {resource.source_domain}"
+                        f"from {domain or 'unknown source'}"
                     )
 
         return "\n".join(resource_parts) if len(resource_parts) > 1 else ""

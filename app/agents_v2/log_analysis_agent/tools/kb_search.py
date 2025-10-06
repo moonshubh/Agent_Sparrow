@@ -7,6 +7,7 @@ log error analysis and resolution.
 
 import logging
 from typing import List, Optional, Dict, Any
+import re
 from dataclasses import dataclass
 
 from app.agents_v2.primary_agent.feedme_knowledge_tool import (
@@ -282,7 +283,6 @@ class EnhancedKBSearch:
         for line in lines:
             if "http" in line.lower():
                 # Extract URL from line
-                import re
                 url_pattern = r'https?://[^\s<>"{}|\\^`\[\]]*'
                 match = re.search(url_pattern, line)
                 if match:

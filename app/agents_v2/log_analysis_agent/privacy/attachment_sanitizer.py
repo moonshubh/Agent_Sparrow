@@ -271,7 +271,6 @@ class AttachmentSanitizer:
             Processed safe image or None if validation fails
         """
         image = None
-        temp_file = None
 
         try:
             # Validate file safety
@@ -305,10 +304,7 @@ class AttachmentSanitizer:
             if self.config.store_thumbnails_only:
                 image = self._create_safe_thumbnail(image)
 
-            # Save to temporary file
-            with self.cleanup_manager.temporary_file(suffix='.png') as temp_path:
-                image.save(temp_path, 'PNG', optimize=True)
-                yield image
+            yield image
 
         except Exception as e:
             logger.error(f"Image processing error: {e}")
@@ -416,7 +412,9 @@ class AttachmentSanitizer:
                 mime_type, _ = mimetypes.guess_type(str(file_path))
                 if mime_type and mime_type.startswith('image/'):
                     attachment_type = "image"
-                elif mime_type in ['application/pdf', 'text/plain']:
+                elif mime_type in ['application/pdf', 'text/plain'] or (
+                    mime_type and mime_type.startswith('text/')
+                ):
                     attachment_type = "document"
                 else:
                     attachment_type = "unknown"

@@ -12,6 +12,9 @@ import {
 import { PanelLeft, ChevronDown } from "lucide-react";
 import { ChatHistorySidebar } from "@/app/chat/components/ChatHistorySidebar";
 import { AssistantMessage } from "./components/AssistantMessage";
+import { WorkingTimeline } from "./components/WorkingTimeline";
+import { computeTimeline } from "@/lib/trace/computeTimeline";
+import { TimelineStep } from "@/types/trace";
 import { CommandBar } from "./components/CommandBar";
 import { FileDropZone } from "./components/FileDropZone";
 import { Attachments, formatBytes } from "./components/Attachments";
@@ -72,6 +75,10 @@ function ChatContent({ sessionId, setSessionId }: ChatContentProps) {
   const [history, setHistory] = useState<HistoryMessage[]>([]);
   const [toolDecision, setToolDecision] = useState<any>(null);
   const [followUpQuestions, setFollowUpQuestions] = useState<string[] | null>(null);
+  const liveTimelinePartsRef = useRef<Array<{ type: string; data?: any }>>([]);
+  const liveTimelineMetadataRef = useRef<any>(null);
+  const liveTimelineAgentRef = useRef<'primary' | 'log_analysis' | 'research' | 'router'>('primary');
+  const [liveTimelineSteps, setLiveTimelineSteps] = useState<TimelineStep[]>([]);
   const { state, toggleSidebar } = useSidebar();
   const fallbackSessionRef = useRef<string>(crypto.randomUUID());
   const chatIdRef = useRef<string>(crypto.randomUUID());
@@ -87,14 +94,34 @@ function ChatContent({ sessionId, setSessionId }: ChatContentProps) {
   const effectiveSessionId = sessionId || fallbackSessionRef.current;
 
   const getMessageText = (m: any) =>
-    (m?.parts || [])
-      .filter((p: any) => p.type === "text")
+    (Array.isArray(m?.parts) ? m.parts : [])
+      .filter((p: any) => p && p.type === "text" && typeof p.text === "string")
       .map((p: any) => p.text)
       .join("");
 
   const getFileParts = (m: any) =>
-    (m?.parts || [])
-      .filter((p: any) => p.type === "file");
+    (Array.isArray(m?.parts) ? m.parts : [])
+      .filter((p: any) => p && p.type === "file");
+
+  const getDataParts = (m: any) => {
+    // Prefer direct data array when present
+    const direct = Array.isArray((m as any)?.data)
+      ? ((m as any).data as Array<{ type: string; data?: any }>).filter(Boolean)
+      : [];
+    if (direct.length > 0) return direct;
+
+    // Otherwise extract all AI SDK data parts (type starts with "data-")
+    const parts = Array.isArray(m?.parts) ? m.parts : [];
+    return parts
+      .filter((p: any) => p && typeof p.type === 'string' && p.type.startsWith('data-'))
+      .map((p: any) => {
+        const t = p.type as string;
+        const d = (p as any).data;
+        // Normalize timeline step so downstream timeline logic is consistent
+        if (t === 'data-timeline-step') return { type: 'timeline-step', data: d };
+        return { type: t, data: d };
+      });
+  };
 
   type ClientMessage = UIMessage<any, any>;
 
@@ -118,11 +145,173 @@ function ChatContent({ sessionId, setSessionId }: ChatContentProps) {
     [provider, model, effectiveSessionId],
   );
 
+  const recomputeLiveTimeline = (streaming: boolean) => {
+    const steps = computeTimeline({
+      dataParts: liveTimelinePartsRef.current,
+      metadata: liveTimelineMetadataRef.current,
+      content: '',
+      agentType: liveTimelineAgentRef.current,
+      isStreaming: streaming,
+    });
+    if (process.env.NODE_ENV !== 'production') {
+      try {
+        // eslint-disable-next-line no-console
+        console.debug('[live:recompute]', {
+          streaming,
+          types: liveTimelinePartsRef.current.map(p => p?.type),
+          metadataKeys: liveTimelineMetadataRef.current ? Object.keys(liveTimelineMetadataRef.current || {}) : [],
+          stepTitles: steps.map(s => `${s.title}:${s.status}`),
+        });
+      } catch {}
+    }
+    setLiveTimelineSteps(steps);
+  };
+
+  const resetLiveTimeline = (agent: 'primary' | 'log_analysis' | 'research' | 'router') => {
+    liveTimelinePartsRef.current = [];
+    liveTimelineMetadataRef.current = null;
+    liveTimelineAgentRef.current = agent;
+    setLiveTimelineSteps([]);
+  };
+
   const { messages, sendMessage, status, error } = useChat<ClientMessage>({
     // Use a stable client-side chat id to avoid UI resets during initial send
     id: chatIdRef.current,
     transport,
+    experimental_throttle: 60,
     onError: (e) => console.error("AI chat error:", e),
+    onData: (chunk) => {
+      if (!chunk) return;
+      const type = (chunk as any).type;
+      if (process.env.NODE_ENV !== 'production') {
+        try {
+          // eslint-disable-next-line no-console
+          console.debug('[live:onData]', type, {
+            keys: Object.keys(chunk as any),
+            preview: (chunk as any)?.data ?? (chunk as any)?.messageMetadata ?? {
+              delta: (chunk as any)?.delta,
+              text: (chunk as any)?.text,
+            },
+          });
+        } catch {}
+      }
+      if (type === 'text-start' || type === 'start') {
+        recomputeLiveTimeline(true);
+        return;
+      }
+      // AI SDK namespaced data parts (data-*) or canonical data part
+      if (type === 'data' || (typeof type === 'string' && type.startsWith('data-'))) {
+        const dataPart = (chunk as any).data;
+        if (dataPart) {
+          if (type === 'data-tool-result') {
+            const toolName = dataPart?.tool_name || dataPart?.toolName || dataPart?.name || dataPart?.id || 'Tool';
+            const statusRaw = (dataPart?.status || dataPart?.state || 'completed').toString().toLowerCase();
+            const status = statusRaw.includes('fail') || statusRaw.includes('error')
+              ? 'failed'
+              : statusRaw.includes('progress')
+                ? 'in_progress'
+                : 'completed';
+            const detail = dataPart?.reasoning || dataPart?.summary || dataPart?.output || dataPart?.result || '';
+            liveTimelinePartsRef.current = [
+              ...liveTimelinePartsRef.current,
+              {
+                type: 'timeline-step',
+                data: {
+                  type: `Tool: ${toolName}`,
+                  description: typeof detail === 'string' ? detail : JSON.stringify(detail, null, 2),
+                  status,
+                },
+              },
+            ];
+          }
+          if (type === 'data-followups') {
+            const suggestions = Array.isArray(dataPart) ? dataPart.slice(0, 3).join('\n• ') : undefined;
+            liveTimelinePartsRef.current = [
+              ...liveTimelinePartsRef.current,
+              {
+                type: 'timeline-step',
+                data: {
+                  type: 'Follow-up suggestions',
+                  description: suggestions,
+                  status: 'completed',
+                },
+              },
+            ];
+          }
+          // If it's a namespaced data-* chunk, keep its original type
+          if (type !== 'data') {
+            const namespaced = { type, data: dataPart } as any;
+            liveTimelinePartsRef.current = [...liveTimelinePartsRef.current, namespaced];
+          } else {
+            liveTimelinePartsRef.current = [...liveTimelinePartsRef.current, dataPart];
+          }
+          recomputeLiveTimeline(true);
+        }
+        return;
+      }
+      // Reasoning stream (Gemini/OpenAI) → synthesize into thinking/timeline parts
+      if (typeof type === 'string' && (type === 'reasoning' || type.startsWith('reasoning-'))) {
+        const deltaText = (chunk as any).delta ?? (chunk as any).text ?? '';
+        const end = type === 'reasoning-end' || type === 'reasoning-part-finish';
+        const part = {
+          type: 'timeline-step',
+          data: {
+            type: 'Reasoning',
+            description: deltaText || (type === 'reasoning-start' ? 'Starting reasoning…' : undefined),
+            status: end ? 'completed' : 'in-progress',
+          },
+        } as any;
+        liveTimelinePartsRef.current = [...liveTimelinePartsRef.current, part];
+        // Also keep a compact thinking_trace shape for computeTimeline inference
+        const prev = (liveTimelineMetadataRef.current?.thinking_trace?.thinking_steps as any[]) || [];
+        const merged = deltaText ? [...prev, { phase: 'REASONING', thought: deltaText }] : prev;
+        liveTimelineMetadataRef.current = {
+          ...(liveTimelineMetadataRef.current || {}),
+          thinking_trace: { thinking_steps: merged },
+        };
+        recomputeLiveTimeline(true);
+        return;
+      }
+      // Tool streaming (Gemini/OpenAI tool runtime)
+      if (typeof type === 'string' && (type.startsWith('tool-') || type.startsWith('source-'))) {
+        const callId = (chunk as any).toolCallId || (chunk as any).id;
+        const toolName = (chunk as any).toolName || (chunk as any).name || 'Tool';
+        const level = type.includes('error') ? 'failed' : (type.includes('available') || type.includes('output') || type.includes('end')) ? 'completed' : 'in-progress';
+        const desc = (chunk as any).inputTextDelta || (chunk as any).errorText || '';
+        const part = {
+          type: 'timeline-step',
+          data: {
+            type: `Tool: ${toolName}`,
+            description: desc,
+            status: level,
+            id: callId,
+          },
+        } as any;
+        liveTimelinePartsRef.current = [...liveTimelinePartsRef.current, part];
+        recomputeLiveTimeline(true);
+        return;
+      }
+      if (type === 'message-metadata') {
+        const meta = (chunk as any).messageMetadata;
+        if (meta && typeof meta === 'object') {
+          liveTimelineMetadataRef.current = {
+            ...(liveTimelineMetadataRef.current || {}),
+            ...meta,
+          };
+          if (!liveTimelineAgentRef.current || liveTimelineAgentRef.current === 'primary') {
+            if (meta?.analysisResults || meta?.logMetadata) {
+              liveTimelineAgentRef.current = 'log_analysis';
+            }
+          }
+          recomputeLiveTimeline(true);
+        }
+        return;
+      }
+      if (type === 'text-end' || type === 'finish') {
+        // Keep steps until onFinish persists message, then we clear there
+        return;
+      }
+    },
     onFinish: async ({ message: assistantMessage, messages: chatMessages, isAbort, isError }) => {
       const activeSessionId = sessionId || lastPersistedSessionIdRef.current;
       if (!activeSessionId) return;
@@ -169,9 +358,7 @@ function ChatContent({ sessionId, setSessionId }: ChatContentProps) {
           if (messageMetadata && Object.keys(messageMetadata).length > 0) {
             metadataPayload.messageMetadata = messageMetadata;
           }
-          const dataParts = Array.isArray((assistantMessage as any)?.data)
-            ? (assistantMessage as any).data
-            : [];
+          const dataParts = getDataParts(assistantMessage);
           if (dataParts.length > 0) {
             metadataPayload.dataParts = dataParts;
           }
@@ -191,6 +378,9 @@ function ChatContent({ sessionId, setSessionId }: ChatContentProps) {
         console.error('Failed to persist messages:', persistError);
       }
 
+      // Clear live timeline once the message finalizes
+      resetLiveTimeline(liveTimelineAgentRef.current);
+
       // Ensure UI session state is linked to the created/persisted session
       try {
         if (!sessionId && lastPersistedSessionIdRef.current) {
@@ -201,6 +391,13 @@ function ChatContent({ sessionId, setSessionId }: ChatContentProps) {
       }
     },
   });
+
+  // Ensure we show at least the minimal in-progress step as soon as message is submitted
+  useEffect(() => {
+    if ((status === 'submitted' || status === 'streaming') && liveTimelineSteps.length === 0) {
+      recomputeLiveTimeline(true);
+    }
+  }, [status, liveTimelineSteps.length]);
 
   // Auto-scroll to bottom when new messages arrive
   useEffect(() => {
@@ -345,6 +542,7 @@ function ChatContent({ sessionId, setSessionId }: ChatContentProps) {
           : activeAgent === 'research'
             ? 'research'
             : 'primary';
+        resetLiveTimeline(desiredAgent);
         const session = await sessionsAPI.create(desiredAgent);
         const createdId = String(session.id);
         nextSessionId = createdId;
@@ -358,6 +556,14 @@ function ChatContent({ sessionId, setSessionId }: ChatContentProps) {
     if (nextSessionId) {
       lastPersistedSessionIdRef.current = nextSessionId;
     }
+
+    // Reset live timeline state for new send
+    const agentForTimeline = logFile
+      ? 'log_analysis'
+      : activeAgent === 'research'
+        ? 'research'
+        : activeAgent;
+    resetLiveTimeline(agentForTimeline);
 
     // Convert File[] to FileUIPart[]
     const fileUIParts: FileUIPart[] = await Promise.all(
@@ -380,16 +586,7 @@ function ChatContent({ sessionId, setSessionId }: ChatContentProps) {
       })
     );
 
-    // Also include the log file as a UI attachment so it appears in the user bubble
-    if (logFile) {
-      fileUIParts.push({
-        type: 'file',
-        mediaType: 'text/plain',
-        filename: logFile.name,
-        // Empty payload; we only need filename for UI display
-        url: 'data:text/plain;base64,',
-      } as FileUIPart);
-    }
+    // Do not include the log file as a UI attachment in the user bubble
 
     await sendMessage(
       { text, files: fileUIParts.length ? fileUIParts : undefined },
@@ -573,6 +770,7 @@ function ChatContent({ sessionId, setSessionId }: ChatContentProps) {
             {displayedHistory.length > 0 && (
               <div className="space-y-6 opacity-90">
                 {displayedHistory.map((m) => {
+                  const fullMeta = m.metadata as any;
                   const assistantMetadata = normalizeAssistantMetadata(m.metadata);
                   const isLogHistory =
                     m.role === 'assistant' && (
@@ -585,28 +783,38 @@ function ChatContent({ sessionId, setSessionId }: ChatContentProps) {
                       )
                     );
 
+                  const dataParts = (fullMeta && Array.isArray(fullMeta.dataParts) ? fullMeta.dataParts : []) as any[];
+                  const timelineSteps = computeTimeline({
+                    dataParts,
+                    metadata: assistantMetadata,
+                    content: m.content,
+                    agentType: isLogHistory ? 'log_analysis' : 'primary',
+                    isStreaming: false,
+                  });
+
                   return (
                     <div
                       key={`h-${m.id}`}
                       className={`flex gap-4 ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}
                     >
-                      <div
-                        className={`max-w-[85%] rounded-2xl px-5 py-3 ${
-                          m.role === 'user'
-                            ? 'bg-primary/10 dark:bg-primary/20 text-foreground border border-primary/20'
-                            : 'bg-secondary/50 dark:bg-zinc-800/50 border border-border/50'
-                        }`}
-                      >
-                        {m.role === 'assistant' ? (
-                          <AssistantMessage
-                            content={m.content}
-                            metadata={assistantMetadata}
-                            isLogAnalysis={isLogHistory}
-                          />
-                        ) : (
+                      {m.role === 'assistant' ? (
+                        <div className="max-w-[85%] space-y-2">
+                          {timelineSteps.length > 0 && (
+                            <WorkingTimeline steps={timelineSteps} variant="final" />
+                          )}
+                          <div className="rounded-2xl px-5 py-3 bg-secondary/50 dark:bg-zinc-800/50 border border-border/50">
+                            <AssistantMessage
+                              content={m.content}
+                              metadata={assistantMetadata}
+                              isLogAnalysis={isLogHistory}
+                            />
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="max-w-[85%] rounded-2xl px-5 py-3 bg-primary/10 dark:bg-primary/20 text-foreground border border-primary/20">
                           <div className="text-[15px] leading-relaxed whitespace-pre-wrap">{m.content}</div>
-                        )}
-                      </div>
+                        </div>
+                      )}
                     </div>
                   );
                 })}
@@ -616,71 +824,93 @@ function ChatContent({ sessionId, setSessionId }: ChatContentProps) {
             {/* Live Messages */}
             {hasContent && (
               <div className="space-y-6">
-                {messages.map((m, idx) => (
-                  <div
-                    key={m.id ?? idx}
-                    className={`flex gap-4 animate-in slide-in-from-bottom-2 fade-in duration-300 ${
-                      m.role === "user" ? "justify-end" : "justify-start"
-                    }`}
-                    style={{ animationDelay: `${idx * 50}ms` }}
-                  >
+                {messages.map((m, idx) => {
+                  const isLast = idx === messages.length - 1;
+                  const isStreamingMessage = (status === 'streaming' || status === 'submitted') && isLast;
+                  const contentText = getMessageText(m);
+                  const meta = normalizeAssistantMetadata((m as any).metadata);
+                  const dataParts = getDataParts(m) as any[];
+                  const logHints = Boolean(
+                    (m as any)?.agentType === 'log_analysis' ||
+                      meta?.logMetadata ||
+                      meta?.errorSnippets ||
+                      meta?.rootCause ||
+                      meta?.analysisResults ||
+                      (isStreamingMessage && activeAgent === 'log_analysis')
+                  );
+                  const agentTypeForTimeline = logHints ? 'log_analysis' : 'primary';
+                  const computedSteps = computeTimeline({
+                    dataParts,
+                    metadata: meta,
+                    content: contentText,
+                    agentType: agentTypeForTimeline,
+                    isStreaming: m.role === 'assistant' ? isStreamingMessage : false,
+                  });
+                  const stepsToRender = (m.role === 'assistant' && isStreamingMessage)
+                    ? (liveTimelineSteps.length > 0 ? liveTimelineSteps : computedSteps)
+                    : computedSteps;
+
+                  return (
                     <div
-                      className={`max-w-[85%] rounded-2xl px-5 py-3 ${
-                        m.role === "user"
-                          ? "bg-primary/10 dark:bg-primary/20 text-foreground border border-primary/20"
-                          : "bg-secondary/50 dark:bg-zinc-800/50 border border-border/50"
+                      key={m.id ?? idx}
+                      className={`flex gap-4 animate-in slide-in-from-bottom-2 fade-in duration-300 ${
+                        m.role === "user" ? "justify-end" : "justify-start"
                       }`}
+                      style={{ animationDelay: `${idx * 50}ms` }}
                     >
                       {m.role === "assistant" ? (
-                        <AssistantMessage
-                          content={getMessageText(m)}
-                          metadata={normalizeAssistantMetadata((m as any).metadata)}
-                          isLogAnalysis={isLogAnalysis}
-                        />
-                      ) : (
-                        <div className="space-y-2">
-                          <div className="text-[15px] leading-relaxed whitespace-pre-wrap">
-                            {getMessageText(m)}
-                          </div>
-                          {getFileParts(m).length > 0 && (
-                            <div className="flex flex-wrap gap-2 pt-1">
-                              {getFileParts(m).map((fp: any, i: number) => (
-                                <span key={i} className="inline-flex items-center gap-2 rounded-full border border-border/40 bg-background/60 px-3 py-1 text-xs text-muted-foreground">
-                                  <span className="inline-block w-2 h-2 rounded-full bg-primary/60" />
-                                  {fp.filename || 'attachment'}
-                                </span>
-                              ))}
-                            </div>
+                        <div className="max-w-[85%] space-y-2">
+                          {stepsToRender.length > 0 && (
+                            <WorkingTimeline
+                              steps={stepsToRender}
+                              variant={isStreamingMessage ? 'live' : 'final'}
+                            />
                           )}
+                          <div className="rounded-2xl px-5 py-3 bg-secondary/50 dark:bg-zinc-800/50 border border-border/50">
+                            <AssistantMessage
+                              content={contentText}
+                              metadata={meta}
+                              isLogAnalysis={logHints}
+                            />
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="max-w-[85%] rounded-2xl px-5 py-3 bg-primary/10 dark:bg-primary/20 text-foreground border border-primary/20">
+                          <div className="space-y-2">
+                            <div className="text-[15px] leading-relaxed whitespace-pre-wrap">
+                              {contentText}
+                            </div>
+                            {(() => {
+                              const fileParts = getFileParts(m).filter((fp: any) => !(typeof fp?.mediaType === 'string' && fp.mediaType.startsWith('text/')));
+                              return fileParts.length > 0 ? (
+                                <div className="flex flex-wrap gap-2 pt-1">
+                                  {fileParts.map((fp: any, i: number) => (
+                                    <span
+                                      key={i}
+                                      className="inline-flex items-center gap-2 rounded-full border border-border/40 bg-background/60 px-3 py-1 text-xs text-muted-foreground"
+                                    >
+                                      <span className="inline-block w-2 h-2 rounded-full bg-primary/60" />
+                                      {fp.filename || 'attachment'}
+                                    </span>
+                                  ))}
+                                </div>
+                              ) : null
+                            })()}
+                          </div>
                         </div>
                       )}
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
 
-                {/* Loading indicator */}
-                {(status === "streaming" || status === "submitted") && (
+                {/* Fallback live timeline when assistant message hasn't been created yet */}
+                {(status === 'streaming' || status === 'submitted') && messages.length > 0 && messages[messages.length - 1]?.role !== 'assistant' && (
                   <div className="flex gap-4 justify-start animate-in fade-in duration-300">
-                    <div className="bg-secondary/50 dark:bg-zinc-800/50 rounded-2xl px-5 py-3 border border-border/50">
-                      <div className="flex items-center gap-2">
-                        <div className="flex gap-1">
-                          <span
-                            className="w-2 h-2 bg-primary/60 rounded-full animate-bounce"
-                            style={{ animationDelay: "0ms" }}
-                          />
-                          <span
-                            className="w-2 h-2 bg-primary/60 rounded-full animate-bounce"
-                            style={{ animationDelay: "150ms" }}
-                          />
-                          <span
-                            className="w-2 h-2 bg-primary/60 rounded-full animate-bounce"
-                            style={{ animationDelay: "300ms" }}
-                          />
-                        </div>
-                        <span className="text-sm text-muted-foreground">
-                          Thinking...
-                        </span>
-                      </div>
+                    <div className="max-w-[85%] space-y-2">
+                      <WorkingTimeline
+                        steps={(liveTimelineSteps.length > 0 ? liveTimelineSteps : ([{ id: 'working-fallback', title: 'Thinking', status: 'in_progress' }] as any))}
+                        variant="live"
+                      />
                     </div>
                   </div>
                 )}

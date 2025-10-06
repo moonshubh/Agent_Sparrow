@@ -23,11 +23,18 @@ def load_mailbird_settings(path: Optional[str] = None, content: Optional[str] = 
     """Load Mailbird settings YAML either from a file path or direct content.
 
     Raises when yaml is unavailable or content exceeds size limits.
+
+    Note:
+        Both the size check and file read use ``errors="ignore"`` so undecodable
+        bytes are skipped rather than raising ``UnicodeDecodeError``. This keeps
+        ingestion resilient but may omit corrupt characters from the resulting
+        configuration.
     """
     if yaml is None:
         raise RuntimeError("PyYAML not available. Install pyyaml to load settings.")
 
     if content is not None:
+        # ``errors="ignore"`` ensures invalid bytes do not abort ingestion but may drop data.
         if len(content.encode("utf-8", errors="ignore")) > MAX_SETTINGS_BYTES:
             raise ValueError("Settings content too large")
         return _safe_yaml_load(content)

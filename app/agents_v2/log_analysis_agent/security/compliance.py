@@ -16,6 +16,7 @@ Security Design:
 import hashlib
 import json
 import logging
+import threading
 from dataclasses import dataclass, field, asdict
 from datetime import datetime, timedelta
 from enum import Enum
@@ -102,6 +103,8 @@ class ComplianceManager:
         self._compliance_cache = {}
         self._automated_check_task = None
         self._violation_count = 0
+        self._background_loop: Optional[asyncio.AbstractEventLoop] = None
+        self._background_thread: Optional[threading.Thread] = None
 
         if self.config.enable_automated_checks:
             self._start_automated_checks()
@@ -118,15 +121,34 @@ class ComplianceManager:
                     if report.status == ComplianceStatus.NON_COMPLIANT:
                         logger.error(f"Compliance violation detected: {report.issues_found}")
                         self._violation_count += 1
+                except asyncio.CancelledError:
+                    logger.info("Automated compliance checks cancelled")
+                    break
                 except Exception as e:
                     logger.error(f"Automated compliance check failed: {e}")
 
         try:
-            loop = asyncio.get_event_loop()
-            self._automated_check_task = loop.create_task(run_checks())
+            loop = asyncio.get_running_loop()
         except RuntimeError:
-            # No event loop, skip automated checks
-            logger.warning("No event loop available for automated compliance checks")
+            loop = None
+
+        if loop and loop.is_running():
+            self._automated_check_task = loop.create_task(run_checks())
+        else:
+            self._background_loop = asyncio.new_event_loop()
+            self._background_thread = threading.Thread(
+                target=self._run_background_loop,
+                args=(self._background_loop,),
+                daemon=True,
+            )
+            self._background_thread.start()
+            self._automated_check_task = asyncio.run_coroutine_threadsafe(
+                run_checks(), self._background_loop
+            )
+
+    def _run_background_loop(self, loop: asyncio.AbstractEventLoop) -> None:
+        asyncio.set_event_loop(loop)
+        loop.run_forever()
 
     def validate_for_storage(self, data: Dict[str, Any]) -> Tuple[bool, List[str]]:
         """
@@ -274,10 +296,9 @@ class ComplianceManager:
 
         # Add metadata hash instead of raw content
         if 'log_content' in session_data:
-            sanitized['content_hash'] = hashlib.sha256(
-                str(session_data['log_content']).encode()
-            ).hexdigest()[:16]
-            sanitized['content_size'] = len(str(session_data['log_content']))
+            serialized_content = self._serialize_log_content(session_data['log_content'])
+            sanitized['content_hash'] = hashlib.sha256(serialized_content).hexdigest()[:16]
+            sanitized['content_size'] = len(serialized_content)
 
         # Add sanitized summary
         if 'analysis_result' in session_data:
@@ -335,18 +356,63 @@ class ComplianceManager:
         # Ensure no full file paths (privacy concern)
         if 'file_path' in attachment_data:
             path = str(attachment_data['file_path'])
-            if '/home/' in path or '/Users/' in path or 'C:\\Users' in path:
+            lowered = path.lower()
+            risky_segments = (
+                '/home/',
+                '/users/',
+                '\\users\\',
+                ':\\users\\',
+            )
+            if (
+                any(segment in lowered for segment in risky_segments)
+                or path.startswith('\\\\')
+            ):
                 issues.append("Full file path with user information detected")
 
         # Check for base64 encoded content
         for value in attachment_data.values():
             # Only check string values
             if isinstance(value, str):
-                if len(value) > 1000 and re.match(r'^[A-Za-z0-9+/]+=*$', value):
+                if len(value) > 1000 and re.search(r'[A-Za-z0-9+/]+=*', value):
                     issues.append("Possible base64 encoded content detected")
                     break
 
         return len(issues) == 0, issues
+
+    def stop_automated_checks(self) -> None:
+        """Cancel automated compliance checks and stop background loop."""
+        task = self._automated_check_task
+        self._automated_check_task = None
+
+        if task is not None:
+            try:
+                if isinstance(task, asyncio.Task):
+                    loop = task.get_loop()
+                    loop.call_soon_threadsafe(task.cancel)
+                else:
+                    task.cancel()
+            except Exception:
+                logger.debug("Failed to cancel automated compliance task", exc_info=True)
+
+            if hasattr(task, "result"):
+                try:
+                    task.result(timeout=1)
+                except Exception:
+                    pass
+
+        if self._background_loop:
+            loop = self._background_loop
+            loop.call_soon_threadsafe(loop.stop)
+            if self._background_thread and self._background_thread.is_alive():
+                self._background_thread.join(timeout=1)
+            self._background_loop = None
+            self._background_thread = None
+
+    def __del__(self):  # pragma: no cover - defensive cleanup
+        try:
+            self.stop_automated_checks()
+        except Exception:
+            pass
 
     def _escalate_status(self, current: ComplianceStatus, new: ComplianceStatus) -> ComplianceStatus:
         """

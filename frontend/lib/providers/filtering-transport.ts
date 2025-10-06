@@ -22,6 +22,32 @@ export const filterUIMessageStream = (
   stream.pipeThrough(
     new TransformStream<UIMessageChunk, UIMessageChunk>({
       transform(chunk, controller) {
+        const chunkType = (chunk as any)?.type;
+        if (typeof chunkType === 'string') {
+          if (chunkType.startsWith('reasoning')) {
+            controller.enqueue({
+              type: 'data',
+              data: { type: chunkType, data: chunk },
+            } as UIMessageChunk);
+            return;
+          }
+          if (chunkType.startsWith('tool-')) {
+            controller.enqueue({
+              type: 'data',
+              data: { type: chunkType, data: chunk },
+            } as UIMessageChunk);
+            return;
+          }
+          if (chunkType.startsWith('data-')) {
+            const originalType = chunkType;
+            const payload = (chunk as any).data;
+            controller.enqueue({
+              type: 'data',
+              data: { type: originalType, data: payload },
+            } as UIMessageChunk);
+            return;
+          }
+        }
         if (chunk.type === 'text-delta' && typeof (chunk as any).delta === 'string') {
           const filtered = stripSystemMarkers((chunk as any).delta);
           if (filtered) {

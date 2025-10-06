@@ -42,7 +42,7 @@ class Settings(BaseSettings):
     enhanced_log_model: str = Field(default="gemini-2.5-pro", alias="ENHANCED_LOG_MODEL")
     # Provider/model selection for primary agent
     primary_agent_provider: str = Field(default="google", alias="PRIMARY_AGENT_PROVIDER")
-    primary_agent_model: str = Field(default="gemini-2.5-flash-preview-09-2025", alias="PRIMARY_AGENT_MODEL")
+    primary_agent_model: str = Field(default="gemini-2.5-flash", alias="PRIMARY_AGENT_MODEL")
     primary_agent_quality_level: str = Field(default="balanced", alias="PRIMARY_AGENT_QUALITY_LEVEL")
     reflection_default_provider: Optional[str] = Field(default=None, alias="DEFAULT_REFLECTION_PROVIDER")
     reflection_default_model: Optional[str] = Field(default=None, alias="DEFAULT_REFLECTION_MODEL")
@@ -62,7 +62,7 @@ class Settings(BaseSettings):
     feedme_pdf_concurrent_limit: int = Field(default=5, alias="FEEDME_PDF_CONCURRENT_LIMIT")
     
     # Enhanced PDF Processing Configuration
-    feedme_max_tokens_per_minute: int = Field(default=12000, alias="FEEDME_MAX_TOKENS_PER_MINUTE")
+    feedme_max_tokens_per_minute: int = Field(default=250000, alias="FEEDME_MAX_TOKENS_PER_MINUTE")
     feedme_max_tokens_per_chunk: int = Field(default=8000, alias="FEEDME_MAX_TOKENS_PER_CHUNK")
     feedme_chunk_overlap_tokens: int = Field(default=500, alias="FEEDME_CHUNK_OVERLAP_TOKENS")
     
@@ -78,7 +78,8 @@ class Settings(BaseSettings):
     feedme_celery_broker: str = Field(default="memory://", alias="FEEDME_CELERY_BROKER")
     feedme_result_backend: str = Field(default="cache+memory://", alias="FEEDME_RESULT_BACKEND")
     feedme_security_enabled: bool = Field(default=True, alias="FEEDME_SECURITY_ENABLED")
-    feedme_rate_limit_per_minute: int = Field(default=10, alias="FEEDME_RATE_LIMIT_PER_MINUTE")
+    feedme_rate_limit_per_minute: int = Field(default=15, alias="FEEDME_RATE_LIMIT_PER_MINUTE")
+    feedme_requests_per_day_limit: int = Field(default=1000, alias="FEEDME_REQUESTS_PER_DAY_LIMIT")
     feedme_version_control: bool = Field(default=True, alias="FEEDME_VERSION_CONTROL")
     feedme_quality_threshold: float = Field(default=0.7, alias="FEEDME_QUALITY_THRESHOLD")
     
@@ -89,7 +90,7 @@ class Settings(BaseSettings):
     reasoning_enable_quality_assessment: bool = Field(default=True, alias="REASONING_ENABLE_QUALITY_ASSESSMENT")
     reasoning_enable_reasoning_transparency: bool = Field(default=True, alias="REASONING_ENABLE_REASONING_TRANSPARENCY")
     reasoning_debug_mode: bool = Field(default=False, alias="REASONING_DEBUG_MODE")
-    reasoning_enable_thinking_trace: bool = Field(default=False, alias="ENABLE_THINKING_TRACE")
+    reasoning_enable_thinking_trace: bool = Field(default=True, alias="ENABLE_THINKING_TRACE")
     
     # Enhanced Log Analysis v3.0 Configuration
     log_analysis_use_optimized_analysis: bool = Field(default=True, alias="USE_OPTIMIZED_ANALYSIS")
@@ -132,6 +133,7 @@ class Settings(BaseSettings):
     supabase_jwt_secret: Optional[str] = Field(default=None, alias="SUPABASE_JWT_SECRET")
     
     # FeedMe AI Configuration
+    feedme_model_name: str = Field(default="gemini-2.5-flash-lite", alias="FEEDME_MODEL_NAME")
     feedme_ai_pdf_enabled: bool = Field(default=True, alias="FEEDME_AI_PDF_ENABLED")
     feedme_ai_max_pages: int = Field(default=10, alias="FEEDME_AI_MAX_PAGES")
     feedme_ai_pages_per_call: int = Field(default=3, alias="FEEDME_AI_PAGES_PER_CALL")

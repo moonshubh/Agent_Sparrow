@@ -7,7 +7,7 @@ integrates all Phase 6.0 security features for production use.
 
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional, Dict, Any, List
 from uuid import uuid4
@@ -46,11 +46,17 @@ class SecurityAuditResponse(BaseModel):
     recent_validations: List[Dict[str, Any]] = []
 
 
-# Thread-safe agent creation
-import threading
-
-_agent_lock = threading.Lock()
-_secure_agent = None
+def get_redaction_level(level: Optional[str]) -> RedactionLevel:
+    """Map a string security level to a RedactionLevel enumeration."""
+    mapping = {
+        "paranoid": RedactionLevel.PARANOID,
+        "high": RedactionLevel.HIGH,
+        "medium": RedactionLevel.MEDIUM,
+        "low": RedactionLevel.LOW,
+    }
+    if not level:
+        return RedactionLevel.HIGH
+    return mapping.get(level.lower(), RedactionLevel.HIGH)
 
 
 def create_secure_agent(security_level: RedactionLevel = RedactionLevel.PARANOID) -> LogAnalysisAgent:
@@ -71,24 +77,6 @@ def create_secure_agent(security_level: RedactionLevel = RedactionLevel.PARANOID
         enable_security=True,
         security_level=security_level
     )
-
-
-def get_secure_agent() -> LogAnalysisAgent:
-    """Get or create the secure log analysis agent.
-
-    NOTE: This maintains a singleton for backward compatibility,
-    but new code should use create_secure_agent() for thread safety.
-    """
-    global _secure_agent
-    with _agent_lock:
-        if _secure_agent is None:
-            _secure_agent = LogAnalysisAgent(
-                provider="google",
-                model_name="gemini-2.5-pro",
-                enable_security=True,
-                security_level=RedactionLevel.PARANOID  # Maximum security by default
-            )
-        return _secure_agent
 
 
 @router.post("/agent/secure/logs")
@@ -113,20 +101,11 @@ async def analyze_logs_securely(
     # Generate secure session ID
     session_id = request.trace_id or f"secure-{uuid4().hex[:8]}"
 
-    try:
-        # Set security level based on request
-        security_levels = {
-            "paranoid": RedactionLevel.PARANOID,
-            "high": RedactionLevel.HIGH,
-            "medium": RedactionLevel.MEDIUM,
-            "low": RedactionLevel.LOW
-        }
-        requested_level = security_levels.get(
-            request.security_level.lower(),
-            RedactionLevel.HIGH
-        )
+    agent: Optional[LogAnalysisAgent] = None
 
-        # Create per-request agent for thread safety
+    try:
+        requested_level = get_redaction_level(request.security_level)
+
         agent = create_secure_agent(requested_level)
         logger.info(f"Created new agent with security level: {requested_level.value}")
 
@@ -188,7 +167,7 @@ async def analyze_logs_securely(
         session_data = {
             "session_id": session_id,
             "user_id": user_id,
-            "timestamp": datetime.now().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
             "security_level": requested_level.value,
             "analysis_summary": {
                 "has_errors": bool(analysis_result.error_patterns),
@@ -211,26 +190,23 @@ async def analyze_logs_securely(
                 "security_level": requested_level.value,
                 "compliance_status": "compliant" if is_compliant else "non-compliant",
                 "threat_level": validation_result.threat_level.value,
-                "timestamp": datetime.now().isoformat()
+                "timestamp": datetime.now(timezone.utc).isoformat()
             }
         }
-
-        # Force cleanup before returning
-        agent.cleanup_manager.force_cleanup()
-
         return secure_response
 
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Secure analysis failed for session {session_id}: {e}")
-        # Ensure cleanup on error
-        if 'agent' in locals():
-            agent.cleanup_manager.force_cleanup()
         raise HTTPException(
             status_code=500,
             detail=f"Secure analysis failed: {str(e)}"
         )
+
+    finally:
+        if agent is not None and hasattr(agent, "cleanup_manager"):
+            agent.cleanup_manager.force_cleanup()
 
 
 @router.post("/agent/secure/logs/file")
@@ -281,9 +257,14 @@ async def analyze_log_file_securely(
         return await analyze_logs_securely(request, user_id)
 
     finally:
-        # Ensure file content is cleared from memory
-        del file_content
-        del content
+        try:
+            del file_content
+        except UnboundLocalError:
+            pass
+        try:
+            del content
+        except UnboundLocalError:
+            pass
 
 
 @router.get("/agent/secure/audit")
@@ -299,19 +280,20 @@ async def get_security_audit(
     - Compliance status
     - Recent security validations
     """
-    agent = get_secure_agent()
+    agent = create_secure_agent(RedactionLevel.PARANOID)
+    try:
+        audit_data = agent.get_security_audit()
 
-    audit_data = agent.get_security_audit()
+        if 'compliance_report' in audit_data:
+            report = audit_data['compliance_report']
+            audit_data['compliance_status'] = report.status.value
+            audit_data['compliance_checks'] = report.checks_performed
+            audit_data['compliance_issues'] = report.issues_found
+            del audit_data['compliance_report']
 
-    # Convert compliance report to dict for response
-    if 'compliance_report' in audit_data:
-        report = audit_data['compliance_report']
-        audit_data['compliance_status'] = report.status.value
-        audit_data['compliance_checks'] = report.checks_performed
-        audit_data['compliance_issues'] = report.issues_found
-        del audit_data['compliance_report']
-
-    return SecurityAuditResponse(**audit_data)
+        return SecurityAuditResponse(**audit_data)
+    finally:
+        agent.cleanup_manager.force_cleanup()
 
 
 @router.post("/agent/secure/compliance/check")
@@ -327,18 +309,20 @@ async def run_compliance_check(
     - Security policy adherence
     - Recommendations
     """
-    agent = get_secure_agent()
+    agent = create_secure_agent(RedactionLevel.PARANOID)
+    try:
+        report = agent.compliance_manager.run_compliance_check()
 
-    report = agent.compliance_manager.run_compliance_check()
-
-    return {
-        "timestamp": report.timestamp.isoformat(),
-        "status": report.status.value,
-        "checks_performed": report.checks_performed,
-        "issues_found": report.issues_found,
-        "recommendations": report.recommendations,
-        "metadata": report.metadata
-    }
+        return {
+            "timestamp": report.timestamp.isoformat(),
+            "status": report.status.value,
+            "checks_performed": report.checks_performed,
+            "issues_found": report.issues_found,
+            "recommendations": report.recommendations,
+            "metadata": report.metadata
+        }
+    finally:
+        agent.cleanup_manager.force_cleanup()
 
 
 @router.delete("/agent/secure/cleanup")
@@ -351,15 +335,16 @@ async def force_security_cleanup(
     This endpoint ensures all sensitive data is immediately removed from memory
     and temporary storage.
     """
-    agent = get_secure_agent()
-
-    cleanup_stats = agent.cleanup_manager.force_cleanup()
-
-    return {
-        "status": "success",
-        "cleanup_stats": cleanup_stats,
-        "timestamp": datetime.now().isoformat()
-    }
+    agent = create_secure_agent(RedactionLevel.PARANOID)
+    try:
+        cleanup_stats = agent.cleanup_manager.force_cleanup()
+        return {
+            "status": "success",
+            "cleanup_stats": cleanup_stats,
+            "timestamp": datetime.now(timezone.utc).isoformat()
+        }
+    finally:
+        agent.cleanup_manager.force_cleanup()
 
 
 async def secure_log_stream_generator(
@@ -441,15 +426,17 @@ async def secure_log_analysis_stream(
     if not request.content:
         raise HTTPException(status_code=400, detail="Log content cannot be empty")
 
+    user_context = await create_user_context_from_user_id(user_id)
+    gemini_key = await user_context.get_gemini_api_key()
+    if not gemini_key:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid or missing API key"
+        )
+
     session_id = request.trace_id or f"secure-stream-{uuid4().hex[:8]}"
 
-    security_levels = {
-        "paranoid": RedactionLevel.PARANOID,
-        "high": RedactionLevel.HIGH,
-        "medium": RedactionLevel.MEDIUM,
-        "low": RedactionLevel.LOW
-    }
-    security_level = security_levels.get(request.security_level.lower(), RedactionLevel.HIGH)
+    security_level = get_redaction_level(request.security_level)
 
     return StreamingResponse(
         secure_log_stream_generator(

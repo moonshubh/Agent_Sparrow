@@ -16,29 +16,40 @@ def _install_langgraph_postgres_shim() -> None:
     except Exception:
         pass
 
-    # Ensure a base 'langgraph' package exists
-    if 'langgraph' in sys.modules:
-        langgraph_pkg = sys.modules['langgraph']
-    else:
+    # Ensure a base 'langgraph' package exists or reuse the one already imported
+    langgraph_pkg = sys.modules.get('langgraph')
+    if langgraph_pkg is None:
         langgraph_pkg = types.ModuleType('langgraph')
-        # Mark as package
         langgraph_pkg.__path__ = [""]  # type: ignore[attr-defined]
         sys.modules['langgraph'] = langgraph_pkg
+    else:
+        langgraph_pkg.__path__ = getattr(langgraph_pkg, '__path__', [""])  # type: ignore[attr-defined]
 
-    # Create nested modules
-    checkpoint_mod = types.ModuleType("langgraph.checkpoint")
-    postgres_mod = types.ModuleType("langgraph.checkpoint.postgres")
-    aio_mod = types.ModuleType("langgraph.checkpoint.postgres.aio")
+    # Reuse existing submodules when present to avoid duplicate module objects
+    checkpoint_mod = sys.modules.get("langgraph.checkpoint")
+    if checkpoint_mod is None:
+        checkpoint_mod = types.ModuleType("langgraph.checkpoint")
+        checkpoint_mod.__path__ = [""]  # type: ignore[attr-defined]
+    else:
+        checkpoint_mod.__path__ = getattr(checkpoint_mod, '__path__', [""])  # type: ignore[attr-defined]
 
-    # Set __path__ to behave like packages
-    checkpoint_mod.__path__ = [""]  # type: ignore[attr-defined]
-    postgres_mod.__path__ = [""]  # type: ignore[attr-defined]
+    postgres_mod = sys.modules.get("langgraph.checkpoint.postgres")
+    if postgres_mod is None:
+        postgres_mod = types.ModuleType("langgraph.checkpoint.postgres")
+        postgres_mod.__path__ = [""]  # type: ignore[attr-defined]
+    else:
+        postgres_mod.__path__ = getattr(postgres_mod, '__path__', [""])  # type: ignore[attr-defined]
 
-    class AsyncPostgresSaver:  # type: ignore
-        """Lightweight test stub used only for import compatibility."""
-        pass
+    aio_mod = sys.modules.get("langgraph.checkpoint.postgres.aio")
+    if aio_mod is None:
+        aio_mod = types.ModuleType("langgraph.checkpoint.postgres.aio")
 
-    aio_mod.AsyncPostgresSaver = AsyncPostgresSaver  # type: ignore[attr-defined]
+    if not hasattr(aio_mod, "AsyncPostgresSaver"):
+        class AsyncPostgresSaver:  # type: ignore
+            """Lightweight test stub used only for import compatibility."""
+            pass
+
+        aio_mod.AsyncPostgresSaver = AsyncPostgresSaver  # type: ignore[attr-defined]
 
     # Wire module hierarchy
     langgraph_pkg.checkpoint = checkpoint_mod  # type: ignore[attr-defined]
@@ -46,9 +57,9 @@ def _install_langgraph_postgres_shim() -> None:
     postgres_mod.aio = aio_mod                 # type: ignore[attr-defined]
 
     # Register modules in sys.modules for dotted imports
-    sys.modules.setdefault("langgraph.checkpoint", checkpoint_mod)
-    sys.modules.setdefault("langgraph.checkpoint.postgres", postgres_mod)
-    sys.modules.setdefault("langgraph.checkpoint.postgres.aio", aio_mod)
+    sys.modules["langgraph.checkpoint"] = checkpoint_mod
+    sys.modules["langgraph.checkpoint.postgres"] = postgres_mod
+    sys.modules["langgraph.checkpoint.postgres.aio"] = aio_mod
 
 
 _install_langgraph_postgres_shim()

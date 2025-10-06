@@ -1,7 +1,6 @@
 "use client"
 
 import React from 'react'
-import { FileText } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { LogOverviewCard, type LogMetadata, type ErrorSnippet } from './LogOverviewCard'
@@ -78,14 +77,7 @@ export function AssistantMessage({ content, metadata, isLogAnalysis }: Assistant
           </ReactMarkdown>
         </div>
       </div>
-
-      {derivedIsLog && (
-        <div className="flex flex-wrap gap-2 pt-2">
-          <span className="inline-flex items-center gap-2 rounded-full border border-orange-500/40 bg-orange-500/10 px-3 py-1 text-[11px] font-medium text-orange-500">
-            <FileText className="w-3 h-3" /> Log Analysis
-          </span>
-        </div>
-      )}
+      {/* No extra pills or badges under the message */}
     </div>
   )
 }

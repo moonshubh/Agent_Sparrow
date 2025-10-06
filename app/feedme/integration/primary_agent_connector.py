@@ -6,6 +6,7 @@ Provides integration between the Primary Agent and FeedMe knowledge retrieval sy
 
 import logging
 import asyncio
+import time
 from typing import List, Dict, Any, Optional
 from datetime import datetime
 
@@ -123,6 +124,8 @@ class PrimaryAgentConnector:
             logger.debug("FeedMe integration disabled; returning empty results")
             return []
 
+        perf_start = time.perf_counter() if track_performance else None
+
         try:
             from app.db.supabase_client import SupabaseClient
             from app.db.embedding_utils import get_embedding_model
@@ -176,6 +179,16 @@ class PrimaryAgentConnector:
                         },
                     }
                 )
+
+            if track_performance and perf_start is not None:
+                duration_ms = (time.perf_counter() - perf_start) * 1000
+                logger.info(
+                    "FeedMe knowledge retrieval completed in %.2f ms (track_performance enabled)",
+                    duration_ms,
+                )
+                latency_value = round(duration_ms, 2)
+                for item in results:
+                    item.setdefault("diagnostics", {})["retrieval_latency_ms"] = latency_value
 
             return results
 

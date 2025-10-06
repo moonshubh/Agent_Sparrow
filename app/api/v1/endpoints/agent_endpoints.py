@@ -438,6 +438,15 @@ async def primary_agent_stream_generator(
             async for chunk in run_primary_agent(initial_state):
                 payloads: list[dict] = []
 
+                def ensure_text_started() -> None:
+                    nonlocal text_started
+                    if not text_started:
+                        payloads.append({
+                            "type": "text-start",
+                            "id": stream_id,
+                        })
+                        text_started = True
+
                 if hasattr(chunk, 'content') and chunk.content is not None:
                     content_piece = chunk.content
                     if not isinstance(content_piece, str):
@@ -449,12 +458,7 @@ async def primary_agent_stream_generator(
                     content_piece = _filter_system_text(content_piece)
 
                     if content_piece:
-                        if not text_started:
-                            payloads.append({
-                                "type": "text-start",
-                                "id": stream_id,
-                            })
-                            text_started = True
+                        ensure_text_started()
 
                         payloads.append({
                             "type": "text-delta",
@@ -467,6 +471,7 @@ async def primary_agent_stream_generator(
                     # Follow-up questions
                     followups = metadata.get("followUpQuestions")
                     if followups:
+                        ensure_text_started()
                         payloads.append({
                             "type": "data-followups",
                             "data": followups,
@@ -476,6 +481,7 @@ async def primary_agent_stream_generator(
                     # Thinking trace
                     thinking_trace = metadata.get("thinking_trace")
                     if thinking_trace:
+                        ensure_text_started()
                         payloads.append({
                             "type": "data-thinking",
                             "data": thinking_trace,
@@ -483,6 +489,7 @@ async def primary_agent_stream_generator(
 
                     tool_results = metadata.get("toolResults")
                     if tool_results:
+                        ensure_text_started()
                         payloads.append({
                             "type": "data-tool-result",
                             "data": tool_results,
@@ -494,6 +501,7 @@ async def primary_agent_stream_generator(
                         if key not in {"followUpQuestions", "thinking_trace", "toolResults"}
                     }
                     if leftover:
+                        ensure_text_started()
                         payloads.append({
                             "type": "message-metadata",
                             "messageMetadata": leftover,
@@ -953,6 +961,12 @@ async def unified_agent_stream_generator(
                 result: Optional[Dict[str, Any]] = None
                 try:
                     async with user_context_scope(user_context):
+                        # Stage-2: live step updates for unified stream
+                        try:
+                            yield f"data: {json.dumps({'type': 'step', 'data': {'type': 'Starting Analysis', 'description': 'Initializing log analysis...', 'status': 'in-progress'}}, ensure_ascii=False)}\n\n"
+                            yield f"data: {json.dumps({'type': 'step', 'data': {'type': 'Parsing', 'description': 'Parsing log entries...', 'status': 'in-progress'}}, ensure_ascii=False)}\n\n"
+                        except Exception:
+                            pass
                         initial_state = {
                             "raw_log_content": request.log_content,
                             "question": request.message or None,
@@ -960,6 +974,11 @@ async def unified_agent_stream_generator(
                             "session_id": session_id
                         }
                         result = await run_log_analysis_agent(initial_state)
+                        try:
+                            yield f"data: {json.dumps({'type': 'step', 'data': {'type': 'Analyzing', 'description': 'Analyzing patterns and issues...', 'status': 'complete'}}, ensure_ascii=False)}\n\n"
+                            yield f"data: {json.dumps({'type': 'step', 'data': {'type': 'Synthesizing', 'description': 'Generating final summary and recommendations...', 'status': 'in-progress'}}, ensure_ascii=False)}\n\n"
+                        except Exception:
+                            pass
                 except Exception as agent_error:
                     logger.error("Log analysis agent failed: %s", agent_error, exc_info=True)
                     error_payload = json.dumps({
@@ -1003,6 +1022,11 @@ async def unified_agent_stream_generator(
                     )
 
                     try:
+                        # Step: formatting complete
+                        try:
+                            yield f"data: {json.dumps({'type': 'step', 'data': {'type': 'Synthesizing', 'description': 'Finalizing the response...', 'status': 'complete'}}, ensure_ascii=False)}\n\n"
+                        except Exception:
+                            pass
                         content_md = _format_log_analysis_content(analysis_results, request.message)
                         json_payload = json.dumps({
                             "role": "assistant",
@@ -1499,9 +1523,9 @@ async def get_log_analysis_rate_limits(
     """Get current rate limit status for log analysis."""
     from app.api.v1.middleware.log_analysis_middleware import LOG_ANALYSIS_RATE_LIMITS
 
-    # Get user's current usage
-    user_requests = log_analysis_rate_limiter._user_requests.get(user_id, [])
-    concurrent = log_analysis_rate_limiter._concurrent_analyses.get(user_id, 0)
+    usage_snapshot = await log_analysis_rate_limiter.get_user_usage(user_id)
+    user_requests = usage_snapshot.get("requests", [])
+    concurrent = usage_snapshot.get("concurrent", 0)
 
     now = datetime.utcnow()
     from datetime import timedelta

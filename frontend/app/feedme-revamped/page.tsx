@@ -104,6 +104,7 @@ export default function FeedMeRevampedPage() {
           isOpen={foldersOpen}
           onClose={() => {
             setFoldersOpen(false)
+            setShowCenter(true)
             advanceLogoFrame()
           }}
           onSubDialogClose={advanceLogoFrame}
@@ -112,6 +113,7 @@ export default function FeedMeRevampedPage() {
           isOpen={uploadOpen}
           onClose={() => {
             setUploadOpen(false)
+            setShowCenter(true)
             advanceLogoFrame()
           }}
         />
@@ -119,6 +121,7 @@ export default function FeedMeRevampedPage() {
           isOpen={unassignedOpen}
           onClose={() => {
             setUnassignedOpen(false)
+            setShowCenter(true)
             advanceLogoFrame()
           }}
         />
@@ -126,7 +129,10 @@ export default function FeedMeRevampedPage() {
           open={statsOpen}
           onOpenChange={(open) => {
             setStatsOpen(open)
-            if (!open) advanceLogoFrame()
+            if (!open) {
+              setShowCenter(true)
+              advanceLogoFrame()
+            }
           }}
         />
       </section>

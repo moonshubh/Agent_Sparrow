@@ -8,17 +8,15 @@ with proper escaping, styling, and structure for log analysis responses.
 from typing import List, Optional, Dict, Any, Tuple
 from dataclasses import dataclass
 from enum import Enum
-import re
 from urllib.parse import quote
 
 
 class MarkdownStyle(Enum):
     """Markdown styling options"""
     BOLD = "**"
-    ITALIC = "_"
+    ITALIC = "*"
     CODE = "`"
     STRIKETHROUGH = "~~"
-    UNDERLINE = "__"
 
 
 class AlertLevel(Enum):
@@ -262,19 +260,14 @@ class MarkdownBuilder:
             Self for method chaining
         """
         escaped_text = self._escape_text(text)
-
-        # Encode URL for special characters and spaces
-        # But don't encode if it's already encoded (contains %20, %2F, etc.)
-        if not re.search(r'%[0-9A-Fa-f]{2}', url):
-            # Replace spaces with %20 for proper URL encoding
-            url = url.replace(' ', '%20')
+        encoded_url = self._encode_url(url)
 
         if title:
             # Escape title to prevent markdown injection
-            escaped_title = title.replace('"', '\\"')
-            link = f'[{escaped_text}]({url} "{escaped_title}")'
+            escaped_title = title.replace("\\", "\\\\").replace('"', '\\"')
+            link = f'[{escaped_text}]({encoded_url} "{escaped_title}")'
         else:
-            link = f"[{escaped_text}]({url})"
+            link = f"[{escaped_text}]({encoded_url})"
 
         self.content.append(link)
         return self
@@ -292,17 +285,14 @@ class MarkdownBuilder:
             Self for method chaining
         """
         escaped_alt = self._escape_text(alt_text)
-
-        # Encode URL for special characters and spaces
-        if not re.search(r'%[0-9A-Fa-f]{2}', url):
-            url = url.replace(' ', '%20')
+        encoded_url = self._encode_url(url)
 
         if title:
             # Escape title to prevent markdown injection
-            escaped_title = title.replace('"', '\\"')
-            image = f'![{escaped_alt}]({url} "{escaped_title}")'
+            escaped_title = title.replace("\\", "\\\\").replace('"', '\\"')
+            image = f'![{escaped_alt}]({encoded_url} "{escaped_title}")'
         else:
-            image = f"![{escaped_alt}]({url})"
+            image = f"![{escaped_alt}]({encoded_url})"
 
         self.content.append(image)
         self.content.append("")
@@ -381,6 +371,14 @@ class MarkdownBuilder:
         """
         return "\n".join(self.content)
 
+    @staticmethod
+    def _encode_url(url: str) -> str:
+        """Safely encode URLs while preserving reserved characters."""
+        if not url:
+            return url
+        # Include "%" in safe characters to avoid double-encoding pre-escaped sequences.
+        return quote(url, safe=":/?#&=.%+-_~%")
+
     def _escape_text(self, text: str) -> str:
         """
         Escape special markdown characters in text.
@@ -392,6 +390,7 @@ class MarkdownBuilder:
             Escaped text
         """
         # Escape markdown special characters
+        text = text.replace("\\", "\\\\")
         special_chars = r"*_`~[]()#+-.!|{}"
         for char in special_chars:
             text = text.replace(char, f"\\{char}")

@@ -7,15 +7,18 @@ with reported symptoms, attempted solutions, and business impact.
 
 import re
 import logging
-from typing import Dict, List, Optional, Any, Tuple
-from datetime import datetime, timedelta
-from dataclasses import dataclass
-
+from typing import Dict, List, Optional, Any, Tuple, Iterable
+from datetime import datetime, timedelta, timezone
 from app.agents_v2.primary_agent.prompts.emotion_templates import EmotionTemplates
 
 from ..schemas.log_schemas import UserContext
 
 logger = logging.getLogger(__name__)
+
+try:  # pragma: no cover - optional dependency
+    from dateutil import parser as dateutil_parser
+except Exception:  # pragma: no cover - dateutil not installed
+    dateutil_parser = None  # type: ignore
 
 
 class ContextIngestor:
@@ -70,7 +73,8 @@ class ContextIngestor:
                 r"\b(\d{1,2}:\d{2}(?::\d{2})?(?:\s*[AP]M)?)\b", re.IGNORECASE
             ),
             "date": re.compile(
-                r"\b(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})\b"
+                r"\b((?:\d{1,4}[/-]\d{1,2}[/-]\d{2,4})|(?:[A-Za-z]{3,9}\s+\d{1,2}(?:,?\s*\d{4})?))\b",
+                re.IGNORECASE,
             ),
             "version": re.compile(
                 r"\b(?:version|v\.?)\s*([\d.]+)\b", re.IGNORECASE
@@ -109,15 +113,17 @@ class ContextIngestor:
         # Assess business impact
         context.business_impact = self._assess_business_impact(user_input)
 
-        # Determine urgency
-        context.urgency_level = self._determine_urgency(user_input)
-
         # Assess technical proficiency
         context.technical_proficiency = self._assess_proficiency(user_input)
 
-        # Detect emotional state
-        emotion_result = EmotionTemplates.detect_emotion(user_input)
-        context.emotional_state = emotion_result.primary_emotion.value
+        # Detect emotional state safely and reuse for urgency calculations
+        detected_emotion = self._safe_detect_emotion(user_input)
+        context.emotional_state = detected_emotion or "unknown"
+
+        # Determine urgency, reusing detected emotion when possible
+        context.urgency_level = self._determine_urgency(
+            user_input, detected_emotion
+        )
 
         # Merge additional metadata if provided
         if additional_metadata:
@@ -127,7 +133,7 @@ class ContextIngestor:
 
     def _extract_occurrence_time(self, text: str) -> Optional[datetime]:
         """Extract when the issue occurred from text."""
-        now = datetime.now()
+        now = datetime.now().astimezone()
         text_lower = text.lower()
 
         # Check for relative time expressions
@@ -141,21 +147,21 @@ class ContextIngestor:
             # For specific times, assume today
             time_str = time_match.group(1)
             try:
-                # Simple parsing - would need enhancement for production
-                return now.replace(
-                    hour=int(time_str.split(":")[0]) % 24,
-                    minute=int(time_str.split(":")[1][:2]),
-                    second=0,
-                    microsecond=0,
-                )
-            except (ValueError, IndexError):
+                parsed_time = self._parse_time_string(time_str, now)
+                if parsed_time:
+                    return parsed_time
+            except Exception as exc:  # pragma: no cover - defensive logging
+                logger.debug("Time parsing failed for '%s': %s", time_str, exc)
                 pass
 
         # Check for specific date mentions
         date_match = self._compiled_patterns["date"].search(text)
         if date_match:
-            # Simple date parsing - would need enhancement for production
-            return now  # Placeholder
+            date_str = date_match.group(1)
+            parsed_date = self._parse_date_string(date_str, now)
+            if parsed_date:
+                return parsed_date
+            return now
 
         return None
 
@@ -298,7 +304,21 @@ class ContextIngestor:
         # Low impact
         return "Low - Minor inconvenience"
 
-    def _determine_urgency(self, text: str) -> str:
+    def _safe_detect_emotion(self, text: str) -> Optional[str]:
+        """Safely detect primary emotion value from text."""
+        try:
+            emotion_result = EmotionTemplates.detect_emotion(text)
+        except Exception as exc:  # pragma: no cover - defensive logging
+            logger.warning("Emotion detection failed: %s", exc)
+            return None
+
+        primary = getattr(emotion_result, "primary_emotion", None)
+        if not primary:
+            return None
+        value = getattr(primary, "value", None)
+        return value.lower() if isinstance(value, str) else value
+
+    def _determine_urgency(self, text: str, detected_emotion: Optional[str] = None) -> str:
         """Determine urgency level from user input."""
         text_lower = text.lower()
 
@@ -307,8 +327,11 @@ class ContextIngestor:
                 return urgency_level
 
         # Default based on emotional content
-        emotion_result = EmotionTemplates.detect_emotion(text)
-        if emotion_result.primary_emotion.value in ["urgent", "anxious", "frustrated"]:
+        emotion_value = detected_emotion
+        if emotion_value is None:
+            emotion_value = self._safe_detect_emotion(text)
+
+        if emotion_value in {"urgent", "anxious", "frustrated"}:
             return "high"
 
         return "normal"
@@ -338,21 +361,135 @@ class ContextIngestor:
         else:
             return "beginner"
 
+    def _parse_time_string(self, time_str: str, reference: datetime) -> Optional[datetime]:
+        """Parse a time string into a datetime aligned with the reference date."""
+        time_formats = [
+            "%I:%M %p",
+            "%I:%M:%S %p",
+            "%I:%M%p",
+            "%I:%M:%S%p",
+            "%H:%M:%S",
+            "%H:%M",
+        ]
+
+        candidates = {
+            time_str.strip(),
+            time_str.strip().upper(),
+        }
+
+        for candidate in candidates:
+            for fmt in time_formats:
+                try:
+                    parsed = datetime.strptime(candidate, fmt)
+                    return reference.replace(
+                        hour=parsed.hour,
+                        minute=parsed.minute,
+                        second=parsed.second,
+                        microsecond=0,
+                    )
+                except ValueError:
+                    continue
+        return None
+
+    def _parse_date_string(self, date_str: str, reference: datetime) -> Optional[datetime]:
+        """Parse a date string, filling missing components from reference."""
+        normalized = date_str.replace(",", "").strip()
+        date_formats = [
+            "%Y-%m-%d",
+            "%Y/%m/%d",
+            "%m/%d/%Y",
+            "%d/%m/%Y",
+            "%m-%d-%Y",
+            "%d-%m-%Y",
+            "%b %d %Y",
+            "%B %d %Y",
+            "%b %d",
+            "%B %d",
+        ]
+
+        for fmt in date_formats:
+            try:
+                parsed = datetime.strptime(normalized, fmt)
+                if "%Y" not in fmt:
+                    parsed = parsed.replace(year=reference.year)
+                tzinfo = reference.tzinfo or timezone.utc
+                parsed = parsed.replace(tzinfo=tzinfo)
+                return parsed
+            except ValueError:
+                continue
+
+        if dateutil_parser:
+            try:
+                parsed = dateutil_parser.parse(normalized, default=reference)
+                if parsed.tzinfo is None:
+                    parsed = parsed.replace(tzinfo=reference.tzinfo or timezone.utc)
+                return parsed
+            except (ValueError, TypeError, OverflowError) as exc:
+                logger.debug("dateutil parse failed for '%s': %s", normalized, exc)
+
+        return None
+
     def _merge_metadata(
         self,
         context: UserContext,
         metadata: Dict[str, Any]
     ):
         """Merge additional metadata into context."""
-        # Override with explicit metadata if provided
+        # Override with explicit metadata if provided, with validation
         if "urgency" in metadata:
-            context.urgency_level = metadata["urgency"]
+            urgency = metadata.get("urgency")
+            if isinstance(urgency, str):
+                urgency_normalized = urgency.strip().lower()
+                if urgency_normalized in self.URGENCY_KEYWORDS:
+                    context.urgency_level = urgency_normalized
+                else:
+                    logger.warning("Ignoring invalid urgency metadata: %s", urgency)
+            else:
+                logger.warning("Ignoring invalid urgency metadata: %s", urgency)
+
         if "technical_level" in metadata:
-            context.technical_proficiency = metadata["technical_level"]
+            technical_level = metadata.get("technical_level")
+            if isinstance(technical_level, str):
+                tech_normalized = technical_level.strip().lower()
+                if tech_normalized in self.PROFICIENCY_INDICATORS:
+                    context.technical_proficiency = tech_normalized
+                else:
+                    logger.warning(
+                        "Ignoring invalid technical_level metadata: %s", technical_level
+                    )
+            else:
+                logger.warning(
+                    "Ignoring invalid technical_level metadata: %s", technical_level
+                )
+
         if "accounts" in metadata:
-            context.affected_accounts.extend(metadata["accounts"])
+            accounts_value = metadata.get("accounts")
+            validated_accounts: List[str] = []
+            if isinstance(accounts_value, Iterable) and not isinstance(accounts_value, (str, bytes)):
+                for account in accounts_value:
+                    if isinstance(account, str) and account.strip():
+                        validated_accounts.append(account.strip())
+                    else:
+                        logger.warning("Skipping invalid account entry: %s", account)
+            else:
+                logger.warning("Accounts metadata must be a list of strings: %s", accounts_value)
+
+            if validated_accounts:
+                existing = {acc.lower() for acc in context.affected_accounts}
+                for account in validated_accounts:
+                    key = account.lower()
+                    if key not in existing:
+                        context.affected_accounts.append(account)
+                        existing.add(key)
+
         if "business_impact" in metadata:
-            context.business_impact = metadata["business_impact"]
+            business_impact = metadata.get("business_impact")
+            if isinstance(business_impact, str):
+                context.business_impact = business_impact
+            else:
+                logger.warning(
+                    "Ignoring invalid business_impact metadata: %s", business_impact
+                )
 
     def enhance_with_log_correlation(
         self,
@@ -371,6 +508,12 @@ class ContextIngestor:
         """
         log_start, log_end = log_timestamp_range
 
+        if context.occurrence_time and context.occurrence_time.tzinfo:
+            if log_start.tzinfo is None:
+                log_start = log_start.replace(tzinfo=context.occurrence_time.tzinfo)
+            if log_end.tzinfo is None:
+                log_end = log_end.replace(tzinfo=context.occurrence_time.tzinfo)
+
         # If no occurrence time specified, use log evidence
         if not context.occurrence_time:
             # Assume issue started near the beginning of error logs
@@ -385,12 +528,20 @@ class ContextIngestor:
 
         # Add timing information to business impact if significant delay
         if context.occurrence_time:
-            duration = datetime.now() - context.occurrence_time
+            reference_now = datetime.now(tz=context.occurrence_time.tzinfo)
+            duration = reference_now - context.occurrence_time
             if duration > timedelta(days=1):
-                context.business_impact += f" (Issue ongoing for {duration.days} days)"
+                fragment = f"(Issue ongoing for {duration.days} days)"
             elif duration > timedelta(hours=4):
                 hours = duration.total_seconds() / 3600
-                context.business_impact += f" (Issue ongoing for {hours:.0f} hours)"
+                fragment = f"(Issue ongoing for {hours:.0f} hours)"
+            else:
+                fragment = ""
+
+            if fragment:
+                context.business_impact = self._append_duration_fragment(
+                    context.business_impact, fragment
+                )
 
         return context
 
@@ -414,7 +565,8 @@ class ContextIngestor:
 
         # Timing
         if context.occurrence_time:
-            time_ago = datetime.now() - context.occurrence_time
+            reference_now = datetime.now(tz=context.occurrence_time.tzinfo)
+            time_ago = reference_now - context.occurrence_time
             if time_ago < timedelta(hours=1):
                 summary_parts.append("Started: Less than an hour ago")
             elif time_ago < timedelta(days=1):
@@ -444,3 +596,25 @@ class ContextIngestor:
         summary_parts.append(f"Emotional state: {context.emotional_state}")
 
         return " | ".join(summary_parts)
+
+    @staticmethod
+    def _append_duration_fragment(
+        business_impact: str, fragment: str
+    ) -> str:
+        """Append duration fragment ensuring only one instance exists."""
+
+        if not fragment:
+            return business_impact or ""
+
+        # Remove existing duration note if present
+        existing_impact = business_impact or ""
+        cleaned = re.sub(
+            r"\s*\(Issue ongoing for [^)]+\)\s*$", "", existing_impact
+        ).rstrip()
+
+        if fragment in existing_impact:
+            return existing_impact
+
+        if cleaned:
+            return f"{cleaned} {fragment}"
+        return fragment

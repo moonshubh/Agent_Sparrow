@@ -312,11 +312,13 @@ class MetadataExtractor:
         self._metadata.total_entries = len(entries)
         self._metadata.error_count = sum(
             1 for e in entries
-            if e.severity.numeric_value >= Severity.ERROR.numeric_value
+            if getattr(e.severity, "numeric_value", 0) >= Severity.ERROR.numeric_value
         )
         self._metadata.warning_count = sum(
             1 for e in entries
-            if e.severity == Severity.WARNING
+            if Severity.WARNING.numeric_value
+            <= getattr(e.severity, "numeric_value", -1)
+            < Severity.ERROR.numeric_value
         )
 
     def _finalize_metadata(self):
@@ -360,14 +362,19 @@ class MetadataExtractor:
 
     def _is_system_email(self, email: str) -> bool:
         """Check if an email is a system/example email."""
-        system_domains = [
+        email_lower = (email or "").strip().lower()
+        local_part, domain = (email_lower.split("@", 1) + [""])[:2]
+        system_domains = {
             "example.com",
             "test.com",
             "localhost",
             "mailbird.com",
-            "noreply",
-        ]
-        return any(domain in email.lower() for domain in system_domains)
+        }
+        system_prefixes = ("noreply", "no-reply")
+
+        if domain in system_domains:
+            return True
+        return any(local_part.startswith(prefix) for prefix in system_prefixes)
 
     def _identify_provider(self, email: str) -> str:
         """Identify email provider from email address."""

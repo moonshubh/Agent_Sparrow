@@ -629,7 +629,6 @@ async def list_chat_sessions(
     try:
         # Use authenticated user ID if available, otherwise use guest ID from cookie
         use_database = current_user is not None
-        use_database = current_user is not None
         if current_user:
             user_id = current_user.sub
         else:

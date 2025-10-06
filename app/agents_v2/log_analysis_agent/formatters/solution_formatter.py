@@ -80,13 +80,13 @@ class SolutionFormatter:
     }
 
     # Confidence level descriptions
-    CONFIDENCE_LEVELS = {
-        (0.9, 1.0): ("Very High", "💚"),
-        (0.7, 0.9): ("High", "🟢"),
-        (0.5, 0.7): ("Moderate", "🟡"),
-        (0.3, 0.5): ("Low", "🟠"),
-        (0.0, 0.3): ("Uncertain", "🔴")
-    }
+    CONFIDENCE_LEVELS = (
+        (0.9, 1.00001, "Very High", "💚"),
+        (0.7, 0.9, "High", "🟢"),
+        (0.5, 0.7, "Moderate", "🟡"),
+        (0.3, 0.5, "Low", "🟠"),
+        (0.0, 0.3, "Uncertain", "🔴"),
+    )
 
     def __init__(self):
         """Initialize the solution formatter"""
@@ -369,8 +369,8 @@ class SolutionFormatter:
 
     def _get_confidence_description(self, score: float) -> Tuple[str, str]:
         """Get confidence level description and icon"""
-        for range_tuple, (desc, icon) in self.CONFIDENCE_LEVELS.items():
-            if range_tuple[0] <= score <= range_tuple[1]:
+        for lower, upper, desc, icon in self.CONFIDENCE_LEVELS:
+            if lower <= score < upper:
                 return desc, icon
         return "Unknown", "❓"
 

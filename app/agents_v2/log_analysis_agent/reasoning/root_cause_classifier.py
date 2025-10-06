@@ -280,11 +280,12 @@ class RootCauseClassifier:
 
         # Check pattern matches
         for pattern in patterns:
-            pattern_text = (
-                pattern.description.lower() +
-                " ".join(pattern.indicators).lower() +
-                " ".join(e.message.lower() for e in pattern.sample_entries)
-            )
+            text_parts = [pattern.description.lower()]
+            if pattern.indicators:
+                text_parts.append(" ".join(pattern.indicators).lower())
+            if pattern.sample_entries:
+                text_parts.append(" ".join(e.message.lower() for e in pattern.sample_entries))
+            pattern_text = " ".join(text_parts)
 
             for indicator in indicators:
                 if indicator.lower() in pattern_text:
@@ -321,7 +322,9 @@ class RootCauseClassifier:
 
         for pattern in patterns:
             # Check if pattern matches indicators
-            pattern_text = pattern.description.lower() + " ".join(pattern.indicators).lower()
+            pattern_text = (
+                pattern.description.lower() + " " + " ".join(pattern.indicators).lower()
+            )
 
             matching_indicators = [
                 ind for ind in indicators

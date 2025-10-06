@@ -232,7 +232,6 @@ Remember: You're not just analyzing logs; you're helping someone get back to pro
 
         # Add thinking budget if supported (for future Gemini updates)
         if thinking_budget is not None:
-            model_config["thinking_budget"] = thinking_budget
             # Pro model supports up to 64K thinking tokens
             model_config["thinking_budget"] = min(thinking_budget, 65536)
 

@@ -236,11 +236,23 @@ class NaturalLanguageGenerator:
         if emotional_state == EmotionalState.FRUSTRATED:
             closing = "I know this has been frustrating. " + closing
         elif emotional_state == EmotionalState.ANXIOUS:
-            closing = "Don't worry - " + closing.lower()
+            if closing:
+                closing = "Don't worry - " + closing[0].upper() + closing[1:]
+            else:
+                closing = "Don't worry - " + closing
 
         # Add personal touch
         if user_name:
-            closing = closing.replace("!", f", {user_name}!")
+            if "!" in closing:
+                closing = closing.replace("!", f", {user_name}!", 1)
+            elif closing:
+                terminal = closing[-1]
+                if terminal in ".?!":
+                    closing = f"{closing[:-1]}, {user_name}{terminal}"
+                else:
+                    closing = f"{closing}, {user_name}"
+            else:
+                closing = user_name
 
         return closing
 

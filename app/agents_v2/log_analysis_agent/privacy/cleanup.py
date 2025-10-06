@@ -111,15 +111,24 @@ class SecureDataStore:
             self._access_count.pop(key, None)
             self._weak_refs.pop(key, None)
 
-            # Clear the data
+            # Clear the data if supported
             if hasattr(data, 'clear'):
-                data.clear()
-            elif isinstance(data, (list, dict)):
-                data.clear()
+                try:
+                    data.clear()
+                except Exception:
+                    logger.debug("Failed to clear data during eviction", exc_info=True)
 
             del data
             return True
         return False
+
+    def get_statistics(self) -> Dict[str, int]:
+        """Return a snapshot of internal state for reporting."""
+        with self._lock:
+            return {
+                "items": len(self._data),
+                "weak_refs": len(self._weak_refs),
+            }
 
     def _cleanup_weak_ref(self, key: str) -> None:
         """Cleanup callback for weak references."""
@@ -469,15 +478,18 @@ class LogCleanupManager:
 
     def get_cleanup_statistics(self) -> Dict[str, Any]:
         """Get statistics about cleanup operations."""
-        return {
-            "memory_items": len(self._data_store._data),
-            "temp_files": len(self._temp_files),
-            "temp_dirs": len(self._temp_dirs),
-            "pending_cleanup_tasks": len(self._cleanup_tasks),
-            "max_memory_items": self.config.max_memory_items,
-            "cleanup_delay_seconds": self.config.cleanup_delay_seconds,
-            "paranoid_mode": self.config.paranoid_mode,
-        }
+        with self._cleanup_lock:
+            store_stats = self._data_store.get_statistics()
+            return {
+                "memory_items": store_stats["items"],
+                "weak_refs": store_stats["weak_refs"],
+                "temp_files": len(self._temp_files),
+                "temp_dirs": len(self._temp_dirs),
+                "pending_cleanup_tasks": len(self._cleanup_tasks),
+                "max_memory_items": self.config.max_memory_items,
+                "cleanup_delay_seconds": self.config.cleanup_delay_seconds,
+                "paranoid_mode": self.config.paranoid_mode,
+            }
 
     def force_cleanup(self) -> Dict[str, int]:
         """

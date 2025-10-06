@@ -14,6 +14,7 @@ Security Design:
 """
 
 import re
+import quopri
 import hashlib
 import logging
 from enum import Enum
@@ -77,6 +78,13 @@ class LogSanitizer:
     of sensitive information while maintaining log integrity for analysis.
     """
 
+    _SOFT_LINE_BREAK_RE = re.compile(r'=\r?\n')
+    _CONTROL_CHAR_RE = re.compile(r'[\x00-\x08\x0B\x0C\x0E-\x1F]+')
+    _COMMON_CORRECTIONS = (
+        (re.compile(r'\bfirwall\b', re.IGNORECASE), 'firewall'),
+        (re.compile(r'\bfir\s+wall\b', re.IGNORECASE), 'firewall'),
+    )
+
     # Comprehensive regex patterns for sensitive data detection
     # Each pattern has multiple variants to catch edge cases
 
@@ -103,12 +111,13 @@ class LogSanitizer:
     ]
 
     # API Keys and Tokens - various formats and platforms
+    # Require explicit keywords and longer token lengths to reduce false positives; may still flag long encoded strings and should be tuned as needed
     API_KEY_PATTERNS = [
         r'(?i)(?:api[_-]?key|apikey|api[_-]?token|access[_-]?token|auth[_-]?token|authorization|bearer)\s*[:=]\s*["\']?[A-Za-z0-9+/=_-]{20,}["\']?',
         r'(?i)(?:secret|private[_-]?key|client[_-]?secret)\s*[:=]\s*["\']?[A-Za-z0-9+/=_-]{20,}["\']?',
         r'sk_(?:test|live)_[A-Za-z0-9]{24,}',  # Stripe
         r'(?:r|s)k_[A-Za-z0-9]{40,}',  # Various providers
-        r'[A-Za-z0-9]{32,}',  # Generic long tokens
+        r'(?i)(?:key|token|secret|apikey|api[_-]?key|access[_-]?token|auth[_-]?token)[^\S\r\n]{0,5}[:=]?\s*["\']?[A-Za-z0-9+/=_-]{40,}["\']?',
         r'ghp_[A-Za-z0-9]{36}',  # GitHub personal access token
         r'gho_[A-Za-z0-9]{36}',  # GitHub OAuth token
         r'github_pat_[A-Za-z0-9]{22}_[A-Za-z0-9]{59}',  # GitHub fine-grained PAT
@@ -143,17 +152,14 @@ class LogSanitizer:
     SSN_PATTERNS = [
         r'\b\d{3}-\d{2}-\d{4}\b',  # US SSN with dashes
         r'\b\d{3}\s\d{2}\s\d{4}\b',  # US SSN with spaces
-        r'\b\d{9}\b',  # US SSN without separators (context-dependent)
         r'(?i)(?:ssn|social)\s*[:=]\s*\d{3}[-\s]?\d{2}[-\s]?\d{4}',
         r'(?i)(?:tax[_-]?id|tin)\s*[:=]\s*\d{2}-?\d{7}',  # Tax ID
     ]
 
     # Phone number patterns - international formats
     PHONE_PATTERNS = [
-        r'\+?[1-9]\d{0,3}[\s.-]?\(?\d{1,4}\)?[\s.-]?\d{1,4}[\s.-]?\d{1,9}',  # International
-        r'\b\d{3}[-.\s]?\d{3}[-.\s]?\d{4}\b',  # US format
-        r'\(\d{3}\)\s?\d{3}[-.\s]?\d{4}',  # US with area code
-        r'(?i)(?:phone|tel|mobile|cell)\s*[:=]\s*[\d\s()+-]+',
+        r'\+[1-9]\d{9,14}\b',  # E.164 compliant
+        r'(?i)(?:phone|tel|mobile|cell)\s*[:=]\s*\+[1-9]\d{9,14}'
     ]
 
     # AWS and Cloud Provider patterns
@@ -319,6 +325,8 @@ class LogSanitizer:
         if not text:
             return text, {}
 
+        text = self._preprocess_text(text)
+
         # Unicode normalization to prevent bypass attempts
         if self.config.enable_unicode_normalization:
             text = self._normalize_unicode(text)
@@ -355,6 +363,26 @@ class LogSanitizer:
 
         logger.info(f"Sanitization complete: {total_redactions} redactions across {iteration} iterations")
         return text, redaction_stats
+
+    def _preprocess_text(self, text: str) -> str:
+        """Normalize transport artefacts before sanitization routines run."""
+
+        processed = text
+
+        try:
+            decoded_bytes = quopri.decodestring(processed.encode('utf-8', errors='ignore'))
+            processed = decoded_bytes.decode('utf-8', errors='ignore')
+        except Exception:
+            # If decoding fails, continue with the original text
+            pass
+
+        processed = self._SOFT_LINE_BREAK_RE.sub('', processed)
+        processed = self._CONTROL_CHAR_RE.sub('', processed)
+
+        for pattern, replacement in self._COMMON_CORRECTIONS:
+            processed = pattern.sub(replacement, processed)
+
+        return processed
 
     def _validate_sanitization(self, text: str) -> List[str]:
         """

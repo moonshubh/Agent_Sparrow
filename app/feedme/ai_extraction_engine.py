@@ -28,15 +28,25 @@ logger = logging.getLogger(__name__)
 @dataclass
 class ExtractionConfig:
     """Configuration for AI extraction engine with intelligent rate limiting"""
-    model_name: str = "gemini-2.5-flash-lite-preview-09-2025"  # Latest Gemini 2.5 Flash Lite preview (Sep 2025)
+    model_name: str = field(
+        default_factory=lambda: getattr(settings, "feedme_model_name", "gemini-2.5-flash-lite")
+    )
     temperature: float = 0.3                
     max_output_tokens: int = 8192
     confidence_threshold: float = 0.7
     max_retries: int = 3
     retry_delay: float = 1.0
     
-    # Intelligent rate limiting for Gemini free tier (15k tokens/minute)
-    max_tokens_per_minute: int = 12000  # Conservative 80% of 15k limit
+    # Intelligent rate limiting for Gemini free tier
+    max_tokens_per_minute: int = field(
+        default_factory=lambda: getattr(settings, "feedme_max_tokens_per_minute", 250000)
+    )
+    max_requests_per_minute: int = field(
+        default_factory=lambda: getattr(settings, "feedme_rate_limit_per_minute", 15)
+    )
+    max_requests_per_day: int = field(
+        default_factory=lambda: getattr(settings, "feedme_requests_per_day_limit", 1000)
+    )
     max_tokens_per_chunk: int = 8000    # Max tokens per single request
     chunk_overlap_tokens: int = 500     # Overlap between chunks for context
     rate_limit_window: int = 60         # Rate limit window in seconds
@@ -77,6 +87,7 @@ class RateLimitTracker:
     def __init__(self, config: ExtractionConfig):
         self.config = config
         self.token_usage = []  # List of (timestamp, tokens_used)
+        self.request_events = []  # List of timestamps for per-request limits
         self.last_request_time = 0
         
     def estimate_tokens(self, text: str) -> int:
@@ -118,28 +129,69 @@ class RateLimitTracker:
         """Get token usage in current minute"""
         current_time = time.time()
         minute_ago = current_time - self.config.rate_limit_window
-        
+
         # Remove old entries and calculate current usage
         self.token_usage = [(ts, tokens) for ts, tokens in self.token_usage if ts > minute_ago]
         return sum(tokens for _, tokens in self.token_usage)
+
+    def get_request_usage(self) -> Tuple[int, int]:
+        """Return requests in the current minute and day."""
+        now = time.time()
+        minute_ago = now - self.config.rate_limit_window
+        day_ago = now - 86400
+        # Trim to requests within a day
+        self.request_events = [ts for ts in self.request_events if ts > day_ago]
+        minute_requests = [ts for ts in self.request_events if ts > minute_ago]
+        return len(minute_requests), len(self.request_events)
         
     def can_make_request(self, estimated_tokens: int) -> Tuple[bool, float]:
         """Check if request can be made, return (can_proceed, delay_needed)"""
+        now = time.time()
         current_usage = self.get_current_minute_usage()
-        
-        if current_usage + estimated_tokens <= self.config.max_tokens_per_minute:
-            return True, 0.0
-            
-        # Calculate delay needed
-        oldest_in_window = min(self.token_usage, key=lambda x: x[0])[0] if self.token_usage else (time.time() - self.config.rate_limit_window)
-        delay_needed = (oldest_in_window + self.config.rate_limit_window) - time.time()
-        
-        return False, max(0, delay_needed)
+
+        token_delay = 0.0
+        can_proceed_tokens = True
+        if current_usage + estimated_tokens > self.config.max_tokens_per_minute:
+            oldest_in_window = (
+                min(self.token_usage, key=lambda x: x[0])[0]
+                if self.token_usage
+                else (now - self.config.rate_limit_window)
+            )
+            token_delay = (oldest_in_window + self.config.rate_limit_window) - now
+            can_proceed_tokens = False
+
+        minute_requests, day_requests = self.get_request_usage()
+        can_proceed_requests = True
+        request_delay = 0.0
+
+        minute_limit = max(self.config.max_requests_per_minute, 0)
+        if minute_limit and minute_requests >= minute_limit:
+            window_start = now - self.config.rate_limit_window
+            oldest_minute = min(
+                (ts for ts in self.request_events if ts > window_start),
+                default=None,
+            )
+            if oldest_minute is not None:
+                request_delay = max(request_delay, (oldest_minute + self.config.rate_limit_window) - now)
+            can_proceed_requests = False
+
+        daily_limit = max(self.config.max_requests_per_day, 0)
+        if daily_limit and day_requests >= daily_limit:
+            oldest_day = self.request_events[0] if self.request_events else None
+            if oldest_day is not None:
+                request_delay = max(request_delay, (oldest_day + 86400) - now)
+            can_proceed_requests = False
+
+        can_proceed = can_proceed_tokens and can_proceed_requests
+        delay_needed = max(token_delay, request_delay, 0.0)
+        return can_proceed, delay_needed
         
     def record_usage(self, tokens_used: int):
         """Record token usage"""
-        self.token_usage.append((time.time(), tokens_used))
-        self.last_request_time = time.time()
+        now = time.time()
+        self.token_usage.append((now, tokens_used))
+        self.request_events.append(now)
+        self.last_request_time = now
         
     async def wait_for_rate_limit(self, delay: float):
         """Wait for rate limit with progress logging"""
@@ -185,7 +237,11 @@ class GeminiExtractionEngine:
         self.config = config or ExtractionConfig()
         self.api_key = api_key or settings.gemini_api_key
         self.rate_limiter = RateLimitTracker(self.config)
-        
+
+        if not self.config.model_name:
+            # Fall back to configured default if the supplied config left the model blank
+            self.config.model_name = getattr(settings, "feedme_model_name", "gemini-2.5-flash-lite")
+
         if not self.api_key:
             raise ValueError("Google AI API key is required for extraction engine")
         
@@ -204,7 +260,21 @@ class GeminiExtractionEngine:
         )
         
         logger.info(f"Initialized AI extraction engine with model: {self.config.model_name}")
-        logger.info(f"Rate limiting: {self.config.max_tokens_per_minute} tokens/minute, max {self.config.max_tokens_per_chunk} tokens/chunk")
+        logger.info(
+            "Rate limiting: %s tokens/minute, %s requests/minute, %s requests/day; max %s tokens/chunk",
+            self.config.max_tokens_per_minute,
+            self.config.max_requests_per_minute,
+            self.config.max_requests_per_day,
+            self.config.max_tokens_per_chunk,
+        )
+
+        if "preview" in self.config.model_name.lower():
+            # Warn operators so preview deprecations or quality shifts are surfaced in monitoring
+            logger.warning(
+                "FeedMe extraction engine currently targets preview model '%s'. "
+                "Monitor for Google deprecation notices and track extraction accuracy KPIs.",
+                self.config.model_name,
+            )
         
         # HTML parsing functionality removed - PDF and manual text processing only
 

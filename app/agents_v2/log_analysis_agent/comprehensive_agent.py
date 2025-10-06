@@ -22,6 +22,8 @@ import hashlib
 from uuid import uuid4
 import asyncio
 
+import aiofiles
+
 from app.providers.registry import load_model
 from app.agents_v2.primary_agent.reasoning.schemas import ReasoningConfig
 
@@ -1063,8 +1065,10 @@ class LogAnalysisAgent:
     async def _read_log_file(self, file_path: Path) -> str:
         """Read log file content."""
         try:
-            with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
-                return f.read()
+            async with aiofiles.open(
+                file_path, mode="r", encoding="utf-8", errors="ignore"
+            ) as f:
+                return await f.read()
         except Exception as e:
             logger.error(f"Failed to read log file {file_path}: {e}")
             raise
@@ -1095,29 +1099,6 @@ class LogAnalysisAgent:
         }
 
         return audit
-
-    def _generate_cache_key(self, file_path: Path, query: Optional[str], context: Optional[str]) -> str:
-        """Generate cache key for analysis results."""
-        try:
-            resolved_path = str(file_path.resolve())
-        except OSError:
-            resolved_path = str(file_path)
-
-        key_parts = [resolved_path]
-
-        if file_path.exists():
-            try:
-                stat_result = file_path.stat()
-                key_parts.extend([
-                    str(stat_result.st_size),
-                    str(stat_result.st_mtime_ns),
-                ])
-            except OSError:
-                pass
-
-        key_parts.extend([query or "", context or ""])
-        key_string = "|".join(key_parts)
-        return hashlib.md5(key_string.encode()).hexdigest()
 
     def _generate_analysis_id(self) -> str:
         """Generate unique analysis ID."""

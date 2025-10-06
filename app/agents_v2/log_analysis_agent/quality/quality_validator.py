@@ -258,7 +258,12 @@ class QualityValidator:
                     ))
 
                 # Check confidence mention
-                if f"{top_cause.confidence_score:.0%}" not in response:
+                confidence_score = getattr(top_cause, "confidence_score", None)
+                if isinstance(confidence_score, (int, float)):
+                    confidence_token = f"{confidence_score:.0%}"
+                    if confidence_token not in response:
+                        dimension_score -= 0.1
+                else:
                     dimension_score -= 0.1
 
             # Check for root cause section

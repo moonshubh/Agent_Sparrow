@@ -89,12 +89,21 @@ async def run_log_analysis_agent(state: Dict[str, Any]) -> Dict[str, Any]:
                     # Prefer direct content
                     try:
                         settings_dict = load_mailbird_settings(content=settings_content)
-                    except Exception:
+                    except (ValueError, FileNotFoundError, TypeError) as exc:
+                        logger.warning(
+                            "Failed to load Mailbird settings from content: %s",
+                            exc,
+                        )
                         settings_dict = None
                 elif isinstance(settings_path, str) and settings_path.strip():
                     try:
                         settings_dict = load_mailbird_settings(path=settings_path)
-                    except Exception:
+                    except (ValueError, FileNotFoundError, TypeError) as exc:
+                        logger.warning(
+                            "Failed to load Mailbird settings from path %s: %s",
+                            settings_path,
+                            exc,
+                        )
                         settings_dict = None
 
             # Initialize comprehensive agent (quality-first)

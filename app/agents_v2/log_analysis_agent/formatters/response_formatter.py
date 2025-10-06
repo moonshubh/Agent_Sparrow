@@ -22,6 +22,7 @@ try:
         ErrorPattern,
         RootCause,
         LogEntry,
+        IssueImpact,
     )
 except ImportError:  # When imported as top-level `formatters.*` in tests
     try:
@@ -31,6 +32,7 @@ except ImportError:  # When imported as top-level `formatters.*` in tests
             ErrorPattern,
             RootCause,
             LogEntry,
+            IssueImpact,
         )
     except ImportError:
         from app.agents_v2.log_analysis_agent.schemas.log_schemas import (
@@ -39,6 +41,7 @@ except ImportError:  # When imported as top-level `formatters.*` in tests
             ErrorPattern,
             RootCause,
             LogEntry,
+            IssueImpact,
         )
 
 try:
@@ -64,12 +67,16 @@ except ImportError:
         from app.agents_v2.log_analysis_agent.templates.response_templates import ResponseTemplates, TemplateContext
 
 try:
-    from ..quality.quality_validator import QualityValidator, ValidationResult
+    from ..quality.quality_validator import QualityValidator, ValidationResult, QualityScore
 except ImportError:
     try:
-        from quality.quality_validator import QualityValidator, ValidationResult
+        from quality.quality_validator import QualityValidator, ValidationResult, QualityScore
     except ImportError:
-        from app.agents_v2.log_analysis_agent.quality.quality_validator import QualityValidator, ValidationResult
+        from app.agents_v2.log_analysis_agent.quality.quality_validator import (
+            QualityValidator,
+            ValidationResult,
+            QualityScore,
+        )
 
 logger = logging.getLogger(__name__)
 
@@ -176,13 +183,6 @@ class LogResponseFormatter:
                     # Could trigger revision here if needed
             else:
                 # Create dummy passing validation
-                try:
-                    from ..quality.quality_validator import QualityScore
-                except ImportError:
-                    try:
-                        from quality.quality_validator import QualityScore
-                    except ImportError:
-                        from app.agents_v2.log_analysis_agent.quality.quality_validator import QualityScore
                 validation = ValidationResult(
                     score=QualityScore(overall_score=1.0, passed=True),
                     is_acceptable=True,
@@ -195,13 +195,6 @@ class LogResponseFormatter:
             logger.error(f"Error formatting response: {e}")
             # Return fallback response
             fallback = self._create_fallback_response(analysis, str(e))
-            try:
-                from ..quality.quality_validator import QualityScore
-            except ImportError:
-                try:
-                    from quality.quality_validator import QualityScore
-                except ImportError:
-                    from app.agents_v2.log_analysis_agent.quality.quality_validator import QualityScore
             validation = ValidationResult(
                 score=QualityScore(overall_score=0.5, passed=False),
                 is_acceptable=False,  # Fallback response is not acceptable
@@ -223,10 +216,9 @@ class LogResponseFormatter:
         builder = MarkdownBuilder()
 
         # Section 1: Metadata Overview (always first)
-        if self.config.show_metadata:
-            metadata_section = self.metadata_formatter.format_compact_metadata(
-                analysis.metadata
-            )
+        metadata = getattr(analysis, "metadata", None)
+        if self.config.show_metadata and metadata:
+            metadata_section = self.metadata_formatter.format_compact_metadata(metadata)
             builder.add_raw(metadata_section)
             builder.add_horizontal_rule()
 
@@ -355,11 +347,13 @@ class LogResponseFormatter:
             builder.add_table(headers, rows)
 
         # Add performance metrics if available
-        if analysis.performance_metrics.has_performance_issues:
+        performance_metrics = getattr(analysis, "performance_metrics", None)
+        if performance_metrics and getattr(performance_metrics, "has_performance_issues", False):
             perf_section = self.metadata_formatter.format_performance_metrics(
-                analysis.performance_metrics
+                performance_metrics
             )
-            builder.add_raw(perf_section)
+            if perf_section:
+                builder.add_raw(perf_section)
 
     def _add_error_highlights(
         self,
@@ -527,13 +521,6 @@ class LogResponseFormatter:
 
     def _get_alert_level_for_impact(self, impact) -> AlertLevel:
         """Convert impact level to alert level"""
-        try:
-            from ..schemas.log_schemas import IssueImpact
-        except ImportError:
-            try:
-                from schemas.log_schemas import IssueImpact
-            except ImportError:
-                from app.agents_v2.log_analysis_agent.schemas.log_schemas import IssueImpact
         mapping = {
             IssueImpact.CRITICAL: AlertLevel.CRITICAL,
             IssueImpact.HIGH: AlertLevel.ERROR,
@@ -563,17 +550,25 @@ class LogResponseFormatter:
         )
 
         # Basic summary
-        builder.add_paragraph(analysis.generate_user_summary())
+        try:
+            summary_text = analysis.generate_user_summary()
+        except Exception as exc:
+            logger.warning("Failed to generate user summary: %s", exc)
+            summary_text = "Summary unavailable due to an internal error."
+        builder.add_paragraph(summary_text)
 
         # Basic metadata
         if analysis.metadata:
+            meta = analysis.metadata
+            mailbird_version = getattr(meta, "mailbird_version", "unknown") or "unknown"
+            os_version = getattr(meta, "os_version", "unknown") or "unknown"
+            error_count = getattr(meta, "error_count", 0) or 0
+            error_rate = getattr(meta, "error_rate", 0.0) or 0.0
             builder.add_paragraph(
-                f"**System**: Mailbird {analysis.metadata.mailbird_version} "
-                f"on {analysis.metadata.os_version}"
+                f"**System**: Mailbird {mailbird_version} on {os_version}"
             )
             builder.add_paragraph(
-                f"**Errors Found**: {analysis.metadata.error_count} "
-                f"({analysis.metadata.error_rate:.1f}% of logs)"
+                f"**Errors Found**: {error_count} ({error_rate:.1f}% of logs)"
             )
 
         # Basic root causes
@@ -628,9 +623,11 @@ class LogResponseFormatter:
             parts.append(f"Main issue: {analysis.top_priority_cause.title}")
 
         # Stats
+        metadata = getattr(analysis, "metadata", None)
+        error_count = getattr(metadata, "error_count", 0) if metadata else 0
+        mailbird_version = getattr(metadata, "mailbird_version", "unknown") if metadata else "unknown"
         parts.append(
-            f"Errors: {analysis.metadata.error_count} | "
-            f"Version: {analysis.metadata.mailbird_version}"
+            f"Errors: {error_count} | Version: {mailbird_version}"
         )
 
         # Resolution time
@@ -639,6 +636,9 @@ class LogResponseFormatter:
 
         result = " | ".join(parts)
         if len(result) > max_length:
-            result = result[:max_length-3] + "..."
+            if max_length > 3:
+                result = result[:max_length - 3] + "..."
+            else:
+                result = result[:max_length]
 
         return result
