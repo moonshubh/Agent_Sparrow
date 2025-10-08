@@ -1,6 +1,2 @@
-"""Log analysis reasoning components."""
-
-from .log_reasoning_engine import LogReasoningEngine
-from .root_cause_classifier import RootCauseClassifier
-
-__all__ = ["LogReasoningEngine", "RootCauseClassifier"]
+"""Compat: app.agents_v2.log_analysis_agent.reasoning → app.agents.log_analysis.log_analysis_agent.reasoning"""
+from app.agents.log_analysis.log_analysis_agent.reasoning import *  # noqa: F401,F403

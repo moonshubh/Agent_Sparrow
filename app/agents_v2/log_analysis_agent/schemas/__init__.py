@@ -1,5 +1,1 @@
-"""Log analysis schemas and data models."""
-
-from . import log_schemas
-
-__all__ = ["log_schemas"]
+from app.agents.log_analysis.log_analysis_agent.schemas import *  # noqa: F401,F403

@@ -4,7 +4,7 @@ Canonical import path: app.agents.log_analysis.security
 """
 
 try:
-    from app.agents_v2.log_analysis_agent.security import (
+    from app.agents.log_analysis.log_analysis_agent.security import (
         ValidationStatus,  # noqa: F401
         ThreatLevel,  # noqa: F401
     )
