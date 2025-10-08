@@ -160,10 +160,7 @@ def get_feedme_supabase_client():
             return None
     return _supabase_client
 
-# For backwards compatibility - use lazy loading
-@property
-def supabase_client_property():
-    return get_feedme_supabase_client()
+# For backwards compatibility - removed unused supabase_client_property stub
 
 # Create a class to handle the property access
 class _SupabaseClientProxy:
@@ -1967,6 +1964,9 @@ async def bulk_approve_conversations(bulk_request: BulkApprovalRequest):
     
     if not settings.feedme_enabled:
         raise HTTPException(status_code=503, detail="FeedMe service is currently disabled")
+    # Gate legacy DB-backed endpoint
+    if not settings.legacy_endpoints_enabled():
+        raise HTTPException(status_code=410, detail="Deprecated endpoint (legacy DB). Use Supabase workflows.")
     
     successful = []
     failed = []
@@ -2114,6 +2114,8 @@ async def review_example(example_id: int, review_request: ExampleReviewRequest):
     
     if not settings.feedme_enabled:
         raise HTTPException(status_code=503, detail="FeedMe service is currently disabled")
+    if not settings.legacy_endpoints_enabled():
+        raise HTTPException(status_code=410, detail="Deprecated endpoint (legacy DB). Use Supabase workflows.")
     
     try:
         with get_db_connection() as conn:
@@ -2211,6 +2213,8 @@ async def preview_extracted_examples(conversation_id: int):
     """
     if not settings.feedme_enabled:
         raise HTTPException(status_code=503, detail="FeedMe service is currently disabled")
+    if not settings.legacy_endpoints_enabled():
+        raise HTTPException(status_code=410, detail="Deprecated endpoint (legacy DB). Use Supabase workflows.")
     
     try:
         with get_db_connection() as conn:
@@ -2298,6 +2302,8 @@ async def approve_conversation_examples(
     """
     if not settings.feedme_enabled:
         raise HTTPException(status_code=503, detail="FeedMe service is currently disabled")
+    if not settings.legacy_endpoints_enabled():
+        raise HTTPException(status_code=410, detail="Deprecated endpoint (legacy DB). Use Supabase workflows.")
     
     approved_by = approval_data.get('approved_by')
     if not approved_by:
@@ -2375,6 +2381,8 @@ async def reject_conversation_examples(
     """
     if not settings.feedme_enabled:
         raise HTTPException(status_code=503, detail="FeedMe service is currently disabled")
+    if not settings.legacy_endpoints_enabled():
+        raise HTTPException(status_code=410, detail="Deprecated endpoint (legacy DB). Use Supabase workflows.")
     
     rejected_by = rejection_data.get('rejected_by')
     if not rejected_by:
@@ -2440,6 +2448,8 @@ async def get_conversation_summary(conversation_id: int):
     """
     if not settings.feedme_enabled:
         raise HTTPException(status_code=503, detail="FeedMe service is currently disabled")
+    if not settings.legacy_endpoints_enabled():
+        raise HTTPException(status_code=410, detail="Deprecated endpoint (legacy DB). Use Supabase workflows.")
     
     try:
         with get_db_connection() as conn:

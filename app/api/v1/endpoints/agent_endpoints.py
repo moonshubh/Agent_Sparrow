@@ -525,7 +525,7 @@ async def primary_agent_stream_generator(
         error_payload = json.dumps({"type": "error", "errorText": f"An error occurred in the agent: {str(e)}"}, ensure_ascii=False)
         yield f"data: {error_payload}\n\n"
 
-# Legacy v1 endpoint - DEPRECATED but maintained for backward compatibility
+# Legacy v1 endpoint - DEPRECATED; gated via ENABLE_LEGACY_ENDPOINTS
 @router.post("/agent/chat/stream")
 async def chat_stream_v1_legacy(
     request: ChatRequest
@@ -541,12 +541,25 @@ async def chat_stream_v1_legacy(
     - Please migrate to the authenticated v2 endpoint
     - See migration guide: /docs/api-migration
     """
+    from app.core.settings import get_settings
+    settings = get_settings()
+
+    if not settings.legacy_endpoints_enabled():
+        # Explicitly disabled unless enabled via env
+        raise HTTPException(
+            status_code=410,
+            detail="This endpoint is deprecated and disabled. Use /v2/agent/chat/stream.",
+            headers={
+                "Deprecation": "true",
+                "Link": "</v2/agent/chat/stream>; rel=successor-version"
+            }
+        )
+
     if not request.message:
         raise HTTPException(status_code=400, detail="Message cannot be empty")
     
     # In development mode with SKIP_AUTH=true, use the development user ID
-    from app.core.settings import get_settings
-    settings = get_settings()
+    # settings loaded above
     
     # Determine user ID based on environment
     user_id = _get_user_id_for_dev_mode(settings)
