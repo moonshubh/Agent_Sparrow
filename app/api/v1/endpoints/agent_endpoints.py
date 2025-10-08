@@ -1,3 +1,44 @@
+"""
+DEPRECATED: Legacy agent endpoints module.
+
+This file is retained only for backward compatibility during the cleanup phase.
+All agent streaming endpoints have been moved to modular routers:
+- chat: app.api.v1.endpoints.chat_endpoints
+- unified: app.api.v1.endpoints.unified_endpoints
+- logs: app.api.v1.endpoints.logs_endpoints
+
+Only the system-text filter utility is kept here temporarily. Prefer importing
+it from app.api.v1.endpoints.agent_common instead.
+"""
+
+from __future__ import annotations
+
+import re
+from typing import Pattern
+
+# Canonical implementation lives in agent_common; re-export here for compat
+try:
+    from app.api.v1.endpoints.agent_common import filter_system_text as _filter_system_text  # type: ignore
+except Exception:
+    # Fallback minimal implementation (kept in sync with agent_common)
+    SELF_CRITIQUE_RE = re.compile(r"<self_critique>.*?</self_critique>", flags=re.DOTALL)
+    SYSTEM_PATTERNS: list[Pattern[str]] = [
+        re.compile(r"<system>.*?</system>", flags=re.DOTALL | re.IGNORECASE),
+        re.compile(r"<internal>.*?</internal>", flags=re.DOTALL | re.IGNORECASE),
+        re.compile(r"<self_critique>.*?</self_critique>", flags=re.DOTALL | re.IGNORECASE),
+        re.compile(r".*loyalty relationship.*", flags=re.IGNORECASE),
+    ]
+
+    def _filter_system_text(text: str | None) -> str:
+        if not text:
+            return ""
+        filtered = SELF_CRITIQUE_RE.sub("", text)
+        for pattern in SYSTEM_PATTERNS:
+            filtered = pattern.sub("", filtered)
+        return filtered
+
+__all__ = ["_filter_system_text"]
+
 from fastapi import APIRouter, HTTPException, Depends
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel

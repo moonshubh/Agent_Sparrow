@@ -16,6 +16,20 @@
       "args": [
         "@playwright/mcp@latest"
       ]
+    },
+    "firecrawl": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "-p",
+        "firecrawl-mcp",
+        "-p",
+        "@modelcontextprotocol/sdk",
+        "firecrawl-mcp"
+      ],
+      "env": {
+        "FIRECRAWL_API_KEY": "fc-8239763207034c5ea5cc24892fc0be9b"
+      }
     }
   }
 }

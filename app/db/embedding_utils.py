@@ -25,7 +25,7 @@ from typing import List, Optional, Dict, Any # Removed Tuple
 from pydantic import BaseModel, ConfigDict # Added Pydantic BaseModel
 
 from app.core.settings import settings
-from app.db.supabase_client import get_supabase_client
+from app.db.supabase.client import get_supabase_client
 from app.db.embedding_config import MODEL_NAME as EMB_MODEL_NAME_SOT, EXPECTED_DIM as EXPECTED_EMBEDDING_DIM, assert_dim
 
 # Configure logging
