@@ -16,9 +16,9 @@ from fastapi import APIRouter, HTTPException, Depends, UploadFile, File, Form
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from app.agents_v2.log_analysis_agent.comprehensive_agent import LogAnalysisAgent
-from app.agents_v2.log_analysis_agent.privacy import RedactionLevel
-from app.agents_v2.log_analysis_agent.security import ValidationStatus, ThreatLevel
+from app.agents.log_analysis.comprehensive_agent import LogAnalysisAgent
+from app.agents.log_analysis.privacy import RedactionLevel
+from app.agents.log_analysis.security import ValidationStatus, ThreatLevel
 try:
     from app.api.v1.endpoints.auth import get_current_user_id
 except ImportError:  # pragma: no cover

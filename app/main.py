@@ -21,8 +21,8 @@ from app.core.rate_limiting.exceptions import (
     GeminiServiceUnavailableException
 )
 
-from app.agents_v2.orchestration.graph import app as agent_graph
-from app.agents_v2.orchestration.state import GraphState # Corrected import location
+from app.agents import agent_graph
+from app.agents import GraphState # Corrected import location
 from app.api.v1.endpoints import search_tools_endpoints # Added for search tools endpoints
 from app.api.v1.endpoints import (
     chat_endpoints,  # Agent chat (SSE)

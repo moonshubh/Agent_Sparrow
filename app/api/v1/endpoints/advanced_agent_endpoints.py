@@ -23,22 +23,21 @@ import os
 
 # Use the new in-memory session store instead of Redis
 from app.core.session_store import store_session, get_session, delete_session, get_session_store
-from app.agents_v2.primary_agent.reasoning.reasoning_engine import ReasoningEngine, ReasoningConfig
-from app.agents_v2.primary_agent.troubleshooting.troubleshooting_engine import (
-    TroubleshootingEngine, 
-    TroubleshootingConfig
-)
-from app.agents_v2.primary_agent.troubleshooting.troubleshooting_schemas import (
-    TroubleshootingState,
-    DiagnosticStep,
-    TroubleshootingPhase
-)
-from app.agents_v2.primary_agent.reasoning.schemas import (
+from app.agents.primary.reasoning import (
+    ReasoningEngine,
+    ReasoningConfig,
     ReasoningState,
     QueryAnalysis,
     EmotionalState,
     ToolDecisionType,
-    ProblemCategory
+    ProblemCategory,
+)
+from app.agents.primary.troubleshooting import (
+    TroubleshootingEngine,
+    TroubleshootingConfig,
+    TroubleshootingState,
+    DiagnosticStep,
+    TroubleshootingPhase,
 )
 from app.api.v1.endpoints.auth import get_current_user_id
 from app.core.user_context import user_context_scope, create_user_context_from_user_id
@@ -320,7 +319,7 @@ async def analyze_with_reasoning(
         user_context = await create_user_context_from_user_id(user_id)
         
         # Determine provider/model (per-request override or defaults)
-        from app.agents_v2.primary_agent.adapter_bridge import get_primary_agent_model
+        from app.agents.primary.adapter_bridge import get_primary_agent_model
         from app.providers.adapters import default_provider, default_model_for_provider
         provider = (request.provider or default_provider()).lower()
         model_id = (request.model or default_model_for_provider(provider)).lower()
