@@ -710,6 +710,8 @@ Sample_PDFs/
 sample logs/
 sample\ logs/
 supabase/
+# Allow backend compat wrapper under app/db/supabase
+!app/db/supabase/**
 # Zendesk PDFs - contain sensitive customer data
 Zendesk PDF/
 *.pdf

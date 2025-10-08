@@ -17,6 +17,8 @@
 
 Agent Sparrow is a sophisticated multi-agent AI system built on FastAPI with a Next.js frontend. The backend implements an orchestrated agent graph using LangGraph, with specialized agents for different tasks (primary agent, log analysis, research, reflection). The system integrates with Supabase for data persistence and supports multiple AI providers.
 
+Note (Backend re-organization – Phase 1): canonical imports are moving from `app.agents_v2.*` to `app.agents.*`. A compatibility layer has been added so both paths work; no behavior change.
+
 ## Architecture Diagram
 
 ```mermaid
@@ -230,7 +232,13 @@ graph TB
 
 ```
 app/
-├── agents_v2/              # Multi-agent system
+├── agents/                 # NEW: canonical agents package (compat re-exports to agents_v2)
+│   ├── primary/            # Primary conversational agent (re-export)
+│   ├── log_analysis/       # Log analysis agent (re-export)
+│   ├── research/           # Research agent (re-export)
+│   ├── reflection/         # Reflection (re-export)
+│   └── orchestration/      # Graph + state (re-export)
+├── agents_v2/              # Legacy import path (still present; slated for removal later)
 │   ├── primary_agent/      # Main conversational agent
 │   │   ├── agent.py        # Agent implementation
 │   │   ├── reasoning/      # Reasoning components
@@ -247,15 +255,21 @@ app/
 │       ├── endpoints/      # API endpoints
 │       └── websocket/      # WebSocket handlers
 ├── core/                   # Core utilities
+│   ├── transport/          # NEW: unified SSE/WebSocket helpers (skeleton)
+│   └── tracing/            # NEW: observability helpers (skeleton)
 │   ├── rate_limiting/      # Rate limiting system
 │   ├── auth.py            # Authentication
 │   ├── settings.py        # Configuration
 │   └── security.py        # Security utilities
 ├── db/                     # Database layer
+│   ├── supabase/           # NEW: client + repositories (compat wrapper to supabase_client)
+│   └── embedding/          # NEW: embedding utils (compat wrapper to embedding_utils)
 │   ├── models.py          # SQLAlchemy models
 │   ├── supabase_client.py # Supabase integration
 │   └── migrations/        # Database migrations
 ├── providers/              # AI provider adapters
+│   ├── adapters/           # NEW: adapters namespace (skeleton)
+│   └── limits/             # NEW: rate limit wrappers/config (skeleton)
 │   ├── Google/            # Google Gemini
 │   └── OpenAI/            # OpenAI GPT
 ├── tools/                  # Agent tools

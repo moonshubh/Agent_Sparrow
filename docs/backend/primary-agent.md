@@ -3,6 +3,8 @@
 ## Overview
 The Primary Agent powers general conversational support with structured reasoning, tool usage, and streaming. It is orchestrated by LangGraph and exposed via authenticated SSE endpoints consumed by the frontend unified client.
 
+Re-organization note: prefer `from app.agents.primary import run_primary_agent, PrimaryAgentState` (compat exists for `app.agents_v2.primary_agent.*`).
+
 ## Key Files
 - app/agents_v2/primary_agent/agent.py – streaming runner (Gemini/OpenAI selection, reasoning, SSE metadata)
 - app/agents_v2/primary_agent/reasoning/* – ReasoningEngine, configs, schemas

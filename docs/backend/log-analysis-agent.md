@@ -5,6 +5,8 @@ Specialized agent for analyzing Mailbird logs. Two modes:
 - Simplified (default): question-driven, fast summaries and actions
 - Comprehensive: quality-first pipeline with privacy/security controls
 
+Re-organization note: prefer `from app.agents.log_analysis import run_log_analysis_agent, SimplifiedLogAnalysisOutput` (compat exists for `app.agents_v2.log_analysis_agent.*`).
+
 ## Key Files
 - app/agents_v2/log_analysis_agent/agent.py – router between simplified/comprehensive
 - app/agents_v2/log_analysis_agent/simplified_agent.py, simplified_schemas.py – fast path
