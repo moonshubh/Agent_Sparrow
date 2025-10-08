@@ -200,8 +200,7 @@ class Settings(BaseSettings):
     enable_api_key_endpoints: bool = Field(default=True, alias="ENABLE_API_KEY_ENDPOINTS")
     force_production_security: bool = Field(default=True, alias="FORCE_PRODUCTION_SECURITY")
 
-    # Legacy endpoints gating
-    enable_legacy_endpoints: bool = Field(default=False, alias="ENABLE_LEGACY_ENDPOINTS")
+    # Legacy endpoints gating removed: no legacy endpoints remain
     
     # Production Environment Configuration
     production_domains: List[str] = Field(
@@ -295,9 +294,7 @@ class Settings(BaseSettings):
         """
         return self._should_enable_security_endpoint(self.enable_api_key_endpoints)
     
-    def legacy_endpoints_enabled(self) -> bool:
-        """Return True if legacy endpoints are explicitly enabled via env flag."""
-        return bool(self.enable_legacy_endpoints)
+    # Removed: legacy_endpoints_enabled()
     
     def should_enable_thinking_trace(self) -> bool:
         """
