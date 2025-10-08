@@ -321,7 +321,7 @@ async def analyze_with_reasoning(
         
         # Determine provider/model (per-request override or defaults)
         from app.agents_v2.primary_agent.adapter_bridge import get_primary_agent_model
-        from app.providers.registry import default_provider, default_model_for_provider
+        from app.providers.adapters import default_provider, default_model_for_provider
         provider = (request.provider or default_provider()).lower()
         model_id = (request.model or default_model_for_provider(provider)).lower()
 

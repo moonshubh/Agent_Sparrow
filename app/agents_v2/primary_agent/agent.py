@@ -11,7 +11,7 @@ from langchain_google_genai import ChatGoogleGenerativeAI, HarmCategory, HarmBlo
 from opentelemetry import trace
 from opentelemetry.trace import Status, StatusCode
 
-from app.core.rate_limiting.agent_wrapper import wrap_gemini_agent
+from app.providers.limits import wrap_gemini_agent
 from app.agents_v2.primary_agent.schemas import PrimaryAgentState
 from app.agents_v2.primary_agent.tools import mailbird_kb_search, tavily_web_search
 from app.agents_v2.primary_agent.reasoning import ReasoningEngine, ReasoningConfig

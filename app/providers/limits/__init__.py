@@ -1,3 +1,10 @@
-"""Provider rate limit wrappers/config (Phase 1 skeleton)."""
+"""Provider rate limit wrappers/config.
 
-__all__: list[str] = []
+Stable import path for rate-limit utilities bound to providers.
+"""
+
+from .wrappers import wrap_gemini_agent  # noqa: F401
+
+__all__ = [
+    "wrap_gemini_agent",
+]

@@ -31,7 +31,7 @@ from .problem_solver import ProblemSolvingFramework
 from .tool_intelligence import ToolIntelligence
 from app.agents_v2.primary_agent.prompts import EmotionTemplates, AgentSparrowV9Prompts
 from app.agents_v2.primary_agent.prompts.emotion_templates import EmotionalState
-from app.providers.registry import (
+from app.providers.adapters import (
     get_adapter,
     default_provider,
     default_model_for_provider,

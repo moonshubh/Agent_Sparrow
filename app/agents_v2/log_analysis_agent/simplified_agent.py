@@ -13,7 +13,7 @@ from functools import wraps
 
 from langchain_google_genai import ChatGoogleGenerativeAI
 from app.core.settings import settings
-from app.core.rate_limiting.agent_wrapper import wrap_gemini_agent
+from app.providers.limits import wrap_gemini_agent
 from app.core.logging_config import get_logger
 from app.core.user_context import get_current_user_context
 

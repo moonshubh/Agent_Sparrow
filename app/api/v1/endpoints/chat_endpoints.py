@@ -33,7 +33,7 @@ class ChatRequest(BaseModel):
 
 def _resolve_provider_model(provider: Optional[str], model: Optional[str]) -> tuple[str, str]:
     try:
-        from app.providers.registry import default_provider, default_model_for_provider
+        from app.providers.adapters import default_provider, default_model_for_provider
         req_provider = (provider or default_provider()).lower()
         req_model = (model or default_model_for_provider(req_provider)).lower()
     except Exception:

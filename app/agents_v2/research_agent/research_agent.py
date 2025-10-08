@@ -28,7 +28,7 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 from langgraph.graph import END, StateGraph
 
 from app.tools.research_tools import get_research_tools
-from app.core.rate_limiting.agent_wrapper import wrap_gemini_agent
+from app.providers.limits import wrap_gemini_agent
 
 
 # ---------------------------------------------------------------------------

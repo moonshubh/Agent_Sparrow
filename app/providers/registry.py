@@ -20,6 +20,27 @@ _REGISTRY: Dict[Tuple[str, str], Type[ProviderAdapter]] = {}
 
 # Configuration cache
 _CONFIG_CACHE: Optional[Dict] = None
+_BOOTSTRAPPED: bool = False
+
+
+def _bootstrap_adapters() -> None:
+    """Import the unified adapters package once to trigger registrations.
+
+    Keeping this lazy avoids import cycles and keeps startup cost minimal while
+    still allowing explicit adapter modules to self-register.
+    """
+    global _BOOTSTRAPPED
+    if _BOOTSTRAPPED:
+        return
+    try:
+        # Import central adapters package; it imports known adapters guardedly
+        # which call register_adapter() on import.
+        import app.providers.adapters  # noqa: F401
+    except Exception:
+        # Adapters package is optional; fallback to file-based loader below
+        pass
+    finally:
+        _BOOTSTRAPPED = True
 
 
 def _load_config() -> Dict:
@@ -76,6 +97,9 @@ def _ensure_loaded(provider: str, model: str) -> None:
     We use file-based import to support hyphenated directory names, e.g. 'Gemini-2.5-Flash'.
     """
     with _LOCK:
+        # First, attempt to bootstrap explicit registrations
+        _bootstrap_adapters()
+
         key = (provider.lower(), model.lower())
         if key in _REGISTRY:
             return

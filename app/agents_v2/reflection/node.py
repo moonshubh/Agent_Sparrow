@@ -14,7 +14,7 @@ from loguru import logger
 from app.core.settings import settings
 from app.core.user_context import get_current_user_context
 from app.providers.base import BaseChatModel
-from app.providers.registry import (
+from app.providers.adapters import (
     get_adapter,
     default_model_for_provider,
     default_provider,

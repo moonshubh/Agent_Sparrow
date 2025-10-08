@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 from typing import Optional
-from app.providers.registry import load_model, default_provider, default_model_for_provider
+from app.providers.adapters import load_model, default_provider, default_model_for_provider
 
 async def get_primary_agent_model(*, api_key: Optional[str] = None, provider: Optional[str] = None, model: Optional[str] = None):
     """
