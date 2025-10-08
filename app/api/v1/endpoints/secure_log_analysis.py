@@ -21,6 +21,7 @@ from app.agents_v2.log_analysis_agent.privacy import RedactionLevel
 from app.agents_v2.log_analysis_agent.security import ValidationStatus, ThreatLevel
 from app.api.v1.endpoints.agent_endpoints import get_current_user_id
 from app.core.user_context import create_user_context_from_user_id, user_context_scope
+from app.core.transport.sse import format_sse_data
 
 logger = logging.getLogger(__name__)
 
@@ -360,7 +361,7 @@ async def secure_log_stream_generator(
 
     try:
         # Send initial security status
-        yield f"data: {json.dumps({'type': 'security', 'status': 'validating'})}\n\n"
+        yield format_sse_data({'type': 'security', 'status': 'validating'})
 
         # Validate content
         validation_result = agent.security_validator.validate_request({
@@ -369,19 +370,19 @@ async def secure_log_stream_generator(
         })
 
         if validation_result.status == ValidationStatus.FAILED:
-            yield f"data: {json.dumps({'type': 'error', 'message': 'Security validation failed'})}\n\n"
+            yield format_sse_data({'type': 'error', 'message': 'Security validation failed'})
             return
 
         # Send sanitization status
-        yield f"data: {json.dumps({'type': 'security', 'status': 'sanitizing'})}\n\n"
+        yield format_sse_data({'type': 'security', 'status': 'sanitizing'})
 
         # Sanitize content
         sanitized_content, stats = agent.sanitizer.sanitize(log_content)
 
-        yield f"data: {json.dumps({'type': 'security', 'redacted': sum(stats.values())})}\n\n"
+        yield format_sse_data({'type': 'security', 'redacted': sum(stats.values())})
 
         # Process analysis
-        yield f"data: {json.dumps({'type': 'analysis', 'status': 'processing'})}\n\n"
+        yield format_sse_data({'type': 'analysis', 'status': 'processing'})
 
         # Create user context and analyze
         user_context = await create_user_context_from_user_id(user_id)
@@ -395,14 +396,14 @@ async def secure_log_stream_generator(
                 )
 
         # Send result
-        yield f"data: {json.dumps({'type': 'result', 'data': response})}\n\n"
+        yield format_sse_data({'type': 'result', 'data': response})
 
         # Send completion
-        yield f"data: {json.dumps({'type': 'done'})}\n\n"
+        yield format_sse_data({'type': 'done'})
 
     except Exception as e:
         logger.error(f"Secure stream error: {e}")
-        yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+        yield format_sse_data({'type': 'error', 'message': str(e)})
 
     finally:
         # Ensure cleanup
