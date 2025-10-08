@@ -24,7 +24,12 @@ from app.core.rate_limiting.exceptions import (
 from app.agents_v2.orchestration.graph import app as agent_graph
 from app.agents_v2.orchestration.state import GraphState # Corrected import location
 from app.api.v1.endpoints import search_tools_endpoints # Added for search tools endpoints
-from app.api.v1.endpoints import agent_endpoints  # Agent interaction endpoints
+from app.api.v1.endpoints import (
+    chat_endpoints,  # Agent chat (SSE)
+    unified_endpoints,  # Unified router (SSE)
+    logs_endpoints,  # Log analysis (JSON + SSE + sessions)
+    research_endpoints,  # Research (JSON + SSE)
+)
 from app.api.v1.endpoints import feedme_endpoints  # FeedMe transcript ingestion
 from app.api.v1.endpoints import text_approval_endpoints  # Text approval workflow for FeedMe
 from app.api.v1.endpoints import chat_session_endpoints  # Chat session persistence
@@ -131,7 +136,11 @@ if os.getenv("ENABLE_LOCAL_AUTH_BYPASS", "false").lower() == "true":
 
 # Always include core application routers
 app.include_router(search_tools_endpoints.router, prefix="/api/v1/tools", tags=["Search Tools"])
-app.include_router(agent_endpoints.router, prefix="/api/v1", tags=["Agent Interaction"])
+# Register Agent Interaction routers (modularized)
+app.include_router(chat_endpoints.router, prefix="/api/v1", tags=["Agent Interaction"])
+app.include_router(unified_endpoints.router, prefix="/api/v1", tags=["Agent Interaction"])
+app.include_router(logs_endpoints.router, prefix="/api/v1", tags=["Agent Interaction"]) 
+app.include_router(research_endpoints.router, prefix="/api/v1", tags=["Agent Interaction"]) 
 # Register FeedMe routes
 app.include_router(feedme_endpoints.router, prefix="/api/v1", tags=["FeedMe"])
 # Register FeedMe Text Approval routes  
