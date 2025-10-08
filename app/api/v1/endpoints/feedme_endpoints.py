@@ -1349,7 +1349,7 @@ async def manually_process_conversation(conversation_id: int):
             # Fall back to direct processing
             try:
                 from app.feedme.transcript_parser import TranscriptParser
-                from app.db.embedding_utils import generate_feedme_embeddings
+                from app.db.embedding.utils import generate_feedme_embeddings
                 
                 # Update status to processing using Supabase
                 await update_conversation_status(
