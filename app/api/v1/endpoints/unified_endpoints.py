@@ -17,6 +17,7 @@ from app.api.v1.endpoints.agent_common import (
     get_user_id_for_dev_mode,
     serialize_analysis_results,
     augment_analysis_metadata,
+    _format_log_analysis_content,
 )
 from app.api.v1.middleware.log_analysis_middleware import (
     log_analysis_request_middleware,
@@ -146,8 +147,6 @@ async def unified_agent_stream_generator(request: UnifiedAgentRequest, user_id: 
                             pass
                         content_md = summary if not isinstance(analysis_results, dict) else None
                         if not content_md:
-                            # Build content with the same helper as agent_endpoints used previously
-                            from app.api.v1.endpoints.agent_endpoints import _format_log_analysis_content  # reuse existing builder
                             content_md = _format_log_analysis_content(analysis_results, request.message)
                         yield format_sse_data({"role": "assistant", "content": content_md, "agent_type": "log_analysis", "trace_id": request.trace_id, "analysis_results": analysis_results, "session_id": session_id})
                     except Exception as json_error:

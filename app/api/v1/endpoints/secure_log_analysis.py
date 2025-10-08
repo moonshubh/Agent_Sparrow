@@ -19,7 +19,12 @@ from pydantic import BaseModel
 from app.agents_v2.log_analysis_agent.comprehensive_agent import LogAnalysisAgent
 from app.agents_v2.log_analysis_agent.privacy import RedactionLevel
 from app.agents_v2.log_analysis_agent.security import ValidationStatus, ThreatLevel
-from app.api.v1.endpoints.agent_endpoints import get_current_user_id
+try:
+    from app.api.v1.endpoints.auth import get_current_user_id
+except ImportError:  # pragma: no cover
+    async def get_current_user_id() -> str:  # type: ignore
+        from app.core.settings import settings
+        return getattr(settings, 'development_user_id', 'dev-user-12345')
 from app.core.user_context import create_user_context_from_user_id, user_context_scope
 from app.core.transport.sse import format_sse_data
 

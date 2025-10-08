@@ -130,3 +130,70 @@ def get_user_id_for_dev_mode(settings) -> str:
     if getattr(settings, 'skip_auth', False) and getattr(settings, 'development_user_id', None):
         return settings.development_user_id
     return "anonymous"
+
+
+def _format_log_analysis_content(analysis: dict | Any, question: str | None) -> str:
+    """Build a cohesive markdown answer for log analysis results."""
+    try:
+        if not isinstance(analysis, dict):
+            if hasattr(analysis, 'model_dump'):
+                analysis = analysis.model_dump()  # type: ignore
+            elif hasattr(analysis, 'dict'):
+                analysis = analysis.dict()  # type: ignore
+            else:
+                analysis = {"overall_summary": str(analysis)}
+
+        overall_summary = analysis.get("overall_summary") or analysis.get("summary") or "Log analysis complete."
+        issues = analysis.get("identified_issues") or analysis.get("issues") or []
+        solutions = analysis.get("proposed_solutions") or analysis.get("solutions") or analysis.get("actions") or []
+
+        parts: list[str] = []
+        if question:
+            parts.append(
+                f"Thanks for sharing the log file. I reviewed it in the context of your question: \"{question}\". Here's what I found and how to fix it."
+            )
+        else:
+            parts.append(
+                "Thanks for sharing the log file. I’ve completed the analysis — here’s what’s going on and how to fix it."
+            )
+
+        parts.append("## Problem analysis\n" + str(overall_summary))
+
+        if isinstance(issues, list) and len(issues) > 0:
+            findings: list[str] = []
+            for issue in issues[:3]:
+                title = issue.get("title") if isinstance(issue, dict) else None
+                details = issue.get("details") if isinstance(issue, dict) else None
+                severity = issue.get("severity") if isinstance(issue, dict) else None
+                bullet = "- "
+                if severity:
+                    bullet += f"[{severity}] "
+                if title:
+                    bullet += f"{title}"
+                if details:
+                    bullet += f": {details}"
+                findings.append(bullet)
+            if findings:
+                parts.append("### Critical findings\n" + "\n".join(findings))
+
+        step_sections: list[str] = []
+        if isinstance(solutions, list) and len(solutions) > 0:
+            for idx, sol in enumerate(solutions[:3], start=1):
+                if not isinstance(sol, dict):
+                    continue
+                title = sol.get("title") or f"Solution {idx}"
+                steps = sol.get("steps") or []
+                section_lines: list[str] = [f"### Solution {idx}: {title}"]
+                if isinstance(steps, list) and steps:
+                    section_lines.append("**Steps to resolve:**")
+                    for j, step in enumerate(steps, start=1):
+                        section_lines.append(f"{j}. {step}")
+                step_sections.append("\n".join(section_lines))
+
+        if step_sections:
+            parts.append("## Step-by-step solution\n" + "\n\n".join(step_sections))
+
+        return "\n\n".join(parts)
+    except Exception:
+        summary = analysis.get("overall_summary") if isinstance(analysis, dict) else None
+        return f"Log analysis complete! {summary or ''}".strip()
