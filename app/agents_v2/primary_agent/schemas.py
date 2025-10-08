@@ -1,6 +1,6 @@
 from typing import List, Optional
 from langchain_core.messages import BaseMessage
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 
 class PrimaryAgentState(BaseModel):
     """
@@ -23,7 +23,8 @@ class PrimaryAgentState(BaseModel):
         description="LLM model id override (e.g., 'gemini-2.5-flash' or 'gpt-5-mini-2025-08-07')."
     )
 
-    class Config:
-        arbitrary_types_allowed = True
+    model_config = ConfigDict(
+        arbitrary_types_allowed=True,
         # Allow future forward-compat fields if added by callers
-        extra = "ignore"
+        extra="ignore",
+    )

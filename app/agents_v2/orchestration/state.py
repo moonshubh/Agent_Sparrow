@@ -1,7 +1,7 @@
 from typing import List, Literal, Optional, Any
 from langchain_core.documents import Document
 from langchain_core.messages import BaseMessage
-from pydantic import BaseModel, Field, model_serializer
+from pydantic import BaseModel, Field, model_serializer, ConfigDict
 
 from app.agents_v2.log_analysis_agent.simplified_schemas import SimplifiedLogAnalysisOutput as StructuredLogAnalysisOutput
 from app.agents_v2.reflection.schema import ReflectionFeedback  # noqa: E402, isort:skip
@@ -60,7 +60,6 @@ class GraphState(BaseModel):
         serialized_data['messages'] = self.messages
         return serialized_data
 
-    class Config:
-        arbitrary_types_allowed = True
+    model_config = ConfigDict(arbitrary_types_allowed=True)
 
 GraphState.model_rebuild()

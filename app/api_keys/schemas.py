@@ -4,7 +4,7 @@ Pydantic schemas for secure API key management.
 
 from datetime import datetime
 from typing import Optional, List, Dict, Any
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, field_validator, ConfigDict
 from enum import Enum
 
 class APIKeyType(str, Enum):
@@ -29,13 +29,13 @@ class APIKeyCreateRequest(BaseModel):
     api_key: str = Field(..., min_length=1, description="The API key value")
     key_name: Optional[str] = Field(None, max_length=100, description="User-friendly name")
     
-    @validator('api_key')
+    @field_validator('api_key')
     def validate_api_key(cls, v):
         if not v or not v.strip():
             raise ValueError("API key cannot be empty")
         return v.strip()
     
-    @validator('key_name')
+    @field_validator('key_name')
     def validate_key_name(cls, v):
         if v is not None:
             v = v.strip()
@@ -49,7 +49,7 @@ class APIKeyUpdateRequest(BaseModel):
     key_name: Optional[str] = Field(None, max_length=100, description="User-friendly name")
     is_active: Optional[bool] = Field(None, description="Whether the key is active")
     
-    @validator('api_key')
+    @field_validator('api_key')
     def validate_api_key(cls, v):
         if v is not None:
             v = v.strip()
@@ -74,8 +74,7 @@ class APIKeyInfo(BaseModel):
     last_used_at: Optional[datetime]
     masked_key: str = Field(..., description="Masked API key for display")
     
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 class APIKeyListResponse(BaseModel):
     """Response for listing user's API keys."""
@@ -123,8 +122,7 @@ class APIKeyAuditLog(BaseModel):
     user_agent: Optional[str]
     created_at: datetime
     
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 class APIKeyAuditLogResponse(BaseModel):
     """Response for audit log queries."""
@@ -146,8 +144,7 @@ class APIKeyRecord(BaseModel):
     updated_at: datetime
     last_used_at: Optional[datetime]
     
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 class DecryptedAPIKey(BaseModel):
     """Decrypted API key for internal use."""

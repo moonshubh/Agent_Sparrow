@@ -8,7 +8,7 @@ from datetime import datetime
 from typing import List, Dict, Optional, Any, Union
 from enum import Enum
 
-from pydantic import BaseModel, Field, validator, ConfigDict, ValidationError
+from pydantic import BaseModel, Field, field_validator, model_validator, ConfigDict, ValidationError, FieldValidationInfo
 import numpy as np
 
 
@@ -71,7 +71,7 @@ class TempExampleCreate(BaseModel):
     tags: Optional[List[str]] = Field(default_factory=list)
     metadata: Optional[Dict[str, Any]] = Field(default_factory=dict)
 
-    @validator('question_text', 'answer_text')
+    @field_validator('question_text', 'answer_text')
     def validate_text_content(cls, v):
         """Validate text content for basic quality"""
         if not v or not v.strip():
@@ -83,7 +83,7 @@ class TempExampleCreate(BaseModel):
         
         return v.strip()
 
-    @validator('tags')
+    @field_validator('tags')
     def validate_tags(cls, v):
         """Validate tags list"""
         if v and len(v) > 10:
@@ -228,7 +228,7 @@ class BulkApprovalRequest(BaseModel):
     """Schema for bulk approval operations"""
     model_config = ConfigDict(str_strip_whitespace=True)
     
-    temp_example_ids: List[int] = Field(..., min_items=1, max_items=100)
+    temp_example_ids: List[int] = Field(..., min_length=1, max_length=100)
     action: ApprovalAction
     reviewer_id: str = Field(..., min_length=1, max_length=255)
     
@@ -239,7 +239,7 @@ class BulkApprovalRequest(BaseModel):
     rejection_reason: Optional[RejectionReason] = None
     revision_instructions: Optional[str] = Field(None, max_length=1000)
 
-    @validator('temp_example_ids')
+    @field_validator('temp_example_ids')
     def validate_unique_ids(cls, v):
         """Ensure all IDs are unique"""
         if len(v) != len(set(v)):
@@ -337,10 +337,10 @@ class WorkflowConfig(BaseModel):
     min_confidence_for_auto_approval: float = Field(default=0.9, ge=0.5, le=1.0)
     require_dual_review_threshold: float = Field(default=0.5, ge=0.0, le=1.0)
 
-    @validator('high_confidence_threshold')
-    def validate_threshold_order(cls, v, values):
+    @field_validator('high_confidence_threshold')
+    def validate_threshold_order(cls, v, info: FieldValidationInfo):
         """Ensure thresholds are in correct order"""
-        auto_threshold = values.get('auto_approval_threshold', 0.9)
+        auto_threshold = info.data.get('auto_approval_threshold', 0.9)
         if v >= auto_threshold:
             raise ValueError("High confidence threshold must be less than auto approval threshold")
         return v
@@ -358,12 +358,13 @@ class PaginatedTempExampleResponse(BaseModel):
     page_size: int
     total_pages: int
 
-    @validator('total_pages', always=True)
-    def calculate_total_pages(cls, v, values):
+    @model_validator(mode='after')
+    def calculate_total_pages(self):
         """Calculate total pages based on total and page_size"""
-        total = values.get('total', 0)
-        page_size = values.get('page_size', 10)
-        return (total + page_size - 1) // page_size if total > 0 else 0
+        total = getattr(self, 'total', 0)
+        page_size = getattr(self, 'page_size', 10)
+        self.total_pages = (total + page_size - 1) // page_size if total > 0 else 0
+        return self
 
 
 class ApprovalSummary(BaseModel):

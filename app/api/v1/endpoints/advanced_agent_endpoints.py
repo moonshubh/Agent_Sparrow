@@ -11,7 +11,7 @@ suitable for small-scale deployments (10 users).
 
 from fastapi import APIRouter, HTTPException, Depends, Body
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, field_validator
 from typing import Optional, List, Dict, Any, Literal, AsyncGenerator
 from datetime import datetime, timedelta
 import logging
@@ -107,15 +107,15 @@ class ReasoningRequest(BaseModel):
     quality_level: Optional[str] = Field(default="balanced", description="Quality level for processing")
     stream_response: bool = Field(default=False, description="Stream partial results as they become available")
     
-    @validator('query')
+    @field_validator('query')
     def validate_query(cls, v):
         return validate_query_length(v)
     
-    @validator('session_id')
+    @field_validator('session_id')
     def validate_session(cls, v):
         return validate_session_id(v)
     
-    @validator('quality_level')
+    @field_validator('quality_level')
     def validate_quality_level(cls, v):
         if v not in ["fast", "balanced", "thorough"]:
             raise ValueError('Invalid quality level')
@@ -150,22 +150,22 @@ class TroubleshootingRequest(BaseModel):
     session_id: Optional[str] = Field(None, description="Session ID for persistence")
     quality_level: Optional[str] = Field(default="balanced", description="Quality level for processing")
     
-    @validator('problem_description')
+    @field_validator('problem_description')
     def validate_problem(cls, v):
         return validate_query_length(v)
     
-    @validator('session_id')
+    @field_validator('session_id')
     def validate_session(cls, v):
         return validate_session_id(v)
     
-    @validator('previous_attempts')
+    @field_validator('previous_attempts')
     def validate_attempts(cls, v):
         if v and len(v) > 10:
             raise ValueError('Too many previous attempts (max 10)')
         # Sanitize each attempt
         return [sanitize_input(attempt) for attempt in v] if v else []
     
-    @validator('quality_level')
+    @field_validator('quality_level')
     def validate_quality_level(cls, v):
         if v not in ["fast", "balanced", "thorough"]:
             raise ValueError('Invalid quality level')
@@ -195,18 +195,18 @@ class DiagnosticStepRequest(BaseModel):
     additional_data: Optional[Dict[str, Any]] = Field(default_factory=dict, description="Additional data")
     quality_level: Optional[str] = Field(default="balanced", description="Quality level for processing")
     
-    @validator('session_id')
+    @field_validator('session_id')
     def validate_session(cls, v):
         return validate_session_id(v)
     
-    @validator('customer_feedback')
+    @field_validator('customer_feedback')
     def validate_feedback(cls, v):
         if v:
             # Sanitize customer feedback to prevent XSS
             return sanitize_input(v)
         return v
     
-    @validator('quality_level')
+    @field_validator('quality_level')
     def validate_quality_level(cls, v):
         if v not in ["fast", "balanced", "thorough"]:
             raise ValueError('Invalid quality level')

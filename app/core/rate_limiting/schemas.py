@@ -5,7 +5,7 @@ Schemas for rate limiting data structures.
 from datetime import datetime
 from enum import Enum
 from typing import Dict, Any, Optional
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 
 
 class CircuitState(str, Enum):
@@ -32,8 +32,7 @@ class RateLimitMetadata(BaseModel):
     model: str = Field(description="Gemini model name")
     safety_margin: float = Field(default=0.2, description="Safety margin applied")
     
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class RateLimitResult(BaseModel):
@@ -44,8 +43,7 @@ class RateLimitResult(BaseModel):
     retry_after: Optional[int] = Field(default=None, description="Seconds to wait before retry")
     blocked_by: Optional[str] = Field(default=None, description="Which limit blocked the request")
     
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class CircuitBreakerStatus(BaseModel):
@@ -57,8 +55,7 @@ class CircuitBreakerStatus(BaseModel):
     last_failure_time: Optional[datetime] = Field(default=None, description="Time of last failure")
     next_attempt_time: Optional[datetime] = Field(default=None, description="When next attempt is allowed")
     
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
     
     
 class UsageStats(BaseModel):
@@ -76,5 +73,4 @@ class UsageStats(BaseModel):
     uptime_percentage: float = Field(description="Service uptime percentage")
     last_updated: datetime = Field(default_factory=datetime.utcnow, description="When stats were last updated")
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)

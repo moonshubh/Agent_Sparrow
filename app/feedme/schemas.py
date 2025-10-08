@@ -9,7 +9,7 @@ from typing import Dict, List, Optional, Any
 from uuid import UUID
 from datetime import datetime
 from enum import Enum
-from pydantic import BaseModel, Field, validator, field_validator
+from pydantic import BaseModel, Field, field_validator, ConfigDict
 import uuid
 
 from app.core.settings import settings
@@ -137,7 +137,7 @@ class TranscriptUploadRequest(BaseModel):
     uploaded_by: Optional[str] = Field(None, description="User uploading the transcript")
     metadata: Dict[str, Any] = Field(default_factory=dict, description="Additional metadata")
 
-    @validator('transcript_content')
+    @field_validator('transcript_content')
     def validate_transcript_content(cls, v):
         """
         Validates that the transcript content is at least 10 characters long after stripping whitespace.
@@ -219,7 +219,7 @@ class DeleteConversationResponse(BaseModel):
 
 class BulkApprovalRequest(BaseModel):
     """Request model for bulk approving conversations."""
-    conversation_ids: List[int] = Field(..., min_items=1, description="A list of conversation IDs to approve.")
+    conversation_ids: List[int] = Field(..., min_length=1, description="A list of conversation IDs to approve.")
     approved_by: str = Field(..., description="The ID or name of the user performing the bulk approval.")
     approval_notes: Optional[str] = Field(None, description="Optional notes for the bulk approval.")
 
@@ -243,8 +243,7 @@ class ConversationVersion(BaseModel):
     change_description: Optional[str] = None
     is_active: bool
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 class VersionListResponse(BaseModel):
     """Response model for a list of conversation versions."""
@@ -341,8 +340,7 @@ class FeedMeConversation(FeedMeConversationBase):
     created_at: datetime = Field(..., description="Creation timestamp")
     updated_at: datetime = Field(..., description="Last update timestamp")
     
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 # FeedMeExample class removed - system now uses unified text canvas approach
@@ -434,8 +432,7 @@ class Folder(FolderBase):
     updated_at: datetime = Field(..., description="Last update timestamp")
     conversation_count: int = Field(0, description="Number of conversations in this folder")
     
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class FolderListResponse(BaseModel):
@@ -447,7 +444,7 @@ class AddConversationToFolderRequest(BaseModel):
     """Request to add a conversation to a folder"""
     conversation_ids: List[int] = Field(..., description="List of conversation IDs to add")
     
-    @validator('conversation_ids')
+    @field_validator('conversation_ids')
     def validate_conversation_ids(cls, v):
         if not v:
             raise ValueError("At least one conversation ID must be provided")
@@ -528,7 +525,7 @@ class BulkApprovalRequest(BaseModel):
     approved_by: str = Field(..., description="User performing the bulk operation")
     reviewer_notes: Optional[str] = Field(None, description="Notes for the bulk operation")
     
-    @validator('conversation_ids')
+    @field_validator('conversation_ids')
     def validate_conversation_ids(cls, v):
         if not v or len(v) == 0:
             raise ValueError("At least one conversation ID is required")
@@ -536,7 +533,7 @@ class BulkApprovalRequest(BaseModel):
             raise ValueError("Maximum 50 conversations can be processed at once")
         return v
     
-    @validator('action')
+    @field_validator('action')
     def validate_action(cls, v):
         if v not in ['approve', 'reject']:
             raise ValueError("Action must be 'approve' or 'reject'")
@@ -608,8 +605,7 @@ class ConversationApprovalPreview(BaseModel):
     text_stats: Dict[str, int] = Field(..., description="Text statistics (character count, word count, etc.)")
     approval_metadata: Dict[str, Any] = Field(..., description="Metadata for approval process")
     
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 # Example-related schemas for Q&A pairs
@@ -653,8 +649,7 @@ class FeedMeExample(FeedMeExampleBase):
     created_at: datetime
     updated_at: datetime
     
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class ExampleListResponse(BaseModel):
@@ -665,8 +660,7 @@ class ExampleListResponse(BaseModel):
     page_size: int
     total_pages: int
     
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class ExampleReviewRequest(BaseModel):
@@ -833,5 +827,4 @@ class SmartSearchResponse(BaseModel):
     results: List[SmartSearchResult]
     total_results: int
     suggestions: List[str]
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)

@@ -11,7 +11,7 @@ from typing import List, Optional, Dict, Any
 from datetime import datetime, timezone
 from fastapi import APIRouter, HTTPException, Depends, UploadFile, File, Form, Query, Body, BackgroundTasks, Request
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 import io
 # import psycopg2.extras as psycopg2_extras  # Removed - using Supabase exclusively
 
@@ -81,8 +81,7 @@ class FeedMeFolder(BaseModel):
     updated_at: datetime
     conversation_count: Optional[int] = 0
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 class FolderCreate(BaseModel):
     name: str

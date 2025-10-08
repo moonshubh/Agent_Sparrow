@@ -6,8 +6,8 @@ from pathlib import Path
 from typing import Optional, List
 
 from dotenv import load_dotenv
-from pydantic_settings import BaseSettings
-from pydantic import Field, field_validator, validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import Field, field_validator
 
 # Load environment variables from project root .env if present
 # Calculate the path safely with depth validation
@@ -26,6 +26,13 @@ load_dotenv(ENV_PATH)
 
 class Settings(BaseSettings):
     """Application configuration loaded from environment variables."""
+
+    # Pydantic v2 settings configuration
+    model_config = SettingsConfigDict(
+        case_sensitive=False,
+        env_file=ENV_PATH,
+        extra="ignore",
+    )
 
     gemini_api_key: Optional[str] = Field(default=None, alias="GEMINI_API_KEY")
     
@@ -177,7 +184,7 @@ class Settings(BaseSettings):
     # Use a valid UUID for development (this is a v4 UUID)
     development_user_id: str = Field(default="00000000-0000-0000-0000-000000000000", alias="DEVELOPMENT_USER_ID")
     
-    @validator('skip_auth', pre=True)
+    @field_validator('skip_auth', mode='before')
     @classmethod
     def parse_skip_auth(cls, v):
         """Parse boolean from string environment variable."""
@@ -294,10 +301,6 @@ class Settings(BaseSettings):
             return False
         return self.reasoning_enable_thinking_trace
 
-    class Config:
-        case_sensitive = False
-        env_file = ENV_PATH
-        extra = "ignore"
 
 @lru_cache()
 def get_settings() -> Settings:

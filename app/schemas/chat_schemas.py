@@ -8,7 +8,7 @@ Following the established MB-Sparrow patterns from FeedMe schemas.
 from typing import Dict, List, Optional, Any
 from datetime import datetime
 from enum import Enum
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, field_validator, FieldValidationInfo, ConfigDict
 
 
 class MessageType(str, Enum):
@@ -35,7 +35,7 @@ class ChatSessionBase(BaseModel):
     metadata: Dict[str, Any] = Field(default_factory=dict, description="Additional metadata")
     is_active: bool = Field(default=True, description="Whether session is active")
 
-    @validator('title')
+    @field_validator('title')
     def validate_title(cls, v):
         """Validate that title is not empty after stripping whitespace"""
         if not v or not v.strip():
@@ -52,17 +52,17 @@ class ChatMessageBase(BaseModel):
     environmental_context: Optional[Dict[str, Any]] = Field(default_factory=dict, description="Environmental context information for the message")
     correlation_analysis: Optional[Dict[str, Any]] = Field(default_factory=dict, description="Correlation analysis data for message relationships")
 
-    @validator('content')
+    @field_validator('content')
     def validate_content(cls, v):
         """Validate that content is not empty after stripping whitespace"""
         if not v or not v.strip():
             raise ValueError("Message content cannot be empty")
         return v.strip()
 
-    @validator('agent_type')
-    def validate_agent_type_for_assistant(cls, v, values):
+    @field_validator('agent_type')
+    def validate_agent_type_for_assistant(cls, v, info: FieldValidationInfo):
         """Validate that assistant messages have an agent_type"""
-        if values.get('message_type') == MessageType.ASSISTANT and not v:
+        if (info.data.get('message_type') == MessageType.ASSISTANT) and not v:
             raise ValueError("Assistant messages must specify an agent_type")
         return v
 
@@ -81,7 +81,7 @@ class ChatMessageCreate(ChatMessageBase):
         description="ID of the parent chat session. Optional when provided via URL path."
     )
 
-    @validator('session_id')
+    @field_validator('session_id')
     def validate_session_id(cls, v):
         """Ensure explicit session IDs are positive when supplied."""
         if v is not None and v <= 0:
@@ -97,7 +97,7 @@ class ChatSessionUpdate(BaseModel):
     is_active: Optional[bool] = Field(None, description="Updated active status")
     metadata: Optional[Dict[str, Any]] = Field(None, description="Updated metadata")
 
-    @validator('title')
+    @field_validator('title')
     def validate_title(cls, v):
         """Validate that title is not empty after stripping whitespace"""
         if v is not None:
@@ -118,8 +118,7 @@ class ChatSession(ChatSessionBase):
     updated_at: datetime
     message_count: int = Field(default=0, description="Number of messages in this session")
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class ChatMessage(ChatMessageBase):
@@ -128,8 +127,7 @@ class ChatMessage(ChatMessageBase):
     session_id: int
     created_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class ChatSessionWithMessages(ChatSession):
@@ -213,7 +211,7 @@ class ChatErrorResponse(BaseModel):
 
 class BulkSessionUpdate(BaseModel):
     """Model for bulk updating sessions"""
-    session_ids: List[int] = Field(..., min_items=1, description="List of session IDs to update")
+    session_ids: List[int] = Field(..., min_length=1, description="List of session IDs to update")
     updates: ChatSessionUpdate = Field(..., description="Updates to apply")
 
 

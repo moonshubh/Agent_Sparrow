@@ -22,7 +22,7 @@ from pgvector.psycopg2 import register_vector
 from dotenv import load_dotenv
 from langchain_google_genai import embeddings as gen_embeddings
 from typing import List, Optional, Dict, Any # Removed Tuple
-from pydantic import BaseModel # Added Pydantic BaseModel
+from pydantic import BaseModel, ConfigDict # Added Pydantic BaseModel
 
 from app.core.settings import settings
 from app.db.supabase_client import get_supabase_client
@@ -171,8 +171,7 @@ class SearchResult(BaseModel):
     similarity_score: float # Cosine similarity, not distance
     source_type: str = "knowledge_base"  # Source identifier
 
-    class Config:
-        from_attributes = True  # Updated for Pydantic v2
+    model_config = ConfigDict(from_attributes=True)  # Updated for Pydantic v2
 
 
 class FeedMeSearchResult(BaseModel):
@@ -192,8 +191,7 @@ class FeedMeSearchResult(BaseModel):
     usefulness_score: float
     source_type: str = "feedme"  # Source identifier
 
-    class Config:
-        from_attributes = True  # Updated for Pydantic v2
+    model_config = ConfigDict(from_attributes=True)  # Updated for Pydantic v2
 
 
 class CombinedSearchResult(BaseModel):
@@ -207,8 +205,7 @@ class CombinedSearchResult(BaseModel):
     similarity_score: float
     additional_data: Optional[Dict[str, Any]] = None  # Source-specific extra data
 
-    class Config:
-        from_attributes = True  # Updated for Pydantic v2
+    model_config = ConfigDict(from_attributes=True)  # Updated for Pydantic v2
 
 def find_similar_documents(query: str, top_k: int = 5) -> List[SearchResult]:
     """Finds documents similar to the query using pgvector cosine similarity."""

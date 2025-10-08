@@ -26,7 +26,7 @@ from urllib.parse import urlparse
 import ipaddress
 import logging
 
-from pydantic import BaseModel, validator, Field
+from pydantic import BaseModel, Field, field_validator
 from fastapi import HTTPException, Request, Response
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 import bleach
@@ -214,7 +214,7 @@ class SecureTextModel(BaseModel):
     """Pydantic model for secure text validation"""
     text: str = Field(..., min_length=1, max_length=SECURITY_CONFIG["MAX_TEXT_LENGTH"])
     
-    @validator('text')
+    @field_validator('text')
     def validate_text_security(cls, v):
         # Check for XSS patterns
         xss_patterns = SecurityValidator.detect_xss_patterns(v)
@@ -229,7 +229,7 @@ class SecureTitleModel(BaseModel):
     """Pydantic model for secure title validation"""
     title: str = Field(..., min_length=1, max_length=SECURITY_CONFIG["MAX_TITLE_LENGTH"])
     
-    @validator('title')
+    @field_validator('title')
     def validate_title_security(cls, v):
         # Check for XSS patterns
         xss_patterns = SecurityValidator.detect_xss_patterns(v)
@@ -244,7 +244,7 @@ class SecureFolderNameModel(BaseModel):
     """Pydantic model for secure folder name validation"""
     name: str = Field(..., min_length=1, max_length=SECURITY_CONFIG["MAX_FOLDER_NAME_LENGTH"])
     
-    @validator('name')
+    @field_validator('name')
     def validate_folder_name(cls, v):
         # Check for path traversal
         if SecurityValidator.detect_path_traversal(v):
@@ -261,7 +261,7 @@ class SecureSearchModel(BaseModel):
     """Pydantic model for secure search query validation"""
     query: str = Field(..., max_length=200)
     
-    @validator('query')
+    @field_validator('query')
     def validate_search_query(cls, v):
         # Check for SQL injection
         sql_patterns = SecurityValidator.detect_sql_injection(v)

@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import Optional
 from sqlalchemy import Column, Integer, String, Text, Boolean, DateTime, JSON, CheckConstraint, Index
 from sqlalchemy.dialects.postgresql import INET, JSONB
-from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import declarative_base
 from sqlalchemy.sql import func
 
 Base = declarative_base()
