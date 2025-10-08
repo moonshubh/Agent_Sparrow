@@ -68,20 +68,13 @@ def get_redaction_level(level: Optional[str]) -> RedactionLevel:
 def create_secure_agent(security_level: RedactionLevel = RedactionLevel.PARANOID) -> LogAnalysisAgent:
     """Create a new secure log analysis agent instance.
 
-    Creates a fresh agent instance for thread-safety in concurrent requests.
-    Each request gets its own agent to avoid race conditions.
-
-    Args:
-        security_level: The security/redaction level for the agent
-
-    Returns:
-        A new LogAnalysisAgent instance
+    For log analysis we require the higher quality Google model.
     """
     return LogAnalysisAgent(
         provider="google",
         model_name="gemini-2.5-pro",
         enable_security=True,
-        security_level=security_level
+        security_level=security_level,
     )
 
 
