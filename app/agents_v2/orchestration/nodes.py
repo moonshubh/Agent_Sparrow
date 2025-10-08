@@ -101,7 +101,7 @@ async def run_researcher(state: GraphState):
     Runs the research agent graph asynchronously using the last user query,
     and appends a synthesized answer + citations to the messages.
     """
-    print("---RUNNING RESEARCHER (async)---")
+    logger.debug("running_researcher_async")
     # Extract the latest user query (prefer last HumanMessage)
     query_text = None
     if state.messages:

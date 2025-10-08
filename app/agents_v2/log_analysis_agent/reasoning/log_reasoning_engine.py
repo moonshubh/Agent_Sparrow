@@ -40,6 +40,21 @@ from ..formatters.response_formatter import LogResponseFormatter, FormattingConf
 logger = logging.getLogger(__name__)
 
 
+def should_include_live_web(confidence: float, coverage: int, top_score: float) -> bool:
+    """Gate to decide whether to trigger live Tavily search.
+
+    Rules:
+      - confidence < 0.7 OR
+      - coverage < 3 OR
+      - top_score < 0.55
+    """
+    try:
+        return (confidence < 0.7) or (coverage < 3) or (top_score < 0.55)
+    except Exception:
+        # Fail open to include live web only if metrics unavailable
+        return True
+
+
 class LogReasoningEngine(ReasoningEngine):
     """
     Specialized reasoning engine for log analysis with enhanced capabilities.
@@ -614,12 +629,47 @@ Reflect on this log analysis response for quality improvement:
         try:
             logger.info("Gathering tool context for log analysis")
 
-            # Execute parallel tool searches
+            # First pass: KB + FeedMe + saved web snapshots (no live web)
             tool_results = await self.tool_orchestrator.search_all(
                 patterns=error_patterns,
                 metadata=metadata,
-                use_cache=True
+                use_cache=True,
+                include_web=False,
             )
+
+            # Compute coverage and top score across sources
+            coverage = (
+                len(tool_results.kb_articles)
+                + len(tool_results.feedme_conversations)
+                + len(tool_results.web_resources)
+            )
+            top_scores: list[float] = []
+            if tool_results.kb_articles:
+                top_scores.append(tool_results.kb_articles[0].relevance_score)
+            if tool_results.feedme_conversations:
+                top_scores.append(tool_results.feedme_conversations[0].confidence_score)
+            if tool_results.web_resources:
+                top_scores.append(tool_results.web_resources[0].relevance_score)
+            top_score = max(top_scores) if top_scores else 0.0
+
+            # Confidence from log analysis metadata if available
+            initial_conf = getattr(metadata, 'confidence_score', None)
+            if initial_conf is None:
+                # Fall back to 0.0 if not available
+                initial_conf = 0.0
+
+            # Gate live web search
+            if should_include_live_web(float(initial_conf), int(coverage), float(top_score)):
+                logger.info(
+                    "Gating enabled: triggering live web search (conf=%.2f, coverage=%d, top=%.2f)",
+                    initial_conf, coverage, top_score,
+                )
+                tool_results = await self.tool_orchestrator.search_all(
+                    patterns=error_patterns,
+                    metadata=metadata,
+                    use_cache=True,
+                    include_web=True,
+                )
 
             if tool_results.has_results:
                 logger.info(

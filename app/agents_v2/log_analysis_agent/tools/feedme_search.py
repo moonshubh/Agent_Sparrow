@@ -288,12 +288,21 @@ class FeedMeLogSearch:
                 else:
                     resolution_status = "unresolved"
 
-            # Calculate confidence score
-            confidence = self._calculate_confidence(
-                conv_data,
-                patterns,
-                conv_patterns
-            )
+            # Calculate confidence score; prefer similarity/confidence from aggregator if provided
+            confidence = None
+            try:
+                if isinstance(conv_data.get("confidence"), (int, float)):
+                    confidence = float(conv_data.get("confidence"))
+                elif isinstance(conv_data.get("similarity"), (int, float)):
+                    confidence = float(conv_data.get("similarity"))
+            except Exception:
+                confidence = None
+            if confidence is None:
+                confidence = self._calculate_confidence(
+                    conv_data,
+                    patterns,
+                    conv_patterns
+                )
 
             # Parse timestamp
             created_at = self._parse_timestamp(conv_data.get("created_at"))

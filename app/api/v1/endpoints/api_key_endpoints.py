@@ -355,12 +355,12 @@ async def debug_api_key_usage(
     
     # Check if user has a stored key
     try:
-        response = service.supabase.client.table("user_api_keys")\
-            .select("encrypted_key, is_active, created_at, last_used_at")\
-            .eq("user_uuid", user_id)\
-            .eq("api_key_type", "gemini")\
-            .eq("is_active", True)\
-            .execute()
+        response = await service.supabase._exec(lambda: service.supabase.client.table("user_api_keys")
+            .select("encrypted_key, is_active, created_at, last_used_at")
+            .eq("user_uuid", user_id)
+            .eq("api_key_type", "gemini")
+            .eq("is_active", True)
+            .execute())
         
         has_user_key = bool(response.data)
         user_key_info = response.data[0] if has_user_key else None

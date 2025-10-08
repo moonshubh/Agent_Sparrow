@@ -85,6 +85,15 @@ class SupabaseClient:
         if not self._client:
             self._initialize_client()
         return self._client
+
+    async def _exec(self, fn, timeout: float = 30):
+        """Run blocking Supabase SDK call in a thread with a timeout."""
+        try:
+            loop = asyncio.get_running_loop()
+            return await asyncio.wait_for(loop.run_in_executor(None, fn), timeout=timeout)
+        except Exception as e:
+            logger.error(f"Supabase exec failed: {e}")
+            raise
     
     # =====================================================
     # FOLDER OPERATIONS
@@ -123,7 +132,7 @@ class SupabaseClient:
             # Remove None values to avoid database errors
             data = {k: v for k, v in data.items() if v is not None}
             
-            response = self.client.table('feedme_folders').insert(data).execute()
+            response = await self._exec(lambda: self.client.table('feedme_folders').insert(data).execute())
             
             if response.data:
                 logger.info(f"Created folder: {name} (ID: {response.data[0]['id']})")
@@ -165,10 +174,10 @@ class SupabaseClient:
             # Add updated timestamp
             filtered_data['updated_at'] = datetime.now().isoformat()
             
-            response = self.client.table('feedme_folders')\
-                .update(filtered_data)\
-                .eq('id', folder_id)\
-                .execute()
+            response = await self._exec(lambda: self.client.table('feedme_folders')
+                .update(filtered_data)
+                .eq('id', folder_id)
+                .execute())
             
             if response.data and len(response.data) > 0:
                 logger.info(f"Updated folder ID: {folder_id} with fields: {list(filtered_data.keys())}")
@@ -184,10 +193,10 @@ class SupabaseClient:
     async def delete_folder(self, folder_id: int) -> bool:
         """Delete a folder (cascades to child folders)"""
         try:
-            response = self.client.table('feedme_folders')\
-                .delete()\
-                .eq('id', folder_id)\
-                .execute()
+            response = await self._exec(lambda: self.client.table('feedme_folders')
+                .delete()
+                .eq('id', folder_id)
+                .execute())
             
             logger.info(f"Deleted folder ID: {folder_id}")
             return True
@@ -200,10 +209,10 @@ class SupabaseClient:
         """List all folders with stats"""
         try:
             # Query the folder stats view for enriched data
-            response = self.client.table('feedme_folder_stats')\
-                .select('*')\
-                .order('folder_path')\
-                .execute()
+            response = await self._exec(lambda: self.client.table('feedme_folder_stats')
+                .select('*')
+                .order('folder_path')
+                .execute())
             
             return response.data or []
             
@@ -245,7 +254,7 @@ class SupabaseClient:
                 "processing_method": processing_method or "pdf_ocr",
             }
             
-            response = self.client.table('feedme_conversations').insert(data).execute()
+            response = await self._exec(lambda: self.client.table('feedme_conversations').insert(data).execute())
             
             if response.data:
                 logger.info(f"Created conversation: {title} (ID: {response.data[0]['id']})")
@@ -271,13 +280,13 @@ class SupabaseClient:
             # Use `maybe_single()` to explicitly request a single row. This returns
             # `None` when no rows are found instead of an empty list, which makes it
             # easier to distinguish between "not found" and other error cases.
-            response = (
+            response = await self._exec(lambda: (
                 self.client.table('feedme_conversations')
                 .select('*')
                 .eq('id', conversation_id)
                 .maybe_single()
                 .execute()
-            )
+            ))
 
             if response.data:
                 logger.info(f"Retrieved conversation {conversation_id}")
@@ -329,12 +338,12 @@ class SupabaseClient:
             query = query.order('created_at', desc=True)\
                          .range(offset, offset + limit - 1)
             
-            response = query.execute()
+            response = await self._exec(lambda: query.execute())
             
             # Get total count for pagination
-            count_response = self.client.table('feedme_conversations')\
-                .select('id', count='exact')\
-                .execute()
+            count_response = await self._exec(lambda: self.client.table('feedme_conversations')
+                .select('id', count='exact')
+                .execute())
             
             total_count = count_response.count if count_response.count else 0
             
@@ -377,10 +386,10 @@ class SupabaseClient:
             # Add updated_at timestamp
             updates['updated_at'] = datetime.now().isoformat()
             
-            response = self.client.table('feedme_conversations')\
-                .update(updates)\
-                .eq('id', conversation_id)\
-                .execute()
+            response = await self._exec(lambda: self.client.table('feedme_conversations')
+                .update(updates)
+                .eq('id', conversation_id)
+                .execute())
             
             if response.data and len(response.data) > 0:
                 logger.info(f"Updated conversation {conversation_id}")
@@ -406,10 +415,10 @@ class SupabaseClient:
         try:
             # Delete associated text chunks first (if they exist)
             try:
-                chunks_response = self.client.table('feedme_text_chunks')\
-                    .delete()\
-                    .eq('conversation_id', conversation_id)\
-                    .execute()
+                chunks_response = await self._exec(lambda: self.client.table('feedme_text_chunks')
+                    .delete()
+                    .eq('conversation_id', conversation_id)
+                    .execute())
                 chunks_count = len(chunks_response.data) if chunks_response.data else 0
             except Exception as e:
                 # Table might not exist or have no chunks - that's OK
@@ -417,10 +426,10 @@ class SupabaseClient:
                 chunks_count = 0
             
             # Then delete the conversation
-            conversation_response = self.client.table('feedme_conversations')\
-                .delete()\
-                .eq('id', conversation_id)\
-                .execute()
+            conversation_response = await self._exec(lambda: self.client.table('feedme_conversations')
+                .delete()
+                .eq('id', conversation_id)
+                .execute())
             
             if conversation_response.data:
                 logger.info(f"Deleted conversation {conversation_id} and {chunks_count} text chunks")
@@ -440,10 +449,10 @@ class SupabaseClient:
     ) -> Dict[str, Any]:
         """Move conversation to a different folder"""
         try:
-            response = self.client.table('feedme_conversations')\
-                .update({"folder_id": folder_id})\
-                .eq('id', conversation_id)\
-                .execute()
+            response = await self._exec(lambda: self.client.table('feedme_conversations')
+                .update({"folder_id": folder_id})
+                .eq('id', conversation_id)
+                .execute())
             
             if response.data:
                 logger.info(f"Moved conversation {conversation_id} to folder {folder_id}")
@@ -465,10 +474,10 @@ class SupabaseClient:
             # Handle special case for UNASSIGNED_FOLDER_ID (0) - set to NULL
             effective_folder_id = None if folder_id == 0 else folder_id
             
-            response = self.client.table('feedme_conversations')\
-                .update({"folder_id": effective_folder_id})\
-                .in_('id', conversation_ids)\
-                .execute()
+            response = await self._exec(lambda: self.client.table('feedme_conversations')
+                .update({"folder_id": effective_folder_id})
+                .in_('id', conversation_ids)
+                .execute())
             
             count = len(response.data) if response.data else 0
             logger.info(f"Assigned {count} conversations to folder {effective_folder_id} (input: {folder_id})")
@@ -493,10 +502,10 @@ class SupabaseClient:
             Dict containing example data if found, None otherwise
         """
         try:
-            response = self.client.table('feedme_examples')\
-                .select('*')\
-                .eq('id', example_id)\
-                .execute()
+            response = await self._exec(lambda: self.client.table('feedme_examples')
+                .select('*')
+                .eq('id', example_id)
+                .execute())
             
             if response.data and len(response.data) > 0:
                 logger.info(f"Retrieved example {example_id}")
@@ -528,10 +537,10 @@ class SupabaseClient:
             # Add updated_at timestamp
             update_data['updated_at'] = datetime.now().isoformat()
             
-            response = self.client.table('feedme_examples')\
-                .update(update_data)\
-                .eq('id', example_id)\
-                .execute()
+            response = await self._exec(lambda: self.client.table('feedme_examples')
+                .update(update_data)
+                .eq('id', example_id)
+                .execute())
             
             if response.data and len(response.data) > 0:
                 logger.info(f"Updated example {example_id}")
@@ -555,10 +564,10 @@ class SupabaseClient:
             Dict containing example and conversation data if found, None otherwise
         """
         try:
-            response = self.client.table('feedme_examples')\
-                .select('*, feedme_conversations(*)')\
-                .eq('id', example_id)\
-                .execute()
+            response = await self._exec(lambda: self.client.table('feedme_examples')
+                .select('*, feedme_conversations(*)')
+                .eq('id', example_id)
+                .execute())
             
             if response.data and len(response.data) > 0:
                 logger.info(f"Retrieved example {example_id} with conversation")
@@ -591,10 +600,10 @@ class SupabaseClient:
             conversation_id = example['conversation_id']
             
             # Delete the example
-            response = self.client.table('feedme_examples')\
-                .delete()\
-                .eq('id', example_id)\
-                .execute()
+            response = await self._exec(lambda: self.client.table('feedme_examples')
+                .delete()
+                .eq('id', example_id)
+                .execute())
             
             if response.data:
                 # Update conversation example count
@@ -621,18 +630,18 @@ class SupabaseClient:
         """
         try:
             # Count examples for this conversation
-            count_response = self.client.table('feedme_examples')\
-                .select('id', count='exact')\
-                .eq('conversation_id', conversation_id)\
-                .execute()
+            count_response = await self._exec(lambda: self.client.table('feedme_examples')
+                .select('id', count='exact')
+                .eq('conversation_id', conversation_id)
+                .execute())
             
             example_count = count_response.count if count_response.count is not None else 0
             
             # Update the conversation
-            response = self.client.table('feedme_conversations')\
-                .update({'total_examples': example_count, 'updated_at': datetime.now().isoformat()})\
-                .eq('id', conversation_id)\
-                .execute()
+            response = await self._exec(lambda: self.client.table('feedme_conversations')
+                .update({'total_examples': example_count, 'updated_at': datetime.now().isoformat()})
+                .eq('id', conversation_id)
+                .execute())
             
             if response.data:
                 logger.info(f"Updated conversation {conversation_id} example count to {example_count}")
@@ -674,16 +683,16 @@ class SupabaseClient:
             List of approved examples
         """
         try:
-            response = self.client.table('feedme_examples')\
+            response = await self._exec(lambda: self.client.table('feedme_examples')
                 .update({
                     "reviewed_at": datetime.utcnow().isoformat(),
                     "reviewed_by": approved_by,
                     "review_status": "approved",
                     "supabase_sync_status": "synced",
                     "supabase_sync_at": datetime.utcnow().isoformat()
-                })\
-                .in_('id', example_ids)\
-                .execute()
+                })
+                .in_('id', example_ids)
+                .execute())
             
             approved_examples = response.data if response.data else []
             logger.info(f"Approved {len(approved_examples)} examples")
@@ -712,7 +721,7 @@ class SupabaseClient:
             # Note: Approval fields temporarily disabled until migration is applied
             # TODO: Re-enable after adding approval columns to Supabase table
             
-            response = self.client.table('feedme_examples').insert(examples).execute()
+            response = await self._exec(lambda: self.client.table('feedme_examples').insert(examples).execute())
             
             if response.data:
                 logger.info(f"Inserted {len(response.data)} examples")
@@ -757,7 +766,7 @@ class SupabaseClient:
             if example_ids:
                 query = query.in_('id', example_ids)
             
-            response = query.execute()
+            response = await self._exec(lambda: query.execute())
             
             approved_count = len(response.data) if response.data else 0
             
@@ -816,27 +825,145 @@ class SupabaseClient:
                 params["filter"] = " AND ".join(filters)
             
             # Call vector search function (needs to be created in Supabase)
-            response = self.client.rpc('search_feedme_examples', params).execute()
+            response = await self._exec(lambda: self.client.rpc('search_feedme_examples', params).execute())
             
             return response.data or []
             
         except Exception as e:
             logger.error(f"Error searching examples: {e}")
             raise
+
+    async def search_kb_articles(
+        self,
+        query_embedding: List[float],
+        limit: int = 5,
+        similarity_threshold: float = 0.25,
+    ) -> List[Dict[str, Any]]:
+        """
+        Vector similarity search for Mailbird knowledge base articles via RPC.
+
+        Args:
+            query_embedding: 3072-dim embedding vector for the query
+            limit: Maximum number of results to return
+            similarity_threshold: Minimum cosine similarity (0..1)
+
+        Returns:
+            List of rows with keys: id, url, markdown, content, metadata, similarity
+        """
+        try:
+            if self.mock_mode:
+                logger.info("search_kb_articles called in mock mode; returning empty list")
+                return []
+
+            from app.db.embedding_config import EXPECTED_DIM as expected_dim
+            if len(query_embedding) != expected_dim:
+                logger.error(
+                    "search_kb_articles received embedding with unexpected dimension %s (expected %s)",
+                    len(query_embedding),
+                    expected_dim,
+                )
+                return []
+
+            # Clamp inputs to safe bounds
+            try:
+                limit = max(1, min(int(limit or 5), 50))
+            except Exception:
+                limit = 5
+            try:
+                similarity_threshold = float(similarity_threshold or 0.25)
+                similarity_threshold = 0.0 if similarity_threshold < 0 else similarity_threshold
+                similarity_threshold = 1.0 if similarity_threshold > 1 else similarity_threshold
+            except Exception:
+                similarity_threshold = 0.25
+
+            params = {
+                "query_embedding": query_embedding,
+                "match_count": limit,
+                "match_threshold": similarity_threshold,
+            }
+
+            response = await self._exec(lambda: self.client.rpc("search_mailbird_knowledge", params).execute())
+            return response.data or []
+        except APIError as e:
+            logger.error(f"Supabase RPC error in search_kb_articles: {e}")
+            return []
+        except Exception as e:
+            logger.error(f"Error searching knowledge base: {e}")
+            return []
     
     # =====================================================
     # SYNC OPERATIONS
     # =====================================================
+
+    async def search_web_snapshots(
+        self,
+        query_embedding: List[float],
+        match_count: int = 5,
+        match_threshold: float = 0.4,
+    ) -> List[Dict[str, Any]]:
+        """
+        Vector similarity search for Tavily saved web research snapshots via RPC.
+
+        Args:
+            query_embedding: 3072-dim embedding vector for the query
+            match_count: Maximum number of results to return
+            match_threshold: Minimum cosine similarity (0..1)
+
+        Returns:
+            List of rows with keys: id, url, title, content, source_domain, published_at, similarity
+        """
+        try:
+            if self.mock_mode:
+                logger.info("search_web_snapshots called in mock mode; returning empty list")
+                return []
+
+            from app.db.embedding_config import EXPECTED_DIM as expected_dim
+            if len(query_embedding) != expected_dim:
+                logger.error(
+                    "search_web_snapshots received embedding with unexpected dimension %s (expected %s)",
+                    len(query_embedding),
+                    expected_dim,
+                )
+                return []
+
+            # Clamp inputs to safe bounds
+            try:
+                match_count = max(1, min(int(match_count or 5), 50))
+            except Exception:
+                match_count = 5
+            try:
+                match_threshold = float(match_threshold or 0.4)
+                match_threshold = 0.0 if match_threshold < 0 else match_threshold
+                match_threshold = 1.0 if match_threshold > 1 else match_threshold
+            except Exception:
+                match_threshold = 0.4
+
+            params = {
+                "query_embedding": query_embedding,
+                "match_count": match_count,
+                "match_threshold": match_threshold,
+            }
+
+            response = await self._exec(
+                lambda: self.client.rpc("search_web_research_snapshots", params).execute()
+            )
+            return response.data or []
+        except APIError as e:
+            logger.error(f"Supabase RPC error in search_web_snapshots: {e}")
+            return []
+        except Exception as e:
+            logger.error(f"Error searching web research snapshots: {e}")
+            return []
     
     async def get_unsynced_examples(self, limit: int = 100) -> List[Dict[str, Any]]:
         """Get approved examples that haven't been synced to Supabase"""
         try:
-            response = self.client.table('feedme_examples')\
-                .select('*')\
-                .eq('supabase_synced', False)\
-                .not_.is_('approved_at', 'null')\
-                .limit(limit)\
-                .execute()
+            response = await self._exec(lambda: self.client.table('feedme_examples')
+                .select('*')
+                .eq('supabase_synced', False)
+                .not_.is_('approved_at', 'null')
+                .limit(limit)
+                .execute())
             
             return response.data or []
             
@@ -847,13 +974,13 @@ class SupabaseClient:
     async def mark_examples_synced(self, example_ids: List[int]) -> int:
         """Mark examples as synced to Supabase"""
         try:
-            response = self.client.table('feedme_examples')\
+            response = await self._exec(lambda: self.client.table('feedme_examples')
                 .update({
                     "supabase_synced": True,
                     "supabase_sync_at": datetime.utcnow().isoformat()
-                })\
-                .in_('id', example_ids)\
-                .execute()
+                })
+                .in_('id', example_ids)
+                .execute())
             
             count = len(response.data) if response.data else 0
             logger.info(f"Marked {count} examples as synced")
@@ -916,8 +1043,8 @@ class SupabaseClient:
             query = query.order('created_at', desc=True).range(offset, offset + page_size - 1)
             
             # Get data and count in parallel
-            response = query.execute()
-            count_response = count_query.execute()
+            response = await self._exec(lambda: query.execute())
+            count_response = await self._exec(lambda: count_query.execute())
             
             total_count = count_response.count if count_response.count is not None else 0
             conversations = response.data if response.data else []
@@ -953,19 +1080,19 @@ class SupabaseClient:
         """
         try:
             # Get basic counts
-            total_response = self.client.table('feedme_conversations')\
-                .select('id', count='exact')\
-                .execute()
+            total_response = await self._exec(lambda: self.client.table('feedme_conversations')
+                .select('id', count='exact')
+                .execute())
             
             # Get status breakdown
-            status_response = self.client.table('feedme_conversations')\
-                .select('processing_status')\
-                .execute()
+            status_response = await self._exec(lambda: self.client.table('feedme_conversations')
+                .select('processing_status')
+                .execute())
             
             # Get example counts
-            examples_response = self.client.table('feedme_examples')\
-                .select('id', count='exact')\
-                .execute()
+            examples_response = await self._exec(lambda: self.client.table('feedme_examples')
+                .select('id', count='exact')
+                .execute())
             
             # Process status breakdown
             status_counts = {}
@@ -1002,10 +1129,10 @@ class SupabaseClient:
         """
         try:
             # Get conversation with examples count
-            conversation_response = self.client.table('feedme_conversations')\
-                .select('*')\
-                .eq('id', conversation_id)\
-                .execute()
+            conversation_response = await self._exec(lambda: self.client.table('feedme_conversations')
+                .select('*')
+                .eq('id', conversation_id)
+                .execute())
             
             if not conversation_response.data:
                 raise Exception(f"Conversation {conversation_id} not found")
@@ -1013,10 +1140,10 @@ class SupabaseClient:
             conversation = conversation_response.data[0]
             
             # Get examples stats
-            examples_response = self.client.table('feedme_examples')\
-                .select('confidence_score, usefulness_score, review_status')\
-                .eq('conversation_id', conversation_id)\
-                .execute()
+            examples_response = await self._exec(lambda: self.client.table('feedme_examples')
+                .select('confidence_score, usefulness_score, review_status')
+                .eq('conversation_id', conversation_id)
+                .execute())
             
             examples = examples_response.data or []
             
@@ -1066,9 +1193,9 @@ class SupabaseClient:
         """
         try:
             # Get conversations by approval status
-            conversations_response = self.client.table('feedme_conversations')\
-                .select('approval_status, approved_by, approved_at, processing_status')\
-                .execute()
+            conversations_response = await self._exec(lambda: self.client.table('feedme_conversations')
+                .select('approval_status, approved_by, approved_at, processing_status')
+                .execute())
             
             conversations = conversations_response.data or []
             
@@ -1084,9 +1211,9 @@ class SupabaseClient:
                     approvers.add(conv.get('approved_by'))
             
             # Get examples approval stats
-            examples_response = self.client.table('feedme_examples')\
-                .select('review_status, reviewed_by')\
-                .execute()
+            examples_response = await self._exec(lambda: self.client.table('feedme_examples')
+                .select('review_status, reviewed_by')
+                .execute())
             
             examples = examples_response.data or []
             example_review_counts = {}
@@ -1134,14 +1261,14 @@ class SupabaseClient:
             for conversation_id in conversation_ids:
                 try:
                     # Reset conversation status
-                    update_result = self.client.table('feedme_conversations')\
+                    update_result = await self._exec(lambda: self.client.table('feedme_conversations')
                         .update({
                             "processing_status": "pending",
                             "error_message": None,
                             "updated_at": datetime.now().isoformat()
-                        })\
-                        .eq('id', conversation_id)\
-                        .execute()
+                        })
+                        .eq('id', conversation_id)
+                        .execute())
                     
                     if update_result.data:
                         successful.append(conversation_id)
@@ -1178,10 +1305,10 @@ class SupabaseClient:
     async def delete_text_chunks_for_conversation(self, conversation_id: int) -> int:
         """Delete existing text chunks for a conversation"""
         try:
-            response = self.client.table('feedme_text_chunks') \
-                .delete() \
-                .eq('conversation_id', conversation_id) \
-                .execute()
+            response = await self._exec(lambda: self.client.table('feedme_text_chunks')
+                .delete()
+                .eq('conversation_id', conversation_id)
+                .execute())
             return len(response.data) if response.data else 0
         except Exception as e:
             logger.error(f"Failed to delete text chunks for conversation {conversation_id}: {e}")
@@ -1197,7 +1324,7 @@ class SupabaseClient:
                 'content': content,
                 'metadata': metadata or {}
             }
-            response = self.client.table('feedme_text_chunks').insert(data).execute()
+            response = await self._exec(lambda: self.client.table('feedme_text_chunks').insert(data).execute())
             if response.data:
                 return response.data[0]
             raise Exception('No data from insert_text_chunk')
@@ -1208,7 +1335,7 @@ class SupabaseClient:
     async def update_text_chunk_embedding(self, chunk_id: int, embedding: list[float]) -> bool:
         """Update chunk embedding vector"""
         try:
-            response = self.client.table('feedme_text_chunks').update({ 'embedding': embedding }).eq('id', chunk_id).execute()
+            response = await self._exec(lambda: self.client.table('feedme_text_chunks').update({ 'embedding': embedding }).eq('id', chunk_id).execute())
             return bool(response.data)
         except Exception as e:
             logger.error(f"Failed to update text chunk embedding: {e}")
@@ -1217,16 +1344,64 @@ class SupabaseClient:
     async def search_text_chunks(self, query_embedding: list[float], match_count: int = 10, folder_id: Optional[int] = None) -> List[Dict[str, Any]]:
         """Search text chunks via RPC similarity function."""
         try:
+            # Validate embedding dimension early to avoid RPC call and client access
+            from app.db.embedding_config import EXPECTED_DIM as expected_dim
+            if len(query_embedding) != expected_dim:
+                logger.error(
+                    "search_text_chunks received embedding with unexpected dimension %s (expected %s)",
+                    len(query_embedding), expected_dim
+                )
+                return []
+
+            # Clamp inputs to safe bounds
+            try:
+                match_count = max(1, min(int(match_count or 10), 50))
+            except Exception:
+                match_count = 10
+
             params = {
                 'query_embedding': query_embedding,
                 'match_count': match_count,
                 'filter_folder_id': folder_id
             }
-            result = self.client.rpc('search_feedme_text_chunks', params).execute()
+            result = await self._exec(lambda: self.client.rpc('search_feedme_text_chunks', params).execute())
             return result.data or []
         except Exception as e:
             logger.error(f"Text chunk search failed: {e}")
             return []
+
+    async def get_conversations_by_ids(self, conversation_ids: List[int]) -> Dict[int, Dict[str, Any]]:
+        """Fetch multiple conversations by their IDs.
+
+        Returns a dict keyed by conversation id for fast hydration and only
+        selects required fields to minimize payload size.
+
+        Selected fields:
+          id, title, metadata, extracted_text, approval_status,
+          processing_status, folder_id, created_at
+        """
+        result: Dict[int, Dict[str, Any]] = {}
+        if not conversation_ids:
+            return result
+        try:
+            response = await self._exec(lambda: (
+                self.client
+                .table('feedme_conversations')
+                .select('id,title,metadata,extracted_text,approval_status,processing_status,folder_id,created_at')
+                .in_('id', conversation_ids)
+                .execute()
+            ))
+            for row in (response.data or []):
+                try:
+                    cid = int(row.get('id'))
+                except Exception:
+                    # Skip rows without valid id
+                    continue
+                result[cid] = row
+            return result
+        except Exception as e:
+            logger.error(f"Error fetching conversations by ids: {e}")
+            return result
     
     async def get_feedme_summary(self) -> Dict[str, Any]:
         """
@@ -1237,17 +1412,17 @@ class SupabaseClient:
         """
         try:
             # Get all basic counts
-            conversations_response = self.client.table('feedme_conversations')\
-                .select('id, processing_status, approval_status, total_examples', count='exact')\
-                .execute()
+            conversations_response = await self._exec(lambda: self.client.table('feedme_conversations')
+                .select('id, processing_status, approval_status, total_examples', count='exact')
+                .execute())
             
-            examples_response = self.client.table('feedme_examples')\
-                .select('id, review_status', count='exact')\
-                .execute()
+            examples_response = await self._exec(lambda: self.client.table('feedme_examples')
+                .select('id, review_status', count='exact')
+                .execute())
             
-            folders_response = self.client.table('feedme_folders')\
-                .select('id', count='exact')\
-                .execute()
+            folders_response = await self._exec(lambda: self.client.table('feedme_folders')
+                .select('id', count='exact')
+                .execute())
             
             conversations = conversations_response.data or []
             examples = examples_response.data or []
@@ -1309,13 +1484,13 @@ class SupabaseClient:
             # Fetch folders along with aggregated conversation counts in a single query
             # The `feedme_conversations(count)` syntax leverages the PostgREST relation that exists
             # via the foreign key between feedme_conversations.folder_id and feedme_folders.id.
-            folders_response = (
+            folders_response = await self._exec(lambda: (
                 self.client
                 .table('feedme_folders')
                 .select('id,name,color,description,created_by,created_at,updated_at,feedme_conversations(count)')
                 .order('name')
                 .execute()
-            )
+            ))
 
             folders: List[Dict[str, Any]] = []
             for record in folders_response.data or []:
@@ -1330,13 +1505,13 @@ class SupabaseClient:
                 folders.append(record)
 
             # Add special "No Folder" entry (conversations without folder assignment)
-            no_folder_response = (
+            no_folder_response = await self._exec(lambda: (
                 self.client
                 .table('feedme_conversations')
                 .select('id', count='exact')
                 .is_('folder_id', 'null')
                 .execute()
-            )
+            ))
 
             folders.insert(0, {
                 'id': None,
@@ -1366,10 +1541,10 @@ class SupabaseClient:
             True if folder exists, False otherwise
         """
         try:
-            response = self.client.table('feedme_folders')\
-                .select('id')\
-                .eq('id', folder_id)\
-                .execute()
+            response = await self._exec(lambda: self.client.table('feedme_folders')
+                .select('id')
+                .eq('id', folder_id)
+                .execute())
             
             return bool(response.data)
             
@@ -1400,13 +1575,13 @@ class SupabaseClient:
                     raise Exception(f"Target folder {target_folder_id} does not exist")
             
             # Perform bulk update
-            response = self.client.table('feedme_conversations')\
+            response = await self._exec(lambda: self.client.table('feedme_conversations')
                 .update({
                     "folder_id": target_folder_id,
                     "updated_at": datetime.now().isoformat()
-                })\
-                .in_('id', conversation_ids)\
-                .execute()
+                })
+                .in_('id', conversation_ids)
+                .execute())
             
             updated_count = len(response.data) if response.data else 0
             
@@ -1428,10 +1603,10 @@ class SupabaseClient:
     async def _update_conversation_status(self, conversation_id: int, status: str):
         """Update conversation processing status"""
         try:
-            self.client.table('feedme_conversations')\
-                .update({"processing_status": status})\
-                .eq('id', conversation_id)\
-                .execute()
+            await self._exec(lambda: self.client.table('feedme_conversations')
+                .update({"processing_status": status})
+                .eq('id', conversation_id)
+                .execute())
         except Exception as e:
             logger.warning(f"Failed to update conversation status: {e}")
     
@@ -1461,10 +1636,10 @@ class SupabaseClient:
             if error_message is not None:
                 update_data["error_message"] = error_message
             
-            response = self.client.table('feedme_conversations')\
-                .update(update_data)\
-                .eq('id', conversation_id)\
-                .execute()
+            response = await self._exec(lambda: self.client.table('feedme_conversations')
+                .update(update_data)
+                .eq('id', conversation_id)
+                .execute())
             
             if response.data:
                 logger.info(f"Updated conversation {conversation_id} status to {status}")
@@ -1492,11 +1667,11 @@ class SupabaseClient:
         """Persist processing progress details to Supabase"""
         try:
             metadata: Dict[str, Any] = {}
-            existing = self.client.table('feedme_conversations')\
-                .select('metadata')\
-                .eq('id', conversation_id)\
-                .maybe_single()\
-                .execute()
+            existing = await self._exec(lambda: self.client.table('feedme_conversations')
+                .select('metadata')
+                .eq('id', conversation_id)
+                .maybe_single()
+                .execute())
 
             if existing and existing.data and isinstance(existing.data, dict):
                 metadata = existing.data.get('metadata') or {}
@@ -1535,10 +1710,10 @@ class SupabaseClient:
             if processed_at is not None:
                 update_data['processed_at'] = processed_at.isoformat() if isinstance(processed_at, datetime) else processed_at
 
-            self.client.table('feedme_conversations')\
-                .update(update_data)\
-                .eq('id', conversation_id)\
-                .execute()
+            await self._exec(lambda: self.client.table('feedme_conversations')
+                .update(update_data)
+                .eq('id', conversation_id)
+                .execute())
 
             return True
         except Exception as e:
@@ -1564,10 +1739,10 @@ class SupabaseClient:
             # Add updated_at timestamp
             update_data['updated_at'] = datetime.now().isoformat()
             
-            response = self.client.table('feedme_examples')\
-                .update(update_data)\
-                .in_('id', example_ids)\
-                .execute()
+            response = await self._exec(lambda: self.client.table('feedme_examples')
+                .update(update_data)
+                .in_('id', example_ids)
+                .execute())
             
             updated_examples = response.data if response.data else []
             logger.info(f"Bulk updated {len(updated_examples)} examples")
@@ -1603,7 +1778,7 @@ class SupabaseClient:
             if limit is not None:
                 query = query.range(offset, offset + limit - 1)
             
-            response = query.execute()
+            response = await self._exec(lambda: query.execute())
             
             examples = response.data if response.data else []
             logger.info(f"Retrieved {len(examples)} examples for conversation {conversation_id}")
@@ -1617,10 +1792,10 @@ class SupabaseClient:
         """Check Supabase connection health"""
         try:
             # Test basic query
-            response = self.client.table('feedme_folders').select('count').execute()
+            response = await self._exec(lambda: self.client.table('feedme_folders').select('count').execute())
             
             # Test vector extension
-            vector_test = self.client.rpc('test_vector_extension').execute()
+            vector_test = await self._exec(lambda: self.client.rpc('test_vector_extension').execute())
             
             return {
                 "status": "healthy",

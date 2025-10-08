@@ -26,6 +26,7 @@ from pydantic import BaseModel # Added Pydantic BaseModel
 
 from app.core.settings import settings
 from app.db.supabase_client import get_supabase_client
+from app.db.embedding_config import MODEL_NAME as EMB_MODEL_NAME_SOT, EXPECTED_DIM as EXPECTED_EMBEDDING_DIM, assert_dim
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -40,7 +41,10 @@ load_dotenv(PROJECT_ROOT / '.env')
 
 # --- Configuration ---
 GEMINI_API_KEY = settings.gemini_api_key
-EMBEDDING_MODEL_NAME = "models/gemini-embedding-001" # 768-dimensional Gemini embeddings
+_cfg_name = settings.gemini_embed_model or EMB_MODEL_NAME_SOT
+if _cfg_name != EMB_MODEL_NAME_SOT:
+    raise ValueError(f"Embedding model must be '{EMB_MODEL_NAME_SOT}' but got '{_cfg_name}'")
+EMBEDDING_MODEL_NAME = _cfg_name
 
 # --- Database Connection (Updated for FeedMe v3.0 - Supabase Only) ---
 def get_db_connection():
@@ -61,11 +65,23 @@ def get_embedding_model():
             model=EMBEDDING_MODEL_NAME, 
             google_api_key=GEMINI_API_KEY
         )
-        logger.info(f"Initialized embedding model: {EMBEDDING_MODEL_NAME}")
+        logger.info(
+            "Initialized embedding model %s (expected_dim=%s)",
+            EMBEDDING_MODEL_NAME,
+            EXPECTED_EMBEDDING_DIM,
+        )
         return emb_model
     except Exception as e:
         logger.error(f"Failed to initialize embedding model: {e}")
         raise
+
+
+def _embedding_has_expected_dim(vector: List[float], context: str) -> bool:
+    try:
+        assert_dim(vector, context)
+        return True
+    except Exception:
+        return False
 
 def generate_embeddings_for_pending_content(batch_size: int = 10) -> int:
     """Fetches content without embeddings, generates embeddings, and updates the DB."""
@@ -109,6 +125,14 @@ def generate_embeddings_for_pending_content(batch_size: int = 10) -> int:
                         logger.warning(f"Record ID {record.id}: Content truncated for embedding. Original: {original_length} chars, Truncated: {len(text_to_embed)} chars.")
                     
                     embedding_vector = emb_model.embed_query(text_to_embed)
+                    if not _embedding_has_expected_dim(embedding_vector, "generate_embeddings_for_pending_content"):
+                        conn.rollback()
+                        logger.error(
+                            "Skipping record %s due to embedding dimension mismatch",
+                            record.id,
+                        )
+                        failed_count += 1
+                        continue
                     
                     update_sql = "UPDATE mailbird_knowledge SET embedding = %s WHERE id = %s;"
                     # Use the main cursor 'cur' directly for the update, no need for 'update_cur'
@@ -203,6 +227,10 @@ def find_similar_documents(query: str, top_k: int = 5) -> List[SearchResult]:
         
         emb_model = get_embedding_model()
         query_embedding = emb_model.embed_query(query)
+        if not _embedding_has_expected_dim(query_embedding, "find_similar_feedme_examples"):
+            return results
+        if not _embedding_has_expected_dim(query_embedding, "find_similar_documents"):
+            return results
 
         # <=> is cosine distance (0=identical, 1=orthogonal, 2=opposite)
         # 1 - (cosine distance) = cosine similarity (1=identical, 0=orthogonal, -1=opposite)
@@ -527,11 +555,18 @@ def generate_feedme_embeddings(
                     
                     # Generate embeddings for question, answer, and combined
                     question_embedding = emb_model.embed_query(record.question_text)
+                    if not _embedding_has_expected_dim(question_embedding, "generate_feedme_embeddings:question"):
+                        raise ValueError("Question embedding dimension mismatch")
+
                     answer_embedding = emb_model.embed_query(record.answer_text)
+                    if not _embedding_has_expected_dim(answer_embedding, "generate_feedme_embeddings:answer"):
+                        raise ValueError("Answer embedding dimension mismatch")
                     
                     # Create combined text for better search
                     combined_text = f"Question: {record.question_text}\n\nAnswer: {record.answer_text}"
                     combined_embedding = emb_model.embed_query(combined_text)
+                    if not _embedding_has_expected_dim(combined_embedding, "generate_feedme_embeddings:combined"):
+                        raise ValueError("Combined embedding dimension mismatch")
                     
                     # Update the record
                     update_sql = """

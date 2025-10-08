@@ -24,6 +24,8 @@ class PrimaryAgentConnector:
         self.enabled = settings.feedme_enabled
         self.similarity_threshold = settings.feedme_similarity_threshold
         self.max_results = settings.feedme_max_retrieval_results
+        # Default include saved web snapshots
+        self.include_web = True
         
     async def search_feedme_examples(
         self,
@@ -49,7 +51,12 @@ class PrimaryAgentConnector:
         try:
             # For now, return empty list as the actual implementation
             # would require database queries and embeddings
-            logger.info(f"FeedMe search called with query: {query}")
+            # Avoid logging raw user queries at info level (PII risk)
+            try:
+                qlen = len(query or "")
+            except Exception:
+                qlen = 0
+            logger.debug("FeedMe search called (query_len=%d)", qlen)
             return []
             
         except Exception as e:
@@ -110,6 +117,126 @@ class PrimaryAgentConnector:
             
         return "\n".join(formatted_parts)
 
+    async def search_conversations(
+        self,
+        params: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """
+        Search FeedMe stored conversations via feedme_text_chunks embeddings.
+
+        Args:
+            params: Search parameters, may include:
+              - query: override free-text query
+              - error_signatures: list[str]
+              - max_results: int
+              - folder_id: Optional[int]
+
+        Returns:
+            Dict with shape { conversations: [..], total: int }
+        """
+        if not self.enabled:
+            logger.debug("FeedMe integration is disabled")
+            return {"conversations": [], "total": 0}
+
+        try:
+            from app.db.supabase_client import SupabaseClient
+            from app.db.embedding_utils import get_embedding_model
+
+            max_results = int(params.get("max_results", self.max_results or 5))
+            folder_id = params.get("folder_id")
+
+            # Build a query string
+            query_text = params.get("query")
+            if not query_text:
+                sigs = params.get("error_signatures") or []
+                types = params.get("error_types") or []
+                query_text = " ".join([*sigs[:3], *types[:2]]) or "Mailbird error"
+
+            # Embed
+            emb_model = get_embedding_model()
+            loop = asyncio.get_running_loop()
+            qv = await loop.run_in_executor(None, emb_model.embed_query, query_text)
+
+            client = SupabaseClient()
+            # Fetch more chunks than conversations to aggregate
+            chunk_rows = await client.search_text_chunks(qv, match_count=max(20, max_results * 4), folder_id=folder_id)
+
+            # Group by conversation id and aggregate scores/snippets
+            by_conv: Dict[int, Dict[str, Any]] = {}
+            for row in chunk_rows or []:
+                conv_id = row.get("conversation_id") or row.get("conversationId")
+                if conv_id is None:
+                    continue
+                entry = by_conv.setdefault(int(conv_id), {
+                    "id": int(conv_id),
+                    "title": None,
+                    "summary": "",
+                    "resolution": "",
+                    "error_patterns": [],
+                    "resolution_status": "unknown",
+                    "created_at": None,
+                    "top_similarity": 0.0,
+                    "snippets": []
+                })
+                sim = float(row.get("similarity") or row.get("similarity_score") or 0.0)
+                entry["top_similarity"] = max(entry["top_similarity"], sim)
+                content = (row.get("content") or "")[:280]
+                if content:
+                    entry["snippets"].append(content)
+
+            if not by_conv:
+                return {"conversations": [], "total": 0}
+
+            # Fetch conversation titles/metadata
+            conv_ids = list(by_conv.keys())
+            conv_details = await client.get_conversations_by_ids(conv_ids)
+            for cid, c in (conv_details or {}).items():
+                if cid in by_conv:
+                    by_conv[cid]["title"] = c.get("title") or by_conv[cid]["title"] or "Conversation"
+                    by_conv[cid]["created_at"] = c.get("created_at")
+                    # Prefer AI-generated note or extracted_text for summary
+                    meta = c.get("metadata") or {}
+                    ai_note = None
+                    try:
+                        if isinstance(meta, dict):
+                            ai_note = meta.get("ai_note") or meta.get("summary")
+                    except Exception:
+                        ai_note = None
+                    extracted_text = c.get("extracted_text") or ""
+                    # Build summary: ai_note else first 400 chars of extracted_text
+                    pref_summary = None
+                    if ai_note and isinstance(ai_note, str):
+                        pref_summary = ai_note.strip()
+                    elif isinstance(extracted_text, str) and extracted_text:
+                        pref_summary = extracted_text[:400]
+                    if pref_summary:
+                        by_conv[cid]["snippets"] = [pref_summary]
+                    # If conversation has resolution fields present (optional)
+                    by_conv[cid]["resolution"] = c.get("resolution") or by_conv[cid].get("resolution", "")
+                    by_conv[cid]["resolution_status"] = c.get("resolution_status") or by_conv[cid].get("resolution_status", ("resolved" if by_conv[cid].get("resolution") else "unresolved"))
+
+            # Rank by top similarity
+            ranked = sorted(by_conv.values(), key=lambda x: x["top_similarity"], reverse=True)
+            # Trim and shape response
+            conversations = []
+            for conv in ranked[:max_results]:
+                conversations.append({
+                    "id": conv["id"],
+                    "title": conv.get("title") or f"Conversation {conv['id']}",
+                    "summary": ("\n".join(conv.get("snippets", [])[:3]))[:600],
+                    "resolution": conv.get("resolution") or "",
+                    "error_patterns": conv.get("error_patterns", []),
+                    "resolution_status": conv.get("resolution_status", "unknown"),
+                    "created_at": conv.get("created_at"),
+                    "confidence": conv.get("top_similarity", 0.0)
+                })
+
+            return {"conversations": conversations, "total": len(ranked)}
+
+        except Exception as e:
+            logger.error(f"Error searching conversations: {e}")
+            return {"conversations": [], "total": 0}
+
     async def retrieve_knowledge(
         self,
         query: Dict[str, Any],
@@ -118,7 +245,10 @@ class PrimaryAgentConnector:
     ) -> List[Dict[str, Any]]:
         """Unified knowledge retrieval for Enhanced KB search.
 
-        Currently returns FeedMe examples via Supabase vector search.
+        Aggregates results from:
+         - Knowledge Base (pgvector)
+         - FeedMe stored conversations (feedme_text_chunks with 3072-d embeddings)
+         - Tavily saved web research snapshots (web_research_snapshots)
         """
         if not self.enabled:
             logger.debug("FeedMe integration disabled; returning empty results")
@@ -139,46 +269,113 @@ class PrimaryAgentConnector:
             loop = asyncio.get_running_loop()
             query_vec = await loop.run_in_executor(None, emb_model.embed_query, text)
 
-            # Search Supabase examples
             client = SupabaseClient()
-            rows = await client.search_examples(
-                query_embedding=query_vec,
-                limit=max_results,
-                similarity_threshold=getattr(self, "similarity_threshold", 0.7),
-            )
-
-            def _safe_float(val: Any) -> float:
-                try:
-                    return float(val)
-                except (TypeError, ValueError):
-                    return 0.0
 
             results: List[Dict[str, Any]] = []
-            for r in rows:
-                # Normalize fields defensively
-                title = r.get("conversation_title") or r.get("title") or "Support Example"
-                answer = r.get("answer_text") or ""
-                question = r.get("question_text") or ""
-                confidence = _safe_float(r.get("similarity", r.get("similarity_score", 0.0)))
 
+            # 1) Knowledge Base articles
+            kb_rows = await client.search_kb_articles(
+                query_embedding=query_vec,
+                limit=max_results,
+                similarity_threshold=0.25,
+            )
+            for r in kb_rows or []:
+                sim = float(r.get("similarity") or 0.0)
                 results.append(
                     {
-                        "source": "feedme",
-                        "title": title,
-                        "content": f"Q: {question}\n\nA: {answer}",
-                        "relevance_score": confidence,
+                        "source": "knowledge_base",
+                        "title": r.get("url") or "Knowledge Base Article",
+                        "content": (r.get("markdown") or r.get("content") or ""),
+                        "relevance_score": sim,
                         "metadata": {
-                            "conversation_id": r.get("conversation_id"),
-                            "example_id": r.get("id"),
-                            "issue_type": r.get("issue_type"),
-                            "resolution_type": r.get("resolution_type"),
-                            "tags": r.get("tags") or [],
+                            "kb_id": r.get("id"),
+                            "url": r.get("url"),
+                            "original_metadata": r.get("metadata"),
                         },
                         "quality_indicators": {
-                            "high_confidence": confidence >= 0.8,
+                            "high_confidence": sim >= 0.8,
                         },
                     }
                 )
+
+            # 2) FeedMe stored conversations via text chunks
+            chunk_rows = await client.search_text_chunks(query_vec, match_count=max(max_results * 4, 20))
+            # Aggregate by conversation
+            by_conv: Dict[int, Dict[str, Any]] = {}
+            for row in chunk_rows or []:
+                conv_id = row.get("conversation_id") or row.get("conversationId")
+                if conv_id is None:
+                    continue
+                entry = by_conv.setdefault(int(conv_id), {
+                    "id": int(conv_id),
+                    "title": None,
+                    "top_similarity": 0.0,
+                    "snippets": []
+                })
+                sim = float(row.get("similarity") or row.get("similarity_score") or 0.0)
+                entry["top_similarity"] = max(entry["top_similarity"], sim)
+                content = (row.get("content") or "")[:280]
+                if content:
+                    entry["snippets"].append(content)
+
+            if by_conv:
+                details = await client.get_conversations_by_ids(list(by_conv.keys()))
+                for cid, agg in by_conv.items():
+                    conv_row = (details or {}).get(cid, {})
+                    title = conv_row.get("title") or f"Conversation {cid}"
+                    sim = agg.get("top_similarity", 0.0)
+                    # Prefer AI note / extracted_text if available
+                    meta = conv_row.get("metadata") or {}
+                    ai_note = None
+                    try:
+                        if isinstance(meta, dict):
+                            ai_note = meta.get("ai_note") or meta.get("summary")
+                    except Exception:
+                        ai_note = None
+                    extracted_text = conv_row.get("extracted_text") or ""
+                    content = (ai_note or extracted_text or ("\n".join(agg.get("snippets", [])[:3])))
+                    content = (content or "")[:600]
+                    results.append(
+                        {
+                            "source": "feedme",
+                            "title": title,
+                            "content": content,
+                            "relevance_score": sim,
+                            "metadata": {
+                                "conversation_id": cid,
+                            },
+                            "quality_indicators": {
+                                "high_confidence": sim >= 0.8,
+                            },
+                        }
+                    )
+
+            # 3) Saved web research snapshots
+            if self.include_web:
+                web_rows = await client.search_web_snapshots(
+                    query_embedding=query_vec,
+                    match_count=max_results,
+                    match_threshold=0.4,
+                )
+                for r in web_rows or []:
+                    sim = float(r.get("similarity") or 0.0)
+                    results.append(
+                        {
+                            "source": "saved_web",
+                            "title": r.get("title") or r.get("url") or "Web Resource",
+                            "content": (r.get("content") or "")[:1000],
+                            "relevance_score": sim,
+                            "metadata": {
+                                "url": r.get("url"),
+                                "source_domain": r.get("source_domain") or r.get("domain"),
+                                "published_at": r.get("published_at"),
+                                "snapshot_id": r.get("id"),
+                            },
+                            "quality_indicators": {
+                                "high_confidence": sim >= 0.8,
+                            },
+                        }
+                    )
 
             if track_performance and perf_start is not None:
                 duration_ms = (time.perf_counter() - perf_start) * 1000

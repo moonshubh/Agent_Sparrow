@@ -67,7 +67,7 @@ class SupabaseAPIKeyService:
                 query = query.or_(f"user_uuid.eq.{user_id},user_id.eq.{user_id}")
             else:
                 query = query.eq("user_id", user_id)
-            existing_response = query.eq("api_key_type", api_key_type_str).execute()
+            existing_response = await self.supabase._exec(lambda: query.eq("api_key_type", api_key_type_str).execute())
             
             current_time = datetime.now(timezone.utc).isoformat()
             
@@ -86,7 +86,7 @@ class SupabaseAPIKeyService:
                     update_q = update_q.or_(f"user_uuid.eq.{user_id},user_id.eq.{user_id}")
                 else:
                     update_q = update_q.eq("user_id", user_id)
-                response = update_q.eq("api_key_type", api_key_type_str).execute()
+                response = await self.supabase._exec(lambda: update_q.eq("api_key_type", api_key_type_str).execute())
                 
                 operation = APIKeyOperation.UPDATE
                 api_key_data = existing_response.data[0]
@@ -105,9 +105,9 @@ class SupabaseAPIKeyService:
                     "updated_at": current_time
                 }
                 
-                response = self.supabase.client.table("user_api_keys")\
-                    .insert(insert_data)\
-                    .execute()
+                response = await self.supabase._exec(lambda: self.supabase.client.table("user_api_keys")
+                    .insert(insert_data)
+                    .execute())
                 
                 operation = APIKeyOperation.CREATE
                 api_key_data = response.data[0]
@@ -149,10 +149,10 @@ class SupabaseAPIKeyService:
     async def get_user_api_keys(self, user_id: str) -> APIKeyListResponse:
         """Get all API keys for a user (masked for security)."""
         try:
-            response = self.supabase.client.table("user_api_keys")\
-                .select("id, api_key_type, key_name, is_active, created_at, updated_at, last_used_at, encrypted_key, masked_key")\
-                .eq("user_uuid", user_id)\
-                .execute()
+            response = await self.supabase._exec(lambda: self.supabase.client.table("user_api_keys")
+                .select("id, api_key_type, key_name, is_active, created_at, updated_at, last_used_at, encrypted_key, masked_key")
+                .eq("user_uuid", user_id)
+                .execute())
             
             api_key_infos = []
             for key_data in response.data:
@@ -197,9 +197,9 @@ class SupabaseAPIKeyService:
         Falls back to environment variable if user key not found and fallback is provided.
         """
         try:
-            # Log the user_id to debug the format
-            logger.info(f"Fetching API key for user_id: {user_id} (type: {type(user_id).__name__}, length: {len(str(user_id))})")
-            logger.info(f"API key type requested: {api_key_type}")
+            # Debug only; avoid leaking identifiable data at INFO level
+            logger.debug("Fetching API key for user_id type=%s len=%s api_key_type=%s",
+                         type(user_id).__name__, len(str(user_id)), api_key_type)
             
             # Try to get user-specific key first (check both user_uuid and user_id)
             # Convert enum to string value for database query
@@ -211,9 +211,8 @@ class SupabaseAPIKeyService:
                 select_q = select_q.or_(f"user_uuid.eq.{user_id},user_id.eq.{user_id}")
             else:
                 select_q = select_q.eq("user_id", user_id)
-            response = select_q.eq("api_key_type", api_key_type_str).eq("is_active", True).execute()
-            
-            logger.info(f"Database query returned {len(response.data)} results")
+            response = await self.supabase._exec(lambda: select_q.eq("api_key_type", api_key_type_str).eq("is_active", True).execute())
+            logger.debug("API key rows fetched: %s", len(response.data) if response and response.data is not None else 0)
             
             if response.data:
                 key_data = response.data[0]
@@ -222,11 +221,12 @@ class SupabaseAPIKeyService:
                 
                 # Decrypt and return
                 decrypted_key = encryption_service.decrypt_api_key(user_id, key_data["encrypted_key"])
-                logger.info(f"Successfully retrieved user's {api_key_type} API key (preview: {decrypted_key[:8]}...{decrypted_key[-4:]})")
+                logger.debug("Successfully retrieved user's %s API key", api_key_type)
                 return decrypted_key
             
             # If no user key found, try fallback
-            logger.info(f"No user API key found for {api_key_type}, trying fallback: {fallback_env_var}")
+            logger.debug("No user API key found for %s, trying fallback env var present=%s",
+                         api_key_type, bool(fallback_env_var))
             return self._get_fallback_env_key(user_id, api_key_type, fallback_env_var)
             
         except Exception as e:
@@ -250,7 +250,7 @@ class SupabaseAPIKeyService:
                 delete_q = delete_q.or_(f"user_uuid.eq.{user_id},user_id.eq.{user_id}")
             else:
                 delete_q = delete_q.eq("user_id", user_id)
-            response = delete_q.eq("api_key_type", api_key_type_str).execute()
+            response = await self.supabase._exec(lambda: delete_q.eq("api_key_type", api_key_type_str).execute())
             
             if not response.data:
                 return APIKeyDeleteResponse(
@@ -289,7 +289,7 @@ class SupabaseAPIKeyService:
                 response_q = response_q.or_(f"user_uuid.eq.{user_id},user_id.eq.{user_id}")
             else:
                 response_q = response_q.eq("user_id", user_id)
-            response = response_q.execute()
+            response = await self.supabase._exec(lambda: response_q.execute())
             
             # Normalize configured types to simple strings
             configured_types = {str(item.get("api_key_type")).lower() for item in (response.data or [])}
@@ -346,7 +346,7 @@ class SupabaseAPIKeyService:
                 last_used_q = last_used_q.or_(f"user_uuid.eq.{user_id},user_id.eq.{user_id}")
             else:
                 last_used_q = last_used_q.eq("user_id", user_id)
-            last_used_q.eq("api_key_type", api_key_type_str).execute()
+            await self.supabase._exec(lambda: last_used_q.eq("api_key_type", api_key_type_str).execute())
         except Exception as e:
             logger.debug(f"Failed to update last_used timestamp: {e}")
     
@@ -378,7 +378,7 @@ class SupabaseAPIKeyService:
                 # by skipping external audit log insert.
                 return
 
-            self.supabase.client.table("api_key_audit_log").insert({
+            await self.supabase._exec(lambda: self.supabase.client.table("api_key_audit_log").insert({
                 "user_uuid": user_id,
                 "user_id": user_id,  # Also set user_id for backward compatibility
                 "api_key_type": api_key_type_str,
@@ -387,7 +387,7 @@ class SupabaseAPIKeyService:
                 "ip_address": ip_address,
                 "user_agent": user_agent,
                 "created_at": datetime.now(timezone.utc).isoformat()
-            }).execute()
+            }).execute())
             
         except Exception as e:
             logger.error(f"Failed to log API key operation: {e}")
@@ -440,14 +440,14 @@ class SupabaseAPIKeyService:
     ) -> Optional[str]:
         """Get fallback environment variable API key with optional usage logging."""
         if not fallback_env_var:
-            logger.info(f"No fallback env var specified for {api_key_type}")
+            logger.debug("No fallback env var specified for %s", api_key_type)
             return None
             
         fallback_key = os.getenv(fallback_env_var)
         if fallback_key:
-            logger.info(f"Using fallback {fallback_env_var} for {api_key_type} (preview: {fallback_key[:8]}...{fallback_key[-4:]})")
+            logger.debug("Using fallback %s for %s", fallback_env_var, api_key_type)
         else:
-            logger.info(f"Fallback env var {fallback_env_var} is not set")
+            logger.debug("Fallback env var %s is not set", fallback_env_var)
         if fallback_key and log_usage:
             # Log fallback usage for monitoring (fire and forget)
             try:

@@ -11,11 +11,16 @@ from typing import Dict, Any, List, Optional
 from pydantic import BaseModel, Field
 from langchain_core.tools import tool
 
-from app.db.embedding_utils import find_combined_similar_content
+from app.db.embedding_utils import get_embedding_model
+from app.db.supabase_client import SupabaseClient
 from app.feedme.integration.primary_agent_connector import PrimaryAgentConnector
 from app.core.settings import settings
+from app.utils.async_bridge import run_coro_blocking
 
 logger = logging.getLogger(__name__)
+
+
+ 
 
 
 class EnhancedKBSearchInput(BaseModel):
@@ -99,7 +104,11 @@ def enhanced_mailbird_kb_search(
     start_time = time.time()
     
     try:
-        logger.info(f"Enhanced KB search: '{query[:50]}...' sources={search_sources}")
+        logger.debug(
+            "Enhanced KB search invoked: query_len=%s sources=%s",
+            len(query),
+            search_sources,
+        )
         
         # Validate inputs
         max_results = max(1, min(10, max_results))
@@ -216,31 +225,14 @@ def _search_with_feedme(
     # Perform async search (run in thread pool if needed)
     try:
         # Use asyncio if available, otherwise fallback
-        loop = asyncio.get_event_loop()
-        if loop.is_running():
-            # Create a new task in the background
-            import concurrent.futures
-            with concurrent.futures.ThreadPoolExecutor() as executor:
-                future = executor.submit(
-                    lambda: asyncio.run(
-                        connector.retrieve_knowledge(
-                            query=feedme_query,
-                            max_results=max_results,
-                            track_performance=True
-                        )
-                    )
-                )
-                results = future.result(timeout=30)  # 30 second timeout
-        else:
-            results = asyncio.run(
-                connector.retrieve_knowledge(
-                    query=feedme_query,
-                    max_results=max_results,
-                    track_performance=True
-                )
-            )
-        
-        return results
+        return run_coro_blocking(
+            connector.retrieve_knowledge(
+                query=feedme_query,
+                max_results=max_results,
+                track_performance=True,
+            ),
+            timeout=30,
+        )
         
     except Exception as e:
         logger.error(f"Error in FeedMe search execution: {e}")
@@ -249,39 +241,44 @@ def _search_with_feedme(
 
 def _search_traditional_kb(query: str, max_results: int) -> List[Dict[str, Any]]:
     """Search traditional knowledge base"""
-    
     try:
-        from app.db.embedding_utils import find_similar_documents
-        
-        # Search traditional KB
-        kb_results = find_similar_documents(query, top_k=max_results)
-        
-        # Convert to standard format
-        formatted_results = []
-        for result in kb_results:
-            formatted_result = {
+        # Build query embedding (3072-d, gemini-embedding-001)
+        emb_model = get_embedding_model()
+        # embed synchronously (fast); safe to run in threadpool if needed later
+        query_vec = emb_model.embed_query(query)
+
+        async def _search_kb_async(qv: List[float], limit: int):
+            client = SupabaseClient()
+            rows = await client.search_kb_articles(qv, limit=limit, similarity_threshold=0.25)
+            return rows
+
+        rows = run_coro_blocking(_search_kb_async(query_vec, max_results), timeout=30)
+
+        formatted_results: List[Dict[str, Any]] = []
+        for r in rows or []:
+            sim = float(r.get('similarity') or 0.0)
+            formatted_results.append({
                 'source': 'knowledge_base',
-                'title': result.url or 'Knowledge Base Article',
-                'content': result.markdown or result.content or '',
-                'relevance_score': result.similarity_score,
-                'confidence': result.similarity_score,  # Use similarity as confidence
+                'title': r.get('url') or 'Knowledge Base Article',
+                'content': (r.get('markdown') or r.get('content') or ''),
+                'relevance_score': sim,
+                'confidence': sim,
                 'metadata': {
-                    'kb_id': result.id,
-                    'url': result.url,
-                    'original_metadata': result.metadata,
+                    'kb_id': r.get('id'),
+                    'url': r.get('url'),
+                    'original_metadata': r.get('metadata'),
                     'search_type': 'traditional_kb'
                 },
                 'context': {},
                 'quality_indicators': {
-                    'high_confidence': result.similarity_score >= 0.8,
+                    'high_confidence': sim >= 0.8,
                     'semantic_match': True,
                     'source_authority': 'official'
                 }
-            }
-            formatted_results.append(formatted_result)
-        
+            })
+
         return formatted_results
-        
+
     except Exception as e:
         logger.error(f"Error in traditional KB search: {e}")
         raise
@@ -289,45 +286,34 @@ def _search_traditional_kb(query: str, max_results: int) -> List[Dict[str, Any]]
 
 def _search_combined_fallback(query: str, max_results: int) -> List[Dict[str, Any]]:
     """Fallback to combined search using embedding_utils"""
-    
     try:
-        # Use the combined search from embedding_utils
-        combined_results = find_combined_similar_content(
-            query=query,
-            top_k_total=max_results,
-            kb_weight=0.6,
-            feedme_weight=0.4,
-            min_kb_similarity=0.25,
-            min_feedme_similarity=0.6
-        )
-        
-        # Convert to standard format
-        formatted_results = []
-        for result in combined_results:
-            formatted_result = {
-                'source': result.source_type,
-                'title': result.title,
-                'content': result.content,
-                'relevance_score': result.similarity_score,
-                'confidence': result.additional_data.get('original_score', result.similarity_score),
-                'metadata': {
-                    'combined_id': result.id,
-                    'url': result.url,
-                    'original_metadata': result.metadata,
-                    'search_type': 'combined_fallback',
-                    'additional_data': result.additional_data
-                },
-                'context': {},
-                'quality_indicators': {
-                    'high_confidence': result.similarity_score >= 0.7,
-                    'semantic_match': True,
-                    'fallback_result': True
-                }
-            }
-            formatted_results.append(formatted_result)
-        
-        return formatted_results
-        
+        # KB via Supabase RPC
+        kb_only = _search_traditional_kb(query, max_results)
+
+        # FeedMe via connector (already Supabase-backed)
+        feedme_results: List[Dict[str, Any]] = []
+        try:
+            connector = get_feedme_connector()
+            if connector:
+                # Reuse same pattern as _search_with_feedme
+                feedme_results = run_coro_blocking(
+                    connector.retrieve_knowledge(
+                        query={"query_text": query},
+                        max_results=max_results,
+                        track_performance=False,
+                    ),
+                    timeout=30,
+                )
+        except Exception as e:
+            logger.debug(f"FeedMe fallback retrieval failed: {e}")
+            feedme_results = []
+
+        # Merge and cap
+        combined: List[Dict[str, Any]] = []
+        combined.extend(kb_only or [])
+        combined.extend(feedme_results or [])
+        return combined[:max_results]
+
     except Exception as e:
         logger.error(f"Error in combined fallback search: {e}")
         raise
@@ -454,6 +440,27 @@ def mailbird_kb_search(query: str, **kwargs) -> str:
     return enhanced_mailbird_kb_search(query=query, **kwargs)
 
 
+def enhanced_mailbird_kb_search_call(
+    query: str,
+    context: Optional[Dict[str, Any]] = None,
+    max_results: int = 5,
+    search_sources: List[str] = ["knowledge_base", "feedme"],
+    min_confidence: Optional[float] = None,
+) -> str:
+    """Adapter to call the Tool using kwargs from sync code.
+
+    Avoids TypeError from calling the StructuredTool with keyword arguments.
+    """
+    payload = {
+        "query": query,
+        "context": context,
+        "max_results": max_results,
+        "search_sources": search_sources,
+        "min_confidence": min_confidence,
+    }
+    return ENHANCED_KB_SEARCH_TOOL.invoke(payload)
+
+
 # Export tool configuration for Primary Agent
 ENHANCED_KB_SEARCH_TOOL = enhanced_mailbird_kb_search
 LEGACY_KB_SEARCH_TOOL = mailbird_kb_search
@@ -461,6 +468,7 @@ LEGACY_KB_SEARCH_TOOL = mailbird_kb_search
 __all__ = [
     'enhanced_mailbird_kb_search',
     'mailbird_kb_search',
+    'enhanced_mailbird_kb_search_call',
     'EnhancedKBSearchInput',
     'SearchResultSummary',
     'ENHANCED_KB_SEARCH_TOOL',

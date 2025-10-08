@@ -158,7 +158,7 @@ class TavilyLogSearch:
             else:
                 query = self._build_search_query(patterns, metadata)
 
-            logger.info(f"Searching web for solutions: '{query[:100]}...'")
+            logger.debug("Searching web for solutions (len=%s)", len(query))
 
             # Execute search
             try:
@@ -185,6 +185,77 @@ class TavilyLogSearch:
 
         except Exception as e:
             logger.error(f"Web search error: {e}", exc_info=True)
+            return []
+
+    async def search_saved_snapshots(
+        self,
+        patterns: List[ErrorPattern],
+        metadata: LogMetadata,
+        query_override: Optional[str] = None,
+        max_results: int = 5,
+    ) -> List[WebResource]:
+        """
+        Retrieve saved Tavily web research snapshots from Supabase using vector search.
+
+        Returns:
+            List[WebResource]
+        """
+        try:
+            # Build or use override query
+            if query_override:
+                query = query_override
+            else:
+                query = self._build_search_query(patterns, metadata)
+
+            # Embed query (3072-d Gemini)
+            from app.db.embedding_utils import get_embedding_model
+            from app.db.supabase_client import SupabaseClient
+
+            emb_model = get_embedding_model()
+            import asyncio as _asyncio
+            loop = _asyncio.get_running_loop()
+            qv = await loop.run_in_executor(None, emb_model.embed_query, query)
+
+            client = SupabaseClient()
+            rows = await client.search_web_snapshots(qv, match_count=max_results, match_threshold=0.4)
+
+            resources: List[WebResource] = []
+            for r in rows or []:
+                try:
+                    url = r.get("url") or ""
+                    title = r.get("title") or (url.split("/")[-1].replace("-", " ") if url else "Web Resource")
+                    snippet = (r.get("content") or "")[:500]
+                    sim = float(r.get("similarity") or r.get("similarity_score") or 0.0)
+                    domain = r.get("source_domain") or r.get("domain") or ""
+                    published = r.get("published_at")
+                    # Coerce published date into datetime if string is isoformat
+                    pub_dt = None
+                    if published:
+                        from datetime import datetime as _dt
+                        try:
+                            pub_dt = _dt.fromisoformat(str(published).replace("Z", "+00:00"))
+                        except Exception:
+                            pub_dt = None
+
+                    resources.append(
+                        WebResource(
+                            url=url,
+                            title=title,
+                            snippet=snippet,
+                            relevance_score=sim,
+                            source_domain=domain,
+                            published_date=pub_dt,
+                        )
+                    )
+                except Exception:
+                    continue
+
+            # Sort by similarity
+            resources.sort(key=lambda r: r.relevance_score, reverse=True)
+            return resources[:max_results]
+
+        except Exception as e:
+            logger.error(f"Saved snapshot retrieval error: {e}")
             return []
 
     def _parse_search_results(

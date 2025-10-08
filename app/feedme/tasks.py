@@ -51,7 +51,7 @@ import google.generativeai as genai
 
 # Feature flags / behavior toggles
 DELETE_PDF_AFTER_EXTRACT = True  # Immediately remove PDF payload after extraction
-EMBEDDING_MODEL_NAME = "models/gemini-embedding-001"
+from app.db.embedding_config import MODEL_NAME as EMBEDDING_MODEL_NAME, EXPECTED_DIM as EXPECTED_EMBEDDING_DIM, assert_dim
 
 def _light_cleanup(text: str) -> str:
     """Perform minimal cleanup to improve readability without changing content semantics."""
@@ -621,8 +621,9 @@ def generate_text_chunks_and_embeddings(self, conversation_id: int, max_chunk_ch
 
         # Insert and embed per chunk with rate limiting
         stored = 0
-        model_name = current_settings().gemini_embed_model or "models/gemini-embedding-001"
-        expected_dim = 3072 if "embedding-004" in model_name else 768
+        model_name = current_settings().gemini_embed_model or EMBEDDING_MODEL_NAME
+        if model_name != EMBEDDING_MODEL_NAME:
+            raise ValueError(f"Embedding model must be '{EMBEDDING_MODEL_NAME}' but got '{model_name}'")
         
         for idx, chunk in enumerate(chunks):
             ins = client.client.table('feedme_text_chunks').insert({
@@ -654,8 +655,10 @@ def generate_text_chunks_and_embeddings(self, conversation_id: int, max_chunk_ch
                 vec = emb['embedding'] if isinstance(emb, dict) else emb.embedding
                 
                 # Verify dimension based on model
-                if len(vec) != expected_dim:
-                    logger.warning(f"Unexpected embedding dimension: {len(vec)}, expected {expected_dim}")
+                try:
+                    assert_dim(vec, "feedme_text_chunks.embedding")
+                except Exception as e:
+                    logger.warning(str(e))
                 
                 # Store embedding
                 client.client.table('feedme_text_chunks').update({ 'embedding': vec }).eq('id', chunk_id).execute()
@@ -881,8 +884,7 @@ def health_check(self) -> Dict[str, Any]:
         try:
             model = get_embedding_model()
             test_embedding = model.embed_query("test")
-            if len(test_embedding) != 768:
-                embedding_health = {"status": "unhealthy", "error": "Invalid embedding dimension"}
+            assert_dim(test_embedding, "health_check")
         except Exception as e:
             embedding_health = {"status": "unhealthy", "error": str(e)}
         

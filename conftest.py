@@ -3,9 +3,14 @@ Pytest configuration and import shims for optional dependencies.
 
 Provides a minimal shim for `langgraph.checkpoint.postgres.aio.AsyncPostgresSaver`
 so tests that import it can run without requiring the optional Postgres module.
+
+Also adjusts sys.path for internal test modules that expect to be run from the
+log_analysis_agent package directory (so that `schemas`, `formatters`, and `tools`
+can be imported directly during repository-level pytest runs).
 """
 import sys
 import types
+from pathlib import Path
 
 
 def _install_langgraph_postgres_shim() -> None:
@@ -63,3 +68,23 @@ def _install_langgraph_postgres_shim() -> None:
 
 
 _install_langgraph_postgres_shim()
+
+
+def _install_log_agent_local_imports() -> None:
+    """Allow tests under app/agents_v2/log_analysis_agent to import local modules.
+
+    Some developer-oriented tests import `schemas`, `formatters`, and `tools`
+    as if the current working directory is the log_analysis_agent package.
+    To support running pytest from the repository root, we prepend that directory
+    to sys.path when available.
+    """
+    try:
+        repo_root = Path(__file__).resolve().parent
+        pkg_dir = repo_root / "app" / "agents_v2" / "log_analysis_agent"
+        if pkg_dir.exists() and str(pkg_dir) not in sys.path:
+            sys.path.insert(0, str(pkg_dir))
+    except Exception:
+        pass
+
+
+_install_log_agent_local_imports()

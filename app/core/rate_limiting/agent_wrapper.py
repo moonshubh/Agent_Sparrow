@@ -188,8 +188,7 @@ class RateLimitedAgent:
         
         For sync streaming, we check rate limits synchronously before streaming.
         """
-        self.logger.info(f"🔥 RATE LIMITING WRAPPER STREAM CALLED for model {self.model}")
-        print(f"🔥 RATE LIMITING WRAPPER STREAM CALLED for model {self.model}")
+        self.logger.info(f"rate_limit_wrapper_stream_called model={self.model}")
         
         try:
             # Check rate limits synchronously before streaming
@@ -210,10 +209,13 @@ class RateLimitedAgent:
                     asyncio.set_event_loop(loop)
             
             # Check rate limits before streaming
-            # Only run rate check if we have a usable loop (not running)\n            if 'loop' in locals():\n                rate_check = loop.run_until_complete(self.rate_limiter.check_and_consume(self.model))\n            else:\n                rate_check = None
+            # Only run rate check if we have a usable loop (not running)
+            if 'loop' in locals():
+                rate_check = loop.run_until_complete(self.rate_limiter.check_and_consume(self.model))
+            else:
+                rate_check = None
             if rate_check is not None and not rate_check.allowed:
                 self.logger.warning(f"Rate limit exceeded for {self.model}")
-                print(f"⚠️ Rate limit exceeded for {self.model}")
                 if self.fail_gracefully:
                     return self._create_error_stream_sync(
                         RateLimitExceededException(
@@ -230,12 +232,10 @@ class RateLimitedAgent:
                     model=self.model
                 )
             
-            self.logger.info(f"✅ Rate limit check passed, proceeding with stream")
-            print(f"✅ Rate limit check passed, proceeding with stream")
+            self.logger.info("rate_limit_check_passed proceeding_with_stream")
             
         except Exception as e:
             self.logger.error(f"Rate limiting error in stream: {e}")
-            print(f"❌ Rate limiting error in stream: {e}")
             # Continue without rate limiting on error to maintain functionality
         
         # Stream with circuit breaker protection
@@ -245,7 +245,6 @@ class RateLimitedAgent:
                 return circuit_breaker.call_sync(self.agent.stream, *args, **kwargs)
             except Exception as e:
                 self.logger.error(f"Circuit breaker error in stream: {e}")
-                print(f"❌ Circuit breaker error in stream: {e}")
                 # Fallback to direct stream call
                 return self.agent.stream(*args, **kwargs)
         else:

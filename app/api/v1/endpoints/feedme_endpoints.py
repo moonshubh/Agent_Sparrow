@@ -832,7 +832,7 @@ async def list_conversation_examples(
         if is_active is not None:
             count_response = count_response.eq('is_active', is_active)
         
-        count_result = count_response.execute()
+        count_result = await client._exec(lambda: count_response.execute())
         total_count = count_result.count if count_result.count else 0
         
         # Get paginated data
@@ -840,7 +840,7 @@ async def list_conversation_examples(
         query = query.order('created_at', desc=True)\
                      .range(offset, offset + page_size - 1)
         
-        response = query.execute()
+        response = await client._exec(lambda: query.execute())
         
         # Convert to FeedMeExample objects
         examples = []
@@ -1130,7 +1130,8 @@ async def get_pdf_storage_analytics():
     
     try:
         # Get PDF storage analytics from Supabase view
-        result = await supabase_client.table('feedme_pdf_storage_analytics').select("*").execute()
+        client = get_supabase_client()
+        result = await client._exec(lambda: client.client.table('feedme_pdf_storage_analytics').select("*").execute())
         
         if result.data and len(result.data) > 0:
             analytics = result.data[0]
@@ -1866,15 +1867,15 @@ async def reject_conversation(conversation_id: int, rejection_request: Rejection
             raise HTTPException(status_code=500, detail="Failed to update conversation rejection status")
         
         # Mark all examples as rejected (inactive for retrieval) using Supabase
-        examples_update_response = supabase_client.client.table('feedme_examples')\
+        examples_update_response = await supabase_client._exec(lambda: supabase_client.client.table('feedme_examples')
             .update({
                 'review_status': 'rejected',
                 'reviewed_by': rejection_request.rejected_by,
                 'reviewed_at': rejection_time,
                 'is_active': False
-            })\
-            .eq('conversation_id', conversation_id)\
-            .execute()
+            })
+            .eq('conversation_id', conversation_id)
+            .execute())
         
         rejected_count = len(examples_update_response.data) if examples_update_response.data else 0
         
@@ -2582,10 +2583,10 @@ async def create_folder(request: Request, folder_data: FolderCreate):
             )[:SECURITY_CONFIG["MAX_DESCRIPTION_LENGTH"]]
         
         # Check if folder name already exists using Supabase
-        existing_folders = supabase_client.client.table('feedme_folders')\
-            .select('id')\
-            .eq('name', folder_data.name)\
-            .execute()
+        existing_folders = await supabase_client._exec(lambda: supabase_client.client.table('feedme_folders')
+            .select('id')
+            .eq('name', folder_data.name)
+            .execute())
         
         if existing_folders.data and len(existing_folders.data) > 0:
             raise HTTPException(status_code=409, detail="Folder name already exists")
@@ -2633,10 +2634,10 @@ async def update_folder(folder_id: int, folder_data: FolderUpdate):
     
     try:
         # Check folder exists using Supabase
-        existing_folder_response = supabase_client.client.table('feedme_folders')\
-            .select('*')\
-            .eq('id', folder_id)\
-            .execute()
+        existing_folder_response = await supabase_client._exec(lambda: supabase_client.client.table('feedme_folders')
+            .select('*')
+            .eq('id', folder_id)
+            .execute())
         
         if not existing_folder_response.data or len(existing_folder_response.data) == 0:
             raise HTTPException(status_code=404, detail="Folder not found")
@@ -2645,11 +2646,11 @@ async def update_folder(folder_id: int, folder_data: FolderUpdate):
         
         # Check for name conflicts if name is being updated
         if folder_data.name and folder_data.name != existing_folder['name']:
-            name_conflict_response = supabase_client.client.table('feedme_folders')\
-                .select('id')\
-                .eq('name', folder_data.name)\
-                .neq('id', folder_id)\
-                .execute()
+            name_conflict_response = await supabase_client._exec(lambda: supabase_client.client.table('feedme_folders')
+                .select('id')
+                .eq('name', folder_data.name)
+                .neq('id', folder_id)
+                .execute())
             
             if name_conflict_response.data and len(name_conflict_response.data) > 0:
                 raise HTTPException(status_code=409, detail="Folder name already exists")
@@ -2668,10 +2669,10 @@ async def update_folder(folder_id: int, folder_data: FolderUpdate):
         
         if not update_data:
             # No fields to update, get conversation count and return existing folder
-            count_response = supabase_client.client.table('feedme_conversations')\
-                .select('id', count='exact')\
-                .eq('folder_id', folder_id)\
-                .execute()
+            count_response = await supabase_client._exec(lambda: supabase_client.client.table('feedme_conversations')
+                .select('id', count='exact')
+                .eq('folder_id', folder_id)
+                .execute())
             
             existing_folder['conversation_count'] = count_response.count or 0
             return FeedMeFolder(**existing_folder)
@@ -2682,10 +2683,10 @@ async def update_folder(folder_id: int, folder_data: FolderUpdate):
             raise HTTPException(status_code=500, detail="Failed to update folder")
         
         # Get conversation count
-        count_response = supabase_client.client.table('feedme_conversations')\
-            .select('id', count='exact')\
-            .eq('folder_id', folder_id)\
-            .execute()
+        count_response = await supabase_client._exec(lambda: supabase_client.client.table('feedme_conversations')
+            .select('id', count='exact')
+            .eq('folder_id', folder_id)
+            .execute())
         
         updated_folder['conversation_count'] = count_response.count or 0
         
@@ -2719,10 +2720,10 @@ async def delete_folder(folder_id: int, move_conversations_to: Optional[int] = Q
         supabase_client = get_supabase_client()
         
         # Check folder exists
-        folder_response = supabase_client.client.table('feedme_folders')\
-            .select('*')\
-            .eq('id', folder_id)\
-            .execute()
+        folder_response = await supabase_client._exec(lambda: supabase_client.client.table('feedme_folders')
+            .select('*')
+            .eq('id', folder_id)
+            .execute())
         
         if not folder_response.data or len(folder_response.data) == 0:
             raise HTTPException(status_code=404, detail="Folder not found")
@@ -2730,33 +2731,33 @@ async def delete_folder(folder_id: int, move_conversations_to: Optional[int] = Q
         folder = folder_response.data[0]
         
         # Count conversations in this folder
-        count_response = supabase_client.client.table('feedme_conversations')\
-            .select('id', count='exact')\
-            .eq('folder_id', folder_id)\
-            .eq('is_active', True)\
-            .execute()
+        count_response = await supabase_client._exec(lambda: supabase_client.client.table('feedme_conversations')
+            .select('id', count='exact')
+            .eq('folder_id', folder_id)
+            .eq('is_active', True)
+            .execute())
         
         conversation_count = count_response.count or 0
         
         # Validate target folder if specified
         if move_conversations_to is not None:
-            target_folder_response = supabase_client.client.table('feedme_folders')\
-                .select('id')\
-                .eq('id', move_conversations_to)\
-                .execute()
+            target_folder_response = await supabase_client._exec(lambda: supabase_client.client.table('feedme_folders')
+                .select('id')
+                .eq('id', move_conversations_to)
+                .execute())
             
             if not target_folder_response.data:
                 raise HTTPException(status_code=404, detail="Target folder not found")
         
         # Move conversations if needed
         if conversation_count > 0:
-            update_response = supabase_client.client.table('feedme_conversations')\
+            update_response = await supabase_client._exec(lambda: supabase_client.client.table('feedme_conversations')
                 .update({
                     'folder_id': move_conversations_to,
                     'updated_at': datetime.now().isoformat()
-                })\
-                .eq('folder_id', folder_id)\
-                .execute()
+                })
+                .eq('folder_id', folder_id)
+                .execute())
         
         # Delete the folder using Supabase client method
         await supabase_client.delete_folder(folder_id)
@@ -2799,10 +2800,12 @@ async def assign_conversations_to_folder(assign_request: AssignFolderRequest):
         # Validate folder exists if folder_id is provided
         folder_name = None
         if assign_request.folder_id is not None:
-            folder_response = supabase_client.client.table('feedme_folders')\
-                .select('name')\
-                .eq('id', assign_request.folder_id)\
+            folder_response = await supabase_client._exec(
+                lambda: supabase_client.client.table('feedme_folders')
+                .select('name')
+                .eq('id', assign_request.folder_id)
                 .execute()
+            )
             
             if not folder_response.data:
                 raise HTTPException(status_code=404, detail="Folder not found")
@@ -2810,11 +2813,11 @@ async def assign_conversations_to_folder(assign_request: AssignFolderRequest):
         
         # Validate conversations exist and are active
         if assign_request.conversation_ids:
-            conversations_response = supabase_client.client.table('feedme_conversations')\
-                .select('id')\
-                .in_('id', assign_request.conversation_ids)\
-                .eq('is_active', True)\
-                .execute()
+            conversations_response = await supabase_client._exec(lambda: supabase_client.client.table('feedme_conversations')
+                .select('id')
+                .in_('id', assign_request.conversation_ids)
+                .eq('is_active', True)
+                .execute())
             
             existing_ids = [row['id'] for row in conversations_response.data]
             missing_ids = set(assign_request.conversation_ids) - set(existing_ids)
@@ -2882,32 +2885,32 @@ async def list_folder_conversations(
         supabase_client = get_supabase_client()
         
         # Validate folder exists
-        folder_response = supabase_client.client.table('feedme_folders')\
-            .select('name')\
-            .eq('id', folder_id)\
-            .execute()
+        folder_response = await supabase_client._exec(lambda: supabase_client.client.table('feedme_folders')
+            .select('name')
+            .eq('id', folder_id)
+            .execute())
         
         if not folder_response.data:
             raise HTTPException(status_code=404, detail="Folder not found")
         
         # Count total conversations in folder
-        count_response = supabase_client.client.table('feedme_conversations')\
-            .select('id', count='exact')\
-            .eq('folder_id', folder_id)\
-            .eq('is_active', True)\
-            .execute()
+        count_response = await supabase_client._exec(lambda: supabase_client.client.table('feedme_conversations')
+            .select('id', count='exact')
+            .eq('folder_id', folder_id)
+            .eq('is_active', True)
+            .execute())
         
         total_count = count_response.count or 0
         
         # Get paginated conversations
         offset = (page - 1) * page_size
-        conversations_response = supabase_client.client.table('feedme_conversations')\
-            .select('*')\
-            .eq('folder_id', folder_id)\
-            .eq('is_active', True)\
-            .order('updated_at', desc=True)\
-            .range(offset, offset + page_size - 1)\
-            .execute()
+        conversations_response = await supabase_client._exec(lambda: supabase_client.client.table('feedme_conversations')
+            .select('*')
+            .eq('folder_id', folder_id)
+            .eq('is_active', True)
+            .order('updated_at', desc=True)
+            .range(offset, offset + page_size - 1)
+            .execute())
         
         conversations = []
         for row in conversations_response.data:
@@ -3044,10 +3047,10 @@ async def create_folder_supabase(
         supabase_client = get_supabase_client()
         
         # Check if folder name already exists
-        existing_folder_response = supabase_client.client.table('feedme_folders')\
-            .select('id')\
-            .eq('name', folder_data.name)\
-            .execute()
+        existing_folder_response = await supabase_client._exec(lambda: supabase_client.client.table('feedme_folders')
+            .select('id')
+            .eq('name', folder_data.name)
+            .execute())
         
         if existing_folder_response.data:
             raise HTTPException(status_code=409, detail="Folder name already exists")
@@ -3100,21 +3103,21 @@ async def update_folder_supabase(
         supabase_client = get_supabase_client()
         
         # Check if folder exists
-        existing_folder_response = supabase_client.client.table('feedme_folders')\
-            .select('*')\
-            .eq('id', folder_id)\
-            .execute()
+        existing_folder_response = await supabase_client._exec(lambda: supabase_client.client.table('feedme_folders')
+            .select('*')
+            .eq('id', folder_id)
+            .execute())
         
         if not existing_folder_response.data:
             raise HTTPException(status_code=404, detail="Folder not found")
         
         # Check if new name conflicts with existing folder
         if folder_data.name:
-            name_conflict_response = supabase_client.client.table('feedme_folders')\
-                .select('id')\
-                .eq('name', folder_data.name)\
-                .neq('id', folder_id)\
-                .execute()
+            name_conflict_response = await supabase_client._exec(lambda: supabase_client.client.table('feedme_folders')
+                .select('id')
+                .eq('name', folder_data.name)
+                .neq('id', folder_id)
+                .execute())
             
             if name_conflict_response.data:
                 raise HTTPException(status_code=409, detail="Folder name already exists")
@@ -3138,10 +3141,10 @@ async def update_folder_supabase(
             raise HTTPException(status_code=500, detail="Failed to update folder")
         
         # Get conversation count
-        count_response = supabase_client.client.table('feedme_conversations')\
-            .select('id', count='exact')\
-            .eq('folder_id', folder_id)\
-            .execute()
+        count_response = await supabase_client._exec(lambda: supabase_client.client.table('feedme_conversations')
+            .select('id', count='exact')
+            .eq('folder_id', folder_id)
+            .execute())
         
         updated_folder['conversation_count'] = count_response.count or 0
         
@@ -3185,10 +3188,10 @@ async def delete_folder_supabase(
         supabase_client = get_supabase_client()
         
         # Check if folder exists and get its info
-        folder_response = supabase_client.client.table('feedme_folders')\
-            .select('*')\
-            .eq('id', folder_id)\
-            .execute()
+        folder_response = await supabase_client._exec(lambda: supabase_client.client.table('feedme_folders')
+            .select('*')
+            .eq('id', folder_id)
+            .execute())
         
         if not folder_response.data:
             raise HTTPException(status_code=404, detail="Folder not found")
@@ -3197,10 +3200,10 @@ async def delete_folder_supabase(
         deleted_folder_name = folder['name']
         
         # Get conversations in this folder
-        conversations_response = supabase_client.client.table('feedme_conversations')\
-            .select('id')\
-            .eq('folder_id', folder_id)\
-            .execute()
+        conversations_response = await supabase_client._exec(lambda: supabase_client.client.table('feedme_conversations')
+            .select('id')
+            .eq('folder_id', folder_id)
+            .execute())
         
         conversation_ids = [conv['id'] for conv in conversations_response.data]
         conversation_count = len(conversation_ids)

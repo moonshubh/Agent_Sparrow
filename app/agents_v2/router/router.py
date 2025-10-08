@@ -28,7 +28,7 @@ try:
     router_prompt = ChatPromptTemplate.from_template(router_prompt_template_str, template_format="f-string")
 except FileNotFoundError:
     # Fallback or error if prompt file is crucial
-    print(f"ERROR: Router prompt file not found at {PROMPT_FILE_PATH}")
+    logging.getLogger(__name__).error("Router prompt file not found at %s", PROMPT_FILE_PATH)
     # Using a basic fallback prompt to allow functionality, but this should be addressed.
     router_prompt = ChatPromptTemplate.from_messages([
         ("system", "You are a router. Classify the query: {{query}} into primary_agent, log_analyst, or researcher."),
@@ -72,7 +72,7 @@ async def query_router(state: 'GraphState' | dict) -> Union[dict, str]:
     Routes the query to the appropriate agent based on LLM classification.
     Updates the 'destination' field in the GraphState.
     """
-    print("---ROUTING QUERY---")
+    logger.debug("routing_query_start")
 
     # Support both GraphState objects and simple dicts for easier unit testing
     if isinstance(state, dict):
@@ -83,7 +83,7 @@ async def query_router(state: 'GraphState' | dict) -> Union[dict, str]:
     user_query = get_user_query(messages) # Access messages from Pydantic state
 
     if not user_query:
-        print("---ROUTING ERROR: No user query found in state.messages---")
+        logger.error("routing_error_no_user_query")
         # Default routing or error handling if query is missing
         return {"destination": "__end__"} # Or perhaps a default agent
 
@@ -100,7 +100,7 @@ async def query_router(state: 'GraphState' | dict) -> Union[dict, str]:
     )
     
     if not gemini_api_key:
-        print("CRITICAL ERROR: No Gemini API key available for user.")
+        logger.error("No Gemini API key available for user")
         return {"destination": "__end__"}
     
     llm = ChatGoogleGenerativeAI(
@@ -134,11 +134,11 @@ async def query_router(state: 'GraphState' | dict) -> Union[dict, str]:
                 "Low confidence (%.2f < %.2f). Falling back to primary_agent", confidence, CONF_THRESHOLD
             )
             destination = "primary_agent"
-        print(f"---ROUTING TO: {destination}---")
+        logger.info("routing_to=%s", destination)
     except Exception as e:
         logger.exception("Routing LLM error: %s", e)
         # Fallback routing in case of LLM error
         destination = "primary_agent" # Or '__end__' or a specific error handling agent
-        print(f"---FALLBACK ROUTING TO: {destination}---")
+        logger.info("routing_fallback_to=%s", destination)
 
     return {"destination": destination}

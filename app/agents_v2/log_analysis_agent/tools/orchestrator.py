@@ -382,7 +382,8 @@ class LogToolOrchestrator:
         self,
         patterns: List[ErrorPattern],
         metadata: LogMetadata,
-        use_cache: bool = True
+        use_cache: bool = True,
+        include_web: bool = True,
     ) -> ToolResults:
         """
         Execute all tool searches in parallel.
@@ -419,11 +420,9 @@ class LogToolOrchestrator:
         # Prepare optimized queries
         queries = self.prepare_queries(patterns, metadata)
 
-        logger.info(
-            f"Starting parallel tool searches - "
-            f"KB: '{queries.kb_query[:50]}...', "
-            f"FeedMe: '{queries.feedme_query[:50]}...', "
-            f"Web: '{queries.web_query[:50]}...'"
+        logger.debug(
+            "Starting parallel tool searches (lens) - KB:%s FeedMe:%s Web:%s",
+            len(queries.kb_query), len(queries.feedme_query), len(queries.web_query)
         )
 
         # Execute searches in parallel with timeout
@@ -434,7 +433,7 @@ class LogToolOrchestrator:
             tasks = [
                 self._search_kb_with_timeout(queries, patterns),
                 self._search_feedme_with_timeout(queries, patterns, metadata),
-                self._search_tavily_with_timeout(queries, patterns, metadata)
+                self._search_tavily_with_timeout(queries, patterns, metadata, include_live=include_web),
             ]
 
             # Execute in parallel
@@ -458,7 +457,7 @@ class LogToolOrchestrator:
                 logger.error(f"FeedMe search error: {search_results[1]}")
                 results.tool_statuses["feedme_search"] = ToolStatus.FAILED
 
-            # Process Tavily results
+            # Process Web results (saved snapshots + optional live)
             if isinstance(search_results[2], tuple):
                 web_resources, web_status = search_results[2]
                 results.web_resources = web_resources
@@ -494,12 +493,14 @@ class LogToolOrchestrator:
     ) -> Tuple[List[KBArticle], ToolStatus]:
         """Execute KB search with timeout"""
         try:
-            async with asyncio.timeout(self.timeout):
-                articles = await self._kb_tool.search_for_log_errors(
+            articles = await asyncio.wait_for(
+                self._kb_tool.search_for_log_errors(
                     error_patterns=patterns,
-                    query_override=queries.kb_query
-                )
-                return articles, ToolStatus.SUCCESS
+                    query_override=queries.kb_query,
+                ),
+                timeout=self.timeout,
+            )
+            return articles, ToolStatus.SUCCESS
         except asyncio.TimeoutError:
             logger.warning(f"KB search timed out after {self.timeout}s")
             return [], ToolStatus.TIMEOUT
@@ -515,13 +516,15 @@ class LogToolOrchestrator:
     ) -> Tuple[List[FeedMeConversation], ToolStatus]:
         """Execute FeedMe search with timeout"""
         try:
-            async with asyncio.timeout(self.timeout):
-                conversations = await self._feedme_tool.find_similar_issues(
+            conversations = await asyncio.wait_for(
+                self._feedme_tool.find_similar_issues(
                     patterns=patterns,
                     metadata=metadata,
-                    query_override=queries.feedme_query
-                )
-                return conversations, ToolStatus.SUCCESS
+                    query_override=queries.feedme_query,
+                ),
+                timeout=self.timeout,
+            )
+            return conversations, ToolStatus.SUCCESS
         except asyncio.TimeoutError:
             logger.warning(f"FeedMe search timed out after {self.timeout}s")
             return [], ToolStatus.TIMEOUT
@@ -533,17 +536,47 @@ class LogToolOrchestrator:
         self,
         queries: ToolQuery,
         patterns: List[ErrorPattern],
-        metadata: LogMetadata
+        metadata: LogMetadata,
+        include_live: bool = True,
     ) -> Tuple[List[WebResource], ToolStatus]:
-        """Execute Tavily search with timeout"""
+        """Execute saved snapshot retrieval plus optional live Tavily search with timeout"""
         try:
-            async with asyncio.timeout(self.timeout):
-                resources = await self._tavily_tool.search_web_solutions(
+            # Saved snapshots
+            saved = await asyncio.wait_for(
+                self._tavily_tool.search_saved_snapshots(
                     patterns=patterns,
                     metadata=metadata,
-                    query_override=queries.web_query
+                    query_override=queries.web_query,
+                    max_results=5,
+                ),
+                timeout=self.timeout,
+            )
+
+            live: List[WebResource] = []
+            if include_live:
+                live = await asyncio.wait_for(
+                    self._tavily_tool.search_web_solutions(
+                        patterns=patterns,
+                        metadata=metadata,
+                        query_override=queries.web_query,
+                    ),
+                    timeout=self.timeout,
                 )
-                return resources, ToolStatus.SUCCESS
+
+            merged: List[WebResource] = []
+            merged.extend(saved or [])
+            if live:
+                # Merge while avoiding duplicates by URL
+                seen = {r.url for r in merged if getattr(r, 'url', None)}
+                for r in live:
+                    if not r.url or r.url not in seen:
+                        merged.append(r)
+                        if r.url:
+                            seen.add(r.url)
+
+            # Sort by relevance
+            merged.sort(key=lambda r: r.relevance_score, reverse=True)
+            return merged, ToolStatus.SUCCESS
         except asyncio.TimeoutError:
             logger.warning(f"Tavily search timed out after {self.timeout}s")
             return [], ToolStatus.TIMEOUT

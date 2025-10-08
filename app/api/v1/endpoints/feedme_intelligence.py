@@ -90,7 +90,7 @@ async def analyze_conversation_batch(
         # Get conversations from database if IDs provided
         if request.conversation_ids:
             supabase = get_supabase_client()
-            result = supabase.client.table('feedme_examples').select('*').in_('conversation_id', request.conversation_ids).execute()
+            result = await supabase._exec(lambda: supabase.client.table('feedme_examples').select('*').in_('conversation_id', request.conversation_ids).execute())
             conversations = result.data if result.data else []
         else:
             conversations = request.conversations
@@ -181,7 +181,7 @@ Return JSON with:
         
         # Perform vector similarity search
         # Note: This is a simplified version. In production, you'd use pgvector similarity search
-        result = query_builder.limit(request.limit).execute()
+        result = await supabase._exec(lambda: query_builder.limit(request.limit).execute())
         
         # Enhance results with relevance scoring
         enhanced_results = []
@@ -236,9 +236,9 @@ async def get_insights_dashboard(
         from datetime import datetime, timedelta
         cutoff_date = (datetime.now() - timedelta(days=days)).isoformat()
         
-        result = supabase.client.table('feedme_conversations').select(
+        result = await supabase._exec(lambda: supabase.client.table('feedme_conversations').select(
             '*, feedme_examples(*)'
-        ).gte('created_at', cutoff_date).execute()
+        ).gte('created_at', cutoff_date).execute())
         
         conversations = result.data if result.data else []
         

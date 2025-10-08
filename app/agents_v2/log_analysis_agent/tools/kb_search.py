@@ -11,7 +11,7 @@ import re
 from dataclasses import dataclass
 
 from app.agents_v2.primary_agent.feedme_knowledge_tool import (
-    enhanced_mailbird_kb_search,
+    enhanced_mailbird_kb_search_call,
     get_feedme_connector
 )
 try:
@@ -181,7 +181,7 @@ class EnhancedKBSearch:
             else:
                 query = self.build_error_query(error_patterns)
 
-            logger.info(f"KB search for log errors: '{query[:100]}...'")
+            logger.debug("KB search for log errors (len=%s)", len(query))
 
             # Prepare context for enhanced search
             context = {
@@ -195,7 +195,7 @@ class EnhancedKBSearch:
             }
 
             # Use existing enhanced KB search
-            raw_results = enhanced_mailbird_kb_search(
+            raw_results = enhanced_mailbird_kb_search_call(
                 query=query,
                 context=context,
                 search_sources=["knowledge_base", "feedme"],
