@@ -700,6 +700,8 @@ dev-debug.log
 !frontend/lib/types/logAnalysis.ts
 frontend/tsconfig.tsbuildinfo
 *.md
+!docs/backend/*.md
+!Backend.md
 *.xml
 *.bak
 
