@@ -26,6 +26,8 @@ Re-organization note: prefer `from app.agents.log_analysis import run_log_analys
   - Final assistant payload includes content and analysis_results (structured)
 - Client maps analysis_results into message metadata (logMetadata, errorSnippets, rootCause)
 
+SSE formatting is unified via `app/core/transport/sse.py` using `format_sse_data(payload)`.
+
 ## Rate Limiting & Sessions
 - Middleware enforces per-minute/hour/day and concurrent limits; creates session records (in-memory manager) with metadata (time_range, line_count, etc.).
 - agent_endpoints releases concurrent slots in a finally block.

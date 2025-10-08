@@ -26,6 +26,8 @@ Re-organization note: prefer `from app.agents.primary import run_primary_agent, 
    - message-metadata (optional) → any remaining metadata
    - text-end, finish → completion markers
 
+SSE formatting: all streaming endpoints use `app/core/transport/sse.format_sse_data(payload)` for consistent event emission.
+
 ## Provider and API Key Resolution
 - Provider: settings.primary_agent_provider (default: google); override via request provider/model.
 - Keys: user context (Supabase-stored encrypted keys) via app/core/user_context and app/api_keys/supabase_service; fallback to env when allowed.

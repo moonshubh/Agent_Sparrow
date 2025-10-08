@@ -32,6 +32,7 @@ except ImportError:
         return getattr(settings, 'development_user_id', 'dev-user-12345')
 from app.core.user_context import user_context_scope, create_user_context_from_user_id
 import logging
+from app.core.transport.sse import format_sse_data
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -377,11 +378,11 @@ async def primary_agent_stream_generator(
         if req_provider == "google":
             gemini_key = await user_context.get_gemini_api_key()
             if not gemini_key:
-                error_payload = json.dumps({
+                error_payload = {
                     "type": "error",
                     "errorText": "API Key Required: Please add your Google Gemini API key in Settings."
-                }, ensure_ascii=False)
-                yield f"data: {error_payload}\n\n"
+                }
+                yield format_sse_data(error_payload)
                 return
         elif req_provider == "openai":
             openai_key = None
@@ -393,18 +394,18 @@ async def primary_agent_stream_generator(
             import os
             openai_key = openai_key or os.getenv("OPENAI_API_KEY")
             if not openai_key:
-                error_payload = json.dumps({
+                error_payload = {
                     "type": "error",
                     "errorText": "OpenAI API key missing. Add it in Settings or set OPENAI_API_KEY."
-                }, ensure_ascii=False)
-                yield f"data: {error_payload}\n\n"
+                }
+                yield format_sse_data(error_payload)
                 return
         else:
-            error_payload = json.dumps({
+            error_payload = {
                 "type": "error",
                 "errorText": f"Unsupported provider: {req_provider}"
-            }, ensure_ascii=False)
-            yield f"data: {error_payload}\n\n"
+            }
+            yield format_sse_data(error_payload)
             return
         
         # Use user-specific context
@@ -508,7 +509,7 @@ async def primary_agent_stream_generator(
                         })
 
                 for payload in payloads:
-                    yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+                    yield format_sse_data(payload)
 
             if text_started:
                 finish_payloads = [
@@ -516,14 +517,14 @@ async def primary_agent_stream_generator(
                     {"type": "finish"},
                 ]
                 for payload in finish_payloads:
-                    yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+                    yield format_sse_data(payload)
 
     except Exception as e:
         # Use logger for consistency if available, otherwise print
         # logger.error(f"Error in primary_agent_stream_generator calling run_primary_agent: {e}", exc_info=True)
         logger.error(f"Error in primary_agent_stream_generator calling run_primary_agent: {e}", exc_info=True)
-        error_payload = json.dumps({"type": "error", "errorText": f"An error occurred in the agent: {str(e)}"}, ensure_ascii=False)
-        yield f"data: {error_payload}\n\n"
+        error_payload = {"type": "error", "errorText": f"An error occurred in the agent: {str(e)}"}
+        yield format_sse_data(error_payload)
 
 ## Legacy v1 chat endpoint removed: use /v2/agent/chat/stream
 
@@ -798,13 +799,13 @@ async def unified_agent_stream_generator(
     """Unified agent endpoint with intelligent routing and fallback."""
     try:
         # Send routing notification
-        routing_payload = json.dumps({
+        routing_payload = {
             "role": "system", 
             "content": f"🤖 Analyzing your request...",
             "agent_type": "router",
             "trace_id": request.trace_id
-        }, ensure_ascii=False)
-        yield f"data: {routing_payload}\n\n"
+        }
+        yield format_sse_data(routing_payload)
         
         # Simple intelligent routing based on message content
         message_lower = request.message.lower()
@@ -831,13 +832,13 @@ async def unified_agent_stream_generator(
             "researcher": "Research"
         }.get(agent_type, "Primary Support")
         
-        agent_payload = json.dumps({
+        agent_payload = {
             "role": "system", 
             "content": f"🎯 Routing to {agent_name} Agent",
             "agent_type": agent_type,
             "trace_id": request.trace_id
-        }, ensure_ascii=False)
-        yield f"data: {agent_payload}\n\n"
+        }
+        yield format_sse_data(agent_payload)
         
         # Route to appropriate agent endpoint
         if agent_type in LOG_AGENT_ALIASES and request.log_content:
@@ -863,23 +864,23 @@ async def unified_agent_stream_generator(
             except HTTPException as exc:
                 detail = exc.detail
                 message = detail.get('message') if isinstance(detail, dict) else str(detail or exc)
-                error_payload = json.dumps({
+                error_payload = {
                     "role": "error",
                     "content": f"Unable to start log analysis: {message}",
                     "agent_type": "log_analysis",
                     "trace_id": request.trace_id
-                }, ensure_ascii=False)
-                yield f"data: {error_payload}\n\n"
+                }
+                yield format_sse_data(error_payload)
                 return
             except Exception as middleware_error:
                 logger.error(f"Middleware failure for log analysis: {middleware_error}", exc_info=True)
-                error_payload = json.dumps({
+                error_payload = {
                     "role": "error",
                     "content": "Unexpected error while preparing log analysis. Please try again shortly.",
                     "agent_type": "log_analysis",
                     "trace_id": request.trace_id
-                }, ensure_ascii=False)
-                yield f"data: {error_payload}\n\n"
+                }
+                yield format_sse_data(error_payload)
                 return
 
             try:
@@ -904,13 +905,13 @@ async def unified_agent_stream_generator(
                 user_context = await create_user_context_from_user_id(resolved_user_id)
                 gemini_key = await user_context.get_gemini_api_key()
                 if not gemini_key:
-                    error_payload = json.dumps({
+                    error_payload = {
                         "role": "error",
                         "content": "🔑 **API Key Required**: To analyze logs, please add your Google Gemini API key in Settings.",
                         "agent_type": "log_analysis",
                         "trace_id": request.trace_id
-                    }, ensure_ascii=False)
-                    yield f"data: {error_payload}\n\n"
+                    }
+                    yield format_sse_data(error_payload)
                     return
 
                 result: Optional[Dict[str, Any]] = None
@@ -918,8 +919,8 @@ async def unified_agent_stream_generator(
                     async with user_context_scope(user_context):
                         # Stage-2: live step updates for unified stream
                         try:
-                            yield f"data: {json.dumps({'type': 'step', 'data': {'type': 'Starting Analysis', 'description': 'Initializing log analysis...', 'status': 'in-progress'}}, ensure_ascii=False)}\n\n"
-                            yield f"data: {json.dumps({'type': 'step', 'data': {'type': 'Parsing', 'description': 'Parsing log entries...', 'status': 'in-progress'}}, ensure_ascii=False)}\n\n"
+                            yield format_sse_data({'type': 'step', 'data': {'type': 'Starting Analysis', 'description': 'Initializing log analysis...', 'status': 'in-progress'}})
+                            yield format_sse_data({'type': 'step', 'data': {'type': 'Parsing', 'description': 'Parsing log entries...', 'status': 'in-progress'}})
                         except Exception:
                             pass
                         initial_state = {
@@ -930,19 +931,19 @@ async def unified_agent_stream_generator(
                         }
                         result = await run_log_analysis_agent(initial_state)
                         try:
-                            yield f"data: {json.dumps({'type': 'step', 'data': {'type': 'Analyzing', 'description': 'Analyzing patterns and issues...', 'status': 'complete'}}, ensure_ascii=False)}\n\n"
-                            yield f"data: {json.dumps({'type': 'step', 'data': {'type': 'Synthesizing', 'description': 'Generating final summary and recommendations...', 'status': 'in-progress'}}, ensure_ascii=False)}\n\n"
+                            yield format_sse_data({'type': 'step', 'data': {'type': 'Analyzing', 'description': 'Analyzing patterns and issues...', 'status': 'complete'}})
+                            yield format_sse_data({'type': 'step', 'data': {'type': 'Synthesizing', 'description': 'Generating final summary and recommendations...', 'status': 'in-progress'}})
                         except Exception:
                             pass
                 except Exception as agent_error:
                     logger.error("Log analysis agent failed: %s", agent_error, exc_info=True)
-                    error_payload = json.dumps({
+                    error_payload = {
                         "role": "error",
                         "content": "Log analysis failed while processing the file. Please try again after a short break.",
                         "agent_type": "log_analysis",
                         "trace_id": request.trace_id
-                    }, ensure_ascii=False)
-                    yield f"data: {error_payload}\n\n"
+                    }
+                    yield format_sse_data(error_payload)
                     return
 
                 final_report = result.get('final_report') if isinstance(result, dict) else None
@@ -979,22 +980,22 @@ async def unified_agent_stream_generator(
                     try:
                         # Step: formatting complete
                         try:
-                            yield f"data: {json.dumps({'type': 'step', 'data': {'type': 'Synthesizing', 'description': 'Finalizing the response...', 'status': 'complete'}}, ensure_ascii=False)}\n\n"
+                            yield format_sse_data({'type': 'step', 'data': {'type': 'Synthesizing', 'description': 'Finalizing the response...', 'status': 'complete'}})
                         except Exception:
                             pass
                         content_md = _format_log_analysis_content(analysis_results, request.message)
-                        json_payload = json.dumps({
+                        payload = {
                             "role": "assistant",
                             "content": content_md,
                             "agent_type": "log_analysis",
                             "trace_id": request.trace_id,
                             "analysis_results": analysis_results,
                             "session_id": session_id
-                        }, ensure_ascii=False)
-                        yield f"data: {json_payload}\n\n"
+                        }
+                        yield format_sse_data(payload)
                     except Exception as json_error:
                         logger.error(f"JSON serialization error: {json_error}")
-                        fallback_payload = json.dumps({
+                        fallback_payload = {
                             "role": "assistant",
                             "content": f"Log analysis complete! {summary}",
                             "agent_type": "log_analysis",
@@ -1007,16 +1008,16 @@ async def unified_agent_stream_generator(
                                 "proposed_solutions": []
                             },
                             "session_id": session_id
-                        }, ensure_ascii=False)
-                        yield f"data: {fallback_payload}\n\n"
+                        }
+                        yield format_sse_data(fallback_payload)
                 else:
-                    error_payload = json.dumps({
+                    error_payload = {
                         "role": "error",
                         "content": "Log analysis completed without producing a final report.",
                         "agent_type": "log_analysis",
                         "trace_id": request.trace_id
-                    }, ensure_ascii=False)
-                    yield f"data: {error_payload}\n\n"
+                    }
+                    yield format_sse_data(error_payload)
 
                 return
             finally:
@@ -1041,14 +1042,14 @@ async def unified_agent_stream_generator(
             answer = result.get("answer", "No answer provided.")
             citations = result.get("citations", [])
             
-            json_payload = json.dumps({
+            payload = {
                 "role": "assistant", 
                 "content": answer,
                 "agent_type": agent_type,
                 "trace_id": request.trace_id,
                 "citations": citations
-            }, ensure_ascii=False)
-            yield f"data: {json_payload}\n\n"
+            }
+            yield format_sse_data(payload)
             
         else:
             # Handle primary agent queries with user context
@@ -1069,12 +1070,12 @@ async def unified_agent_stream_generator(
             # Check if user has required API keys
             gemini_key = await user_context.get_gemini_api_key()
             if not gemini_key:
-                error_payload = json.dumps({
+                error_payload = {
                     "role": "error", 
                     "content": "🔑 **API Key Required**: To use the AI assistant, please add your Google Gemini API key in Settings.\n\n**How to configure:**\n1. Click the ⚙️ Settings button in the top-right corner\n2. Navigate to the 'API Keys' section\n3. Add your Google Gemini API key (starts with 'AIza')\n4. Get your free API key at: https://makersuite.google.com/app/apikey",
                     "trace_id": request.trace_id
-                }, ensure_ascii=False)
-                yield f"data: {error_payload}\n\n"
+                }
+                yield format_sse_data(error_payload)
                 return
             
             # Use user-specific context
@@ -1111,38 +1112,42 @@ async def unified_agent_stream_generator(
                         
                         if cleaned_content.strip():  # Only send non-empty content
                             role = getattr(chunk, 'role', 'assistant') or 'assistant'
-                            json_payload = json.dumps({
+                            payload = {
                                 "role": role,
                                 "content": cleaned_content,
                                 "agent_type": agent_type,
                                 "trace_id": request.trace_id
-                            }, ensure_ascii=False)
+                            }
+                            yield format_sse_data(payload)
+                            continue
                     elif hasattr(chunk, 'additional_kwargs') and chunk.additional_kwargs.get('metadata'):
                         # Handle metadata events (including follow-up questions)
                         metadata = chunk.additional_kwargs['metadata']
-                        json_payload = json.dumps({
+                        payload = {
                             "role": "metadata",
                             "metadata": metadata,
                             "agent_type": agent_type,
                             "trace_id": request.trace_id
-                        }, ensure_ascii=False)
+                        }
+                        yield format_sse_data(payload)
+                        continue
                     
                     if json_payload:
-                        yield f"data: {json_payload}\n\n"
+                        yield format_sse_data(json_payload)
                 
         # Send completion signal
-        yield f"data: {json.dumps({'role': 'system', 'content': '[DONE]'})}\n\n"
+        yield format_sse_data({'role': 'system', 'content': '[DONE]'})
         
     except Exception as e:
         logger.error(f"Error in unified_agent_stream_generator: {e}", exc_info=True)
         import traceback
         traceback.print_exc()
-        error_payload = json.dumps({
+        error_payload = {
             "role": "error", 
             "content": f"An error occurred: {str(e)}",
             "trace_id": request.trace_id
-        }, ensure_ascii=False)
-        yield f"data: {error_payload}\n\n"
+        }
+        yield format_sse_data(error_payload)
 
 if AUTH_AVAILABLE:
     @router.post("/agent/unified/stream")
@@ -1211,14 +1216,14 @@ async def log_analysis_stream_generator(
                     message = detail.get('message', str(detail))
                 else:
                     message = str(detail)
-                error_payload = json.dumps({
+                error_payload = {
                     'type': 'error',
                     'data': {
                         'message': f'Rate limit exceeded: {message}',
                         'trace_id': trace_id
                     }
-                })
-                yield f"data: {error_payload}\n\n"
+                }
+                yield format_sse_data(error_payload)
                 return
 
         # Continue with original logic
@@ -1229,14 +1234,14 @@ async def log_analysis_stream_generator(
             # Check if user has required API keys
             gemini_key = await user_context.get_gemini_api_key()
             if not gemini_key:
-                error_payload = json.dumps({
+                error_payload = {
                     'type': 'error',
                     'data': {
                         'message': 'API Key Required: Please add your Google Gemini API key in Settings.',
                         'trace_id': trace_id
                     }
-                })
-                yield f"data: {error_payload}\n\n"
+                }
+                yield format_sse_data(error_payload)
                 return
         else:
             # Use default settings for anonymous users
@@ -1246,7 +1251,7 @@ async def log_analysis_stream_generator(
             user_context = await create_user_context_from_user_id(user_id)
 
         # Send initial status
-        yield f"data: {json.dumps({'type': 'step', 'data': {'type': 'Starting Analysis', 'description': 'Initializing log analysis...', 'status': 'in-progress'}})}\n\n"
+        yield format_sse_data({'type': 'step', 'data': {'type': 'Starting Analysis', 'description': 'Initializing log analysis...', 'status': 'in-progress'}})
 
         # Use user-specific context
         async with user_context_scope(user_context):
@@ -1257,13 +1262,13 @@ async def log_analysis_stream_generator(
             }
 
             # Send parsing status
-            yield f"data: {json.dumps({'type': 'step', 'data': {'type': 'Parsing', 'description': 'Parsing log entries...', 'status': 'in-progress'}})}\n\n"
+            yield format_sse_data({'type': 'step', 'data': {'type': 'Parsing', 'description': 'Parsing log entries...', 'status': 'in-progress'}})
 
             # Run the log analysis agent
             result = await run_log_analysis_agent(initial_state)
 
             # Send analysis status
-            yield f"data: {json.dumps({'type': 'step', 'data': {'type': 'Analyzing', 'description': 'Analyzing patterns and issues...', 'status': 'complete'}})}\n\n"
+            yield format_sse_data({'type': 'step', 'data': {'type': 'Analyzing', 'description': 'Analyzing patterns and issues...', 'status': 'complete'}})
 
             final_report = result.get('final_report')
             returned_trace_id = result.get('trace_id')
@@ -1280,7 +1285,7 @@ async def log_analysis_stream_generator(
                         'trace_id': returned_trace_id or trace_id
                     }
                 }
-                yield f"data: {json.dumps(final_payload)}\n\n"
+                yield format_sse_data(final_payload)
             else:
                 # Send error if no report
                 error_payload = {
@@ -1290,10 +1295,10 @@ async def log_analysis_stream_generator(
                         'trace_id': trace_id
                     }
                 }
-                yield f"data: {json.dumps(error_payload)}\n\n"
+                yield format_sse_data(error_payload)
 
         # Completion sentinel
-        yield f"data: {json.dumps({'type': 'done'})}\n\n"
+        yield format_sse_data({'type': 'done'})
 
     except Exception as e:
         logger.error(f"Error in log_analysis_stream_generator: {e}", exc_info=True)
@@ -1304,7 +1309,7 @@ async def log_analysis_stream_generator(
                 'trace_id': trace_id
             }
         }
-        yield f"data: {json.dumps(err_payload)}\n\n"
+        yield format_sse_data(err_payload)
     finally:
         # Always release the concurrent slot if we acquired one
         if concurrent_slot_acquired and user_id:
@@ -1343,7 +1348,7 @@ async def research_agent_stream_generator(query: str, trace_id: str | None = Non
         research_graph = get_research_graph()
         
         # Send initial status
-        yield f"data: {json.dumps({'type': 'step', 'data': {'type': 'Starting Research', 'description': 'Initializing research query...', 'status': 'in-progress'}})}\n\n"
+        yield format_sse_data({'type': 'step', 'data': {'type': 'Starting Research', 'description': 'Initializing research query...', 'status': 'in-progress'}})
         
         initial_state: ResearchState = {
             "query": query,
@@ -1357,7 +1362,7 @@ async def research_agent_stream_generator(query: str, trace_id: str | None = Non
         result = await research_graph.ainvoke(initial_state)
 
         # Stream a progress update after synthesize
-        yield f"data: {json.dumps({'type': 'step', 'data': {'type': 'Synthesize', 'description': 'Synthesizing answer from sources...', 'status': 'complete'}})}\n\n"
+        yield format_sse_data({'type': 'step', 'data': {'type': 'Synthesize', 'description': 'Synthesizing answer from sources...', 'status': 'complete'}})
 
         # Emit final result
         final_payload = {
@@ -1368,10 +1373,10 @@ async def research_agent_stream_generator(query: str, trace_id: str | None = Non
                 'trace_id': trace_id
             }
         }
-        yield f"data: {json.dumps(final_payload)}\n\n"
+        yield format_sse_data(final_payload)
 
         # Completion sentinel
-        yield f"data: {json.dumps({'type': 'done'})}\n\n"
+        yield format_sse_data({'type': 'done'})
     except Exception as e:
         logger.error(f"Error in research_agent_stream_generator: {e}", exc_info=True)
         err_payload = {
@@ -1381,10 +1386,10 @@ async def research_agent_stream_generator(query: str, trace_id: str | None = Non
                 'trace_id': trace_id
             }
         }
-        yield f"data: {json.dumps(err_payload)}\n\n"
+        yield format_sse_data(err_payload)
         
         # Send research completion step
-        yield f"data: {json.dumps({'type': 'step', 'data': {'type': 'Research Complete', 'description': 'Research analysis finished', 'status': 'completed'}})}\n\n"
+        yield format_sse_data({'type': 'step', 'data': {'type': 'Research Complete', 'description': 'Research analysis finished', 'status': 'completed'}})
         
         # Send final answer
         answer = result.get("answer", "No answer provided.")
@@ -1401,7 +1406,7 @@ async def research_agent_stream_generator(query: str, trace_id: str | None = Non
             "trace_id": trace_id
         }
         
-        yield f"data: {json.dumps({'type': 'message', 'data': final_message})}\n\n"
+        yield format_sse_data({'type': 'message', 'data': final_message})
         
     except Exception as e:
         logger.error(f"Error in research_agent_stream_generator: {e}", exc_info=True)
@@ -1410,7 +1415,7 @@ async def research_agent_stream_generator(query: str, trace_id: str | None = Non
             "description": f"Research failed: {str(e)}", 
             "status": "error"
         }
-        yield f"data: {json.dumps({'type': 'step', 'data': error_step})}\n\n"
+        yield format_sse_data({'type': 'step', 'data': error_step})
 
 @router.post("/agent/research/stream")
 async def research_agent_stream(request: ResearchRequest):

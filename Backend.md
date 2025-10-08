@@ -373,6 +373,9 @@ class APIKeyAuditLog:
 - Manages authentication tokens
 - Message history management
 
+#### SSE Helpers
+Streaming endpoints use `app/core/transport/sse.py` → `format_sse_data(payload)` for consistent Server‑Sent Event formatting across agents.
+
 ### Communication Flow
 1. Frontend sends request via unified client
 2. Request includes auth token, session ID, message
