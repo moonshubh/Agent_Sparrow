@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from app.agents_v2.research_agent.research_agent import get_research_graph, ResearchState
+from app.agents.research import get_research_graph, ResearchState
 from app.core.transport.sse import format_sse_data
 from app.core.user_context import create_user_context_from_user_id, user_context_scope
 

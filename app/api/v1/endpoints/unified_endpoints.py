@@ -9,9 +9,9 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from app.agents_v2.primary_agent.agent import run_primary_agent
-from app.agents_v2.primary_agent.schemas import PrimaryAgentState
-from app.agents_v2.research_agent.research_agent import get_research_graph
+from app.agents.primary import run_primary_agent, PrimaryAgentState
+from app.agents.research import get_research_graph
+from app.agents.log_analysis import run_log_analysis_agent
 from app.api.v1.endpoints.agent_common import (
     filter_system_text,
     get_user_id_for_dev_mode,

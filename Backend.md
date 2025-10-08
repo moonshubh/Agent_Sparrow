@@ -17,7 +17,7 @@
 
 Agent Sparrow is a sophisticated multi-agent AI system built on FastAPI with a Next.js frontend. The backend implements an orchestrated agent graph using LangGraph, with specialized agents for different tasks (primary agent, log analysis, research, reflection). The system integrates with Supabase for data persistence and supports multiple AI providers.
 
-Note (Backend re-organization – Phase 1): canonical imports are moving from `app.agents_v2.*` to `app.agents.*`. A compatibility layer has been added so both paths work; no behavior change.
+Re-organization note: canonical imports are now `app.agents.*` (compat remains for `app.agents_v2.*`). Endpoint modules have been updated to use the canonical imports.
 
 ## Architecture Diagram
 
@@ -315,10 +315,11 @@ For detailed developer guides, see:
 
 ### Key Endpoints
 
-#### Agent Endpoints (`agent_endpoints.py`)
-- `POST /api/v1/v2/agent/chat/stream` – Primary Agent streaming (SSE)
-- `POST /api/v1/agent/unified/stream` – Unified streaming endpoint (routes to primary/log-analysis/research)
-- `POST /api/v1/agent/logs` – Log Analysis (JSON response)
+#### Agent Endpoints (modularized)
+- chat_endpoints.py: `POST /api/v1/v2/agent/chat/stream` – Primary Agent streaming (SSE)
+- unified_endpoints.py: `POST /api/v1/agent/unified/stream` – Unified stream routing to primary/log-analysis/research
+- logs_endpoints.py: `POST /api/v1/agent/logs` (JSON), `POST /api/v1/agent/logs/stream` (SSE), sessions and rate-limits
+- research_endpoints.py: `POST /api/v1/agent/research` (JSON), `POST /api/v1/agent/research/stream` (SSE)
 
 Streaming contracts:
 - Primary chat stream emits: `text-start`, `text-delta`, optional `data-*` metadata, `text-end`, `finish`.

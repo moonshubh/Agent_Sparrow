@@ -10,8 +10,7 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from app.agents_v2.log_analysis_agent.agent import run_log_analysis_agent
-from app.agents_v2.log_analysis_agent.simplified_schemas import SimplifiedLogAnalysisOutput
+from app.agents.log_analysis import run_log_analysis_agent, SimplifiedLogAnalysisOutput
 from app.api.v1.endpoints.agent_common import serialize_analysis_results
 from app.api.v1.middleware.log_analysis_middleware import (
     LOG_ANALYSIS_RATE_LIMITS,

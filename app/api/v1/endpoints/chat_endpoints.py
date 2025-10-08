@@ -11,8 +11,7 @@ from fastapi.responses import StreamingResponse
 from langchain_core.messages import AIMessage, HumanMessage
 from pydantic import BaseModel
 
-from app.agents_v2.primary_agent.agent import run_primary_agent
-from app.agents_v2.primary_agent.schemas import PrimaryAgentState
+from app.agents.primary import run_primary_agent, PrimaryAgentState
 from app.api.v1.endpoints.agent_common import (
     filter_system_text,
 )
