@@ -12,7 +12,9 @@ Re-organization note: prefer `from app.agents.log_analysis import run_log_analys
 - app/agents_v2/log_analysis_agent/simplified_agent.py, simplified_schemas.py – fast path
 - app/agents_v2/log_analysis_agent/comprehensive_agent.py – advanced pipeline
 - app/api/v1/middleware/log_analysis_middleware.py – validation, rate limits, sessions
-- app/api/v1/endpoints/agent_endpoints.py – /api/v1/agent/logs and unified stream
+- app/api/v1/endpoints/logs_endpoints.py – /api/v1/agent/logs, /api/v1/agent/logs/stream, sessions, rate limits
+- app/api/v1/endpoints/unified_endpoints.py – unified stream integration
+- app/providers/adapters – Unified provider registry access (get_adapter/load_model)
 - app/api/v1/endpoints/secure_log_analysis.py – paranoid secure streaming endpoint
 
 ## Endpoints
@@ -31,6 +33,7 @@ SSE formatting is unified via `app/core/transport/sse.py` using `format_sse_data
 ## Rate Limiting & Sessions
 - Middleware enforces per-minute/hour/day and concurrent limits; creates session records (in-memory manager) with metadata (time_range, line_count, etc.).
 - agent_endpoints releases concurrent slots in a finally block.
+- Provider wrappers: use app/providers/limits/wrap_gemini_agent for Gemini models.
 
 ## Security & Privacy
 - secure_log_analysis.py provides paranoid redaction pipeline knobs.

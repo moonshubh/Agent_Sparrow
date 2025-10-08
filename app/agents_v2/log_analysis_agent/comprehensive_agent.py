@@ -24,7 +24,7 @@ import asyncio
 
 import aiofiles
 
-from app.providers.registry import load_model
+from app.providers.adapters import load_model
 from app.agents_v2.primary_agent.reasoning.schemas import ReasoningConfig
 
 from .schemas.log_schemas import (

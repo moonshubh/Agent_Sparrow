@@ -11,8 +11,8 @@ Re-organization note: prefer `from app.agents.primary import run_primary_agent, 
 - app/agents_v2/primary_agent/prompts/* – prompt templates and response formatting
 - app/agents_v2/primary_agent/tools.py – Tavily web search bridge; KB tool imports
 - app/agents_v2/primary_agent/feedme_knowledge_tool.py – Enhanced KB + FeedMe retrieval tool
-- app/providers/** – Provider registry/adapters
-- app/api/v1/endpoints/agent_endpoints.py – v2 streaming chat endpoints
+- app/providers/adapters – Unified registry API; provider-specific modules live under app/providers/<Provider>/<Model>/
+- app/api/v1/endpoints/chat_endpoints.py – v2 streaming chat endpoint
 
 ## Request → Response Flow
 1. Frontend: unified-client.ts sends SSE request to POST /api/v1/v2/agent/chat/stream with history and current message.
@@ -31,7 +31,7 @@ SSE formatting: all streaming endpoints use `app/core/transport/sse.format_sse_d
 ## Provider and API Key Resolution
 - Provider: settings.primary_agent_provider (default: google); override via request provider/model.
 - Keys: user context (Supabase-stored encrypted keys) via app/core/user_context and app/api_keys/supabase_service; fallback to env when allowed.
-- Rate limiting: app/core/rate_limiting/* wraps ChatGoogleGenerativeAI via wrap_gemini_agent().
+- Rate limiting: app/providers/limits/* exposes wrap_gemini_agent() (provider-scoped re-export of core limiter).
 
 ## Tools
 - Enhanced KB + FeedMe: app/agents_v2/primary_agent/feedme_knowledge_tool.py (Supabase-backed KB/articles, FeedMe conversations, saved web snapshots).
