@@ -601,10 +601,7 @@ def generate_feedme_embeddings(
             logger.info("Database connection closed after FeedMe embedding generation.")
 
 
-# Legacy function - maintain backward compatibility
-def find_similar_documents_legacy(query: str, top_k: int = 5) -> List[SearchResult]:
-    """Legacy function maintained for backward compatibility"""
-    return find_similar_documents(query, top_k)
+## Removed: legacy alias find_similar_documents_legacy — use find_similar_documents
 
 
 if __name__ == "__main__":
