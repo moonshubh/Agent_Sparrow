@@ -20,9 +20,9 @@ import logging
 from celery.exceptions import Retry
 
 from app.feedme.celery_app import celery_app, BaseTaskWithRetry
-from app.db.supabase_client import get_supabase_client
+from app.db.supabase.client import get_supabase_client
 from app.feedme.transcript_parser import TranscriptParser
-from app.db.embedding_utils import get_embedding_model, generate_feedme_embeddings
+from app.db.embedding.utils import get_embedding_model, generate_feedme_embeddings
 from app.feedme.schemas import ProcessingStatus, ProcessingStage
 from app.feedme.websocket.schemas import ProcessingUpdate
 from app.api.v1.websocket.feedme_websocket import notify_processing_update

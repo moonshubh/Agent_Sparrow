@@ -208,8 +208,8 @@ class TavilyLogSearch:
                 query = self._build_search_query(patterns, metadata)
 
             # Embed query (3072-d Gemini)
-            from app.db.embedding_utils import get_embedding_model
-            from app.db.supabase_client import SupabaseClient
+            from app.db.embedding.utils import get_embedding_model
+            from app.db.supabase.client import SupabaseClient
 
             emb_model = get_embedding_model()
             import asyncio as _asyncio

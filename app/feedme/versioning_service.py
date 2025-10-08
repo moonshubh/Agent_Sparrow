@@ -15,7 +15,7 @@ import difflib
 from typing import List, Dict, Any, Optional, Tuple
 from datetime import datetime, timezone
 
-from app.db.supabase_client import get_supabase_client
+from app.db.supabase.client import get_supabase_client
 from app.feedme.schemas import (
     ConversationVersion,
     VersionListResponse,

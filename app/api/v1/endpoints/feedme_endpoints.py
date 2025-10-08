@@ -109,11 +109,11 @@ class SupabaseApprovalRequest(BaseModel):
     reviewer_notes: Optional[str] = None
 
 # Import database utilities
-from app.db.embedding_utils import get_embedding_model
+from app.db.embedding.utils import get_embedding_model
 
 # Constants
 UNASSIGNED_FOLDER_ID = 0
-from app.db.supabase_client import get_supabase_client
+from app.db.supabase.client import get_supabase_client
 from app.feedme.websocket.schemas import ProcessingUpdate
 from app.api.v1.websocket.feedme_websocket import notify_processing_update
 # from .feedme_db_helper import get_db_connection  # Removed - using Supabase exclusively

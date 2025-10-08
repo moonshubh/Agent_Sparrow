@@ -12,7 +12,7 @@ from pathlib import Path
 # Add parent directory to path
 sys.path.append(str(Path(__file__).parent.parent))
 
-from app.db.supabase_client import get_supabase_client
+from app.db.supabase.client import get_supabase_client
 from app.core.settings import settings
 
 logging.basicConfig(level=logging.INFO)

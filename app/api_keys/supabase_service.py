@@ -19,7 +19,7 @@ from app.api_keys.schemas import (
 )
 from app.core.encryption import encryption_service
 from app.core.settings import settings
-from app.db.supabase_client import get_supabase_client
+from app.db.supabase.client import get_supabase_client
 
 logger = logging.getLogger(__name__)
 

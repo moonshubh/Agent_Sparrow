@@ -143,7 +143,7 @@ def worker_init_handler(sender=None, **kwargs):
     
     # Initialize Supabase client
     try:
-        from app.db.supabase_client import get_supabase_client
+        from app.db.supabase.client import get_supabase_client
         client = get_supabase_client()
         logger.info("Supabase client initialized successfully")
     except Exception as e:
@@ -151,7 +151,7 @@ def worker_init_handler(sender=None, **kwargs):
     
     # Initialize embedding model
     try:
-        from app.db.embedding_utils import get_embedding_model
+        from app.db.embedding.utils import get_embedding_model
         model = get_embedding_model()
         logger.info("Embedding model initialized successfully")
     except Exception as e:

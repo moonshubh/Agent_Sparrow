@@ -139,8 +139,8 @@ class PrimaryAgentConnector:
             return {"conversations": [], "total": 0}
 
         try:
-            from app.db.supabase_client import SupabaseClient
-            from app.db.embedding_utils import get_embedding_model
+            from app.db.supabase.client import SupabaseClient
+            from app.db.embedding.utils import get_embedding_model
 
             max_results = int(params.get("max_results", self.max_results or 5))
             folder_id = params.get("folder_id")
@@ -257,8 +257,8 @@ class PrimaryAgentConnector:
         perf_start = time.perf_counter() if track_performance else None
 
         try:
-            from app.db.supabase_client import SupabaseClient
-            from app.db.embedding_utils import get_embedding_model
+            from app.db.supabase.client import SupabaseClient
+            from app.db.embedding.utils import get_embedding_model
 
             text = str(query.get("query_text") or query.get("query") or "").strip()
             if not text:

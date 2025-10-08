@@ -16,6 +16,7 @@ Re-organization note: prefer `from app.agents.log_analysis import run_log_analys
 - app/api/v1/endpoints/unified_endpoints.py – unified stream integration
 - app/providers/adapters – Unified provider registry access (get_adapter/load_model)
 - app/api/v1/endpoints/secure_log_analysis.py – paranoid secure streaming endpoint
+- DB utilities: prefer `app.db.supabase.client` and `app.db.embedding.utils` for canonical imports
 
 ## Endpoints
 - POST /api/v1/agent/logs – returns JSON (SimplifiedLogAnalysisOutput + trace_id)

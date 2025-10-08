@@ -13,6 +13,7 @@ Re-organization note: prefer `from app.agents.primary import run_primary_agent, 
 - app/agents_v2/primary_agent/feedme_knowledge_tool.py – Enhanced KB + FeedMe retrieval tool
 - app/providers/adapters – Unified registry API; provider-specific modules live under app/providers/<Provider>/<Model>/
 - app/api/v1/endpoints/chat_endpoints.py – v2 streaming chat endpoint
+- DB utilities: use `from app.db.supabase.client import get_supabase_client` and `from app.db.embedding.utils import ...`
 
 ## Request → Response Flow
 1. Frontend: unified-client.ts sends SSE request to POST /api/v1/v2/agent/chat/stream with history and current message.

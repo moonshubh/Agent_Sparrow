@@ -19,7 +19,7 @@ from app.feedme.schemas import (
     SmartSearchRequest,
     SmartSearchResponse
 )
-from app.db.supabase_client import get_supabase_client
+from app.db.supabase.client import get_supabase_client
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/feedme/intelligence", tags=["feedme-intelligence"])
@@ -168,7 +168,7 @@ Return JSON with:
         supabase = get_supabase_client()
         
         # Get embedding for the expanded query
-        from app.db.embedding_utils import get_embedding_model
+        from app.db.embedding.utils import get_embedding_model
         embedding_model = get_embedding_model()
         query_embedding = embedding_model.embed_query(intent_data.get('expanded_query', request.query))
         

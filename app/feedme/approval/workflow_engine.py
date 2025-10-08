@@ -28,7 +28,7 @@ from .schemas import (
 )
 from .state_machine import ApprovalStateMachine, StateTransitionError
 from ..embeddings.embedding_pipeline import FeedMeEmbeddingPipeline
-from app.db.supabase_client import get_supabase_client
+from app.db.supabase.client import get_supabase_client
 
 logger = logging.getLogger(__name__)
 

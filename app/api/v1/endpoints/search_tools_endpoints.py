@@ -14,7 +14,7 @@ from pydantic import BaseModel, Field
 # Import security module as a whole so tests can patch its attributes after import.
 import app.core.security as security
 from app.tools.research_tools import get_research_tools # To get TavilySearchTool instance
-from app.db.embedding_utils import find_similar_documents, SearchResult as InternalSearchResult # For internal KB search
+from app.db.embedding.utils import find_similar_documents, SearchResult as InternalSearchResult # For internal KB search
 
 # Re-export TokenPayload for type hints (optional)
 TokenPayload = security.TokenPayload

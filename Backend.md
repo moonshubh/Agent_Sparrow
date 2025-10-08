@@ -344,6 +344,10 @@ Streaming contracts:
 
 ## Database Integration
 
+Canonical imports:
+- Supabase: `from app.db.supabase.client import get_supabase_client`
+- Embeddings utils: `from app.db.embedding.utils import ...`
+
 ### Supabase Client (`supabase_client.py`)
 Provides typed operations for:
 - **Folder Management**: Create, update, delete folders
