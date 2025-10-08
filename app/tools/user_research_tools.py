@@ -46,8 +46,28 @@ _redis_client: Optional[redis.Redis] = None
 TAVILY_MONTHLY_LIMIT = int(os.getenv("TAVILY_MONTHLY_LIMIT", "1000"))
 SEARCH_CACHE_TTL_SEC = int(os.getenv("TAVILY_SEARCH_TTL_SEC", "604800"))  # 7 days
 EXTRACT_CACHE_TTL_SEC = int(os.getenv("TAVILY_EXTRACT_TTL_SEC", "604800"))
-REDIS_TIMEOUT_SEC = float(os.getenv("REDIS_OP_TIMEOUT_SEC", "5"))
-TAVILY_TIMEOUT_SEC = float(os.getenv("TAVILY_OP_TIMEOUT_SEC", "20"))
+def _redis_timeout_sec() -> float:
+    """Fetch Redis operation timeout from env at call-time.
+
+    Keeping this dynamic ensures tests that set env vars during runtime take effect
+    even if this module was imported earlier by another path.
+    """
+    try:
+        return float(os.getenv("REDIS_OP_TIMEOUT_SEC", "5"))
+    except Exception:
+        return 5.0
+
+
+def _tavily_timeout_sec() -> float:
+    """Fetch Tavily client operation timeout from env at call-time.
+
+    Tests toggle TAVILY_OP_TIMEOUT_SEC to validate timeout behavior; reading it
+    lazily avoids stale values cached at import-time.
+    """
+    try:
+        return float(os.getenv("TAVILY_OP_TIMEOUT_SEC", "20"))
+    except Exception:
+        return 20.0
 
 def _get_redis() -> redis.Redis:
     global _redis_client
@@ -100,7 +120,10 @@ class UserTavilySearchTool:
         # Try cache first
         try:
             rc = _get_redis()
-            cached = await asyncio.wait_for(asyncio.to_thread(rc.get, search_cache_key), timeout=REDIS_TIMEOUT_SEC)
+            cached = await asyncio.wait_for(
+                asyncio.to_thread(rc.get, search_cache_key),
+                timeout=_redis_timeout_sec(),
+            )
             if cached:
                 return json.loads(cached)
         except Exception as e:
@@ -108,7 +131,10 @@ class UserTavilySearchTool:
 
         # Quota check: 1 call for search + up to 2 extract calls later
         calls_needed = 1
-        if not await asyncio.wait_for(asyncio.to_thread(_check_and_reserve_quota, user_id, calls_needed), timeout=REDIS_TIMEOUT_SEC):
+        if not await asyncio.wait_for(
+            asyncio.to_thread(_check_and_reserve_quota, user_id, calls_needed),
+            timeout=_redis_timeout_sec(),
+        ):
             logger.warning("Tavily monthly quota exceeded; returning empty results or stale cache")
             return {"results": [], "urls": []}
 
@@ -118,12 +144,15 @@ class UserTavilySearchTool:
             return {"results": [], "urls": []}
 
         try:
-            res = await asyncio.wait_for(asyncio.to_thread(
-                client.search,
-                query,
-                search_depth=self.search_depth,
-                max_results=max_results,
-            ), timeout=TAVILY_TIMEOUT_SEC)
+            res = await asyncio.wait_for(
+                asyncio.to_thread(
+                    client.search,
+                    query,
+                    search_depth=self.search_depth,
+                    max_results=max_results,
+                ),
+                timeout=_tavily_timeout_sec(),
+            )
             items = res.get("results", []) if isinstance(res, dict) else []
             results: List[Dict[str, Any]] = []
             urls: List[str] = []
@@ -156,7 +185,12 @@ class UserTavilySearchTool:
             # Store cache
             try:
                 rc = _get_redis()
-                await asyncio.wait_for(asyncio.to_thread(rc.setex, search_cache_key, SEARCH_CACHE_TTL_SEC, json.dumps(payload)), timeout=REDIS_TIMEOUT_SEC)
+                await asyncio.wait_for(
+                    asyncio.to_thread(
+                        rc.setex, search_cache_key, SEARCH_CACHE_TTL_SEC, json.dumps(payload)
+                    ),
+                    timeout=_redis_timeout_sec(),
+                )
             except Exception:
                 pass
 
@@ -173,7 +207,10 @@ async def _extract_with_cache_and_quota(client: Any, user_id: str, url: str) -> 
     cache_key = f"tavily:extract:{uhash}"
     try:
         rc = _get_redis()
-        cached = await asyncio.wait_for(asyncio.to_thread(rc.get, cache_key), timeout=REDIS_TIMEOUT_SEC)
+        cached = await asyncio.wait_for(
+            asyncio.to_thread(rc.get, cache_key),
+            timeout=_redis_timeout_sec(),
+        )
         if cached:
             data = json.loads(cached)
             return data.get("content")
@@ -181,12 +218,18 @@ async def _extract_with_cache_and_quota(client: Any, user_id: str, url: str) -> 
         pass
 
     # Reserve 1 API call for extract
-    if not await asyncio.wait_for(asyncio.to_thread(_check_and_reserve_quota, user_id, 1), timeout=REDIS_TIMEOUT_SEC):
+    if not await asyncio.wait_for(
+        asyncio.to_thread(_check_and_reserve_quota, user_id, 1),
+        timeout=_redis_timeout_sec(),
+    ):
         return None
 
     try:
         if hasattr(client, "extract"):
-            res = await asyncio.wait_for(asyncio.to_thread(client.extract, url), timeout=TAVILY_TIMEOUT_SEC)
+            res = await asyncio.wait_for(
+                asyncio.to_thread(client.extract, url),
+                timeout=_tavily_timeout_sec(),
+            )
             content = None
             if isinstance(res, dict):
                 # Some SDKs return {"content": "..."} or {"results": [...]}
@@ -199,7 +242,12 @@ async def _extract_with_cache_and_quota(client: Any, user_id: str, url: str) -> 
             if content:
                 try:
                     rc = _get_redis()
-                    await asyncio.wait_for(asyncio.to_thread(rc.setex, cache_key, EXTRACT_CACHE_TTL_SEC, json.dumps({"content": content})), timeout=REDIS_TIMEOUT_SEC)
+                    await asyncio.wait_for(
+                        asyncio.to_thread(
+                            rc.setex, cache_key, EXTRACT_CACHE_TTL_SEC, json.dumps({"content": content})
+                        ),
+                        timeout=_redis_timeout_sec(),
+                    )
                 except Exception:
                     pass
                 return content

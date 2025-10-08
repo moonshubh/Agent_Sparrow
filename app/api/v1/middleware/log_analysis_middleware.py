@@ -74,14 +74,17 @@ class LogAnalysisRateLimiter:
                 self._user_requests[user_id] = []
                 self._concurrent_analyses[user_id] = 0
 
+            def _aware(ts: datetime) -> datetime:
+                return ts if ts.tzinfo is not None else ts.replace(tzinfo=timezone.utc)
+
             self._user_requests[user_id] = [
                 req_time for req_time in self._user_requests[user_id]
-                if now - req_time < timedelta(days=1)
+                if now - _aware(req_time) < timedelta(days=1)
             ]
 
             recent_minute = [
                 req for req in self._user_requests[user_id]
-                if now - req < timedelta(minutes=1)
+                if now - _aware(req) < timedelta(minutes=1)
             ]
             if len(recent_minute) >= LOG_ANALYSIS_RATE_LIMITS["requests_per_minute"]:
                 raise HTTPException(
@@ -95,7 +98,7 @@ class LogAnalysisRateLimiter:
 
             recent_hour = [
                 req for req in self._user_requests[user_id]
-                if now - req < timedelta(hours=1)
+                if now - _aware(req) < timedelta(hours=1)
             ]
             if len(recent_hour) >= LOG_ANALYSIS_RATE_LIMITS["requests_per_hour"]:
                 raise HTTPException(
@@ -301,10 +304,14 @@ class LogAnalysisSessionManager:
         async with lock:
             cutoff_time = datetime.now(timezone.utc) - timedelta(days=max_age_days)
 
+            def _aware(ts: datetime) -> datetime:
+                return ts if ts.tzinfo is not None else ts.replace(tzinfo=timezone.utc)
+
             for user_key in list(self._sessions.keys()):
                 sessions = self._sessions[user_key]
                 for session_id in list(sessions.keys()):
-                    if sessions[session_id].get("updated_at", UTC_MIN) < cutoff_time:
+                    updated_at = sessions[session_id].get("updated_at", UTC_MIN)
+                    if _aware(updated_at) < cutoff_time:
                         del sessions[session_id]
                         logger.info(f"Cleaned up old log analysis session {session_id}")
 
