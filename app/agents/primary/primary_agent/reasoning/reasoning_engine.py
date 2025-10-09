@@ -203,6 +203,7 @@ class ReasoningEngine:
                 start_time=datetime.now(),
                 query_text=query
             )
+            reasoning_state.request_context = context or {}
             span.set_attribute("session_id", session_id)
             span.set_attribute("query_length", len(query))
             
@@ -556,6 +557,15 @@ Steps required: {len(solution.detailed_steps)}
 - Generic responses that could apply to any email client
 
 Now, create a response that feels like it's from Agent Sparrow - your email-savvy friend who genuinely wants to help, knows Mailbird inside out, and can explain things in a way that just clicks."""
+
+                request_context = getattr(reasoning_state, "request_context", {})
+                if isinstance(request_context, dict):
+                    grounding_section = request_context.get("grounding") or {}
+                    grounding_digest = grounding_section.get("digest") or ""
+                    if grounding_digest:
+                        response_prompt += f"\n\nGrounding Evidence (internal use only):\n{grounding_digest}\n"
+
+                response_prompt += "\nPlease do not include explicit URLs, citation markers, or numbered references in the final response. Rely on the provided evidence to stay accurate."  # noqa: E501
 
                 # Use the full Agent Sparrow V9 prompts for proper response generation
                 prompt_config = PromptV9Config(
@@ -1196,11 +1206,20 @@ Provide your analysis in a structured format with clear sections.""",
                 prompt_config=analysis_prompt_config,
             )
 
-            user_prompt = f"""Customer Query: {query}
+            conversation_note = "No prior conversation context provided."
+            grounding_digest = ""
+            if context and isinstance(context, dict):
+                messages_context = context.get("messages") or []
+                if messages_context:
+                    conversation_note = f"{len(messages_context)} prior messages available in session."
+                grounding_section = context.get("grounding") or {}
+                grounding_digest = grounding_section.get("digest") or ""
 
-Context: {context if context else 'No previous context'}
+            user_prompt = f"Customer Query: {query}\n\nConversation context: {conversation_note}\n"
+            if grounding_digest:
+                user_prompt += f"\nGrounding Evidence (internal use only):\n{grounding_digest}\n"
 
-Provide comprehensive analysis following the structure outlined in your instructions."""
+            user_prompt += "\nProvide comprehensive analysis following the structure outlined in your instructions."
 
             # Make single LLM call for unified analysis
             messages: List[BaseMessage] = [
@@ -1581,7 +1600,23 @@ Note: You have a thinking budget of {thinking_budget} tokens available for inter
         
         if reasoning_state.predictive_insights:
             parts.append(f"- Key Insights: {len(reasoning_state.predictive_insights)} identified")
-        
+
+        request_context = getattr(reasoning_state, "request_context", {})
+        if isinstance(request_context, dict):
+            grounding_context = request_context.get("grounding") or {}
+            kb_summary = (grounding_context.get("kb") or {}).get("summary")
+            if kb_summary:
+                try:
+                    parts.append(
+                        f"- KB Evidence: {kb_summary.total_results} results (avg relevance {kb_summary.avg_relevance:.2f})"
+                    )
+                except Exception:
+                    parts.append("- KB Evidence available")
+            grounding_digest = grounding_context.get("digest") or ""
+            if grounding_digest:
+                digest_preview = grounding_digest if len(grounding_digest) <= 280 else f"{grounding_digest[:280]}…"
+                parts.append(f"- Grounding Digest: {digest_preview}")
+
         return "\n".join(parts) if parts else "No detailed analysis available"
     
     async def refine_response_if_needed(

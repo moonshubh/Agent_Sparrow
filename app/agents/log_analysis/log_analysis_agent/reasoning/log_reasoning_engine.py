@@ -94,6 +94,8 @@ class LogReasoningEngine(ReasoningEngine):
         self.response_formatter = LogResponseFormatter(formatter_config)
 
         self._analysis_cache: Dict[str, LogAnalysisResult] = {}
+        # Manual override: force live web search regardless of gating
+        self.force_websearch: bool = False
         self._tool_results_cache: Dict[str, ToolResults] = {}
         self._max_cache_size = 100  # Prevent unbounded cache growth
 
@@ -630,12 +632,21 @@ Reflect on this log analysis response for quality improvement:
             logger.info("Gathering tool context for log analysis")
 
             # First pass: KB + FeedMe + saved web snapshots (no live web)
-            tool_results = await self.tool_orchestrator.search_all(
-                patterns=error_patterns,
-                metadata=metadata,
-                use_cache=True,
-                include_web=False,
-            )
+            # If forced web search, skip the dry run and include live web immediately
+            if self.force_websearch:
+                tool_results = await self.tool_orchestrator.search_all(
+                    patterns=error_patterns,
+                    metadata=metadata,
+                    use_cache=True,
+                    include_web=True,
+                )
+            else:
+                tool_results = await self.tool_orchestrator.search_all(
+                    patterns=error_patterns,
+                    metadata=metadata,
+                    use_cache=True,
+                    include_web=False,
+                )
 
             # Compute coverage and top score across sources
             coverage = (
@@ -659,7 +670,7 @@ Reflect on this log analysis response for quality improvement:
                 initial_conf = 0.0
 
             # Gate live web search
-            if should_include_live_web(float(initial_conf), int(coverage), float(top_score)):
+            if (not self.force_websearch) and should_include_live_web(float(initial_conf), int(coverage), float(top_score)):
                 logger.info(
                     "Gating enabled: triggering live web search (conf=%.2f, coverage=%d, top=%.2f)",
                     initial_conf, coverage, top_score,

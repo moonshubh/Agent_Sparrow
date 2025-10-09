@@ -679,7 +679,7 @@ export function UnifiedTextCanvas({
               </div>
               <div
                 className={cn(
-                  'font-sans bg-background/95 text-foreground rounded-md border border-border/40',
+                  'font-sans text-foreground rounded-md border border-border/40 bg-[hsl(var(--brand-surface)/0.95)]',
                   fullPageMode ? 'max-h-[calc(78vh-56px)] overflow-y-auto p-4 pb-12' : 'max-h-[360px] overflow-y-auto p-3 pb-8'
                 )}
               >
@@ -700,7 +700,7 @@ export function UnifiedTextCanvas({
             </div>
           ) : purifyLoading ? (
             <div className={cn(
-              'flex items-center justify-center rounded-md border border-border/40 bg-background/95',
+              'flex items-center justify-center rounded-md border border-border/40 bg-[hsl(var(--brand-surface)/0.95)]',
               fullPageMode ? 'min-h-[calc(82vh)]' : 'min-h-[380px]'
             )}>
               <div className="text-center space-y-2">
@@ -711,7 +711,7 @@ export function UnifiedTextCanvas({
           ) : (
             <div
               className={cn(
-                'prose max-w-none font-sans text-sm leading-relaxed dark:prose-invert rounded-md border border-border/40 bg-background/95 text-foreground',
+                'prose max-w-none font-sans text-sm leading-relaxed dark:prose-invert rounded-md border border-border/40 text-foreground bg-[hsl(var(--brand-surface)/0.95)]',
                 fullPageMode ? 'max-h-[calc(82vh)] overflow-y-auto p-6 pb-12' : 'max-h-[380px] overflow-y-auto p-4 pb-8',
                 '[&_code.agent-name]:bg-blue-100 [&_code.agent-name]:text-blue-900 [&_code.agent-name]:px-1 [&_code.agent-name]:py-0.5 [&_code.agent-name]:rounded [&_code.agent-name]:text-sm [&_code.agent-name]:font-semibold [&_code.agent-name]:not-italic',
                 '[&_code.customer-name]:bg-amber-100 [&_code.customer-name]:text-amber-900 [&_code.customer-name]:px-1 [&_code.customer-name]:py-0.5 [&_code.customer-name]:rounded [&_code.customer-name]:text-sm [&_code.customer-name]:font-semibold [&_code.customer-name]:not-italic'

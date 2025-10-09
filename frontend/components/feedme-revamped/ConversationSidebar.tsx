@@ -128,7 +128,7 @@ export function ConversationSidebar({
   }, [noteDraft, noteTouched, debouncedSaveNote])
 
   return (
-    <Card className="flex h-full flex-col border-border/60 bg-card shadow-sm">
+    <Card className="flex h-full flex-col border-border/60 bg-[hsl(var(--brand-surface)/0.95)] shadow-sm">
       <ScrollArea className="h-full">
         <div className="space-y-6 p-5">
           <section className="space-y-2">

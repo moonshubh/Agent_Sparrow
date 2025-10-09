@@ -30,6 +30,7 @@ from app.api.v1.endpoints import (
     logs_endpoints,  # Log analysis (JSON + SSE + sessions)
     research_endpoints,  # Research (JSON + SSE)
 )
+from app.api.v1.endpoints import tavily_selftest  # Dev-only Tavily diagnostics
 from app.api.v1.endpoints import feedme_endpoints  # FeedMe transcript ingestion
 from app.api.v1.endpoints import text_approval_endpoints  # Text approval workflow for FeedMe
 from app.api.v1.endpoints import chat_session_endpoints  # Chat session persistence
@@ -66,6 +67,7 @@ from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 from opentelemetry.sdk.resources import Resource
+import hashlib
 
 # Configure the resource for your application
 resource = Resource(attributes={
@@ -110,13 +112,24 @@ app = FastAPI(
 app.state.limiter = limiter
 app.add_middleware(SlowAPIMiddleware)
 
-# Add CORS middleware
+# Add CORS middleware (explicit origins when credentials are allowed)
+cors_env = os.getenv("CORS_ALLOW_ORIGINS", "").strip()
+if cors_env:
+    allowed_origins = [o.strip() for o in cors_env.split(",") if o.strip()]
+else:
+    # Safe defaults for local dev
+    allowed_origins = [
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+    ]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Allows all origins
+    allow_origins=allowed_origins,
+    allow_origin_regex=r"^http:\/\/192\.168\.[0-9]{1,3}\.[0-9]{1,3}:3000$",
     allow_credentials=True,
-    allow_methods=["*"],  # Allows all methods
-    allow_headers=["*"],  # Allows all headers
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 # Conditionally include authentication router
@@ -137,6 +150,7 @@ if os.getenv("ENABLE_LOCAL_AUTH_BYPASS", "false").lower() == "true":
 
 # Always include core application routers
 app.include_router(search_tools_endpoints.router, prefix="/api/v1/tools", tags=["Search Tools"])
+app.include_router(tavily_selftest.router, prefix="/api/v1", tags=["Search Tools"])  # GET /api/v1/tools/tavily/self-test
 # Register Agent Interaction routers (modularized)
 app.include_router(chat_endpoints.router, prefix="/api/v1", tags=["Agent Interaction"])
 app.include_router(unified_endpoints.router, prefix="/api/v1", tags=["Agent Interaction"])
@@ -421,7 +435,12 @@ async def agent_invoke_endpoint(request: AgentQueryRequest):
         # For a single response after full execution, invoke() or ainvoke() is used.
         # Wrap the agent graph invocation in a span
         with tracer.start_as_current_span("agent_graph_invocation") as span:
-            span.set_attribute("input.query", request.query)
+            try:
+                qh = hashlib.sha256(request.query.encode("utf-8")).hexdigest()
+                span.set_attribute("input.query_hash", qh)
+                span.set_attribute("input.query_present", True)
+            except Exception:
+                span.set_attribute("input.query_present", bool(request.query))
             if request.log_content:
                 span.set_attribute("input.log_content_length", len(request.log_content))
             

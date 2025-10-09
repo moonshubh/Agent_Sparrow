@@ -18,6 +18,9 @@ type Props = {
   model: string
   onChangeProvider: (p: 'google' | 'openai') => void
   onChangeModel: (m: string) => void
+  // Web search pill state
+  searchMode?: 'auto' | 'web'
+  onChangeSearchMode?: (mode: 'auto' | 'web') => void
 }
 
 export function CommandBar({ 
@@ -32,7 +35,9 @@ export function CommandBar({
   provider,
   model,
   onChangeProvider,
-  onChangeModel
+  onChangeModel,
+  searchMode = 'auto',
+  onChangeSearchMode,
 }: Props) {
   const fileRef = useRef<HTMLInputElement>(null)
   const submit = (e: React.FormEvent) => { 
@@ -46,24 +51,13 @@ export function CommandBar({
     <form onSubmit={submit} className="w-full max-w-3xl mx-auto px-4">
       <div className="relative group">
         {/* Modern glass morphism input container */}
-        <div className="relative flex items-center gap-2 rounded-[28px] bg-[hsl(var(--chat-input-bg)/0.80)] backdrop-blur-xl border border-border/50 px-4 py-3 shadow-lg hover:shadow-xl transition-all duration-300 focus-within:border-primary/50">
-          
-          {/* Attachment button - clean + icon */}
-          <button
-            type="button"
-            title="Add files"
-            aria-label="Add files"
-            className="flex-shrink-0 w-8 h-8 flex items-center justify-center text-muted-foreground hover:text-foreground transition-colors rounded-full hover:bg-secondary/50"
-            onClick={() => fileRef.current?.click()}
-          >
-            <Plus className="w-5 h-5 stroke-2" />
-          </button>
-          
+        <div className="relative rounded-[28px] bg-[hsl(var(--brand-surface)/0.90)] backdrop-blur-xl border border-border/50 px-4 py-5 md:py-6 shadow-lg hover:shadow-xl transition-all duration-300 focus-within:border-primary/50 min-h-[64px] md:min-h-[72px]">
+
           {/* Main input field */}
-          <div className="flex-1 relative">
+          <div className="flex-1 relative pr-16">
             <input
               type="text"
-              className="w-full bg-transparent outline-none text-[15px] placeholder:text-muted-foreground/60 pr-2"
+              className="w-full bg-transparent outline-none text-[15px] placeholder:text-muted-foreground/60 pr-2 pt-1 pb-9 md:pb-10"
               placeholder={placeholder || 'Ask anything...'}
               value={value}
               onChange={(e) => onChange(e.target.value)}
@@ -79,22 +73,53 @@ export function CommandBar({
             )}
           </div>
 
-          {/* Voice button */}
-          <VoiceButton
-            onFinalText={(t) => onChange(value ? value + ' ' + t : t)}
-            onInterimText={onInterim}
-            className="flex-shrink-0"
-          />
-          
-          {/* Submit button with custom arrow icon */}
-          <button
-            type="submit"
-            disabled={disabled || (!value.trim() && !interimText?.trim())}
-            aria-label="Send message"
-            className="flex-shrink-0 w-8 h-8 flex items-center justify-center rounded-full bg-primary text-primary-foreground hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed transition-all duration-200 hover:scale-105 active:scale-95"
-          >
-            <SendIcon className="w-4 h-4" />
-          </button>
+          {/* Unified bottom controls row to guarantee alignment */}
+          <div className="absolute inset-x-2 bottom-2 flex items-center justify-between">
+            {/* Left cluster */}
+            <div className="pointer-events-auto flex items-center gap-2 whitespace-nowrap">
+              <button
+                type="button"
+                title="Add files"
+                aria-label="Add files"
+                className="w-8 h-8 flex items-center justify-center text-muted-foreground hover:text-foreground transition-colors rounded-full hover:bg-secondary/50"
+                onClick={() => fileRef.current?.click()}
+              >
+                <Plus className="w-5 h-5 stroke-2" />
+              </button>
+              <button
+                type="button"
+                aria-label="Search mode"
+                onClick={(e) => {
+                  e.preventDefault()
+                  if (!onChangeSearchMode) return
+                  onChangeSearchMode(searchMode === 'web' ? 'auto' : 'web')
+                }}
+                className="px-3 h-8 rounded-full border border-border/40 text-xs flex items-center gap-1 hover:bg-secondary/50 text-foreground/90 bg-background/60 backdrop-blur-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/70 focus-visible:ring-offset-2 focus-visible:ring-offset-background leading-none"
+                title={searchMode === 'web' ? 'Web search enabled' : 'Auto mode'}
+              >
+                <span
+                  className="inline-block w-1.5 h-1.5 rounded-full"
+                  style={{ background: searchMode === 'web' ? 'hsl(var(--primary))' : 'hsl(var(--muted-foreground))' }}
+                />
+                {searchMode === 'web' ? 'Web search' : 'Auto'}
+              </button>
+            </div>
+            {/* Right cluster */}
+            <div className="pointer-events-auto flex items-center gap-2">
+              <VoiceButton
+                onFinalText={(t) => onChange(value ? value + ' ' + t : t)}
+                onInterimText={onInterim}
+              />
+              <button
+                type="submit"
+                disabled={disabled || (!value.trim() && !interimText?.trim())}
+                aria-label="Send message"
+                className="w-8 h-8 flex items-center justify-center rounded-full bg-primary text-primary-foreground hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed transition-all duration-200 hover:scale-105 active:scale-95"
+              >
+                <SendIcon className="w-4 h-4" />
+              </button>
+            </div>
+          </div>
         </div>
 
         {/* Hidden file input */}

@@ -15,7 +15,25 @@ const nextConfig = {
   // Note: Runtime header toggling should be handled in middleware.ts for dynamic control
   async headers() {
     const isProduction = process.env.NODE_ENV === 'production'
-    
+    const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
+    const connectSrcBase = [
+      "'self'",
+      'wss:',
+      'ws:',
+      apiUrl,
+      'http://127.0.0.1:8000',
+      'https://*.supabase.co',
+      'https://accounts.google.com',
+      'https://api.github.com',
+    ]
+    const connectSrcProdExtra = [
+      'https://agentsparrow-production.up.railway.app',
+      'https://*.railway.app',
+    ]
+
+    const connectSrcDev = connectSrcBase.join(' ')
+    const connectSrcProd = connectSrcBase.concat(connectSrcProdExtra).join(' ')
+
     return [
       {
         // Apply security headers to all routes
@@ -44,9 +62,7 @@ const nextConfig = {
           },
           {
             key: 'Content-Security-Policy',
-            value: isProduction 
-              ? "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://accounts.google.com https://apis.google.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: blob: https:; connect-src 'self' wss: ws: https://*.supabase.co https://accounts.google.com https://api.github.com https://agentsparrow-production.up.railway.app https://*.railway.app; font-src 'self' https://fonts.gstatic.com data:; frame-src https://accounts.google.com https://github.com https://*.supabase.co; object-src 'none'; base-uri 'self';"
-              : "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://accounts.google.com https://apis.google.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: blob: https:; connect-src 'self' wss: ws: http://localhost:8000 https://*.supabase.co https://accounts.google.com https://api.github.com; font-src 'self' https://fonts.gstatic.com data:; frame-src https://accounts.google.com https://github.com https://*.supabase.co; object-src 'none'; base-uri 'self';"
+            value: `default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://accounts.google.com https://apis.google.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: blob: https:; connect-src ${isProduction ? connectSrcProd : connectSrcDev}; font-src 'self' https://fonts.gstatic.com data:; frame-src https://accounts.google.com https://github.com https://*.supabase.co; object-src 'none'; base-uri 'self';`
           },
           // Only add HSTS in production
           ...(isProduction ? [{

@@ -48,7 +48,7 @@ export function Header() {
 
   return (
     <header 
-      className="sticky top-0 z-30 flex h-14 items-center justify-between px-4 bg-background/70 backdrop-blur border-b border-border/30"
+      className="sticky top-0 z-30 flex h-14 items-center justify-between px-4 bg-[hsl(var(--brand-surface)/0.95)] backdrop-blur border-b border-border/30"
       role="banner"
     >
       <div className="flex items-center gap-2">

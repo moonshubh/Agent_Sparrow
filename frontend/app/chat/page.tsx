@@ -61,6 +61,7 @@ function ChatContent({ sessionId, setSessionId }: ChatContentProps) {
   const [attachError, setAttachError] = useState<string | null>(null);
   const [activeAgent, setActiveAgent] = useState<'primary' | 'log_analysis' | 'research'>('primary');
   const [interimVoice, setInterimVoice] = useState<string>("");
+  const [searchMode, setSearchMode] = useState<'auto'|'web'>("auto");
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const [enableFx, setEnableFx] = useState<boolean>(true);
   const [reducedMotion, setReducedMotion] = useState<boolean>(false);
@@ -606,6 +607,10 @@ function ChatContent({ sessionId, setSessionId }: ChatContentProps) {
             model,
             sessionId: nextSessionId || fallbackSessionRef.current,
             useServerMemory: true,
+            // Manual web search flags
+            forceWebSearch: searchMode === 'web',
+            webSearchMaxResults: 6,
+            webSearchProfile: 'medium',
           },
         },
       },
@@ -678,7 +683,7 @@ function ChatContent({ sessionId, setSessionId }: ChatContentProps) {
       {/* Main content - centered container */}
       <div className="relative z-10 flex flex-col min-h-svh">
         {/* Header */}
-        <header className="sticky top-0 z-50 backdrop-blur-lg border-b border-border/40 bg-[hsl(0_0%_9%/0.90)]">
+        <header className="sticky top-0 z-50 backdrop-blur-lg border-b border-border/40 bg-[hsl(var(--brand-surface)/0.95)]">
           <div className="w-full px-4 py-3">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-3">
@@ -795,14 +800,14 @@ function ChatContent({ sessionId, setSessionId }: ChatContentProps) {
                   return (
                     <div
                       key={`h-${m.id}`}
-                      className={`flex gap-4 ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}
+                      className={`flex gap-4 ${m.role === 'user' ? 'justify-end' : 'justify-center'}`}
                     >
                       {m.role === 'assistant' ? (
-                        <div className="max-w-[85%] space-y-2">
+                        <div className="w-full max-w-3xl mx-auto space-y-2">
                           {timelineSteps.length > 0 && (
                             <WorkingTimeline steps={timelineSteps} variant="final" />
                           )}
-                          <div className="rounded-2xl px-5 py-3 bg-secondary/50 dark:bg-zinc-800/50 border border-border/50">
+                          <div className="rounded-2xl px-5 py-3 border border-border/50 bg-[hsl(var(--brand-surface)/0.70)]">
                             <AssistantMessage
                               content={m.content}
                               metadata={assistantMetadata}
@@ -854,19 +859,19 @@ function ChatContent({ sessionId, setSessionId }: ChatContentProps) {
                     <div
                       key={m.id ?? idx}
                       className={`flex gap-4 animate-in slide-in-from-bottom-2 fade-in duration-300 ${
-                        m.role === "user" ? "justify-end" : "justify-start"
+                        m.role === "user" ? "justify-end" : "justify-center"
                       }`}
                       style={{ animationDelay: `${idx * 50}ms` }}
                     >
                       {m.role === "assistant" ? (
-                        <div className="max-w-[85%] space-y-2">
+                        <div className="w-full max-w-3xl mx-auto space-y-2">
                           {stepsToRender.length > 0 && (
                             <WorkingTimeline
                               steps={stepsToRender}
                               variant={isStreamingMessage ? 'live' : 'final'}
                             />
                           )}
-                          <div className="rounded-2xl px-5 py-3 bg-secondary/50 dark:bg-zinc-800/50 border border-border/50">
+                          <div className="rounded-2xl px-5 py-3 border border-border/50 bg-[hsl(var(--brand-surface)/0.70)]">
                             <AssistantMessage
                               content={contentText}
                               metadata={meta}
@@ -905,8 +910,8 @@ function ChatContent({ sessionId, setSessionId }: ChatContentProps) {
 
                 {/* Fallback live timeline when assistant message hasn't been created yet */}
                 {(status === 'streaming' || status === 'submitted') && messages.length > 0 && messages[messages.length - 1]?.role !== 'assistant' && (
-                  <div className="flex gap-4 justify-start animate-in fade-in duration-300">
-                    <div className="max-w-[85%] space-y-2">
+                  <div className="flex gap-4 justify-center animate-in fade-in duration-300">
+                    <div className="w-full max-w-3xl mx-auto space-y-2">
                       <WorkingTimeline
                         steps={(liveTimelineSteps.length > 0 ? liveTimelineSteps : ([{ id: 'working-fallback', title: 'Thinking', status: 'in_progress' }] as any))}
                         variant="live"
@@ -1067,6 +1072,8 @@ function ChatContent({ sessionId, setSessionId }: ChatContentProps) {
                   // Model will be set by ModelSelector component based on validation
                 }}
                 onChangeModel={(m) => setModel(m)}
+                searchMode={searchMode}
+                onChangeSearchMode={setSearchMode}
               />
             </FileDropZone>
           </div>

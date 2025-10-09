@@ -17,7 +17,7 @@
 
 Agent Sparrow is a sophisticated multi-agent AI system built on FastAPI with a Next.js frontend. The backend implements an orchestrated agent graph using LangGraph, with specialized agents for different tasks (primary agent, log analysis, research, reflection). The system integrates with Supabase for data persistence and supports multiple AI providers.
 
-Re-organization note: canonical imports are now `app.agents.*` (compat remains for `app.agents_v2.*`). Endpoint modules have been updated to use the canonical imports.
+Re-organization note: canonical imports are `app.agents.*` and legacy `app.agents_v2.*` paths have been removed; all endpoints now import from `app.agents.*`.
 
 ## Architecture Diagram
 
@@ -37,18 +37,18 @@ graph TB
     end
 
     subgraph "Agent Orchestration Layer"
-        AG[Agent Graph<br/>app/agents_v2/orchestration/graph.py]
-        Router[Query Router<br/>app/agents_v2/router/router.py]
+        AG[Agent Graph<br/>app/agents/orchestration/orchestration/graph.py]
+        Router[Query Router<br/>app/agents/router/router/router.py]
         PreProc[Pre-Process Node]
         PostProc[Post-Process Node]
         Escalate[Escalation Node]
     end
 
     subgraph "Agent Nodes"
-        PA[Primary Agent<br/>app/agents_v2/primary_agent/agent.py]
-        LA[Log Analysis Agent<br/>app/agents_v2/log_analysis_agent/agent.py]
-        RA[Research Agent<br/>app/agents_v2/research_agent/research_agent.py]
-        RF[Reflection Agent<br/>app/agents_v2/reflection/node.py]
+        PA[Primary Agent<br/>app/agents/primary/primary_agent/agent.py]
+        LA[Log Analysis Agent<br/>app/agents/log_analysis/log_analysis_agent/agent.py]
+        RA[Research Agent<br/>app/agents/research/research_agent/research_agent.py]
+        RF[Reflection Agent<br/>app/agents/reflection/reflection/node.py]
     end
 
     subgraph "Agent Components"
@@ -75,7 +75,7 @@ graph TB
     end
 
     subgraph "Data Layer"
-        SC[Supabase Client<br/>app/db/supabase_client.py]
+        SC[Supabase Client<br/>app/db/supabase/client.py]
         Models[DB Models<br/>app/db/models.py]
         Embeddings[Embedding Utils<br/>app/db/embedding_utils.py]
         Session[Session Manager<br/>app/db/session.py]
@@ -182,7 +182,7 @@ graph TB
   - Dynamic router registration based on configuration
   - Global exception handlers for rate limiting
 
-### 2. Agent Graph (`app/agents_v2/orchestration/graph.py`)
+### 2. Agent Graph (`app/agents/orchestration/orchestration/graph.py`)
 - **Purpose**: Orchestrates the flow between different agents
 - **Components**:
   - StateGraph for managing agent state
@@ -192,7 +192,7 @@ graph TB
   - Reflection node for quality assurance
   - Pre/post processing nodes
 
-### 3. Primary Agent (`app/agents_v2/primary_agent/agent.py`)
+### 3. Primary Agent (`app/agents/primary/primary_agent/agent.py`)
 - **Purpose**: Main conversational agent handling general queries
 - **Features**:
   - Reasoning engine integration
@@ -206,22 +206,23 @@ graph TB
   - `tool_intelligence.py`: Tool selection intelligence
   - `adapter_bridge.py`: Provider abstraction
 
-### 4. Log Analysis Agent (`app/agents_v2/log_analysis_agent/`)
+### 4. Log Analysis Agent (`app/agents/log_analysis/log_analysis_agent/`)
 - **Purpose**: Specialized agent for analyzing logs and debugging
 - **Components**:
   - `agent.py`: Main agent logic
   - `simplified_agent.py`: Simplified version for basic analysis
   - `extractors/`: Log pattern extractors
   - `tools/`: Log-specific tools
+  - `comprehensive_agent.py`: Quality-first pipeline (defaults to Google Gemini 2.5 Pro)
 
-### 5. Research Agent (`app/agents_v2/research_agent/research_agent.py`)
+### 5. Research Agent (`app/agents/research/research_agent/research_agent.py`)
 - **Purpose**: Handles research queries and information gathering
 - **Features**:
   - Web search integration
   - Knowledge base search
   - Multi-source aggregation
 
-### 6. Reflection Agent (`app/agents_v2/reflection/node.py`)
+### 6. Reflection Agent (`app/agents/reflection/reflection/node.py`)
 - **Purpose**: Quality assurance and response refinement
 - **Features**:
   - Response quality checking
@@ -232,63 +233,84 @@ graph TB
 
 ```
 app/
-├── agents/                 # NEW: canonical agents package (compat re-exports to agents_v2)
-│   ├── primary/            # Primary conversational agent (re-export)
-│   ├── log_analysis/       # Log analysis agent (re-export)
-│   ├── research/           # Research agent (re-export)
-│   ├── reflection/         # Reflection (re-export)
-│   └── orchestration/      # Graph + state (re-export)
-├── agents_v2/              # Legacy import path (still present; slated for removal later)
-│   ├── primary_agent/      # Main conversational agent
-│   │   ├── agent.py        # Agent implementation
-│   │   ├── reasoning/      # Reasoning components
-│   │   ├── troubleshooting/# Debug & troubleshooting
-│   │   └── prompts/        # Agent prompts
-│   ├── log_analysis_agent/ # Log analysis specialist
-│   ├── research_agent/     # Research specialist
-│   ├── reflection/         # Quality assurance
-│   ├── orchestration/      # Agent orchestration
-│   └── router/             # Query routing logic
-├── api/                    # API layer
-│   ├── middleware/         # API middleware
+├── agents/                      # Canonical agents package
+│   ├── orchestration/
+│   │   └── orchestration/       # Graph, nodes, state, escalation
+│   │       ├── graph.py
+│   │       ├── nodes.py
+│   │       ├── state.py
+│   │       └── escalation.py
+│   ├── router/
+│   │   └── router/              # Query routing logic
+│   │       ├── router.py
+│   │       └── schemas.py
+│   ├── primary/
+│   │   └── primary_agent/       # Primary conversational agent
+│   │       ├── agent.py
+│   │       ├── reasoning/
+│   │       ├── troubleshooting/
+│   │       ├── prompts/
+│   │       └── tools.py
+│   ├── log_analysis/
+│   │   └── log_analysis_agent/  # Log analysis specialist
+│   │       ├── agent.py
+│   │       ├── simplified_agent.py
+│   │       ├── comprehensive_agent.py
+│   │       └── ...
+│   ├── research/
+│   │   └── research_agent/
+│   │       └── research_agent.py
+│   ├── reflection/
+│   │   └── reflection/
+│   │       ├── node.py
+│   │       └── schema.py
+│   └── checkpointer/
+│       ├── postgres_checkpointer.py
+│       └── thread_manager.py
+├── api/
 │   └── v1/
-│       ├── endpoints/      # API endpoints
-│       └── websocket/      # WebSocket handlers
-├── core/                   # Core utilities
-│   ├── transport/          # NEW: unified SSE/WebSocket helpers (skeleton)
-│   └── tracing/            # NEW: observability helpers (skeleton)
-│   ├── rate_limiting/      # Rate limiting system
-│   ├── auth.py            # Authentication
-│   ├── settings.py        # Configuration
-│   └── security.py        # Security utilities
-├── db/                     # Database layer
-│   ├── supabase/           # NEW: client + repositories (compat wrapper to supabase_client)
-│   └── embedding/          # NEW: embedding utils (compat wrapper to embedding_utils)
-│   ├── models.py          # SQLAlchemy models
-│   ├── supabase_client.py # Supabase integration
-│   └── migrations/        # Database migrations
-├── providers/              # AI provider adapters
-│   ├── adapters/           # NEW: adapters namespace (skeleton)
-│   └── limits/             # NEW: rate limit wrappers/config (skeleton)
-│   ├── Google/            # Google Gemini
-│   └── OpenAI/            # OpenAI GPT
-├── tools/                  # Agent tools
-├── cache/                  # Caching layer
-└── feedme/                 # FeedMe feature module
+│       ├── endpoints/           # chat, unified, logs, secure logs, research, feedme, api-keys, rate-limits, etc.
+│       └── websocket/           # FeedMe
+├── core/
+│   ├── transport/sse.py         # Unified SSE formatting
+│   ├── rate_limiting/           # Gemini limiters, circuit breaker, config
+│   ├── settings.py
+│   ├── user_context.py
+│   └── security.py
+├── db/
+│   ├── supabase/client.py       # Canonical Supabase client
+│   ├── supabase/repository.py
+│   ├── embedding/utils.py
+│   ├── models.py
+│   └── migrations/
+├── providers/
+│   ├── registry.py
+│   ├── adapters/__init__.py     # Bootstraps known adapters
+│   ├── Google/
+│   │   ├── Gemini-2.5-Flash/adapter.py
+│   │   ├── Gemini-2.5-Pro/adapter.py
+│   │   └── LogAnalysis/Gemini-2.5-Pro/adapter.py
+│   └── OpenAI/GPT-5-Mini/adapter.py
+├── tools/
+├── cache/redis_cache.py
+└── feedme/
 ```
 
 ## Agent System
 
 ### Agent State Management
-The system uses a GraphState object to maintain conversation state across agents:
+The system uses a Pydantic GraphState to maintain state across the orchestration graph (`app/agents/orchestration/orchestration/state.py`):
 ```python
-class GraphState:
-    messages: List[BaseMessage]
-    user_info: Dict
-    next: str
-    api_key: str
-    thinking_budget: Optional[int]
-    cached_response: Optional[str]
+class GraphState(BaseModel):
+    session_id: str = "default"
+    messages: List[BaseMessage] = Field(default_factory=list)
+    destination: Optional[Literal["primary_agent", "log_analyst", "researcher", "__end__"]] = None
+    raw_log_content: Optional[str] = None
+    final_report: Optional[StructuredLogAnalysisOutput] = None
+    cached_response: Optional[Any] = None
+    tool_invocation_output: Optional[Any] = None
+    reflection_feedback: Optional[ReflectionFeedback] = None
+    qa_retry_count: int = 0
 ```
 
 ### Agent Flow
@@ -321,9 +343,26 @@ For detailed developer guides, see:
 - logs_endpoints.py: `POST /api/v1/agent/logs` (JSON), `POST /api/v1/agent/logs/stream` (SSE), sessions and rate-limits
 - research_endpoints.py: `POST /api/v1/agent/research` (JSON), `POST /api/v1/agent/research/stream` (SSE)
 
+#### Secure Log Analysis (`secure_log_analysis.py`)
+- `POST /api/v1/agent/secure/logs` – Paranoid secure JSON analysis (Gemini 2.5 Pro enforced)
+- `POST /api/v1/agent/secure/logs/file` – Secure file upload variant
+- `POST /api/v1/agent/secure/logs/stream` – Secure SSE stream with real-time security updates
+- `GET /api/v1/agent/secure/audit` – Security audit snapshot
+- `POST /api/v1/agent/secure/compliance/check` – Full compliance check
+- `DELETE /api/v1/agent/secure/cleanup` – Force immediate cleanup
+
 Streaming contracts:
 - Primary chat stream emits: `text-start`, `text-delta`, optional `data-*` metadata, `text-end`, `finish`.
-- Unified stream (log analysis) emits timeline steps as `{ type: 'step', data: {...} }` and a final assistant message with `analysis_results`.
+- Unified stream (log analysis) emits timeline steps as `{ type: 'step', data: {...} }`, a final assistant message with `analysis_results`, and a terminal `[DONE]` marker.
+- Secure log stream emits: `security` (status/redaction) → `analysis` (processing) → `result` → `done`.
+
+#### API Key Management (`api_key_endpoints.py`)
+- `GET /api/v1/api-keys` – List masked keys; `POST /api/v1/api-keys` – Create/update; `PUT/DELETE /api/v1/api-keys/{type}`
+- `POST /api/v1/api-keys/validate` – Validate format; `POST /api/v1/api-keys/test` – Connectivity
+- `GET /api/v1/api-keys/status` – Status summary; `GET /api/v1/api-keys/internal/{type}` – Internal-only decrypted fetch
+
+#### Rate Limit Monitoring (`rate_limit_endpoints.py`)
+- `GET /api/v1/rate-limits/status|usage|health|config|metrics`, `POST /api/v1/rate-limits/check/{model}`, `POST /api/v1/rate-limits/reset`
 
 #### Advanced Agent Endpoints (`advanced_agent_endpoints.py`)
 - `POST /api/v1/advanced/reasoning/structured` – Structured reasoning
@@ -348,7 +387,7 @@ Canonical imports:
 - Supabase: `from app.db.supabase.client import get_supabase_client`
 - Embeddings utils: `from app.db.embedding.utils import ...`
 
-### Supabase Client (`supabase_client.py`)
+### Supabase Client (`app/db/supabase/client.py`)
 Provides typed operations for:
 - **Folder Management**: Create, update, delete folders
 - **Conversation Persistence**: Store chat sessions
@@ -408,6 +447,7 @@ Streaming endpoints use `app/core/transport/sse.py` → `format_sse_data(payload
 - **CORS Configuration**: Controlled origin access
 - **Input Validation**: Pydantic models for validation
 - **Audit Logging**: API key operation tracking
+- **Secure Log Analysis Enforcement**: Production log analysis uses Google Gemini 2.5 Pro (`gemini-2.5-pro`).
 
 ## Rate Limiting
 
@@ -417,7 +457,7 @@ Streaming endpoints use `app/core/transport/sse.py` → `format_sse_data(payload
    - IP-based throttling
 
 2. **Service-Specific Limiters**:
-   - **Gemini Rate Limiter**: Token bucket algorithm
+   - **Gemini Rate Limiter**: Token bucket + circuit breaker; per-family (Flash/Pro) limits
    - **Embedding Limiter**: Embedding API limits
    - **Circuit Breaker**: Failure protection
 
@@ -486,8 +526,8 @@ python app/main.py
 
 ### Supported Providers
 1. **Google Gemini** (Primary):
-   - Models: gemini-2.5-flash, 
-   - Features: Thinking mode, streaming, function calling
+   - Models: gemini-2.5-flash, gemini-2.5-pro
+   - Features: Thinking mode, streaming, function calling (secure log analysis enforces Pro)
 
 2. **OpenAI**:
    - Models: GPT5-mini
@@ -501,7 +541,7 @@ python app/main.py
 
 ## Troubleshooting Module
 
-### Components (`app/agents_v2/primary_agent/troubleshooting/`)
+### Components (`app/agents/primary/primary_agent/troubleshooting/`)
 - **Error Analysis**: Pattern matching for common errors
 - **Solution Database**: Known issue resolutions
 - **Diagnostic Tools**: System state inspection
@@ -606,7 +646,7 @@ state = GraphState(
 - Custom spans for agent operations
 
 ### Health Checks
-- `/api/health`: System health
+- `/health`: System health
 - `/api/v1/rate-limits/status`: Rate limit status
 - Database connectivity checks
 

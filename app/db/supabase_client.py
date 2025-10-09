@@ -885,10 +885,28 @@ class SupabaseClient:
             response = await self._exec(lambda: self.client.rpc("search_mailbird_knowledge", params).execute())
             return response.data or []
         except APIError as e:
-            logger.error(f"Supabase RPC error in search_kb_articles: {e}")
+            try:
+                dim = len(query_embedding) if isinstance(query_embedding, list) else None
+            except Exception:
+                dim = None
+            logger.error(
+                "Supabase RPC error in search_mailbird_knowledge (dim=%s, count=%s): %s",
+                dim,
+                params.get("match_count") if isinstance(params, dict) else None,
+                e,
+            )
             return []
         except Exception as e:
-            logger.error(f"Error searching knowledge base: {e}")
+            try:
+                dim = len(query_embedding) if isinstance(query_embedding, list) else None
+            except Exception:
+                dim = None
+            logger.error(
+                "Error searching knowledge base via RPC (dim=%s, count=%s): %s",
+                dim,
+                params.get("match_count") if isinstance(params, dict) else None,
+                e,
+            )
             return []
     
     # =====================================================
@@ -949,10 +967,30 @@ class SupabaseClient:
             )
             return response.data or []
         except APIError as e:
-            logger.error(f"Supabase RPC error in search_web_snapshots: {e}")
+            try:
+                dim = len(query_embedding) if isinstance(query_embedding, list) else None
+            except Exception:
+                dim = None
+            logger.error(
+                "Supabase RPC error in search_web_research_snapshots (dim=%s, count=%s, threshold=%s): %s",
+                dim,
+                params.get("match_count") if isinstance(params, dict) else None,
+                params.get("match_threshold") if isinstance(params, dict) else None,
+                e,
+            )
             return []
         except Exception as e:
-            logger.error(f"Error searching web research snapshots: {e}")
+            try:
+                dim = len(query_embedding) if isinstance(query_embedding, list) else None
+            except Exception:
+                dim = None
+            logger.error(
+                "Error searching web research snapshots (dim=%s, count=%s, threshold=%s): %s",
+                dim,
+                params.get("match_count") if isinstance(params, dict) else None,
+                params.get("match_threshold") if isinstance(params, dict) else None,
+                e,
+            )
             return []
     
     async def get_unsynced_examples(self, limit: int = 100) -> List[Dict[str, Any]]:
@@ -1367,7 +1405,17 @@ class SupabaseClient:
             result = await self._exec(lambda: self.client.rpc('search_feedme_text_chunks', params).execute())
             return result.data or []
         except Exception as e:
-            logger.error(f"Text chunk search failed: {e}")
+            try:
+                dim = len(query_embedding) if isinstance(query_embedding, list) else None
+            except Exception:
+                dim = None
+            logger.error(
+                "Text chunk search failed (function=search_feedme_text_chunks dim=%s, count=%s, folder_id=%s): %s",
+                dim,
+                match_count,
+                folder_id,
+                e,
+            )
             return []
 
     async def get_conversations_by_ids(self, conversation_ids: List[int]) -> Dict[int, Dict[str, Any]]:

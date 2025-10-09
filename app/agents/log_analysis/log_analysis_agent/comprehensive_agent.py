@@ -189,6 +189,9 @@ class LogAnalysisAgent:
         # Cache for analysis results (sanitized only)
         self._analysis_cache: Dict[str, LogAnalysisResult] = {}
 
+        # Manual web search override (set by caller; propagated to reasoning engine)
+        self.force_websearch: Optional[bool] = None
+
     async def _initialize_model(self):
         """Initialize the model and reasoning engine if not already done."""
         if self._model is None:
@@ -205,6 +208,12 @@ class LogAnalysisAgent:
                 provider=self.provider,
                 model_name=self.model_name,
             )
+            # Propagate forced web search flag if provided
+            try:
+                if isinstance(self.force_websearch, bool):
+                    setattr(self._reasoning_engine, "force_websearch", bool(self.force_websearch))
+            except Exception:
+                pass
 
     async def analyze_log_file(
         self,

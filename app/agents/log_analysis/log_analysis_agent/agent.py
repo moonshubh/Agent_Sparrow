@@ -1,10 +1,13 @@
-"""
-Log Analysis Agent Router
-Routes between simplified and comprehensive implementations based on configuration.
+"""Log Analysis Agent Router.
+
+Routes between simplified and comprehensive implementations based on configuration
+and enriches the analysis with Mailbird Windows settings when available.
 """
 
 import os
-from typing import Dict, Any
+from functools import lru_cache
+from pathlib import Path
+from typing import Dict, Any, Optional
 from uuid import uuid4
 
 from app.core.logging_config import get_logger
@@ -27,6 +30,31 @@ try:
     from .context.mailbird_settings_loader import load_mailbird_settings
 except Exception:
     load_mailbird_settings = None  # type: ignore
+
+
+PROJECT_ROOT = Path(__file__).resolve().parents[4]
+DEFAULT_MAILBIRD_SETTINGS_PATH = PROJECT_ROOT / "MailbirdSettings.yml"
+
+
+@lru_cache(maxsize=1)
+def _load_default_mailbird_settings_cached() -> Optional[Dict[str, Any]]:
+    """Load the repo-default Mailbird settings file, when available."""
+
+    if load_mailbird_settings is None:
+        return None
+
+    try:
+        if not DEFAULT_MAILBIRD_SETTINGS_PATH.exists():
+            return None
+        return load_mailbird_settings(path=str(DEFAULT_MAILBIRD_SETTINGS_PATH))
+    except Exception as exc:  # pragma: no cover - logging side-effect only
+        logger = get_logger("log_analysis_agent")
+        logger.info(
+            "Default Mailbird settings file could not be loaded",
+            path=str(DEFAULT_MAILBIRD_SETTINGS_PATH),
+            error=str(exc),
+        )
+        return None
 
 
 def _should_use_comprehensive() -> bool:
@@ -81,33 +109,56 @@ async def run_log_analysis_agent(state: Dict[str, Any]) -> Dict[str, Any]:
     if _should_use_comprehensive():
         try:
             # Optional Mailbird settings from request
-            settings_dict = None
+            settings_dict: Optional[Dict[str, Any]] = None
+            settings_source = "none"
             settings_content = state.get("settings_content")
             settings_path = state.get("settings_path")
+
             if load_mailbird_settings:
                 if isinstance(settings_content, str) and settings_content.strip():
-                    # Prefer direct content
                     try:
                         settings_dict = load_mailbird_settings(content=settings_content)
+                        settings_source = "request_content"
                     except (ValueError, FileNotFoundError, TypeError) as exc:
                         logger.warning(
-                            "Failed to load Mailbird settings from content: %s",
-                            exc,
+                            "Failed to load Mailbird settings from provided content",
+                            error=str(exc),
                         )
                         settings_dict = None
                 elif isinstance(settings_path, str) and settings_path.strip():
                     try:
                         settings_dict = load_mailbird_settings(path=settings_path)
+                        settings_source = "request_path"
                     except (ValueError, FileNotFoundError, TypeError) as exc:
                         logger.warning(
-                            "Failed to load Mailbird settings from path %s: %s",
-                            settings_path,
-                            exc,
+                            "Failed to load Mailbird settings from path",
+                            provided_path=settings_path,
+                            error=str(exc),
                         )
                         settings_dict = None
 
+                if settings_dict is None:
+                    default_settings = _load_default_mailbird_settings_cached()
+                    if default_settings:
+                        settings_dict = default_settings
+                        settings_source = "default_repo_file"
+
+            logger.info(
+                "Mailbird settings context prepared",
+                trace_id=trace_id,
+                settings_loaded=bool(settings_dict),
+                settings_source=settings_source,
+            )
+
             # Initialize comprehensive agent (quality-first)
             agent = LogAnalysisAgent()
+            # Pass manual web search override to agent if provided
+            try:
+                force_ws = state.get("force_websearch")
+                if isinstance(force_ws, bool):
+                    setattr(agent, "force_websearch", force_ws)
+            except Exception:
+                pass
             analysis_result, _ = await agent.analyze_log_content(
                 log_content=raw_log,
                 user_query=question,

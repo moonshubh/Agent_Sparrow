@@ -12,7 +12,7 @@ from pydantic import BaseModel, Field
 from langchain_core.tools import tool
 
 from app.db.embedding.utils import get_embedding_model
-from app.db.supabase.client import SupabaseClient
+from app.db.supabase_client import SupabaseClient
 from app.feedme.integration.primary_agent_connector import PrimaryAgentConnector
 from app.core.settings import settings
 from app.utils.async_bridge import run_coro_blocking
@@ -76,14 +76,13 @@ def get_feedme_connector() -> PrimaryAgentConnector:
     return _feedme_connector
 
 
-@tool("enhanced-mailbird-kb-search", args_schema=EnhancedKBSearchInput)
-def enhanced_mailbird_kb_search(
+def _enhanced_mailbird_kb_search_payload(
     query: str,
     context: Optional[Dict[str, Any]] = None,
     max_results: int = 5,
     search_sources: List[str] = ["knowledge_base", "feedme"],
     min_confidence: Optional[float] = None
-) -> str:
+) -> Dict[str, Any]:
     """
     Enhanced knowledge base search with FeedMe integration.
     
@@ -171,7 +170,23 @@ def enhanced_mailbird_kb_search(
                 
             except Exception as e:
                 logger.error(f"All search methods failed: {e}")
-                return _format_error_response(query, str(e))
+                formatted_error = _format_error_response(query, str(e))
+                summary = SearchResultSummary(
+                    total_results=0,
+                    kb_results=0,
+                    feedme_results=0,
+                    avg_relevance=0.0,
+                    search_time_ms=int((time.time() - start_time) * 1000),
+                    sources_used=search_sources,
+                    fallback_used=True,
+                )
+                return {
+                    "results": [],
+                    "summary": summary,
+                    "formatted": formatted_error,
+                    "query": query,
+                    "error": str(e),
+                }
         
         # Limit and format results
         all_results = all_results[:max_results]
@@ -192,11 +207,50 @@ def enhanced_mailbird_kb_search(
         )
         
         # Format final response
-        return _format_search_response(all_results, summary, query)
-        
+        formatted = _format_search_response(all_results, summary, query)
+        return {
+            "results": all_results,
+            "summary": summary,
+            "formatted": formatted,
+            "query": query,
+        }
+
     except Exception as e:
         logger.error(f"Critical error in enhanced KB search: {e}")
-        return _format_error_response(query, str(e))
+        return {
+            "results": [],
+            "summary": SearchResultSummary(
+                total_results=0,
+                kb_results=0,
+                feedme_results=0,
+                avg_relevance=0.0,
+                search_time_ms=0,
+                sources_used=search_sources,
+                fallback_used=True,
+            ),
+            "formatted": _format_error_response(query, str(e)),
+            "query": query,
+            "error": str(e),
+        }
+
+
+@tool("enhanced-mailbird-kb-search", args_schema=EnhancedKBSearchInput)
+def enhanced_mailbird_kb_search(
+    query: str,
+    context: Optional[Dict[str, Any]] = None,
+    max_results: int = 5,
+    search_sources: List[str] = ["knowledge_base", "feedme"],
+    min_confidence: Optional[float] = None
+) -> str:
+    """Wrapper to expose formatted results for LangChain tool usage."""
+    payload = _enhanced_mailbird_kb_search_payload(
+        query=query,
+        context=context,
+        max_results=max_results,
+        search_sources=search_sources,
+        min_confidence=min_confidence,
+    )
+    return payload["formatted"]
 
 
 def _search_with_feedme(
@@ -451,14 +505,31 @@ def enhanced_mailbird_kb_search_call(
 
     Avoids TypeError from calling the StructuredTool with keyword arguments.
     """
-    payload = {
-        "query": query,
-        "context": context,
-        "max_results": max_results,
-        "search_sources": search_sources,
-        "min_confidence": min_confidence,
-    }
-    return ENHANCED_KB_SEARCH_TOOL.invoke(payload)
+    payload = _enhanced_mailbird_kb_search_payload(
+        query=query,
+        context=context,
+        max_results=max_results,
+        search_sources=search_sources,
+        min_confidence=min_confidence,
+    )
+    return payload["formatted"]
+
+
+def enhanced_mailbird_kb_search_structured(
+    query: str,
+    context: Optional[Dict[str, Any]] = None,
+    max_results: int = 5,
+    search_sources: List[str] = ["knowledge_base", "feedme"],
+    min_confidence: Optional[float] = None,
+) -> Dict[str, Any]:
+    """Return structured payload including summary and raw results."""
+    return _enhanced_mailbird_kb_search_payload(
+        query=query,
+        context=context,
+        max_results=max_results,
+        search_sources=search_sources,
+        min_confidence=min_confidence,
+    )
 
 
 # Export tool configuration for Primary Agent
@@ -469,6 +540,7 @@ __all__ = [
     'enhanced_mailbird_kb_search',
     'mailbird_kb_search',
     'enhanced_mailbird_kb_search_call',
+    'enhanced_mailbird_kb_search_structured',
     'EnhancedKBSearchInput',
     'SearchResultSummary',
     'ENHANCED_KB_SEARCH_TOOL',

@@ -392,6 +392,10 @@ export function createBackendChatTransport({
       const isLogAnalysis = Boolean(dataPayload.isLogAnalysis && dataPayload.attachedLogText)
       const attachedLogText = dataPayload.attachedLogText
       const logMetadata = dataPayload.logMetadata
+      // Web search flags (manual pill)
+      const forceWebSearch = Boolean(dataPayload.forceWebSearch)
+      const webSearchMaxResults = getNumber(dataPayload, 'webSearchMaxResults')
+      const webSearchProfile = getString(dataPayload, 'webSearchProfile')
 
       const targetEndpoint = isLogAnalysis ? unifiedEndpoint : chatEndpoint
 
@@ -413,6 +417,9 @@ export function createBackendChatTransport({
             log_metadata: logMetadata,
             trace_id: (resolvedBody?.session_id as string | undefined) ?? sessionId,
           } : {}),
+          ...(forceWebSearch ? { force_websearch: true } : {}),
+          ...(webSearchMaxResults ? { websearch_max_results: webSearchMaxResults } : {}),
+          ...(webSearchProfile ? { websearch_profile: webSearchProfile } : {}),
           ...(dataPayload.useServerMemory ? { use_server_memory: true } : {}),
         },
       }

@@ -29,6 +29,10 @@ class ChatRequest(BaseModel):
     session_id: str | None = None
     provider: str | None = None
     model: str | None = None
+    # Manual web search flags
+    force_websearch: bool | None = None
+    websearch_max_results: int | None = None
+    websearch_profile: str | None = None
 
 
 def _resolve_provider_model(provider: Optional[str], model: Optional[str]) -> tuple[str, str]:
@@ -49,6 +53,10 @@ async def primary_agent_stream_generator(
     session_id: str | None = None,
     provider: str | None = None,
     model: str | None = None,
+    *,
+    force_websearch: bool | None = None,
+    websearch_max_results: int | None = None,
+    websearch_profile: str | None = None,
 ) -> AsyncIterable[str]:
     try:
         user_context = await create_user_context_from_user_id(user_id)
@@ -102,6 +110,9 @@ async def primary_agent_stream_generator(
                 session_id=session_id,
                 provider=req_provider,
                 model=req_model,
+                force_websearch=force_websearch,
+                websearch_max_results=websearch_max_results,
+                websearch_profile=websearch_profile,
             )
             logger.info(
                 f"[chat_stream] initial_state provider={initial_state.provider}, model={initial_state.model}"
@@ -192,6 +203,9 @@ async def chat_stream_v2_authenticated(request: ChatRequest, user_id: str = Depe
             session_id=request.session_id,
             provider=request.provider,
             model=request.model,
+            force_websearch=request.force_websearch,
+            websearch_max_results=request.websearch_max_results,
+            websearch_profile=request.websearch_profile,
         ),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-API-Version": "2.0"},

@@ -83,11 +83,14 @@ else
     # Start backend
     echo "Starting backend service..."
 
-    # Use user-writable log location instead of system directory
-    LOG_DIR="${ROOT_DIR}/logs"
-    mkdir -p "${LOG_DIR}"
-    LOG_FILE="${LOG_DIR}/agent-sparrow-backend.log"
+    # Use project system_logs folder structure by default
+    LOG_DIR="${ROOT_DIR}/system_logs"
+    BACKEND_LOG_DIR="${LOG_DIR}/backend"
+    FRONTEND_LOG_DIR="${LOG_DIR}/frontend"
+    mkdir -p "${BACKEND_LOG_DIR}" "${FRONTEND_LOG_DIR}"
+    LOG_FILE="${BACKEND_LOG_DIR}/backend.log"
 
+    # Start backend and write logs into system_logs/backend/backend.log
     nohup ./venv/bin/python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 > "${LOG_FILE}" 2>&1 &
     BACKEND_PID=$!
 
@@ -121,7 +124,8 @@ else
 
     # Start frontend
     echo "Starting frontend service..."
-    nohup npm run start > "${LOG_DIR}/agent-sparrow-frontend.log" 2>&1 &
+    # Start frontend and write logs into system_logs/frontend/frontend.log
+    nohup npm run start > "${FRONTEND_LOG_DIR}/frontend.log" 2>&1 &
     FRONTEND_PID=$!
 
     # Wait for frontend to be ready
@@ -129,7 +133,7 @@ else
         echo -e "Frontend started successfully (PID: $FRONTEND_PID) ${GREEN}✓${NC}"
     else
         echo -e "${RED}Failed to start frontend service${NC}"
-        echo "Check logs at: ${LOG_DIR}/agent-sparrow-frontend.log"
+        echo "Check logs at: ${FRONTEND_LOG_DIR}/frontend.log"
         exit 1
     fi
 fi
@@ -164,7 +168,7 @@ echo "To manually check backend health:"
 echo "  curl http://localhost:8000/api/v1/feedme/health"
 echo ""
 echo "To view logs:"
-echo "  Backend:  tail -f ${LOG_DIR}/agent-sparrow-backend.log"
-echo "  Frontend: tail -f ${LOG_DIR}/agent-sparrow-frontend.log"
+echo "  Backend:  tail -f ${BACKEND_LOG_DIR}/backend.log"
+echo "  Frontend: tail -f ${FRONTEND_LOG_DIR}/frontend.log"
 
 echo -e "\n${GREEN}System is ready for production use!${NC}"

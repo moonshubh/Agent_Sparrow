@@ -35,7 +35,7 @@ export function AssistantMessage({ content, metadata, isLogAnalysis }: Assistant
       )}
 
       {/* Main Assistant Message */}
-      <div className="relative rounded-lg border border-border/60 bg-gradient-to-br from-background to-muted/30 p-3">
+      <div className="relative rounded-lg border border-border/60 p-3 bg-[hsl(var(--brand-surface))]">
         <div className="mt-1 text-sm text-foreground/90 prose prose-sm dark:prose-invert max-w-none">
           <ReactMarkdown
             remarkPlugins={[remarkGfm]}

@@ -373,6 +373,8 @@
 
 @layer base {
   :root {
+    /* Brand surface applied to sidebars/answer bubbles when requested */
+    --brand-surface: 240 5.3% 26.1%;
     /* Light theme colors */
     --background: 0 0% 100%;
     --foreground: 0 0% 3.9%;
@@ -467,7 +469,7 @@
     --chat-background: 0 0% 7%;
     --chat-user-bg: 0 0% 15%;
     --chat-user-text: 0 0% 95%;
-    --chat-agent-bg: 0 0% 12%;
+    --chat-agent-bg: var(--brand-surface);
     --chat-agent-text: 0 0% 95%;
     --chat-input-bg: 0 0% 9%;
     --chat-input-text: 0 0% 95%;
@@ -481,7 +483,7 @@
     --container-max: 1400px;
     
     /* Dark sidebar colors (updated per new spec) */
-    --sidebar-background: 0 0% 9%;
+    --sidebar-background: var(--brand-surface);
     --sidebar-foreground: 240 4.8% 95.9%;
     --sidebar-primary: 224.3 76.3% 48%;
     --sidebar-primary-foreground: 0 0% 100%;

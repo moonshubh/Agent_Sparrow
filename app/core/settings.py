@@ -51,6 +51,10 @@ class Settings(BaseSettings):
     primary_agent_provider: str = Field(default="google", alias="PRIMARY_AGENT_PROVIDER")
     primary_agent_model: str = Field(default="gemini-2.5-flash", alias="PRIMARY_AGENT_MODEL")
     primary_agent_quality_level: str = Field(default="balanced", alias="PRIMARY_AGENT_QUALITY_LEVEL")
+    enable_websearch: bool = Field(default=True, alias="ENABLE_WEBSEARCH")
+    enable_grounded_responses: bool = Field(default=True, alias="ENABLE_GROUNDED_RESPONSES")
+    primary_agent_min_kb_relevance: float = Field(default=0.65, alias="PRIMARY_AGENT_MIN_KB_RELEVANCE")
+    primary_agent_min_kb_results: int = Field(default=1, alias="PRIMARY_AGENT_MIN_KB_RESULTS")
     reflection_default_provider: Optional[str] = Field(default=None, alias="DEFAULT_REFLECTION_PROVIDER")
     reflection_default_model: Optional[str] = Field(default=None, alias="DEFAULT_REFLECTION_MODEL")
     
@@ -236,6 +240,20 @@ class Settings(BaseSettings):
             return v
         if len(v.encode('utf-8')) < 32:
             raise ValueError("api_key_encryption_secret must be at least 32 bytes long when UTF-8 encoded")
+        return v
+
+    @field_validator('primary_agent_min_kb_relevance')
+    @classmethod
+    def validate_primary_agent_min_kb_relevance(cls, v: float) -> float:
+        if v < 0.0 or v > 1.0:
+            raise ValueError("primary_agent_min_kb_relevance must be between 0.0 and 1.0")
+        return v
+
+    @field_validator('primary_agent_min_kb_results')
+    @classmethod
+    def validate_primary_agent_min_kb_results(cls, v: int) -> int:
+        if v < 0:
+            raise ValueError("primary_agent_min_kb_results must be zero or greater")
         return v
 
     def is_production_mode(self) -> bool:

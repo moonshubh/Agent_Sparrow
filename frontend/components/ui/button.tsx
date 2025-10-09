@@ -9,15 +9,13 @@ const buttonVariants = cva(
   {
     variants: {
       variant: {
-        default: "bg-primary text-primary-foreground hover:bg-mb-blue-300 hover:text-black",
-        destructive:
-          "bg-destructive text-destructive-foreground hover:bg-destructive/90",
-        outline:
-          "border border-input bg-background hover:bg-mb-blue-300/10 hover:text-foreground",
-        secondary:
-          "bg-secondary text-secondary-foreground hover:bg-mb-blue-300/15",
-        ghost: "hover:bg-mb-blue-300/20 hover:text-foreground",
-        link: "text-primary underline-offset-4 hover:underline",
+        // Global style change: all buttons use black background with white text (except custom GradientButton)
+        default: "bg-black text-white hover:bg-black/85",
+        destructive: "bg-black text-white hover:bg-black/85",
+        outline: "border border-input bg-black text-white hover:bg-black/85",
+        secondary: "bg-black text-white hover:bg-black/85",
+        ghost: "bg-black text-white hover:bg-black/85",
+        link: "text-white underline-offset-4 hover:opacity-80",
         gradient: "bg-[linear-gradient(to_right,hsl(0_0%_14.9%)_0%,hsl(0_0%_14.9%)_90%,hsl(217.2_83.2%_53.3%)_93%,hsl(225.9_70.7%_40.2%)_97%,hsl(226.2_57%_21%)_100%)] text-white shadow-lg shadow-blue-500/25 hover:shadow-blue-500/40 hover:scale-[1.02] transition-colors transition-[box-shadow] transition-transform duration-200",
       },
       size: {

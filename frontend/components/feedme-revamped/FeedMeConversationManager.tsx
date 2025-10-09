@@ -373,8 +373,8 @@ export default function FeedMeConversationManager() {
   return (
     <div className="flex h-[calc(100vh-4rem)]">
       {/* Left panel - Conversation list */}
-      <div className="w-1/3 border-r bg-muted/30 flex flex-col">
-        <div className="p-4 border-b">
+      <div className="w-1/3 border-r bg-[hsl(var(--brand-surface))] flex flex-col">
+        <div className="p-4 border-b bg-[hsl(var(--brand-surface))]">
           <div className="flex items-center justify-between mb-4">
             <h2 className="text-lg font-semibold">Conversations</h2>
             <Button size="sm" className="gap-2">
@@ -483,7 +483,7 @@ export default function FeedMeConversationManager() {
         {selectedConversation ? (
           <div className="flex-1 overflow-hidden">
             <div className="h-full flex flex-col">
-              <div className="border-b p-4 flex items-center justify-between">
+              <div className="border-b p-4 flex items-center justify-between bg-[hsl(var(--brand-surface))]">
                 <h3 className="font-semibold">Conversation Details</h3>
                 <Button
                   variant="ghost"

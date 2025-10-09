@@ -1,9 +1,11 @@
+import hashlib
 import logging
 import os
 import anyio
 import re
+from pathlib import Path
 from dotenv import load_dotenv
-from typing import AsyncIterator, Dict, Optional
+from typing import AsyncIterator, Dict, Optional, Any, List
 from functools import lru_cache
 
 from langchain_core.messages import AIMessageChunk
@@ -17,6 +19,24 @@ from app.agents.primary.primary_agent.tools import mailbird_kb_search, tavily_we
 from app.agents.primary.primary_agent.reasoning import ReasoningEngine, ReasoningConfig
 from app.agents.primary.primary_agent.prompts import AgentSparrowV9Prompts
 from app.agents.primary.primary_agent.adapter_bridge import get_primary_agent_model
+from app.core.settings import settings
+from app.agents.primary.primary_agent.feedme_knowledge_tool import (
+    enhanced_mailbird_kb_search_structured,
+    SearchResultSummary,
+)
+from app.agents.primary.primary_agent.grounding_utils import (
+    build_grounding_digest,
+    kb_retrieval_satisfied,
+    sanitize_model_response,
+    summarize_kb_results,
+    summarize_tavily_results,
+)
+try:
+    from app.agents.log_analysis.log_analysis_agent.context.mailbird_settings_loader import (
+        load_mailbird_settings,
+    )
+except Exception:  # pragma: no cover - optional dependency
+    load_mailbird_settings = None  # type: ignore
 
 # Standard logger setup
 logger = logging.getLogger(__name__)
@@ -35,6 +55,119 @@ load_dotenv()
 
 # Model cache for reusing user-specific models
 _model_cache: Dict[str, ChatGoogleGenerativeAI] = {}
+
+PROJECT_ROOT = Path(__file__).resolve().parents[4]
+DEFAULT_MAILBIRD_SETTINGS_PATH = PROJECT_ROOT / "MailbirdSettings.yml"
+
+
+@lru_cache(maxsize=1)
+def _load_default_mailbird_settings_cached() -> Optional[Dict[str, Any]]:
+    if load_mailbird_settings is None:
+        return None
+    try:
+        if not DEFAULT_MAILBIRD_SETTINGS_PATH.exists():
+            return None
+        return load_mailbird_settings(path=str(DEFAULT_MAILBIRD_SETTINGS_PATH))
+    except Exception as exc:  # pragma: no cover - logging side-effect only
+        logger.info("Default Mailbird settings not loaded (parse/path): %s", exc)
+        return None
+
+
+async def _tavily_is_configured() -> bool:
+    try:
+        from app.core.user_context import get_current_user_context
+
+        user_context = get_current_user_context()
+        if user_context:
+            key = await user_context.get_tavily_api_key()
+            if key:
+                return True
+    except Exception as exc:  # pragma: no cover - best effort
+        logger.debug("Unable to resolve user Tavily key: %s", exc)
+
+    return bool(os.getenv("TAVILY_API_KEY"))
+
+
+async def _run_tavily_search(query: str, max_results: int = 5) -> Dict[str, Any]:
+    try:
+        from app.tools import user_research_tools as research_tools
+
+        return await research_tools.tavily_web_search(query, max_results=max_results)
+    except Exception as exc:  # pragma: no cover
+        logger.warning("Tavily search failed: %s", exc)
+        return {"results": [], "error": str(exc)}
+
+
+async def _gather_grounding_evidence(
+    query: str,
+    *,
+    context: Optional[Dict[str, Any]],
+    min_results: int,
+    min_relevance: float,
+    force_websearch: bool = False,
+    websearch_max_results: Optional[int] = None,
+) -> Dict[str, Any]:
+    kb_payload = await anyio.to_thread.run_sync(
+        enhanced_mailbird_kb_search_structured,
+        query,
+        context or {},
+        6,
+        ["knowledge_base", "feedme"],
+        None,
+    )
+
+    summary: Optional[SearchResultSummary] = kb_payload.get("summary")
+    kb_results: List[Dict[str, Any]] = kb_payload.get("results", [])
+    kb_items = summarize_kb_results(kb_results)
+    kb_satisfied = kb_retrieval_satisfied(
+        summary,
+        min_results=min_results,
+        min_relevance=min_relevance,
+    )
+    try:
+        if kb_payload.get("error"):
+            trace.get_current_span().set_attribute("grounding.rpc_errors", 1)
+    except Exception:
+        pass
+
+    tavily_payload: Optional[Dict[str, Any]] = None
+    tavily_items: List[Dict[str, str]] = []
+    used_tavily = False
+
+    if settings.enable_websearch and ((force_websearch) or (not kb_satisfied)) and await _tavily_is_configured():
+        max_res = None
+        try:
+            if websearch_max_results is not None:
+                max_res = int(websearch_max_results)
+        except Exception:
+            max_res = None
+        tavily_payload = await _run_tavily_search(query, max_results=max_res or 5)
+        used_tavily = True and bool(tavily_payload)
+        tavily_results = (tavily_payload or {}).get("results") or []
+        tavily_items = summarize_tavily_results(tavily_results)
+        try:
+            if tavily_payload and tavily_payload.get("error"):
+                trace.get_current_span().set_attribute("grounding.tavily_error", tavily_payload.get("error"))
+                if tavily_payload.get("status") is not None:
+                    trace.get_current_span().set_attribute("grounding.tavily_status", int(tavily_payload.get("status")))
+        except Exception:
+            pass
+
+    digest = build_grounding_digest(kb_items, tavily_items)
+
+    return {
+        "kb": {
+            "payload": kb_payload,
+            "items": kb_items,
+            "summary": summary,
+            "satisfied": kb_satisfied,
+        },
+        "tavily": tavily_payload,
+        "tavily_items": tavily_items,
+        "used_tavily": used_tavily,
+        "forced_websearch": bool(force_websearch),
+        "digest": digest,
+    }
 
 def _validate_api_key(api_key: str) -> bool:
     """Validate API key format for Google Generative AI."""
@@ -160,14 +293,115 @@ async def run_primary_agent(state: PrimaryAgentState) -> AsyncIterator[AIMessage
                 yield AIMessageChunk(content="Your query is too long. Please shorten it and try again.", role="assistant")
                 return
 
+            grounding_data: Dict[str, Any] = {}
+            kb_summary_obj: Optional[SearchResultSummary] = None
+            kb_summary: Dict[str, Any] = {}
+
+            if settings.enable_grounded_responses:
+                grounding_context_input: Dict[str, Any] = {
+                    "session_id": getattr(state, "session_id", "default"),
+                    "message_count": len(state.messages),
+                }
+
+                grounding_data = await _gather_grounding_evidence(
+                    user_query,
+                    context=grounding_context_input,
+                    min_results=settings.primary_agent_min_kb_results,
+                    min_relevance=settings.primary_agent_min_kb_relevance,
+                    force_websearch=bool(getattr(state, 'force_websearch', False)),
+                    websearch_max_results=getattr(state, 'websearch_max_results', None),
+                )
+
+                mailbird_settings = _load_default_mailbird_settings_cached()
+                if mailbird_settings:
+                    grounding_data["mailbird_settings"] = mailbird_settings
+                    keys_preview = ", ".join(list(mailbird_settings.keys())[:5]) if isinstance(mailbird_settings, dict) else ""
+                    addition = "- Mailbird Windows settings available"
+                    if keys_preview:
+                        addition += f" (keys: {keys_preview})"
+                    digest_prefix = grounding_data.get("digest", "")
+                    grounding_data["digest"] = f"{digest_prefix}\n{addition}".strip()
+                    grounding_data["mailbird_settings_loaded"] = True
+                else:
+                    grounding_data["mailbird_settings_loaded"] = False
+
+                kb_summary_obj = grounding_data.get("kb", {}).get("summary")
+                kb_summary = kb_summary_obj.model_dump() if kb_summary_obj else {}
+
+                parent_span.set_attribute("grounding.kb_results", kb_summary.get("total_results", 0))
+                parent_span.set_attribute("grounding.avg_relevance", kb_summary.get("avg_relevance", 0.0))
+                parent_span.set_attribute("grounding.used_tavily", grounding_data.get("used_tavily", False))
+                parent_span.set_attribute("grounding.mailbird_settings", grounding_data.get("mailbird_settings_loaded", False))
+
+                logger.info(
+                    "Grounding summary: kb_results=%s avg_relevance=%.2f used_tavily=%s satisfied=%s",
+                    kb_summary.get("total_results", 0),
+                    kb_summary.get("avg_relevance", 0.0),
+                    grounding_data.get("used_tavily", False),
+                    grounding_data.get("kb", {}).get("satisfied", False),
+                )
+
+                # Safe Fallback gating: if evidence insufficient and no Tavily results, or billing intent with no solid KB
+                try:
+                    kb_ok = bool(grounding_data.get("kb", {}).get("satisfied", False))
+                    tavily_count = len(grounding_data.get("tavily_items") or [])
+                    no_evidence = (not kb_ok) and tavily_count == 0
+                    ql = (user_query or "").lower()
+                    billing_terms = ["billing", "refund", "renew", "subscription", "charge", "invoice", "license", "payment"]
+                    billing_intent = any(t in ql for t in billing_terms)
+                    need_safe_fallback = no_evidence or (billing_intent and not kb_ok)
+                except Exception:
+                    need_safe_fallback = False
+
+                if need_safe_fallback:
+                    parent_span.set_attribute("grounding.safe_fallback", True)
+                    parent_span.set_attribute("grounding.safe_fallback_reason", "billing_no_evidence" if billing_intent and not kb_ok else "no_evidence")
+                    safe_text = (
+                        "Thanks for reaching out — I want to make sure we handle this correctly. "
+                        "I don’t have enough verified evidence to confirm account or billing details here. "
+                        "For secure help from our Billing team, please share:\n"
+                        "• Your order ID (from your purchase receipt)\n"
+                        "• The email address used to buy the license\n\n"
+                        "Please don’t post any full payment details. Once I have those, I’ll route this to Billing or guide you to the right next step."
+                    )
+                    # Send a minimal metadata snapshot before the safe fallback
+                    try:
+                        metadata_snapshot = {
+                            "grounding": {
+                                "kbResults": kb_summary.get("total_results", 0),
+                                "avgRelevance": kb_summary.get("avg_relevance", 0.0),
+                                "usedTavily": grounding_data.get("used_tavily", False),
+                                "fallbackUsed": bool(kb_summary.get("fallback_used", False)),
+                                "mailbirdSettingsLoaded": grounding_data.get("mailbird_settings_loaded", False),
+                            },
+                            "safeFallback": True,
+                        }
+                        yield AIMessageChunk(
+                            content="",
+                            role="assistant",
+                            additional_kwargs={
+                                "metadata": metadata_snapshot,
+                                "metadata_stage": "reasoning_snapshot"
+                            }
+                        )
+                    except Exception:
+                        pass
+                    # Stream safe fallback immediately
+                    yield AIMessageChunk(content=safe_text, role="assistant")
+                    return
+            else:
+                parent_span.set_attribute("grounding.kb_results", 0)
+                parent_span.set_attribute("grounding.avg_relevance", 0.0)
+                parent_span.set_attribute("grounding.used_tavily", False)
+                parent_span.set_attribute("grounding.mailbird_settings", False)
+
             # Determine provider/model with request override via state
-            from app.core.settings import settings as app_settings
             # Prefer provider/model from state if available; otherwise use env/settings defaults
             state_provider = getattr(state, "provider", None)
             state_model = getattr(state, "model", None)
 
-            provider = (state_provider or os.getenv("PRIMARY_AGENT_PROVIDER") or getattr(app_settings, "primary_agent_provider", "google")).lower()
-            model_name = (state_model or getattr(app_settings, "primary_agent_model", "gemini-2.5-flash"))
+            provider = (state_provider or os.getenv("PRIMARY_AGENT_PROVIDER") or getattr(settings, "primary_agent_provider", "google")).lower()
+            model_name = (state_model or getattr(settings, "primary_agent_model", "gemini-2.5-flash"))
             logger.info(f"[primary_agent] selected provider={provider}, model={model_name}")
 
             # Branch per provider
@@ -245,11 +479,14 @@ async def run_primary_agent(state: PrimaryAgentState) -> AsyncIterator[AIMessage
                 logger.debug(f"Loading OpenAI model via providers registry: {model_name}")
                 model_with_tools = await get_primary_agent_model(api_key=openai_key, provider="openai", model=model_name)
 
-            parent_span.set_attribute("input.query", user_query)
+            try:
+                query_hash = hashlib.sha256(user_query.encode("utf-8")).hexdigest()
+                parent_span.set_attribute("input.query_hash", query_hash)
+            except Exception:  # pragma: no cover - hashing failure should not break flow
+                parent_span.set_attribute("input.query_present", bool(user_query))
             parent_span.set_attribute("state.message_count", len(state.messages))
 
             # Initialize reasoning engine with self-critique enabled
-            from app.core.settings import settings
             reasoning_config = ReasoningConfig(
                 enable_self_critique=True,
                 enable_chain_of_thought=settings.reasoning_enable_chain_of_thought,
@@ -275,7 +512,10 @@ async def run_primary_agent(state: PrimaryAgentState) -> AsyncIterator[AIMessage
             # Perform comprehensive reasoning with optimized LLM calls
             reasoning_state = await reasoning_engine.reason_about_query(
                 query=user_query,
-                context={"messages": state.messages},
+                context={
+                    "messages": state.messages,
+                    "grounding": grounding_data,
+                },
                 session_id=getattr(state, 'session_id', 'default')
             )
             
@@ -305,6 +545,10 @@ async def run_primary_agent(state: PrimaryAgentState) -> AsyncIterator[AIMessage
                 yield AIMessageChunk(content="I'm sorry, I was unable to generate a response. Please try again.", role="assistant")
                 return
 
+            sanitized_response = sanitize_model_response(final_response)
+            if sanitized_response:
+                final_response = sanitized_response
+
             # Generate follow-up questions based on the response
             follow_up_questions = []
             if reasoning_state and reasoning_state.query_analysis:
@@ -316,6 +560,28 @@ async def run_primary_agent(state: PrimaryAgentState) -> AsyncIterator[AIMessage
                 )
             # Prepare metadata (thinking trace, follow-ups, tool decisions) before streaming
             metadata_to_send = {}
+
+            if grounding_data:
+                summary_dict = kb_summary if 'kb_summary' in locals() else {}
+                metadata_to_send["grounding"] = {
+                    "kbResults": summary_dict.get("total_results", 0),
+                    "avgRelevance": summary_dict.get("avg_relevance", 0.0),
+                    "usedTavily": grounding_data.get("used_tavily", False),
+                    "fallbackUsed": bool(summary_dict.get("fallback_used", False)),
+                    "mailbirdSettingsLoaded": grounding_data.get("mailbird_settings_loaded", False),
+                }
+                # Emit a tool step when user forced web search
+                if grounding_data.get("forced_websearch"):
+                    try:
+                        tav_count = len(grounding_data.get("tavily_items") or [])
+                        metadata_to_send["toolResults"] = {
+                            "id": "web_search",
+                            "name": "tavily_web_search",
+                            "summary": f"Fetched {tav_count} web results",
+                            "reasoning": "Web search executed (user selected)",
+                        }
+                    except Exception:
+                        pass
 
             if follow_up_questions:
                 metadata_to_send["followUpQuestions"] = follow_up_questions[:5]

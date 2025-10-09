@@ -43,6 +43,10 @@ class UnifiedAgentRequest(BaseModel):
     session_id: str | None = None
     provider: str | None = None
     model: str | None = None
+    # Manual web search flags (from frontend pill)
+    force_websearch: bool | None = None
+    websearch_max_results: int | None = None
+    websearch_profile: str | None = None
 
 
 LOG_AGENT_ALIASES = {"log_analyst", "log_analysis"}
@@ -110,7 +114,16 @@ async def unified_agent_stream_generator(request: UnifiedAgentRequest, user_id: 
                             yield format_sse_data({'type': 'step', 'data': {'type': 'Parsing', 'description': 'Parsing log entries...', 'status': 'in-progress'}})
                         except Exception:
                             pass
-                        initial_state = {"raw_log_content": request.log_content, "question": request.message or None, "trace_id": request.trace_id, "session_id": session_id}
+                        initial_state = {
+                            "raw_log_content": request.log_content,
+                            "question": request.message or None,
+                            "trace_id": request.trace_id,
+                            "session_id": session_id,
+                            # Pass through web search flags to agent
+                            "force_websearch": bool(request.force_websearch) if request.force_websearch is not None else None,
+                            "websearch_max_results": request.websearch_max_results,
+                            "websearch_profile": request.websearch_profile,
+                        }
                         result = await run_log_analysis_agent(initial_state)
                         try:
                             yield format_sse_data({'type': 'step', 'data': {'type': 'Analyzing', 'description': 'Analyzing patterns and issues...', 'status': 'complete'}})
@@ -186,7 +199,15 @@ async def unified_agent_stream_generator(request: UnifiedAgentRequest, user_id: 
                         elif msg.get("type") in ("assistant", "agent") or msg.get("role") == "assistant":
                             messages.append(AIMessage(content=msg.get("content", "")))
                 messages.append(HumanMessage(content=request.message))
-                initial_state = PrimaryAgentState(messages=messages, session_id=request.session_id, provider=request.provider, model=request.model)
+                initial_state = PrimaryAgentState(
+                    messages=messages,
+                    session_id=request.session_id,
+                    provider=request.provider,
+                    model=request.model,
+                    force_websearch=request.force_websearch,
+                    websearch_max_results=request.websearch_max_results,
+                    websearch_profile=request.websearch_profile,
+                )
                 async for chunk in run_primary_agent(initial_state):
                     if hasattr(chunk, 'content') and chunk.content is not None:
                         cleaned_content = filter_system_text(chunk.content)
