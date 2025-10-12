@@ -723,3 +723,10 @@ Zendesk PDF/
 
 # Local authentication scripts - never track
 enable-local-auth.sh
+ 
+# CI/test artifacts and local logs
+.vite/
+system_logs/
+
+# Do not track developer-specific git configuration
+.gitconfig
