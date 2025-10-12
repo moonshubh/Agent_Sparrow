@@ -1,0 +1,25 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true
+  },
+  "include": [
+    "src/app/settings/sessions/**/*",
+    "src/features/sessions/**/*",
+    "src/services/api/endpoints/sessions.ts",
+    "src/services/api/api-client.ts",
+    "src/shared/ui/**/*",
+    "src/shared/lib/**/*",
+    "src/shared/hooks/**/*",
+    "src/shared/components/**/*"
+  ],
+  "exclude": [
+    "src/features/chat/**/*",
+    "src/features/feedme/**/*",
+    "src/features/api-keys/**/*",
+    "src/features/rate-limiting/**/*",
+    "src/app/chat/**/*",
+    "src/app/feedme-revamped/**/*",
+    "src/state/**/*"
+  ]
+}

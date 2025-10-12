@@ -1,0 +1,23 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true
+  },
+  "include": [
+    "src/app/admin/rate-limits/**/*",
+    "src/app/settings/rate-limits/**/*",
+    "src/features/rate-limiting/**/*",
+    "src/services/api/endpoints/rateLimitApi.ts",
+    "src/shared/ui/**/*",
+    "src/shared/lib/**/*",
+    "src/shared/hooks/**/*",
+    "src/shared/components/**/*"
+  ],
+  "exclude": [
+    "src/features/chat/**/*",
+    "src/features/feedme/**/*",
+    "src/features/api-keys/**/*",
+    "src/app/chat/**/*",
+    "src/state/**/*"
+  ]
+}

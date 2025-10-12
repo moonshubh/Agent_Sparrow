@@ -48,10 +48,10 @@ export default defineConfig({
         },
       },
       include: [
-        'components/**/*.{ts,tsx}',
-        'lib/**/*.{ts,tsx}',
-        'hooks/**/*.{ts,tsx}',
-        'utils/**/*.{ts,tsx}',
+        'src/features/**/*.{ts,tsx}',
+        'src/shared/**/*.{ts,tsx}',
+        'src/services/**/*.{ts,tsx}',
+        'src/state/**/*.{ts,tsx}',
       ],
     },
     // Performance settings for large test suites
@@ -89,11 +89,12 @@ export default defineConfig({
   },
   resolve: {
     alias: {
-      '@': path.resolve(__dirname, './'),
-      '@/components': path.resolve(__dirname, './components'),
-      '@/lib': path.resolve(__dirname, './lib'),
-      '@/hooks': path.resolve(__dirname, './hooks'),
-      '@/utils': path.resolve(__dirname, './utils'),
+      '@': path.resolve(__dirname, './src'),
+      '@/app': path.resolve(__dirname, './src/app'),
+      '@/features': path.resolve(__dirname, './src/features'),
+      '@/shared': path.resolve(__dirname, './src/shared'),
+      '@/services': path.resolve(__dirname, './src/services'),
+      '@/state': path.resolve(__dirname, './src/state'),
     },
   },
   esbuild: {

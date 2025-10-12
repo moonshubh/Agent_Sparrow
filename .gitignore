@@ -701,6 +701,7 @@ dev-debug.log
 frontend/tsconfig.tsbuildinfo
 *.md
 !docs/backend/*.md
+!docs/phase-notes/*.md
 !Backend.md
 *.xml
 *.bak

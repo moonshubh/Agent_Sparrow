@@ -1,0 +1,29 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true
+  },
+  "include": [
+    "src/features/auth/**/*",
+    "src/app/login/**/*",
+    "src/app/auth/**/*",
+    "src/shared/contexts/AuthContext.tsx",
+    "src/shared/contexts/AuthProvider.tsx",
+    "src/shared/hooks/**/*",
+    "src/shared/ui/**/*",
+    "src/shared/components/**/*",
+    "src/shared/types/**/*",
+    "src/services/supabase/**/*",
+    "src/services/auth/**/*",
+    "src/services/api/api-client.ts",
+    "src/app/layout.tsx"
+  ],
+  "exclude": [
+    "src/features/chat/**/*",
+    "src/features/feedme/**/*",
+    "src/features/api-keys/**/*",
+    "src/features/rate-limiting/**/*",
+    "src/features/sessions/**/*",
+    "src/state/**/*"
+  ]
+}

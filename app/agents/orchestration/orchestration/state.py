@@ -1,4 +1,4 @@
-from typing import List, Literal, Optional, Any
+from typing import List, Literal, Optional, Any, Dict
 from langchain_core.documents import Document
 from langchain_core.messages import BaseMessage
 from pydantic import BaseModel, Field, model_serializer, ConfigDict
@@ -28,6 +28,8 @@ class GraphState(BaseModel):
     reflection_feedback: Optional[ReflectionFeedback] = None
     # Count of refinement attempts already performed in current session
     qa_retry_count: int = 0
+    # Global knowledge adapter context
+    global_knowledge_context: Optional[Dict[str, Any]] = None
 
     # ------------------------------------------------------------------
     # Dict-like access helpers (compatibility with legacy nodes)

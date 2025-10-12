@@ -11,9 +11,9 @@ console.log('🧪 Testing Stats Feature Components...\n')
 
 // Check if all required files exist
 const requiredFiles = [
-  'hooks/use-stats-data.ts',
-  'components/feedme-revamped/StatsPopover.tsx',
-  'components/feedme-revamped/stats/StatsCards.tsx'
+  'src/features/feedme/hooks/use-stats-data.ts',
+  'src/features/feedme/components/feedme-revamped/StatsPopover.tsx',
+  'src/features/feedme/components/feedme-revamped/stats/StatsCards.tsx'
 ]
 
 let allFilesExist = true

@@ -381,6 +381,14 @@ Streaming contracts:
 - `POST /api/v1/auth/logout` – User logout
 - JWT-based authentication (Supabase)
 
+### Global Knowledge Observability Endpoints
+- `GET /api/v1/global-knowledge/queue` – Review queue (feedback/corrections)
+- `GET /api/v1/global-knowledge/summary` – Aggregated metrics (windowed)
+- `GET /api/v1/global-knowledge/events` – Recent timeline events
+- `GET /api/v1/global-knowledge/stream` – SSE timeline stream (`{ type: 'timeline-step', data }`)
+- `POST /api/v1/global-knowledge/promote/feedback/{id}` – Promote feedback to KB
+- `POST /api/v1/global-knowledge/promote/correction/{id}` – Promote correction to KB
+
 ## Database Integration
 
 Canonical imports:
@@ -408,6 +416,11 @@ class APIKeyAuditLog:
     - Audit trail for API key operations
     - No sensitive data storage
 ```
+
+### Global Knowledge Migrations
+- `032_create_sparrow_feedback.sql` – feedback table with `vector(3072)`, RLS, indexes
+- `033_create_sparrow_corrections.sql` – corrections table with `vector(3072)`, RLS, indexes
+RLS policies compare `user_id` to `auth.uid()::text`. Apply these before enabling store writes.
 
 ## Frontend-Backend Communication
 
@@ -448,6 +461,37 @@ Streaming endpoints use `app/core/transport/sse.py` → `format_sse_data(payload
 - **Input Validation**: Pydantic models for validation
 - **Audit Logging**: API key operation tracking
 - **Secure Log Analysis Enforcement**: Production log analysis uses Google Gemini 2.5 Pro (`gemini-2.5-pro`).
+
+## Global Knowledge (Phases 1–6)
+
+Global Knowledge implements store-backed retrieval for slash commands (`/feedback`, `/correct`) with phased rollout and flags.
+
+### Components
+- Services: `app/services/global_knowledge/{models,enhancer,persistence,retrieval,store,observability}.py`
+- Endpoints: `app/api/v1/endpoints/global_knowledge_observability.py`
+- Supabase client helpers: insert/list/get/update feedback/corrections
+
+### Feature Flags (Settings)
+- `ENABLE_GLOBAL_KNOWLEDGE_INJECTION` – inject retrieved facts into agent memory
+- `ENABLE_STORE_ADAPTER` – use RPC-backed Store adapter for retrieval
+- `ENABLE_STORE_WRITES` – enable dual writes to LangGraph Store
+- `RETRIEVAL_PRIMARY=rpc|store` – prefer Store (with adapter fallback) or RPC
+- `GLOBAL_STORE_DB_URI` – direct Postgres URI for LangGraph Store (requires direct DB; pooled hosts won’t work)
+
+### Phase Highlights
+- Phase 1 (Hybrid Adapter): Store-like search backed by Supabase RPC for parity and fallback
+- Phase 2 (Dual Writes): Persist normalized payloads + embeddings; upsert to Store when enabled
+- Phase 3 (Store-First Retrieval): Query embeddings → `store.search()` with adapter fallback; configurable top‑k/truncation
+- Phase 4 (Enhancer Subgraph): LangGraph `StateGraph` normalizes submissions; durable with `MemorySaver`
+- Phase 5 (Observability & Actions): In‑memory telemetry (timeline/summary) + REST/SSE; review queue and promote actions
+- Phase 6 (Security Hardening): Attachment allowlist, length caps, metadata sanitization; sanitized telemetry/logging
+
+### Observability
+- Telemetry stages: `received`, `classified`, `normalized_*`, `embedding_*`, `supabase_persisted`, `store_upserted`, `completed`
+- SSE emits `{ type: 'timeline-step', data: TimelineEvent }`; aggregate via `/summary`
+
+### Deployment Notes
+- Supabase free tier exposes only pooled hosts; LangGraph Store requires direct Postgres. Use paid Supabase or external Postgres (e.g., Railway) for `GLOBAL_STORE_DB_URI`. Otherwise run adapter‑only (`ENABLE_STORE_WRITES=false`).
 
 ## Rate Limiting
 

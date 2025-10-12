@@ -1,0 +1,28 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true
+  },
+  "include": [
+    "src/app/feedme-revamped/**/*",
+    "src/app/api/feedme/**/*",
+    "src/features/feedme/**/*",
+    "src/features/global-knowledge/**/*",
+    "src/shared/**/*",
+    "src/services/**/*",
+    "src/state/**/*",
+    "src/app/layout.tsx",
+    "src/app/providers.tsx",
+    "src/app/(auth)/**/*"
+  ],
+  "exclude": [
+    "src/app/chat/**/*",
+    "src/app/api/chat/**/*",
+    "src/features/chat/**/*",
+    "src/features/sessions/**/*",
+    "src/features/api-keys/**/*",
+    "src/features/rate-limiting/**/*",
+    "src/features/home/**/*",
+    "src/features/settings/**/*"
+  ]
+}

@@ -1,0 +1,37 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true
+  },
+  "include": [
+    "src/app/chat/**/*",
+    "src/app/api/chat/**/*",
+    "src/features/chat/**/*",
+    "src/features/api-keys/components/**/*",
+    "src/features/sessions/components/**/*",
+    "src/shared/components/LightRays.tsx",
+    "src/shared/components/ShinyText.tsx",
+    "src/shared/types/**/*",
+    "src/shared/ui/**/*",
+    "src/shared/lib/**/*",
+    "src/services/auth/**/*",
+    "src/services/api/providers/**/*",
+    "src/services/api/endpoints/rateLimitApi.ts",
+    "src/services/api/endpoints/sessions.ts",
+    "src/services/trace/**/*",
+    "src/features/settings/**/*",
+    "src/features/auth/hooks/**/*",
+    "src/services/supabase/**/*",
+    "src/shared/logging/**/*",
+    "src/state/**/*",
+    "src/shared/hooks/useWebSocket.ts",
+    "src/services/api/api-monitor.ts",
+    "src/services/api/endpoints/api-cache.ts",
+    "src/features/feedme/components/feedme-revamped/EnhancedFeedMeModal.tsx",
+    "src/features/feedme/components/feedme-revamped/FeedMeConversationManager.tsx"
+  ],
+  "exclude": [
+    "src/services/api/endpoints/feedme/**/*",
+    "src/shared/ui/calendar.tsx"
+  ]
+}

@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 import type { NextRequest } from 'next/server'
-import { createEdgeClient, getUserFromToken, hasAuthCookies } from '@/lib/supabase-edge'
+import { createEdgeClient, getUserFromToken, hasAuthCookies } from '@/services/supabase/edge-client'
 
 // Check if local auth bypass is enabled
 const isLocalAuthBypass = process.env.NEXT_PUBLIC_LOCAL_AUTH_BYPASS === 'true'

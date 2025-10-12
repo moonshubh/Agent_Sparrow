@@ -1,0 +1,17 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "incremental": false
+  },
+  "include": [
+    "src/shared/logging/**/*",
+    "src/shared/lib/error/**/*",
+    "src/shared/hooks/useApiErrorHandler.ts",
+    "src/shared/hooks/use-toast.ts",
+    "src/services/monitoring/backend-health-check.ts"
+  ],
+  "exclude": [
+    "node_modules"
+  ]
+}

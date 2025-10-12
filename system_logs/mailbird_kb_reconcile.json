@@ -1,0 +1,11 @@
+{
+  "zendesk_total": 202,
+  "supabase_total": 206,
+  "missing_in_supabase": [],
+  "extra_in_supabase": [
+    "https://support.getmailbird.com/hc/en-us/articles/220108247",
+    "https://support.getmailbird.com/hc/en-us/articles/220108347",
+    "https://support.getmailbird.com/hc/en-us/articles/360014806554-mailbird-for-mobile-android-ios-",
+    "https://support.getmailbird.com/hc/en-us/articles/360026807893-is-mailbird-free-for-use-"
+  ]
+}

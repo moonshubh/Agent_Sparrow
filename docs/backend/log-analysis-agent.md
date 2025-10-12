@@ -41,6 +41,9 @@ SSE formatting is unified via `app/core/transport/sse.py` using `format_sse_data
 - Avoid logging raw log content; structured metrics only (error_count, line_count, etc.).
 - API keys loaded from user context; fallback env when permitted.
 
+## Global Knowledge
+The Log Analysis agent does not consume Global Knowledge retrieval; phases 1–6 apply to Primary Agent flows and backend observability only. Secure log analysis continues to enforce Gemini 2.5 Pro in production.
+
 ## Behavior Notes
 - Mode selection: env LOG_ANALYSIS_MODE (comprehensive|simplified), defaults to comprehensive when available.
 - Simplified flow: preprocess → relevant sections (LLM-assisted) → answer/issues/solutions JSON → normalized output.

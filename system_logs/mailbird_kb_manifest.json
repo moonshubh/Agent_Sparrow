@@ -1,0 +1,13 @@
+{
+  "source": "mailbird_support",
+  "discovered": 96,
+  "zendesk_discovered": 202,
+  "combined_unique": 206,
+  "bfs_discovered": 120,
+  "prewipe": false,
+  "ingest_offset": 110,
+  "ingest_limit": 110,
+  "ingested_ok": 96,
+  "ingested_failed": [],
+  "timestamp": "2025-10-07T14:17:45.096450+00:00"
+}

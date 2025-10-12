@@ -312,6 +312,30 @@ async def run_primary_agent(state: PrimaryAgentState) -> AsyncIterator[AIMessage
                     websearch_max_results=getattr(state, 'websearch_max_results', None),
                 )
 
+                global_ctx = getattr(state, "global_knowledge_context", None) or {}
+                retrieval_ctx = global_ctx.get("retrieval") if isinstance(global_ctx, dict) else None
+                global_snippet = None
+                if isinstance(global_ctx, dict):
+                    global_snippet = global_ctx.get("memory_snippet") or (
+                        retrieval_ctx.get("memory_snippet") if isinstance(retrieval_ctx, dict) else None
+                    )
+                if global_snippet:
+                    existing_digest = grounding_data.get("digest") or ""
+                    snippet_header = "Global knowledge highlights:\n" + global_snippet
+                    combined_digest = "\n\n".join(filter(None, [existing_digest.strip(), snippet_header.strip()]))
+                    grounding_data["digest"] = combined_digest.strip()
+                    grounding_data["global_knowledge"] = {
+                        "hits": len((retrieval_ctx or {}).get("items") or []),
+                        "source": (retrieval_ctx or {}).get("source"),
+                        "fallback_used": bool((retrieval_ctx or {}).get("fallback_used")),
+                        "latency_ms": (retrieval_ctx or {}).get("latency_ms"),
+                        "errors": (retrieval_ctx or {}).get("errors"),
+                    }
+                    parent_span.set_attribute("global_knowledge.hits", grounding_data["global_knowledge"]["hits"])
+                    if grounding_data["global_knowledge"]["source"]:
+                        parent_span.set_attribute("global_knowledge.source", grounding_data["global_knowledge"]["source"])
+                    parent_span.set_attribute("global_knowledge.fallback", grounding_data["global_knowledge"]["fallback_used"])
+
                 mailbird_settings = _load_default_mailbird_settings_cached()
                 if mailbird_settings:
                     grounding_data["mailbird_settings"] = mailbird_settings

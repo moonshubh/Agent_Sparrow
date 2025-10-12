@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import logging
 from functools import lru_cache
 from pathlib import Path
 from typing import Optional, List
@@ -23,6 +24,10 @@ else:
 
 ENV_PATH = project_root / ".env"
 load_dotenv(ENV_PATH)
+
+logger = logging.getLogger(__name__)
+
+_RETRIEVAL_PRIMARY_ALLOWED = {"rpc", "store"}
 
 class Settings(BaseSettings):
     """Application configuration loaded from environment variables."""
@@ -149,6 +154,17 @@ class Settings(BaseSettings):
     feedme_ai_max_pages: int = Field(default=10, alias="FEEDME_AI_MAX_PAGES")
     feedme_ai_pages_per_call: int = Field(default=3, alias="FEEDME_AI_PAGES_PER_CALL")
     feedme_max_pdf_size_mb: int = Field(default=50, alias="FEEDME_MAX_PDF_SIZE_MB")
+
+    # Global Knowledge / Store integration (Phase 0)
+    enable_global_knowledge_injection: bool = Field(
+        default=False, alias="ENABLE_GLOBAL_KNOWLEDGE_INJECTION"
+    )
+    enable_store_adapter: bool = Field(default=False, alias="ENABLE_STORE_ADAPTER")
+    enable_store_writes: bool = Field(default=False, alias="ENABLE_STORE_WRITES")
+    retrieval_primary: str = Field(default="rpc", alias="RETRIEVAL_PRIMARY")
+    global_store_db_uri: Optional[str] = Field(default=None, alias="GLOBAL_STORE_DB_URI")
+    global_knowledge_top_k: int = Field(default=6, alias="GLOBAL_KNOWLEDGE_TOP_K")
+    global_knowledge_max_chars: int = Field(default=1600, alias="GLOBAL_KNOWLEDGE_MAX_CHARS")
     
     # Rate Limiting Configuration (free tier defaults; override via env)
     gemini_flash_rpm_limit: int = Field(default=10, alias="GEMINI_FLASH_RPM_LIMIT")
@@ -256,6 +272,36 @@ class Settings(BaseSettings):
             raise ValueError("primary_agent_min_kb_results must be zero or greater")
         return v
 
+    @field_validator("retrieval_primary", mode="before")
+    @classmethod
+    def validate_retrieval_primary(cls, value: str | None) -> str:
+        """Normalize retrieval primary selector and fallback to rpc when invalid."""
+        if value is None:
+            return "rpc"
+        normalized = str(value).strip().lower()
+        if normalized not in _RETRIEVAL_PRIMARY_ALLOWED:
+            logger.warning(
+                "Invalid retrieval_primary '%s' provided; expected one of %s. Falling back to 'rpc'.",
+                value,
+                sorted(_RETRIEVAL_PRIMARY_ALLOWED),
+            )
+            return "rpc"
+        return normalized
+
+    @field_validator("global_knowledge_top_k")
+    @classmethod
+    def validate_global_knowledge_top_k(cls, value: int) -> int:
+        if value <= 0:
+            raise ValueError("global_knowledge_top_k must be greater than zero")
+        return value
+
+    @field_validator("global_knowledge_max_chars")
+    @classmethod
+    def validate_global_knowledge_max_chars(cls, value: int) -> int:
+        if value <= 0:
+            raise ValueError("global_knowledge_max_chars must be greater than zero")
+        return value
+
     def is_production_mode(self) -> bool:
         """
         Determine if we're running in production mode.
@@ -322,6 +368,26 @@ class Settings(BaseSettings):
         if self.is_production_mode():
             return False
         return self.reasoning_enable_thinking_trace
+
+    def should_enable_global_knowledge(self) -> bool:
+        """Return True when global knowledge injection is enabled."""
+        return bool(self.enable_global_knowledge_injection)
+
+    def should_use_store_adapter(self) -> bool:
+        """Determine if the store adapter should be leveraged for retrieval operations."""
+        return bool(self.enable_store_adapter) and self.retrieval_primary == "store"
+
+    def should_enable_store_writes(self) -> bool:
+        """Determine if writing to the global store is permitted."""
+        return bool(self.enable_store_writes)
+
+    def get_retrieval_primary(self) -> str:
+        """Return the normalized retrieval primary selector."""
+        return self.retrieval_primary
+
+    def has_global_store_configuration(self) -> bool:
+        """Return True when a global store connection string is configured."""
+        return bool(self.global_store_db_uri)
 
 
 @lru_cache()

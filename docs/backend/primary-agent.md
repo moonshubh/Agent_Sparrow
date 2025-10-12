@@ -38,6 +38,14 @@ SSE formatting: all streaming endpoints use `app/core/transport/sse.format_sse_d
 - Enhanced KB + FeedMe: app/agents_v2/primary_agent/feedme_knowledge_tool.py (Supabase-backed KB/articles, FeedMe conversations, saved web snapshots).
 - Tavily web search: app/tools/user_research_tools.py used via primary_agent/tools.py tavily_web_search().
 
+## Global Knowledge Injection (Phases 1–3)
+- Pre‑process computes query embedding and performs retrieval:
+  - Primary path: LangGraph Store search when `RETRIEVAL_PRIMARY=store` and `GLOBAL_STORE_DB_URI` configured.
+  - Fallback: RPC adapter (`ENABLE_STORE_ADAPTER=true`) or direct RPC in `rpc` mode.
+- Flags:
+  - `ENABLE_GLOBAL_KNOWLEDGE_INJECTION`, `ENABLE_STORE_ADAPTER`, `ENABLE_STORE_WRITES`, `RETRIEVAL_PRIMARY`, `GLOBAL_STORE_DB_URI`.
+- Injection: top‑k facts are compacted to a bounded system memory segment (configurable char budget) and attached to the Primary Agent grounding.
+
 ## Security
 - Never log API keys or PII; Primary Agent logs use OpenTelemetry spans and structured logging.
 - Auth gating handled in app/main.py (Supabase endpoints enabled by settings); v2 chat stream uses Depends(get_current_user_id).

@@ -96,6 +96,222 @@ class SupabaseClient:
             raise
     
     # =====================================================
+    # GLOBAL KNOWLEDGE OPERATIONS
+    # =====================================================
+
+    async def insert_sparrow_feedback(
+        self,
+        *,
+        user_id: str,
+        feedback_text: str,
+        selected_text: Optional[str] = None,
+        attachments: Optional[List[Dict[str, Any]]] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+        embedding: Optional[List[float]] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """Insert a feedback submission row and return the created record."""
+
+        payload: Dict[str, Any] = {
+            "user_id": user_id,
+            "feedback_text": feedback_text,
+            "selected_text": selected_text,
+            "attachments": attachments or [],
+            "metadata": metadata or {},
+        }
+
+        if embedding is not None:
+            payload["embedding"] = embedding
+
+        try:
+            response = await self._exec(
+                lambda: self.client.table("sparrow_feedback").insert(payload).execute()
+            )
+
+            if response.data:
+                row = response.data[0]
+                logger.debug(
+                    "Inserted sparrow_feedback row (id=%s)",
+                    row.get("id"),
+                )
+                return row
+
+            logger.warning("Supabase insert_sparrow_feedback returned no data")
+            return None
+        except Exception as exc:
+            logger.error("Failed to insert sparrow_feedback row: %s", exc)
+            return None
+
+    async def insert_sparrow_correction(
+        self,
+        *,
+        user_id: str,
+        incorrect_text: str,
+        corrected_text: str,
+        explanation: Optional[str] = None,
+        attachments: Optional[List[Dict[str, Any]]] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+        embedding: Optional[List[float]] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """Insert a correction submission row and return the created record."""
+
+        payload: Dict[str, Any] = {
+            "user_id": user_id,
+            "incorrect_text": incorrect_text,
+            "corrected_text": corrected_text,
+            "explanation": explanation,
+            "attachments": attachments or [],
+            "metadata": metadata or {},
+        }
+
+        if embedding is not None:
+            payload["embedding"] = embedding
+
+        try:
+            response = await self._exec(
+                lambda: self.client.table("sparrow_corrections").insert(payload).execute()
+            )
+
+            if response.data:
+                row = response.data[0]
+                logger.debug(
+                    "Inserted sparrow_corrections row (id=%s)",
+                    row.get("id"),
+                )
+                return row
+
+            logger.warning("Supabase insert_sparrow_correction returned no data")
+            return None
+        except Exception as exc:
+            logger.error("Failed to insert sparrow_corrections row: %s", exc)
+            return None
+
+    async def list_sparrow_feedback(
+        self,
+        *,
+        status: Optional[str] = None,
+        limit: int = 50,
+    ) -> List[Dict[str, Any]]:
+        try:
+            query = self.client.table("sparrow_feedback").select("*")
+            if status:
+                query = query.eq("status", status)
+            response = await self._exec(
+                lambda: query.order("created_at", desc=True).limit(limit).execute()
+            )
+            return response.data or []
+        except Exception as exc:
+            logger.error("Failed to list sparrow_feedback rows: %s", exc)
+            return []
+
+    async def list_sparrow_corrections(
+        self,
+        *,
+        status: Optional[str] = None,
+        limit: int = 50,
+    ) -> List[Dict[str, Any]]:
+        try:
+            query = self.client.table("sparrow_corrections").select("*")
+            if status:
+                query = query.eq("status", status)
+            response = await self._exec(
+                lambda: query.order("created_at", desc=True).limit(limit).execute()
+            )
+            return response.data or []
+        except Exception as exc:
+            logger.error("Failed to list sparrow_corrections rows: %s", exc)
+            return []
+
+    async def get_sparrow_feedback(self, feedback_id: int) -> Optional[Dict[str, Any]]:
+        try:
+            response = await self._exec(
+                lambda: self.client
+                .table("sparrow_feedback")
+                .select("*")
+                .eq("id", feedback_id)
+                .limit(1)
+                .execute()
+            )
+            data = getattr(response, "data", None)
+            if data:
+                return data[0]
+            return None
+        except APIError as exc:
+            if getattr(exc, "code", None) in {"PGRST116", "PGRST103"}:
+                return None
+            logger.error("Supabase error fetching sparrow_feedback id=%s: %s", feedback_id, exc)
+            return None
+        except Exception as exc:
+            logger.error("Failed to fetch sparrow_feedback id=%s: %s", feedback_id, exc)
+            return None
+
+    async def get_sparrow_correction(self, correction_id: int) -> Optional[Dict[str, Any]]:
+        try:
+            response = await self._exec(
+                lambda: self.client
+                .table("sparrow_corrections")
+                .select("*")
+                .eq("id", correction_id)
+                .limit(1)
+                .execute()
+            )
+            data = getattr(response, "data", None)
+            if data:
+                return data[0]
+            return None
+        except APIError as exc:
+            if getattr(exc, "code", None) in {"PGRST116", "PGRST103"}:
+                return None
+            logger.error("Supabase error fetching sparrow_corrections id=%s: %s", correction_id, exc)
+            return None
+        except Exception as exc:
+            logger.error("Failed to fetch sparrow_corrections id=%s: %s", correction_id, exc)
+            return None
+
+    async def update_sparrow_feedback_status(
+        self,
+        feedback_id: int,
+        *,
+        status: str,
+    ) -> Optional[Dict[str, Any]]:
+        payload = {"status": status}
+        try:
+            response = await self._exec(
+                lambda: self.client
+                .table("sparrow_feedback")
+                .update(payload)
+                .eq("id", feedback_id)
+                .select("*")
+                .limit(1)
+                .execute()
+            )
+            return response.data[0] if response.data else None
+        except Exception as exc:
+            logger.error("Failed to update sparrow_feedback id=%s: %s", feedback_id, exc)
+            return None
+
+    async def update_sparrow_correction_status(
+        self,
+        correction_id: int,
+        *,
+        status: str,
+    ) -> Optional[Dict[str, Any]]:
+        payload = {"status": status}
+        try:
+            response = await self._exec(
+                lambda: self.client
+                .table("sparrow_corrections")
+                .update(payload)
+                .eq("id", correction_id)
+                .select("*")
+                .limit(1)
+                .execute()
+            )
+            return response.data[0] if response.data else None
+        except Exception as exc:
+            logger.error("Failed to update sparrow_corrections id=%s: %s", correction_id, exc)
+            return None
+
+    # =====================================================
     # FOLDER OPERATIONS
     # =====================================================
     

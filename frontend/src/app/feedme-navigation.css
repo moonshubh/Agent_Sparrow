@@ -1,0 +1,173 @@
+/**
+ * FeedMe Navigation Polish CSS
+ * Apple/Google-level micro-interactions and scrollbar styling
+ */
+
+/* ===========================
+ * Sidebar Collapse System
+ * =========================== */
+
+/* CSS variables for sidebar widths */
+:root {
+  --sidebar-width-expanded: 16rem; /* 256px */
+  --sidebar-width-collapsed: 4rem;  /* 64px */
+  --app-bar-height: 4rem; /* 64px - adjust based on your app bar */
+}
+
+/* Sidebar collapse transitions */
+.sidebar-collapsed {
+  width: var(--sidebar-width-collapsed) !important;
+}
+
+.sidebar-expanded {
+  width: var(--sidebar-width-expanded) !important;
+}
+
+/* ===========================
+ * Enhanced Scrollbar Styling
+ * =========================== */
+
+/* Folder panel scrollbar - hover visible */
+.folder-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+  transition: scrollbar-color 0.2s ease;
+}
+
+.folder-scroll:hover {
+  scrollbar-width: auto;
+  scrollbar-color: hsl(var(--muted-foreground) / 0.3) transparent;
+}
+
+/* Webkit scrollbar styling */
+.folder-scroll::-webkit-scrollbar {
+  width: 6px;
+  background: transparent;
+}
+
+.folder-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.folder-scroll::-webkit-scrollbar-thumb {
+  background: transparent;
+  border-radius: 3px;
+  transition: background-color 0.2s ease;
+}
+
+.folder-scroll:hover::-webkit-scrollbar-thumb {
+  background: hsl(var(--muted-foreground) / 0.3);
+}
+
+.folder-scroll:hover::-webkit-scrollbar-thumb:hover {
+  background: hsl(var(--muted-foreground) / 0.5);
+}
+
+/* ===========================
+ * Micro-interactions
+ * =========================== */
+
+/* Smooth chevron rotation */
+[data-testid="sidebar-toggle"] svg {
+  transition: transform 0.2s ease;
+}
+
+/* Active folder highlighting */
+[data-active="true"] {
+  transform: translateX(2px);
+  transition: transform 0.15s ease;
+}
+
+/* Folder tree item hover effects */
+.folder-tree-item {
+  transition: all 0.15s ease;
+}
+
+.folder-tree-item:hover {
+  transform: translateX(1px);
+}
+
+/* Search input animation */
+@keyframes search-expand {
+  from {
+    width: 2rem;
+    opacity: 0;
+  }
+  to {
+    width: 10rem;
+    opacity: 1;
+  }
+}
+
+@keyframes search-collapse {
+  from {
+    width: 10rem;
+    opacity: 1;
+  }
+  to {
+    width: 2rem;
+    opacity: 0;
+  }
+}
+
+.search-expanding {
+  animation: search-expand 0.2s ease forwards;
+}
+
+.search-collapsing {
+  animation: search-collapse 0.2s ease forwards;
+}
+
+/* ===========================
+ * Accessibility Enhancements
+ * =========================== */
+
+/* Focus indicators */
+.folder-tree-item:focus-within {
+  outline: 2px solid hsl(var(--accent));
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+
+/* Reduced motion support */
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+  
+  .folder-scroll {
+    scrollbar-color: hsl(var(--muted-foreground) / 0.3) transparent;
+  }
+}
+
+/* ===========================
+ * Secondary Panel Positioning
+ * =========================== */
+
+/* Ensure secondary panel slides correctly */
+.secondary-panel-container {
+  transform: translateX(-100%);
+  transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.secondary-panel-container.visible {
+  transform: translateX(0);
+}
+
+/* ===========================
+ * Dark Mode Optimizations
+ * =========================== */
+
+.dark .folder-scroll:hover {
+  scrollbar-color: hsl(var(--muted-foreground) / 0.4) transparent;
+}
+
+.dark .folder-scroll:hover::-webkit-scrollbar-thumb {
+  background: hsl(var(--muted-foreground) / 0.4);
+}
+
+.dark .folder-scroll:hover::-webkit-scrollbar-thumb:hover {
+  background: hsl(var(--muted-foreground) / 0.6);
+}

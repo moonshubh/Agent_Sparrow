@@ -1,9 +1,15 @@
 from app.agents.orchestration.orchestration.state import GraphState
+from app.agents.orchestration.orchestration.store_adapter import (
+    ALLOWED_SOURCES,
+    get_hybrid_store_adapter,
+)
 from app.agents.research.research_agent.research_agent import get_research_graph
 from app.cache.redis_cache import RedisCache
 import structlog
 import hashlib
 from typing import Dict, Any, Optional
+from app.core.settings import settings
+from app.services.global_knowledge.retrieval import retrieve_global_knowledge
 
 # Instantiate global singletons
 logger = structlog.get_logger()
@@ -36,18 +42,33 @@ def _generate_cache_key(session_id: str, user_query: str) -> str:
 # Pre-processing node
 # ---------------------------------------------------------------------------
 
-def pre_process(state: GraphState) -> Dict[str, Any]:
+async def pre_process(state: GraphState) -> Dict[str, Any]:
     """
     Check Redis cache for previously cached responses.
     
     Returns:
-        Dict with either:
+        Dict with updates including:
         - {"cached_response": <cached_value>} on cache hit
-        - {} on cache miss (context handled directly by agents)
+        - Optional "global_knowledge_context" metadata when the store adapter is enabled
+        - {} on cache miss when no extra metadata is produced
     """
 
+    updates: Dict[str, Any] = {}
+    global_context: Dict[str, Any] = {}
+    if settings.should_use_store_adapter():
+        adapter = get_hybrid_store_adapter()
+        global_context.update(
+            {
+                "adapter_ready": adapter.is_ready(),
+                "sources": sorted(ALLOWED_SOURCES),
+            }
+        )
+
     if not state.messages:
-        return {}
+        if global_context:
+            state.global_knowledge_context = dict(global_context)
+            updates["global_knowledge_context"] = state.global_knowledge_context
+        return updates
 
     user_query = state.messages[-1].content
     session_id = getattr(state, 'session_id', 'default')
@@ -57,12 +78,31 @@ def pre_process(state: GraphState) -> Dict[str, Any]:
     cached = cache_layer.get(cache_key)
     if cached is not None:
         logger.info("cache_hit", session_id=session_id)
-        return {"cached_response": cached}
+        updates["cached_response"] = cached
+        if global_context:
+            state.global_knowledge_context = dict(global_context)
+            updates["global_knowledge_context"] = state.global_knowledge_context
+        return updates
 
     # 2. No vector retrieval needed - using Supabase for context
     # Context will be retrieved directly by agents when needed
     logger.info("cache_miss", session_id=session_id)
-    return {}  # Empty dict on cache miss, agents handle their own context
+
+    if settings.should_enable_global_knowledge():
+        retrieval = await retrieve_global_knowledge(
+            user_query,
+            top_k=settings.global_knowledge_top_k,
+        )
+        global_context["retrieval"] = retrieval
+        if retrieval.get("memory_snippet"):
+            global_context["memory_snippet"] = retrieval["memory_snippet"]
+        global_context.setdefault("sources", sorted(ALLOWED_SOURCES))
+
+    if global_context:
+        state.global_knowledge_context = dict(global_context)
+        updates["global_knowledge_context"] = state.global_knowledge_context
+
+    return updates  # Empty dict on cache miss aside from optional adapter context
 
 # ---------------------------------------------------------------------------
 # Post-processing node

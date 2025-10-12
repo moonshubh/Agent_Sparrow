@@ -1,0 +1,28 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true
+  },
+  "include": [
+    "src/app/api-keys/**/*",
+    "src/app/settings/api-keys/**/*",
+    "src/features/api-keys/**/*",
+    "src/features/settings/components/**/*",
+    "src/features/auth/hooks/useAuth.ts",
+    "src/shared/contexts/AuthContext.tsx",
+    "src/shared/lib/**/*",
+    "src/shared/ui/**/*",
+    "src/services/api/api-client.ts",
+    "src/services/api/api-keys.ts",
+    "src/services/api/endpoints/api-key-service.ts",
+    "src/services/api/endpoints/api-key-service-fixed.ts",
+    "src/services/api/endpoints/api-key-service-secure.ts",
+    "src/services/supabase/**/*"
+  ],
+  "exclude": [
+    "src/app/chat/**/*",
+    "src/features/chat/**/*",
+    "src/features/feedme/**/*",
+    "src/state/**/*"
+  ]
+}

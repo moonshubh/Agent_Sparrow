@@ -1,0 +1,1021 @@
+/**
+ * Real-time Store - WebSocket Connection Management
+ * 
+ * Handles WebSocket connections with automatic reconnection, proper cleanup,
+ * and exponential backoff for reliable real-time communication.
+ */
+
+import React from 'react'
+import { create } from 'zustand'
+import { devtools, subscribeWithSelector } from 'zustand/middleware'
+import { feedMeAuth } from '@/services/auth/providers/feedme-auth'
+
+// Configuration constants for notification timeouts
+const NOTIFICATION_TIMEOUTS = {
+  PROCESSING_UPDATE_REMOVAL: 10000, // 10 seconds for completed/failed processing updates
+  INFO_NOTIFICATION_REMOVAL: 5000,  // 5 seconds for info notifications
+} as const
+
+const isRecord = (value: unknown): value is Record<string, unknown> => {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+const PROCESSING_STATUS_VALUES = new Set<ProcessingStatusValue>(['pending', 'processing', 'completed', 'failed', 'cancelled'])
+const PROCESSING_STAGE_VALUES = new Set<ProcessingStageValue>(['queued', 'parsing', 'ai_extraction', 'embedding_generation', 'quality_assessment', 'completed', 'failed'])
+
+const isProcessingStatus = (value: unknown): value is ProcessingStatusValue => {
+  return typeof value === 'string' && PROCESSING_STATUS_VALUES.has(value as ProcessingStatusValue)
+}
+
+const isProcessingStage = (value: unknown): value is ProcessingStageValue => {
+  return typeof value === 'string' && PROCESSING_STAGE_VALUES.has(value as ProcessingStageValue)
+}
+
+const isNotificationLevel = (value: unknown): value is Notification['type'] => {
+  return value === 'info' || value === 'success' || value === 'warning' || value === 'error'
+}
+
+// Types
+export type ProcessingStatusValue = 'pending' | 'processing' | 'completed' | 'failed' | 'cancelled'
+export type ProcessingStageValue =
+  | 'queued'
+  | 'parsing'
+  | 'ai_extraction'
+  | 'embedding_generation'
+  | 'quality_assessment'
+  | 'completed'
+  | 'failed'
+
+export interface ProcessingUpdate {
+  conversation_id: number
+  status: ProcessingStatusValue
+  stage: ProcessingStageValue
+  progress: number
+  message?: string
+  error_details?: string
+  processing_time_ms?: number
+  metadata?: Record<string, unknown>
+}
+
+export interface Notification {
+  id: string
+  type: 'info' | 'success' | 'warning' | 'error'
+  title: string
+  message: string
+  timestamp: string
+  read: boolean
+  actions?: NotificationAction[]
+}
+
+export interface NotificationAction {
+  label: string
+  action: () => void
+  variant?: 'default' | 'destructive'
+}
+
+interface ReconnectionConfig {
+  enabled: boolean
+  maxAttempts: number
+  baseDelay: number // milliseconds
+  maxDelay: number // milliseconds
+  backoffFactor: number
+}
+
+interface HeartbeatConfig {
+  enabled: boolean
+  interval: number // milliseconds
+  timeout: number // milliseconds
+}
+
+export interface RealtimeState {
+  // Connection State
+  isConnected: boolean
+  connectionStatus: 'connecting' | 'connected' | 'disconnected' | 'error' | 'reconnecting'
+  lastUpdate: string | null
+  
+  // WebSocket Management
+  websocket: WebSocket | null
+  wsUrl: string | null
+  
+  // Reconnection State
+  reconnection: {
+    isReconnecting: boolean
+    attempts: number
+    nextRetryIn: number
+    lastError: string | null
+  }
+  
+  // Heartbeat State
+  heartbeat: {
+    isActive: boolean
+    lastPing: string | null
+    lastPong: string | null
+    latency: number | null
+    consecutiveFailures: number
+  }
+  
+  // Data State
+  processingUpdates: Record<number, ProcessingUpdate>
+  notifications: Notification[]
+  
+  // Timers (tracked for cleanup)
+  timers: {
+    reconnectTimer: NodeJS.Timeout | null
+    heartbeatTimer: NodeJS.Timeout | null
+    heartbeatTimeout: NodeJS.Timeout | null
+  }
+}
+
+interface RealtimeActions {
+  // Connection Management
+  connect: (url?: string) => Promise<void>
+  disconnect: () => void
+  reconnect: () => Promise<void>
+
+  // Configuration
+  updateReconnectionConfig: (config: Partial<ReconnectionConfig>) => void
+  updateHeartbeatConfig: (config: Partial<HeartbeatConfig>) => void
+
+  // Processing Updates
+  handleProcessingUpdate: (update: ProcessingUpdate) => void
+  clearProcessingUpdate: (conversationId: number) => void
+  getProcessingStatus: (conversationId: number) => ProcessingUpdate | null
+
+  // Notifications
+  addNotification: (notification: Omit<Notification, 'id' | 'timestamp'>) => void
+  markNotificationRead: (id: string) => void
+  removeNotification: (id: string) => void
+  clearNotifications: () => void
+
+  // Internal Methods
+  cleanup: () => void
+  resetReconnectionState: () => void
+  updateConnectionStatus: (status: ConnectionStatus) => void
+  startHeartbeat: () => void
+  cleanupHeartbeat: () => void
+  cleanupTimers: () => void
+  scheduleReconnection: () => void
+  throttledErrorLog: (message: string, error?: unknown) => void
+  handleMessage: (data: unknown) => void
+}
+
+export interface RealtimeStore extends RealtimeState {
+  actions: RealtimeActions
+}
+
+export type ConnectionStatus = RealtimeState['connectionStatus']
+
+// Default Configuration
+const DEFAULT_RECONNECTION_CONFIG: ReconnectionConfig = {
+  enabled: true,
+  maxAttempts: 5,
+  baseDelay: 1000,
+  maxDelay: 30000,
+  backoffFactor: 2
+}
+
+const DEFAULT_HEARTBEAT_CONFIG: HeartbeatConfig = {
+  enabled: true,
+  interval: 25000, // Send ping every 25 seconds (less than backend 30s timeout)
+  timeout: 4000    // Wait 4 seconds for pong response (total: 25s + 4s = 29s < 30s)
+}
+
+// Store Implementation
+export const useRealtimeStore = create<RealtimeStore>()(
+  devtools(
+    subscribeWithSelector((set, get) => ({
+      // Initial State
+      isConnected: false,
+      connectionStatus: 'disconnected',
+      lastUpdate: null,
+      websocket: null,
+      wsUrl: null,
+      
+      reconnection: {
+        isReconnecting: false,
+        attempts: 0,
+        nextRetryIn: 0,
+        lastError: null
+      },
+      
+      heartbeat: {
+        isActive: false,
+        lastPing: null,
+        lastPong: null,
+        latency: null,
+        consecutiveFailures: 0
+      },
+      
+      processingUpdates: {},
+      notifications: [],
+      
+      timers: {
+        reconnectTimer: null,
+        heartbeatTimer: null,
+        heartbeatTimeout: null
+      },
+      
+      actions: {
+        // ===========================
+        // Connection Management
+        // ===========================
+        
+        connect: async (url?: string) => {
+          const state = get()
+          
+          // Skip WebSocket connections if explicitly disabled in development
+          if (process.env.DISABLE_WEBSOCKET_IN_DEV === 'true') {
+            console.log('WebSocket connections disabled via DISABLE_WEBSOCKET_IN_DEV flag')
+            set({
+              connectionStatus: 'disconnected',
+              isConnected: false
+            })
+            return
+          }
+          
+          // Skip WebSocket connections on pages that don't need them
+          if (typeof window !== 'undefined') {
+            const currentPath = window.location.pathname
+            const noWebSocketPaths = ['/api-keys', '/login', '/settings', '/profile']
+            if (noWebSocketPaths.some(path => currentPath.startsWith(path))) {
+              console.log(`WebSocket connections disabled on ${currentPath}`)
+              set({
+                connectionStatus: 'disconnected',
+                isConnected: false
+              })
+              return
+            }
+          }
+          
+          // Clean up existing connection
+          if (state.websocket) {
+            state.actions.disconnect()
+          }
+          
+          // Determine WebSocket URL
+          let wsUrl = url
+          if (!wsUrl) {
+            const baseUrl = process.env.NODE_ENV === 'development' 
+              ? 'ws://localhost:8000' 
+              : window.location.origin.replace('http', 'ws')
+            wsUrl = `${baseUrl}/ws/feedme/global`
+          }
+          
+          // Skip connection if page is hidden or document not available
+          if (typeof document !== 'undefined' && document.hidden) {
+            console.log('Skipping WebSocket connection - page is hidden')
+            return
+          }
+          
+          // Ensure authentication is initialized
+          feedMeAuth.autoLogin()
+          
+          // Add authentication token
+          const authUrl = feedMeAuth.getWebSocketUrl(wsUrl)
+          
+          set(state => ({
+            connectionStatus: 'connecting',
+            wsUrl: authUrl,
+            reconnection: {
+              ...state.reconnection,
+              lastError: null
+            }
+          }))
+          
+          try {
+            const ws = new WebSocket(authUrl)
+            
+            // Add connection timeout to prevent hanging connections
+            const connectionTimeout = setTimeout(() => {
+              if (ws.readyState === WebSocket.CONNECTING) {
+                console.warn('WebSocket connection timeout')
+                ws.close()
+                
+                set(state => ({
+                  connectionStatus: 'error',
+                  reconnection: {
+                    ...state.reconnection,
+                    lastError: 'Connection timeout - server may be overloaded'
+                  }
+                }))
+                
+                // Schedule reconnection
+                if (DEFAULT_RECONNECTION_CONFIG.enabled) {
+                  get().actions.scheduleReconnection()
+                }
+              }
+            }, 10000) // 10 second connection timeout
+            
+            // Configure WebSocket event handlers
+            ws.onopen = () => {
+              clearTimeout(connectionTimeout) // Clear the connection timeout
+              console.log('✓ WebSocket connected')
+              
+              set(state => ({
+                websocket: ws,
+                isConnected: true,
+                connectionStatus: 'connected',
+                lastUpdate: new Date().toISOString(),
+                reconnection: {
+                  ...state.reconnection,
+                  isReconnecting: false,
+                  attempts: 0,
+                  nextRetryIn: 0,
+                  lastError: null
+                }
+              }))
+              
+              // Start heartbeat
+              get().actions.startHeartbeat()
+            }
+            
+            ws.onmessage = (event) => {
+              try {
+                const data = JSON.parse(event.data)
+                get().actions.handleMessage(data)
+                
+                set({
+                  lastUpdate: new Date().toISOString()
+                })
+              } catch (error) {
+                console.error('Failed to parse WebSocket message:', error)
+              }
+            }
+            
+            ws.onerror = (error) => {
+              // Log errors with different levels based on environment
+              if (process.env.NODE_ENV === 'development') {
+                console.warn('WebSocket connection failed (this is expected until authentication is fully integrated)')
+              } else {
+                // In production, log errors but throttle them to avoid noise
+                get().actions.throttledErrorLog('WebSocket connection error', error)
+              }
+              
+              // Set error state silently without showing user notifications
+              set(state => ({
+                connectionStatus: 'error',
+                reconnection: {
+                  ...state.reconnection,
+                  lastError: 'WebSocket connection unavailable'
+                }
+              }))
+              
+              // Don't attempt aggressive reconnection for auth-related WebSocket failures
+              clearTimeout(connectionTimeout)
+            }
+            
+            ws.onclose = (event) => {
+              console.log('WebSocket closed:', event.code, event.reason)
+              
+              set({
+                websocket: null,
+                isConnected: false,
+                connectionStatus: 'disconnected',
+                heartbeat: {
+                  isActive: false,
+                  lastPing: null,
+                  lastPong: null,
+                  latency: null,
+                  consecutiveFailures: 0
+                }
+              })
+              
+              // Clean up timers
+              get().actions.cleanupTimers()
+              
+              // Attempt reconnection if not intentional disconnect
+              // Exclude close codes that indicate intentional disconnection: 1000 (normal), 1001 (going away)
+              const intentionalCloseCodes = [1000, 1001]
+              const shouldReconnect = !intentionalCloseCodes.includes(event.code) && 
+                                     DEFAULT_RECONNECTION_CONFIG.enabled &&
+                                     typeof document !== 'undefined' && 
+                                     !document.hidden // Don't reconnect if page is hidden
+              
+              if (shouldReconnect) {
+                // Add a small delay before starting reconnection to prevent rapid attempts
+                setTimeout(() => {
+                  const currentState = get()
+                  if (currentState.connectionStatus !== 'connected') {
+                    currentState.actions.scheduleReconnection()
+                  }
+                }, 1000)
+              }
+            }
+            
+          } catch (error) {
+            console.error('Failed to create WebSocket connection:', error)
+            
+            set(state => ({
+              connectionStatus: 'error',
+              reconnection: {
+                ...state.reconnection,
+                lastError: error instanceof Error ? error.message : 'Unknown connection error'
+              }
+            }))
+            
+            // Schedule reconnection
+            if (DEFAULT_RECONNECTION_CONFIG.enabled) {
+              get().actions.scheduleReconnection()
+            }
+          }
+        },
+        
+        disconnect: () => {
+          const state = get()
+          
+          if (state.websocket) {
+            // Intentional disconnect - code 1000
+            state.websocket.close(1000, 'User disconnected')
+          }
+          
+          // Clean up all timers
+          state.actions.cleanupTimers()
+          
+          set({
+            websocket: null,
+            isConnected: false,
+            connectionStatus: 'disconnected',
+            reconnection: {
+              isReconnecting: false,
+              attempts: 0,
+              nextRetryIn: 0,
+              lastError: null
+            },
+            heartbeat: {
+              isActive: false,
+              lastPing: null,
+              lastPong: null,
+              latency: null,
+              consecutiveFailures: 0
+            }
+          })
+        },
+        
+        reconnect: async () => {
+          const state = get()
+          
+          // Reset reconnection state
+          state.actions.resetReconnectionState()
+          
+          // Reconnect using last URL
+          await state.actions.connect(state.wsUrl || undefined)
+        },
+        
+        // ===========================
+        // Configuration
+        // ===========================
+        
+        updateReconnectionConfig: (config) => {
+          Object.assign(DEFAULT_RECONNECTION_CONFIG, config)
+        },
+        
+        updateHeartbeatConfig: (config) => {
+          Object.assign(DEFAULT_HEARTBEAT_CONFIG, config)
+          
+          // Restart heartbeat with new config
+          const state = get()
+          if (state.isConnected && state.heartbeat.isActive) {
+            state.actions.cleanupHeartbeat()
+            state.actions.startHeartbeat()
+          }
+        },
+        
+        // ===========================
+        // Processing Updates
+        // ===========================
+        
+        handleProcessingUpdate: (update) => {
+          set(state => ({
+            processingUpdates: {
+              ...state.processingUpdates,
+              [update.conversation_id]: update
+            }
+          }))
+          
+          // Auto-remove completed/failed updates after delay
+          if (update.status === 'completed' || update.status === 'failed' || update.status === 'cancelled') {
+            setTimeout(() => {
+              get().actions.clearProcessingUpdate(update.conversation_id)
+            }, NOTIFICATION_TIMEOUTS.PROCESSING_UPDATE_REMOVAL)
+          }
+        },
+        
+        clearProcessingUpdate: (conversationId) => {
+          set(state => {
+            const updates = { ...state.processingUpdates }
+            delete updates[conversationId]
+            return { processingUpdates: updates }
+          })
+        },
+        
+        getProcessingStatus: (conversationId) => {
+          return get().processingUpdates[conversationId] || null
+        },
+        
+        // ===========================
+        // Notifications
+        // ===========================
+        
+        addNotification: (notification) => {
+          const newNotification: Notification = {
+            ...notification,
+            id: `notification-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+            timestamp: new Date().toISOString()
+          }
+          
+          set(state => ({
+            notifications: [newNotification, ...state.notifications]
+          }))
+          
+          // Auto-remove info notifications after configured delay
+          if (notification.type === 'info') {
+            setTimeout(() => {
+              get().actions.markNotificationRead(newNotification.id)
+            }, NOTIFICATION_TIMEOUTS.INFO_NOTIFICATION_REMOVAL)
+          }
+          
+          return newNotification.id
+        },
+        
+        markNotificationRead: (id) => {
+          set(state => ({
+            notifications: state.notifications.map(n => 
+              n.id === id ? { ...n, read: true } : n
+            )
+          }))
+        },
+        
+        removeNotification: (id) => {
+          set(state => ({
+            notifications: state.notifications.filter(n => n.id !== id)
+          }))
+        },
+        
+        clearNotifications: () => {
+          set({ notifications: [] })
+        },
+        
+        // ===========================
+        // Internal Methods
+        // ===========================
+        
+        cleanup: () => {
+          const state = get()
+          state.actions.disconnect()
+        },
+        
+        resetReconnectionState: () => {
+          set(state => ({
+            reconnection: {
+              ...state.reconnection,
+              isReconnecting: false,
+              attempts: 0,
+              nextRetryIn: 0,
+              lastError: null
+            }
+          }))
+        },
+        
+        updateConnectionStatus: (status) => {
+          set({ connectionStatus: status })
+        },
+        
+        // ===========================
+        // Private Methods (exposed for internal use)
+        // ===========================
+        
+        startHeartbeat: () => {
+          if (!DEFAULT_HEARTBEAT_CONFIG.enabled) return
+          
+          const heartbeatTimer = setInterval(() => {
+            const state = get()
+            if (state.websocket?.readyState === WebSocket.OPEN) {
+              const pingTime = Date.now()
+              state.websocket.send(JSON.stringify({ 
+                type: 'ping',
+                timestamp: pingTime
+              }))
+              
+              set(state => ({
+                heartbeat: {
+                  ...state.heartbeat,
+                  isActive: true,
+                  lastPing: new Date(pingTime).toISOString()
+                }
+              }))
+              
+              // Set timeout for pong response
+              const heartbeatTimeout = setTimeout(() => {
+                console.warn('Heartbeat timeout - connection may be lost')
+                const currentState = get()
+                
+                // Increment consecutive failures
+                const newFailureCount = currentState.heartbeat.consecutiveFailures + 1
+                const maxFailures = 3 // Force reconnection after 3 consecutive failures
+                
+                set(state => ({
+                  heartbeat: {
+                    ...state.heartbeat,
+                    consecutiveFailures: newFailureCount
+                  }
+                }))
+                
+                // Clear the timeout timer
+                if (currentState.timers.heartbeatTimeout) {
+                  clearTimeout(currentState.timers.heartbeatTimeout)
+                }
+                
+                if (newFailureCount >= maxFailures) {
+                  // Force reconnection after consecutive failures
+                  console.warn(`Forcing reconnection after ${newFailureCount} consecutive heartbeat failures`)
+                  currentState.actions.addNotification({
+                    type: 'warning',
+                    title: 'Connection Lost',
+                    message: 'Attempting to reconnect due to connection timeout',
+                    read: false
+                  })
+                  
+                  // Close current connection to trigger reconnection
+                  if (currentState.websocket) {
+                    currentState.websocket.close(1006, 'Heartbeat timeout')
+                  }
+                } else {
+                  // Add notification about connection issues
+                  currentState.actions.addNotification({
+                    type: 'warning',
+                    title: 'Connection Slow',
+                    message: 'WebSocket connection is experiencing delays',
+                    read: false
+                  })
+                }
+              }, DEFAULT_HEARTBEAT_CONFIG.timeout)
+              
+              set(state => ({
+                timers: {
+                  ...state.timers,
+                  heartbeatTimeout
+                }
+              }))
+            }
+          }, DEFAULT_HEARTBEAT_CONFIG.interval)
+          
+          set(state => ({
+            timers: {
+              ...state.timers,
+              heartbeatTimer
+            }
+          }))
+        },
+        
+        cleanupHeartbeat: () => {
+          const state = get()
+          
+          if (state.timers.heartbeatTimer) {
+            clearInterval(state.timers.heartbeatTimer)
+          }
+          
+          if (state.timers.heartbeatTimeout) {
+            clearTimeout(state.timers.heartbeatTimeout)
+          }
+          
+          set(state => ({
+            timers: {
+              ...state.timers,
+              heartbeatTimer: null,
+              heartbeatTimeout: null
+            },
+            heartbeat: {
+              ...state.heartbeat,
+              isActive: false,
+              consecutiveFailures: 0
+            }
+          }))
+        },
+        
+        cleanupTimers: () => {
+          const state = get()
+          
+          // Clear all timers
+          if (state.timers.reconnectTimer) {
+            clearTimeout(state.timers.reconnectTimer)
+          }
+          
+          if (state.timers.heartbeatTimer) {
+            clearInterval(state.timers.heartbeatTimer)
+          }
+          
+          if (state.timers.heartbeatTimeout) {
+            clearTimeout(state.timers.heartbeatTimeout)
+          }
+          
+          set(() => ({
+            timers: {
+              reconnectTimer: null,
+              heartbeatTimer: null,
+              heartbeatTimeout: null
+            }
+          }))
+        },
+        
+        scheduleReconnection: () => {
+          const state = get()
+          
+          // Don't attempt reconnection if manually disconnected
+          if (state.connectionStatus === 'disconnected') {
+            return
+          }
+          
+          if (state.reconnection.attempts >= DEFAULT_RECONNECTION_CONFIG.maxAttempts) {
+            console.warn('Max reconnection attempts reached, stopping automatic reconnection')
+            
+            set(state => ({
+              connectionStatus: 'error',
+              reconnection: {
+                ...state.reconnection,
+                isReconnecting: false,
+                lastError: 'Max reconnection attempts exceeded'
+              }
+            }))
+            
+            // Add notification for user (only once)
+            const existingNotifications = get().notifications
+            const hasConnectionErrorNotification = existingNotifications.some(
+              n => n.type === 'error' && n.title.includes('Connection Lost')
+            )
+            
+            if (!hasConnectionErrorNotification) {
+              state.actions.addNotification({
+                type: 'error',
+                title: 'Connection Lost',
+                message: 'Failed to reconnect after multiple attempts. Please check your connection.',
+                read: false,
+                actions: [
+                  {
+                    label: 'Retry',
+                    action: () => {
+                      const currentState = get()
+                      set(prevState => ({
+                        reconnection: {
+                          ...prevState.reconnection,
+                          attempts: 0,
+                          isReconnecting: false,
+                          lastError: null
+                        }
+                      }))
+                      currentState.actions.connect()
+                    }
+                  }
+                ]
+              })
+            }
+            
+            return
+          }
+          
+          // Calculate delay with exponential backoff
+          const delay = Math.min(
+            DEFAULT_RECONNECTION_CONFIG.baseDelay * 
+            Math.pow(DEFAULT_RECONNECTION_CONFIG.backoffFactor, state.reconnection.attempts),
+            DEFAULT_RECONNECTION_CONFIG.maxDelay
+          )
+          
+          console.log(`Scheduling reconnection in ${delay}ms (attempt ${state.reconnection.attempts + 1}/${DEFAULT_RECONNECTION_CONFIG.maxAttempts})`)
+          
+          set(state => ({
+            connectionStatus: 'reconnecting',
+            reconnection: {
+              ...state.reconnection,
+              isReconnecting: true,
+              nextRetryIn: delay
+            }
+          }))
+          
+          const reconnectTimer = setTimeout(() => {
+            const currentState = get()
+            
+            set(state => ({
+              reconnection: {
+                ...state.reconnection,
+                attempts: state.reconnection.attempts + 1
+              }
+            }))
+            
+            currentState.actions.connect(currentState.wsUrl || undefined)
+          }, delay)
+          
+          set(state => ({
+            timers: {
+              ...state.timers,
+              reconnectTimer
+            }
+          }))
+        },
+        
+        throttledErrorLog: (() => {
+          let lastLogTime = 0
+          const logThrottleMs = 30000 // 30 seconds
+          
+          return (message: string, error?: unknown) => {
+            const now = Date.now()
+            if (now - lastLogTime > logThrottleMs) {
+              console.error(`[Throttled] ${message}`, error)
+              lastLogTime = now
+              
+              // In production, consider sending to monitoring service
+              // Example: sendToMonitoringService(message, error)
+            }
+          }
+        })(),
+
+        handleMessage: (data: unknown) => {
+          const state = get()
+
+          if (!isRecord(data) || typeof data.type !== 'string') {
+            state.actions.throttledErrorLog('Received malformed WebSocket message', data)
+            return
+          }
+
+          const payload = data as Record<string, unknown> & { type: string }
+
+          switch (payload.type) {
+            case 'pong': {
+              const pongTime = Date.now()
+              let pingTime = pongTime
+              const timestamp = payload.timestamp
+
+              if (typeof timestamp === 'number' && !Number.isNaN(timestamp)) {
+                pingTime = timestamp
+              } else if (typeof timestamp === 'string') {
+                const parsedTime = new Date(timestamp).getTime()
+                if (!Number.isNaN(parsedTime)) {
+                  pingTime = parsedTime
+                }
+              }
+
+              const latency = Math.max(0, pongTime - pingTime)
+
+              if (state.timers.heartbeatTimeout) {
+                clearTimeout(state.timers.heartbeatTimeout)
+              }
+
+              set(current => ({
+                heartbeat: {
+                  ...current.heartbeat,
+                  lastPong: new Date(pongTime).toISOString(),
+                  latency,
+                  consecutiveFailures: 0
+                },
+                timers: {
+                  ...current.timers,
+                  heartbeatTimeout: null
+                }
+              }))
+              break
+            }
+            case 'processing_update': {
+              const conversationId = payload.conversation_id
+              const status = payload.status
+
+              if (typeof conversationId !== 'number' || !isProcessingStatus(status)) {
+                break
+              }
+
+              const stage = isProcessingStage(payload.stage) ? payload.stage : 'queued'
+              const progress = typeof payload.progress === 'number' ? payload.progress : 0
+              const message = typeof payload.message === 'string' ? payload.message : undefined
+              const errorDetails = typeof payload.error_details === 'string' ? payload.error_details : undefined
+              const processingTime = typeof payload.processing_time_ms === 'number' ? payload.processing_time_ms : undefined
+              const metadata = isRecord(payload.metadata) ? payload.metadata : undefined
+
+              const normalized: ProcessingUpdate = {
+                conversation_id: conversationId,
+                status,
+                stage,
+                progress,
+                message,
+                error_details: errorDetails,
+                processing_time_ms: processingTime,
+                metadata
+              }
+
+              state.actions.handleProcessingUpdate(normalized)
+              break
+            }
+            case 'folder_counts_update': {
+              if (!isRecord(payload.folder_counts)) {
+                break
+              }
+
+              const counts = Object.entries(payload.folder_counts).reduce((acc, [folderId, value]) => {
+                if (typeof value === 'number' && !Number.isNaN(value)) {
+                  const id = Number(folderId)
+                  if (!Number.isNaN(id)) {
+                    acc[id] = value
+                  }
+                }
+                return acc
+              }, {} as Record<number, number>)
+
+              if (Object.keys(counts).length === 0) {
+                break
+              }
+
+              import('./folders-store')
+                .then(({ useFoldersStore }) => {
+                  useFoldersStore.getState().actions.updateConversationCounts(counts)
+                })
+                .catch(err => {
+                  console.error('Failed to update folder counts:', err)
+                })
+              break
+            }
+            case 'notification': {
+              const level = isNotificationLevel(payload.level) ? payload.level : 'info'
+              const title = typeof payload.title === 'string' ? payload.title : 'Notification'
+              const message = typeof payload.message === 'string' ? payload.message : ''
+
+              state.actions.addNotification({
+                type: level,
+                title,
+                message,
+                read: false
+              })
+              break
+            }
+            default:
+              console.log('Received unknown WebSocket message type:', payload.type)
+          }
+        }
+
+      }
+    })),
+    {
+      name: 'feedme-realtime-store'
+    }
+  )
+)
+
+// Stable default state for SSR
+type UseRealtimeResult = {
+  isConnected: boolean
+  connectionStatus: ConnectionStatus
+  lastUpdate: string | null
+  processingUpdates: Record<number, ProcessingUpdate>
+  notifications: Notification[]
+  heartbeat: RealtimeState['heartbeat']
+  reconnection: RealtimeState['reconnection']
+}
+
+const SSR_DEFAULT_STATE: UseRealtimeResult = {
+  isConnected: false,
+  connectionStatus: 'disconnected',
+  lastUpdate: null,
+  processingUpdates: {} as Record<number, ProcessingUpdate>,
+  notifications: [] as Notification[],
+  heartbeat: { isActive: false, lastPing: null, lastPong: null, latency: null, consecutiveFailures: 0 },
+  reconnection: { attempts: 0, isReconnecting: false, nextRetryIn: 0, lastError: null }
+}
+
+// Convenience hooks with SSR safety - using individual selectors to avoid infinite loops
+export const useRealtime = (): UseRealtimeResult => {
+  // Only access store after client-side hydration
+  const [isClient, setIsClient] = React.useState(false)
+  
+  React.useEffect(() => {
+    setIsClient(true)
+  }, [])
+  
+  // Individual selectors to avoid object creation on every render
+  const isConnected = useRealtimeStore(state => state.isConnected)
+  const connectionStatus = useRealtimeStore(state => state.connectionStatus)
+  const lastUpdate = useRealtimeStore(state => state.lastUpdate)
+  const processingUpdates = useRealtimeStore(state => state.processingUpdates)
+  const notifications = useRealtimeStore(state => state.notifications)
+  const heartbeat = useRealtimeStore(state => state.heartbeat)
+  const reconnection = useRealtimeStore(state => state.reconnection)
+  
+  // Return stable default state during SSR
+  if (!isClient) {
+    return SSR_DEFAULT_STATE
+  }
+  
+  // Return actual store values on client
+  return {
+    isConnected,
+    connectionStatus,
+    lastUpdate,
+    processingUpdates,
+    notifications,
+    heartbeat,
+    reconnection
+  }
+}
+
+export const useRealtimeActions = () => useRealtimeStore(state => state.actions)
+
+// Auto-cleanup on page unload
+if (typeof window !== 'undefined') {
+  window.addEventListener('beforeunload', () => {
+    useRealtimeStore.getState().actions.cleanup()
+  })
+}

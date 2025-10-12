@@ -38,8 +38,10 @@ from app.api.v1.endpoints import rate_limit_endpoints  # Rate limiting monitorin
 from app.api.v1.endpoints import feedme_intelligence  # FeedMe AI intelligence endpoints
 from app.api.v1.endpoints import advanced_agent_endpoints  # Advanced agent reasoning and troubleshooting
 from app.api.v1.endpoints import secure_log_analysis  # Secure Log Analysis endpoints
+from app.api.v1.endpoints import global_knowledge_observability  # Global knowledge observability APIs
 from app.api.v1.websocket import feedme_websocket  # FeedMe WebSocket endpoints
 from app.core.settings import settings
+from app.db.embedding_config import EXPECTED_DIM
 
 # Conditional imports based on security configuration
 auth_endpoints = None
@@ -156,6 +158,7 @@ app.include_router(chat_endpoints.router, prefix="/api/v1", tags=["Agent Interac
 app.include_router(unified_endpoints.router, prefix="/api/v1", tags=["Agent Interaction"])
 app.include_router(logs_endpoints.router, prefix="/api/v1", tags=["Agent Interaction"]) 
 app.include_router(research_endpoints.router, prefix="/api/v1", tags=["Agent Interaction"]) 
+app.include_router(global_knowledge_observability.router, prefix="/api/v1", tags=["Global Knowledge"])
 # Register FeedMe routes
 app.include_router(feedme_endpoints.router, prefix="/api/v1", tags=["FeedMe"])
 # Register FeedMe Text Approval routes  
@@ -204,6 +207,23 @@ async def startup_event():
     jwt_val = jwt_env if jwt_env is not None else getattr(settings, "jwt_secret_key", None)
     jwt_configured = bool(jwt_val) and str(jwt_val) != "change-this-in-production"
     logging.info(f"JWT Secret Configured: {jwt_configured}")
+
+    logging.info("=== Global Knowledge Configuration ===")
+    logging.info(
+        "Global Knowledge Flags: inject=%s, store_adapter=%s, store_writes=%s, retrieval_primary=%s",
+        settings.enable_global_knowledge_injection,
+        settings.enable_store_adapter,
+        settings.enable_store_writes,
+        settings.get_retrieval_primary(),
+    )
+    logging.info(
+        "Global Knowledge Effective: should_enable=%s, should_use_store_adapter=%s, should_enable_store_writes=%s, store_configured=%s",
+        settings.should_enable_global_knowledge(),
+        settings.should_use_store_adapter(),
+        settings.should_enable_store_writes(),
+        settings.has_global_store_configuration(),
+    )
+    logging.info("=======================================")
     
     if not is_production:
         logging.warning("Running in development mode - some security features may be disabled")
@@ -364,6 +384,53 @@ async def health_check():
                 "service": "mb-sparrow-agent-server",
                 "error": "Service unavailable"
             }
+        )
+
+
+@app.get("/health/global-knowledge", tags=["General"])
+async def global_knowledge_health_check():
+    """Health probe reporting global knowledge feature readiness."""
+    flags = {
+        "enable_global_knowledge_injection": bool(settings.enable_global_knowledge_injection),
+        "enable_store_adapter": bool(settings.enable_store_adapter),
+        "enable_store_writes": bool(settings.enable_store_writes),
+        "retrieval_primary": settings.get_retrieval_primary(),
+    }
+    try:
+        store_configured = settings.has_global_store_configuration()
+        default_state = (
+            not flags["enable_global_knowledge_injection"]
+            and not flags["enable_store_adapter"]
+            and not flags["enable_store_writes"]
+            and flags["retrieval_primary"] == "rpc"
+        )
+        store_required = settings.should_use_store_adapter() or settings.should_enable_store_writes()
+
+        if default_state:
+            ready = True
+        elif store_required:
+            ready = store_configured
+        else:
+            ready = True
+        status = "ready" if ready else "degraded"
+
+        return {
+            "status": status,
+            "flags": flags,
+            "store_configured": store_configured,
+            "embedding_expected_dim": EXPECTED_DIM,
+        }
+    except Exception as exc:  # pragma: no cover - defensive safeguard
+        logging.error("Global knowledge health probe failed: %s", exc, exc_info=True)
+        return JSONResponse(
+            status_code=503,
+            content={
+                "status": "degraded",
+                "flags": flags,
+                "store_configured": settings.has_global_store_configuration(),
+                "embedding_expected_dim": EXPECTED_DIM,
+                "error": "probe_failed",
+            },
         )
 
 
