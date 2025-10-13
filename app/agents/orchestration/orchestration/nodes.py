@@ -55,7 +55,8 @@ async def pre_process(state: GraphState) -> Dict[str, Any]:
 
     updates: Dict[str, Any] = {}
     global_context: Dict[str, Any] = {}
-    if settings.should_use_store_adapter():
+    should_use_adapter = getattr(settings, "should_use_store_adapter", lambda: False)
+    if should_use_adapter():
         adapter = get_hybrid_store_adapter()
         global_context.update(
             {
@@ -88,7 +89,8 @@ async def pre_process(state: GraphState) -> Dict[str, Any]:
     # Context will be retrieved directly by agents when needed
     logger.info("cache_miss", session_id=session_id)
 
-    if settings.should_enable_global_knowledge():
+    should_enable_global = getattr(settings, "should_enable_global_knowledge", lambda: False)
+    if should_enable_global():
         retrieval = await retrieve_global_knowledge(
             user_query,
             top_k=settings.global_knowledge_top_k,
