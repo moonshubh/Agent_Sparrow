@@ -1,147 +1,97 @@
 "use client"
 
-import { useCallback, useState, type ComponentType } from 'react'
+import { useCallback, useState } from 'react'
 import Image from 'next/image'
 import { useRouter } from 'next/navigation'
-import dynamic from 'next/dynamic'
+import { BarChart3, PanelsTopLeft, ChevronDown } from 'lucide-react'
 
 import { Button } from '@/shared/ui/button'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/shared/ui/dropdown-menu'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/shared/ui/tooltip'
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/shared/ui/dialog'
-import { ErrorBoundary } from '@/shared/ui/ErrorBoundary'
-
-export type FeedMeButtonMode = 'navigate' | 'manager' | 'upload'
+import { GlobalKnowledgeObservabilityDialog } from '@/features/global-knowledge/components/GlobalKnowledgeObservabilityDialog'
 
 interface FeedMeButtonProps {
   onClick?: () => void
-  mode?: FeedMeButtonMode
 }
 
-type GenericUploadResult = Record<string, unknown>
-
-const FeedMeConversationManager = dynamic(
-  () =>
-    import('@/features/feedme/components/feedme-revamped/FeedMeConversationManager').then(
-      (module: any) => module.default,
-    ),
-  {
-    ssr: false,
-    loading: () => (
-      <div className="p-6 text-sm text-muted-foreground">Loading FeedMe manager...</div>
-    ),
-  },
-)
-
-type EnhancedModalProps = {
-  isOpen: boolean
-  onClose: () => void
-  onUploadComplete?: (results: GenericUploadResult[]) => void
-}
-
-const EnhancedFeedMeModal = dynamic<EnhancedModalProps>(
-  () =>
-    import('@/features/feedme/components/feedme-revamped/EnhancedFeedMeModal').then(
-      (module: any) => module.EnhancedFeedMeModal as ComponentType<EnhancedModalProps>,
-    ),
-  {
-    ssr: false,
-    loading: () => (
-      <div className="p-6 text-sm text-muted-foreground">Loading uploader...</div>
-    ),
-  },
-)
-
-export function FeedMeButton({ onClick, mode = 'navigate' }: FeedMeButtonProps) {
+export function FeedMeButton({ onClick }: FeedMeButtonProps) {
   const router = useRouter()
   const [isHovered, setIsHovered] = useState(false)
-  const [activeModal, setActiveModal] = useState<FeedMeButtonMode | null>(null)
+  const [observabilityOpen, setObservabilityOpen] = useState(false)
 
-  const openModal = useCallback((nextMode: FeedMeButtonMode) => {
-    setActiveModal(nextMode)
-  }, [])
-
-  const closeModal = useCallback(() => {
-    setActiveModal(null)
-  }, [])
-
-  const handleClick = useCallback(() => {
+  const handleNavigate = useCallback(() => {
     onClick?.()
+    router.push('/feedme-revamped')
+  }, [onClick, router])
 
-    if (mode === 'navigate') {
-      router.push('/feedme-revamped')
-      return
-    }
-
-    if (mode === 'manager' || mode === 'upload') {
-      openModal(mode)
-    }
-  }, [mode, onClick, openModal, router])
-
-  const tooltipText =
-    mode === 'upload'
-      ? 'FeedMe - Upload transcripts'
-      : mode === 'manager'
-        ? 'FeedMe - Manage conversations'
-        : 'FeedMe - Open full page'
-
-  const isNavigate = mode === 'navigate'
+  const handleObservability = useCallback(() => {
+    onClick?.()
+    setObservabilityOpen(true)
+  }, [onClick])
 
   return (
-    <TooltipProvider>
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <Button
-            variant="ghost"
-            size="sm"
-            className={
-              isNavigate
-                ? 'h-8 px-2 gap-2 hover:bg-mb-blue-300/10 focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2'
-                : 'h-8 w-8 p-0 hover:bg-mb-blue-300/10 focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2'
-            }
-            onMouseEnter={() => setIsHovered(true)}
-            onMouseLeave={() => setIsHovered(false)}
-            onClick={handleClick}
-            aria-label={tooltipText}
-          >
-            <Image
-              src="/feedme-icon.png"
-              alt="FeedMe"
-              width={20}
-              height={20}
-              className={`transition-opacity ${isHovered ? 'opacity-100' : 'opacity-70'}`}
-            />
-            {isNavigate && <span className="text-sm">FeedMe</span>}
-          </Button>
-        </TooltipTrigger>
-        <TooltipContent>
-          <p>{tooltipText}</p>
-        </TooltipContent>
-      </Tooltip>
+    <>
+      <TooltipProvider>
+        <DropdownMenu>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-8 px-2 gap-2 hover:bg-mb-blue-300/10 focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2"
+                  onMouseEnter={() => setIsHovered(true)}
+                  onMouseLeave={() => setIsHovered(false)}
+                  aria-label="FeedMe quick actions"
+                >
+                  <Image
+                    src="/feedme-icon.png"
+                    alt="FeedMe"
+                    width={20}
+                    height={20}
+                    className={`transition-opacity ${isHovered ? 'opacity-100' : 'opacity-70'}`}
+                  />
+                  <span className="text-sm">FeedMe</span>
+                  <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
+                </Button>
+              </DropdownMenuTrigger>
+            </TooltipTrigger>
+            <TooltipContent>FeedMe quick actions</TooltipContent>
+          </Tooltip>
+          <DropdownMenuContent align="end" className="w-64">
+            <DropdownMenuItem onSelect={handleNavigate}>
+              <PanelsTopLeft className="mr-2 h-4 w-4 text-muted-foreground" />
+              <div className="flex flex-col">
+                <span className="text-sm font-medium leading-none">Open Feed Me</span>
+                <span className="text-xs text-muted-foreground">
+                  Go to the full Feed Me workspace
+                </span>
+              </div>
+            </DropdownMenuItem>
+            <DropdownMenuItem onSelect={handleObservability}>
+              <BarChart3 className="mr-2 h-4 w-4 text-muted-foreground" />
+              <div className="flex flex-col">
+                <span className="text-sm font-medium leading-none">
+                  Global Knowledge Observability
+                </span>
+                <span className="text-xs text-muted-foreground">
+                  View live knowledge ingestion health
+                </span>
+              </div>
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </TooltipProvider>
 
-      {activeModal === 'upload' && (
-        <EnhancedFeedMeModal
-          isOpen
-          onClose={closeModal}
-          onUploadComplete={() => closeModal()}
-        />
-      )}
-
-      {activeModal === 'manager' && (
-        <Dialog open onOpenChange={open => (open ? undefined : closeModal())}>
-          <DialogContent className="max-w-[1200px] w-full h-[85vh] p-0 overflow-hidden">
-            <DialogHeader className="px-6 pt-6 pb-4 border-b">
-              <DialogTitle className="text-lg font-semibold">FeedMe Conversations</DialogTitle>
-            </DialogHeader>
-            <div className="h-full overflow-hidden">
-              <ErrorBoundary>
-                <div className="h-full overflow-hidden">
-                  <FeedMeConversationManager />
-                </div>
-              </ErrorBoundary>
-            </div>
-          </DialogContent>
-        </Dialog>
-      )}
-    </TooltipProvider>
+      <GlobalKnowledgeObservabilityDialog
+        open={observabilityOpen}
+        onOpenChange={setObservabilityOpen}
+      />
+    </>
   )
 }

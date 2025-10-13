@@ -1,6 +1,6 @@
 "use client"
 
-import React, { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { Image as ImageIcon, FileText, X, Paperclip, ChevronLeft, ChevronRight } from 'lucide-react'
 
 export type MediaAttachment = {
@@ -30,7 +30,7 @@ export function Attachments({
   onRemoveMedia: (index: number) => void
   onRemoveLog: () => void
 }) {
-  if (mediaFiles.length === 0 && !logFile) return null
+  const hasAttachments = mediaFiles.length > 0 || Boolean(logFile)
 
   // Generate object URLs for image previews and revoke them on cleanup
   const [urls, setUrls] = useState<string[]>([])
@@ -42,18 +42,20 @@ export function Attachments({
     const next: string[] = []
     const images: string[] = []
     const indexMap: Record<number, number> = {}
-    for (const f of mediaFiles) {
+    mediaFiles.forEach((f, idx) => {
       if (f.type.startsWith('image/')) {
         try {
           const u = URL.createObjectURL(f)
           next.push(u)
-          indexMap[next.length - 1] = images.length
+          indexMap[idx] = images.length
           images.push(u)
-        } catch {}
+        } catch {
+          next.push('')
+        }
       } else {
         next.push('')
       }
-    }
+    })
     setUrls(next)
     setImageUrls(images)
     setImageIndexByFileIndex(indexMap)
@@ -64,19 +66,30 @@ export function Attachments({
     }
   }, [mediaFiles])
 
-  const openLightbox = (fileIdx: number) => {
-    const imgIdx = imageIndexByFileIndex[fileIdx]
-    if (typeof imgIdx === 'number') {
-      setActiveImage(imgIdx)
-      setLightboxOpen(true)
-    }
-  }
+  const openLightbox = useCallback(
+    (fileIdx: number) => {
+      const imgIdx = imageIndexByFileIndex[fileIdx]
+      if (typeof imgIdx === 'number') {
+        setActiveImage(imgIdx)
+        setLightboxOpen(true)
+      }
+    },
+    [imageIndexByFileIndex],
+  )
 
-  const closeLightbox = () => setLightboxOpen(false)
-  const prevImage = () => setActiveImage((i) => (i - 1 + imageUrls.length) % imageUrls.length)
-  const nextImage = () => setActiveImage((i) => (i + 1) % imageUrls.length)
-  
-  React.useEffect(() => {
+  const closeLightbox = useCallback(() => setLightboxOpen(false), [])
+
+  const prevImage = useCallback(() => {
+    if (imageUrls.length === 0) return
+    setActiveImage((i) => (i - 1 + imageUrls.length) % imageUrls.length)
+  }, [imageUrls.length])
+
+  const nextImage = useCallback(() => {
+    if (imageUrls.length === 0) return
+    setActiveImage((i) => (i + 1) % imageUrls.length)
+  }, [imageUrls.length])
+
+  useEffect(() => {
     if (!lightboxOpen) return
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') closeLightbox()
@@ -85,7 +98,9 @@ export function Attachments({
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [lightboxOpen, imageUrls.length])
+  }, [lightboxOpen, closeLightbox, prevImage, nextImage])
+
+  if (!hasAttachments) return null
 
   return (
     <div className="flex flex-wrap gap-2">
@@ -95,6 +110,7 @@ export function Attachments({
           <div key={idx} className="group flex items-center gap-2 px-2 py-1.5 rounded-full border border-border/60 bg-muted/30 text-xs">
             {isImage ? (
               urls[idx] ? (
+                // eslint-disable-next-line @next/next/no-img-element
                 <img src={urls[idx]} alt={f.name} className="w-6 h-6 rounded object-cover cursor-zoom-in" onClick={() => openLightbox(idx)} />
               ) : (
                 <ImageIcon className="w-3.5 h-3.5 text-mb-blue-500" />
@@ -137,6 +153,7 @@ export function Attachments({
           <button type="button" className="absolute left-4 text-white/80 hover:text-white" onClick={(e) => { e.stopPropagation(); prevImage() }} aria-label="Previous image">
             <ChevronLeft className="w-6 h-6" />
           </button>
+          {/* eslint-disable-next-line @next/next/no-img-element */}
           <img src={imageUrls[activeImage]} alt="Attachment preview" className="max-h-[90vh] max-w-[90vw] object-contain rounded shadow-lg" onClick={(e) => e.stopPropagation()} />
           <button type="button" className="absolute right-4 text-white/80 hover:text-white" onClick={(e) => { e.stopPropagation(); nextImage() }} aria-label="Next image">
             <ChevronRight className="w-6 h-6" />

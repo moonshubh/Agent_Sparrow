@@ -89,13 +89,14 @@ MailbirdSettings:
     - Blocked senders list (Unblock button)
 
   Updates:
-    - Check for updates now (button)
-    - View version history (link)
-    - Update settings dropdown:
-        options:
-          - Install updates automatically   # default
-          - Download updates, ask before installing
-          - Never check for updates
+    Actions:
+      - Check for updates now (button)
+      - View version history (link)
+    Update settings dropdown:
+      options:
+        - Install updates automatically   # default
+        - Download updates, ask before installing
+        - Never check for updates
     Join the early adopters:
       - Become an early adopter (link)
 

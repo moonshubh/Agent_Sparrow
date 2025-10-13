@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import dynamic from "next/dynamic";
 import { getAuthToken, initializeLocalAuth } from "@/services/auth/local-auth";
 import {
@@ -26,6 +26,8 @@ import { APIKeyStatusBadge } from "@/features/api-keys/components/APIKeyStatusBa
 import { SessionStatusChip } from "@/features/sessions/components/SessionStatusChip";
 import { AutoSaveIndicator } from "@/features/sessions/components/AutoSaveIndicator";
 import { SettingsButtonV2 } from "@/shared/ui/SettingsButtonV2";
+import { FeedbackDialog } from "@/features/global-knowledge/components/FeedbackDialog";
+import { CorrectionDialog } from "@/features/global-knowledge/components/CorrectionDialog";
 import { FeedMeButton } from "@/shared/ui/FeedMeButton";
 import ShinyText from "@/shared/components/ShinyText";
 import {
@@ -148,6 +150,18 @@ function ChatContent({ sessionId, setSessionId }: ChatContentProps) {
   const liveTimelineMetadataRef = useRef<ChatMessageMetadata | null>(null);
   const liveTimelineAgentRef = useRef<AgentType>('primary');
   const [liveTimelineSteps, setLiveTimelineSteps] = useState<TimelineStep[]>([]);
+  type FeedbackDialogState = { open: boolean; feedbackText: string; selectedText: string };
+  type CorrectionDialogState = { open: boolean; incorrectText: string; correctedText: string };
+  const [feedbackDialogState, setFeedbackDialogState] = useState<FeedbackDialogState>({
+    open: false,
+    feedbackText: "",
+    selectedText: "",
+  });
+  const [correctionDialogState, setCorrectionDialogState] = useState<CorrectionDialogState>({
+    open: false,
+    incorrectText: "",
+    correctedText: "",
+  });
   const { state, toggleSidebar } = useSidebar();
   const fallbackSessionRef = useRef<string>(crypto.randomUUID());
   const chatIdRef = useRef<string>(crypto.randomUUID());
@@ -639,14 +653,72 @@ function ChatContent({ sessionId, setSessionId }: ChatContentProps) {
     setToolDecision(isRecord(toolData) ? (toolData as ToolDecisionRecord) : null);
   }, [messages]);
 
+  const captureSelection = useCallback((): string => {
+    if (typeof window === "undefined") return "";
+    try {
+      const selection = window.getSelection();
+      if (!selection || selection.isCollapsed) {
+        return "";
+      }
+      return selection.toString().trim();
+    } catch {
+      return "";
+    }
+  }, []);
+
+  const handleSlashCommand = useCallback(
+    (raw: string) => {
+      const trimmed = raw.trim();
+      if (!trimmed.startsWith("/")) {
+        return false;
+      }
+
+      const spaceIndex = trimmed.indexOf(" ");
+      const command = spaceIndex === -1 ? trimmed : trimmed.slice(0, spaceIndex);
+      const remainder = spaceIndex === -1 ? "" : trimmed.slice(spaceIndex + 1).trim();
+      const selectionText = captureSelection();
+
+      if (command === "/feedback") {
+        setFeedbackDialogState({
+          open: true,
+          feedbackText: remainder,
+          selectedText: selectionText,
+        });
+        setMediaFiles([]);
+        setLogFile(null);
+        setAttachError(null);
+        return true;
+      }
+
+      if (command === "/correct") {
+        setCorrectionDialogState({
+          open: true,
+          incorrectText: selectionText || remainder,
+          correctedText: remainder,
+        });
+        setMediaFiles([]);
+        setLogFile(null);
+        setAttachError(null);
+        return true;
+      }
+
+      return false;
+    },
+    [captureSelection, setAttachError, setMediaFiles, setLogFile, setFeedbackDialogState, setCorrectionDialogState],
+  );
+
   const onSend = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
-    if (
-      !(input.trim() || interimVoice.trim()) &&
-      mediaFiles.length === 0 &&
-      !logFile
-    )
+    const rawText = (input || interimVoice || "").trim();
+    if (!rawText && mediaFiles.length === 0 && !logFile) {
       return;
+    }
+
+    if (rawText && handleSlashCommand(rawText)) {
+      setInput("");
+      setInterimVoice("");
+      return;
+    }
 
     // Pre-flight rate limit check for Gemini models
     try {
@@ -677,7 +749,7 @@ function ChatContent({ sessionId, setSessionId }: ChatContentProps) {
       }
     }
 
-    const text = (input || interimVoice || "").trim();
+    const text = rawText;
     setInput("");
     setInterimVoice("");
 
@@ -892,7 +964,7 @@ function ChatContent({ sessionId, setSessionId }: ChatContentProps) {
                 {sessionId && <SessionStatusChip sessionId={sessionId} />}
                 {status === "streaming" && <AutoSaveIndicator status="saving" />}
                 <APIKeyStatusBadge />
-                <FeedMeButton mode="navigate" />
+                <FeedMeButton />
                 <SettingsButtonV2 />
               </div>
             </div>
@@ -1244,6 +1316,36 @@ function ChatContent({ sessionId, setSessionId }: ChatContentProps) {
           <PanelLeft className="h-4 w-4" />
         </button>
       )}
+      <FeedbackDialog
+        open={feedbackDialogState.open}
+        initialFeedback={feedbackDialogState.feedbackText}
+        selectedText={feedbackDialogState.selectedText}
+        sessionId={sessionId}
+        agent={activeAgent}
+        model={model}
+        onClose={() =>
+          setFeedbackDialogState({
+            open: false,
+            feedbackText: "",
+            selectedText: "",
+          })
+        }
+      />
+      <CorrectionDialog
+        open={correctionDialogState.open}
+        initialIncorrect={correctionDialogState.incorrectText}
+        initialCorrected={correctionDialogState.correctedText}
+        sessionId={sessionId}
+        agent={activeAgent}
+        model={model}
+        onClose={() =>
+          setCorrectionDialogState({
+            open: false,
+            incorrectText: "",
+            correctedText: "",
+          })
+        }
+      />
     </div>
   );
 }

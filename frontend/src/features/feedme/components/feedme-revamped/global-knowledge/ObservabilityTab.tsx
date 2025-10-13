@@ -61,6 +61,27 @@ const EmptyState = ({ message }: { message: string }) => (
   </div>
 )
 
+const MAIN_VIEW_ORDER = ['metrics', 'queue', 'timeline'] as const
+type MainView = typeof MAIN_VIEW_ORDER[number]
+
+const MAIN_VIEW_DETAILS: Record<MainView, { label: string; description: string }> = {
+  metrics: {
+    label: 'Global Knowledge Metrics',
+    description: 'Live enhancer and store performance overview.',
+  },
+  queue: {
+    label: 'Review Queue',
+    description: 'Approve corrections and flag feedback in one view.',
+  },
+  timeline: {
+    label: 'Timeline Stream',
+    description: 'Real-time enhancer and persistence events.',
+  },
+}
+
+const isMainView = (value: string): value is MainView =>
+  MAIN_VIEW_ORDER.includes(value as MainView)
+
 export const ObservabilityTab = () => {
   const {
     summary,
@@ -83,6 +104,7 @@ export const ObservabilityTab = () => {
     promoteFeedback,
   } = useGlobalKnowledgeObservability()
 
+  const [activeView, setActiveView] = useState<MainView>('metrics')
   const [activeQueueTab, setActiveQueueTab] = useState<QueueKind>(queueFilter.kind)
   const [summaryRefreshing, setSummaryRefreshing] = useState(false)
   const [queueRefreshing, setQueueRefreshing] = useState(false)
@@ -177,6 +199,8 @@ export const ObservabilityTab = () => {
     },
   ]
 
+  const activeViewDetails = MAIN_VIEW_DETAILS[activeView]
+
   return (
     <div className="space-y-4">
       {(summaryError || queueError || eventsError || streamError) && (
@@ -194,280 +218,311 @@ export const ObservabilityTab = () => {
         </Card>
       )}
 
-      <Card>
-        <CardHeader className="flex flex-row items-center justify-between gap-4">
-          <div>
-            <CardTitle className="text-lg">Global Knowledge Metrics</CardTitle>
-            <p className="text-sm text-muted-foreground">Live enhancer and store performance overview</p>
-          </div>
-          <Button variant="outline" size="sm" onClick={handleSummaryRefresh} disabled={summaryRefreshing}>
-            {summaryRefreshing ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
-            Refresh
-          </Button>
-        </CardHeader>
-        <CardContent>
-          {isSummaryLoading ? (
-            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-              {summaryCards.map(card => (
-                <div key={card.title} className="h-24 animate-pulse rounded-lg bg-muted/40" />
-              ))}
-            </div>
-          ) : (
-            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-              {summaryCards.map(card => (
-                <div key={card.title} className="rounded-lg border border-border/60 bg-muted/20 p-4">
-                  <div className="flex items-center justify-between text-xs text-muted-foreground">
-                    <span>{card.title}</span>
-                    <card.icon className="h-4 w-4" />
-                  </div>
-                  <div className="mt-2 text-2xl font-semibold">{card.value}</div>
-                </div>
-              ))}
-            </div>
-          )}
-
-          <Separator className="my-4" />
-
-          <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-4">
-            {stageMetrics.map(metric => (
-              <div key={metric.label} className="rounded-lg border border-border/50 bg-muted/10 p-3">
-                <div className="text-xs text-muted-foreground">{metric.label} p95</div>
-                <div className="mt-1 text-lg font-medium">{metric.value}</div>
-              </div>
+      <Tabs
+        value={activeView}
+        onValueChange={value => {
+          if (isMainView(value)) {
+            setActiveView(value)
+          }
+        }}
+        className="space-y-4"
+      >
+        <div className="flex flex-col gap-3">
+          <TabsList className="grid w-full gap-2 md:w-auto md:grid-cols-3">
+            {MAIN_VIEW_ORDER.map(view => (
+              <TabsTrigger key={view} value={view} className="text-sm font-medium leading-tight">
+                {MAIN_VIEW_DETAILS[view].label}
+              </TabsTrigger>
             ))}
-          </div>
-        </CardContent>
-      </Card>
+          </TabsList>
+          <p className="text-sm text-muted-foreground">{activeViewDetails.description}</p>
+        </div>
 
-      <div className="grid gap-4 lg:grid-cols-2">
-        <Card className="flex h-full flex-col">
-          <CardHeader className="flex flex-row items-center justify-between gap-4">
-            <div>
-              <CardTitle className="text-lg">Timeline stream</CardTitle>
-              <p className="text-sm text-muted-foreground">Real-time enhancer and persistence events</p>
-            </div>
-            <div className="flex items-center gap-2">
-              <Badge variant={isStreamConnected ? 'default' : 'secondary'} className="flex items-center gap-1 text-xs">
-                {isStreamConnected ? <PlugZap className="h-3 w-3" /> : <Plug className="h-3 w-3" />}
-                {isStreamConnected ? 'Live' : 'Reconnecting'}
-              </Badge>
-              <Button variant="ghost" size="icon" onClick={handleEventsRefresh} disabled={eventsRefreshing}>
-                {eventsRefreshing ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+        <TabsContent value="metrics" className="space-y-4">
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between gap-4">
+              <div>
+                <CardTitle className="text-lg">{MAIN_VIEW_DETAILS.metrics.label}</CardTitle>
+                <p className="text-sm text-muted-foreground">{MAIN_VIEW_DETAILS.metrics.description}</p>
+              </div>
+              <Button variant="outline" size="sm" onClick={handleSummaryRefresh} disabled={summaryRefreshing}>
+                {summaryRefreshing ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
+                Refresh
               </Button>
-            </div>
-          </CardHeader>
-          <CardContent className="flex-1 overflow-hidden p-0">
-            {isEventsLoading ? (
-              <div className="flex h-[320px] items-center justify-center text-sm text-muted-foreground">
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Loading timeline…
-              </div>
-            ) : events.length === 0 ? (
-              <EmptyState message="No timeline events yet." />
-            ) : (
-              <ScrollArea className="h-[320px]">
-                <ul className="space-y-2 p-4">
-                  {events.map(event => {
-                    const eventMetadata = event.metadata ?? {}
-                    const reason = Object.prototype.hasOwnProperty.call(eventMetadata, 'reason')
-                      ? eventMetadata.reason
-                      : undefined
-                    const action = Object.prototype.hasOwnProperty.call(eventMetadata, 'action')
-                      ? eventMetadata.action
-                      : undefined
-
-                    return (
-                      <li key={event.event_id} className="rounded-lg border border-border/60 bg-background/80 p-3">
-                      <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
-                        <div className="flex items-center gap-2">
-                          <Badge variant="outline" className="text-xs capitalize">{event.kind}</Badge>
-                          <span className="font-medium">{event.stage}</span>
-                          <span>•</span>
-                          <span className={cn(
-                            'font-medium',
-                            event.status === 'complete' ? 'text-emerald-500' : event.status === 'error' ? 'text-destructive' : 'text-muted-foreground',
-                          )}>
-                            {event.status}
-                          </span>
-                        </div>
-                        <span>{formatTimeAgo(event.created_at)}</span>
-                      </div>
-                      <div className="mt-2 text-sm">
-                        {reason !== undefined && reason !== null && (
-                          <div className="text-muted-foreground">Reason: {String(reason)}</div>
-                        )}
-                        {action !== undefined && action !== null && (
-                          <div className="text-muted-foreground">Action: {String(action)}</div>
-                        )}
-                        {event.duration_ms !== null && event.duration_ms !== undefined && (
-                          <div className="text-xs text-muted-foreground">Δ {formatMilliseconds(event.duration_ms)}</div>
-                        )}
-                      </div>
-                      <div className="mt-2 flex flex-wrap gap-2 text-[11px] text-muted-foreground">
-                        {event.submission_id !== null && event.submission_id !== undefined && (
-                          <Badge variant="secondary">Submission #{event.submission_id}</Badge>
-                        )}
-                        {event.fallback_used && <Badge variant="destructive">Fallback</Badge>}
-                        {event.store_written != null && (
-                          <Badge variant={event.store_written ? 'default' : 'destructive'}>
-                            Store {event.store_written ? 'written' : 'failed'}
-                          </Badge>
-                        )}
-                      </div>
-                      </li>
-                    )
-                  })}
-                </ul>
-              </ScrollArea>
-            )}
-          </CardContent>
-        </Card>
-
-        <Card className="flex h-full flex-col">
-          <CardHeader className="flex flex-row items-center justify-between gap-4">
-            <div>
-              <CardTitle className="text-lg">Review queue</CardTitle>
-              <p className="text-sm text-muted-foreground">Approve corrections and flag feedback in one view</p>
-            </div>
-            <Button variant="ghost" size="icon" onClick={handleQueueRefresh} disabled={queueRefreshing}>
-              {queueRefreshing ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
-            </Button>
-          </CardHeader>
-          <CardContent className="flex flex-col gap-3">
-            <Tabs
-              value={activeQueueTab}
-              onValueChange={value => {
-                if (!isQueueKind(value)) {
-                  return
-                }
-                setActiveQueueTab(value)
-                setQueueFilter({ kind: value })
-              }}
-            >
-              <div className="flex flex-wrap items-center justify-between gap-3">
-                <TabsList className="grid w-full grid-cols-3 sm:w-auto">
-                  {QUEUE_KIND_OPTIONS.map(kind => (
-                    <TabsTrigger key={kind} value={kind} className="capitalize">
-                      {kind === 'all' ? 'All' : kind}
-                    </TabsTrigger>
+            </CardHeader>
+            <CardContent>
+              {isSummaryLoading ? (
+                <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+                  {summaryCards.map(card => (
+                    <div key={card.title} className="h-24 animate-pulse rounded-lg bg-muted/40" />
                   ))}
-                </TabsList>
-                <Select
-                  value={queueFilter.status}
-                  onValueChange={value => {
-                    if (!isQueueStatus(value)) {
-                      return
-                    }
-                    setQueueFilter({ status: value })
-                  }}
-                >
-                  <SelectTrigger className="w-[160px]">
-                    <SelectValue placeholder="Status" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {QUEUE_STATUS_OPTIONS.map(status => (
-                      <SelectItem key={status} value={status} className="capitalize">
-                        {status}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
+                </div>
+              ) : (
+                <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+                  {summaryCards.map(card => (
+                    <div key={card.title} className="rounded-lg border border-border/60 bg-muted/20 p-4">
+                      <div className="flex items-center justify-between text-xs text-muted-foreground">
+                        <span>{card.title}</span>
+                        <card.icon className="h-4 w-4" />
+                      </div>
+                      <div className="mt-2 text-2xl font-semibold">{card.value}</div>
+                    </div>
+                  ))}
+                </div>
+              )}
 
-              <TabsContent value={activeQueueTab} className="mt-4 flex-1">
-                {isQueueLoading ? (
-                  <div className="flex h-[320px] items-center justify-center text-sm text-muted-foreground">
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Loading queue…
+              <Separator className="my-4" />
+
+              <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-4">
+                {stageMetrics.map(metric => (
+                  <div key={metric.label} className="rounded-lg border border-border/50 bg-muted/10 p-3">
+                    <div className="text-xs text-muted-foreground">{metric.label} p95</div>
+                    <div className="mt-1 text-lg font-medium">{metric.value}</div>
                   </div>
-                ) : queue.length === 0 ? (
-                  <EmptyState message="No submissions for this filter." />
-                ) : (
-                  <ScrollArea className="h-[320px] pr-2">
-                    <div className="space-y-3">
-                      {queue.map(item => {
-                        const enhanced = ((item.metadata ?? {}) as { enhanced?: EnhancedMetadata }).enhanced ?? {}
-                        const rawTags = Array.isArray(enhanced.tags) ? enhanced.tags : item.tags
-                        const tags = rawTags.filter((tag): tag is string => typeof tag === 'string')
-                        const rawKeyFacts = Array.isArray(enhanced.key_facts) ? enhanced.key_facts : item.key_facts
-                        const keyFacts = rawKeyFacts.filter((fact): fact is string => typeof fact === 'string')
+                ))}
+              </div>
+            </CardContent>
+          </Card>
+        </TabsContent>
 
-                        return (
-                          <div key={`${item.kind}-${item.id}`} className="rounded-lg border border-border/70 bg-background/80 p-3">
-                            <div className="flex flex-wrap items-center justify-between gap-2">
-                              <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                                <Badge variant="outline" className="capitalize">{item.kind}</Badge>
-                                <Badge variant="secondary" className="capitalize">{item.status}</Badge>
-                                <span>#{item.id}</span>
+        <TabsContent value="queue" className="space-y-4">
+          <Card className="flex h-full flex-col">
+            <CardHeader className="flex flex-row items-center justify-between gap-4">
+              <div>
+                <CardTitle className="text-lg">{MAIN_VIEW_DETAILS.queue.label}</CardTitle>
+                <p className="text-sm text-muted-foreground">{MAIN_VIEW_DETAILS.queue.description}</p>
+              </div>
+              <Button variant="ghost" size="icon" onClick={handleQueueRefresh} disabled={queueRefreshing}>
+                {queueRefreshing ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+              </Button>
+            </CardHeader>
+            <CardContent className="flex flex-col gap-3">
+              <Tabs
+                value={activeQueueTab}
+                onValueChange={value => {
+                  if (!isQueueKind(value)) {
+                    return
+                  }
+                  setActiveQueueTab(value)
+                  setQueueFilter({ kind: value })
+                }}
+              >
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <TabsList className="grid w-full grid-cols-3 sm:w-auto">
+                    {QUEUE_KIND_OPTIONS.map(kind => (
+                      <TabsTrigger key={kind} value={kind} className="capitalize">
+                        {kind === 'all' ? 'All' : kind}
+                      </TabsTrigger>
+                    ))}
+                  </TabsList>
+                  <Select
+                    value={queueFilter.status}
+                    onValueChange={value => {
+                      if (!isQueueStatus(value)) {
+                        return
+                      }
+                      setQueueFilter({ status: value })
+                    }}
+                  >
+                    <SelectTrigger className="w-[160px]">
+                      <SelectValue placeholder="Status" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {QUEUE_STATUS_OPTIONS.map(status => (
+                        <SelectItem key={status} value={status} className="capitalize">
+                          {status}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <TabsContent value={activeQueueTab} className="mt-4 flex-1">
+                  {isQueueLoading ? (
+                    <div className="flex h-[320px] items-center justify-center text-sm text-muted-foreground">
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Loading queue…
+                    </div>
+                  ) : queue.length === 0 ? (
+                    <EmptyState message="No submissions for this filter." />
+                  ) : (
+                    <ScrollArea className="h-[320px] pr-2">
+                      <div className="space-y-3">
+                        {queue.map(item => {
+                          const enhanced = ((item.metadata ?? {}) as { enhanced?: EnhancedMetadata }).enhanced ?? {}
+                          const rawTags = Array.isArray(enhanced.tags) ? enhanced.tags : item.tags
+                          const tags = rawTags.filter((tag): tag is string => typeof tag === 'string')
+                          const rawKeyFacts = Array.isArray(enhanced.key_facts) ? enhanced.key_facts : item.key_facts
+                          const keyFacts = rawKeyFacts.filter((fact): fact is string => typeof fact === 'string')
+
+                          return (
+                            <div key={`${item.kind}-${item.id}`} className="rounded-lg border border-border/70 bg-background/80 p-3">
+                              <div className="flex flex-wrap items-center justify-between gap-2">
+                                <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                                  <Badge variant="outline" className="capitalize">{item.kind}</Badge>
+                                  <Badge variant="secondary" className="capitalize">{item.status}</Badge>
+                                  <span>#{item.id}</span>
+                                </div>
+                                <span className="text-xs text-muted-foreground">
+                                  {formatDistanceToNowStrict(new Date(item.created_at), { addSuffix: true })}
+                                </span>
                               </div>
-                              <span className="text-xs text-muted-foreground">
-                                {formatDistanceToNowStrict(new Date(item.created_at), { addSuffix: true })}
+                              <div className="mt-2 text-sm font-medium">
+                                {item.summary || item.raw_text || 'No summary available'}
+                              </div>
+                              {keyFacts.length > 0 && (
+                                <ul className="mt-2 list-disc space-y-1 pl-5 text-xs text-muted-foreground">
+                                  {keyFacts.map(fact => (
+                                    <li key={fact}>{fact}</li>
+                                  ))}
+                                </ul>
+                              )}
+                              {tags.length > 0 && (
+                                <div className="mt-2 flex flex-wrap gap-2">
+                                  {tags.map(tag => (
+                                    <Badge key={tag} variant="outline" className="text-[11px] capitalize">
+                                      {tag}
+                                    </Badge>
+                                  ))}
+                                </div>
+                              )}
+                              <CardFooter className="mt-3 flex items-center justify-between gap-3 p-0">
+                                <div className="text-[11px] text-muted-foreground">
+                                  {item.user_id ? `Submitted by ${item.user_id}` : 'Anonymous submission'}
+                                </div>
+                                <div className="flex gap-2">
+                                  {item.kind === 'correction' && (
+                                    <Button
+                                      size="sm"
+                                      onClick={() => onPromote('correction', item.id)}
+                                      disabled={actionLoading?.kind === 'correction' && actionLoading.id === item.id}
+                                    >
+                                      {actionLoading?.kind === 'correction' && actionLoading.id === item.id ? (
+                                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                                      ) : (
+                                        <Database className="mr-2 h-4 w-4" />
+                                      )}
+                                      Add to Knowledge Base
+                                    </Button>
+                                  )}
+                                  {item.kind === 'feedback' && (
+                                    <Button
+                                      size="sm"
+                                      variant="outline"
+                                      onClick={() => onPromote('feedback', item.id)}
+                                      disabled={actionLoading?.kind === 'feedback' && actionLoading.id === item.id}
+                                    >
+                                      {actionLoading?.kind === 'feedback' && actionLoading.id === item.id ? (
+                                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                                      ) : (
+                                        <CheckCircle2 className="mr-2 h-4 w-4" />
+                                      )}
+                                      Flag for Review
+                                    </Button>
+                                  )}
+                                </div>
+                              </CardFooter>
+                            </div>
+                          )
+                        })}
+                      </div>
+                    </ScrollArea>
+                  )}
+                </TabsContent>
+              </Tabs>
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="timeline" className="space-y-4">
+          <Card className="flex h-full flex-col">
+            <CardHeader className="flex flex-row items-center justify-between gap-4">
+              <div>
+                <CardTitle className="text-lg">{MAIN_VIEW_DETAILS.timeline.label}</CardTitle>
+                <p className="text-sm text-muted-foreground">{MAIN_VIEW_DETAILS.timeline.description}</p>
+              </div>
+              <div className="flex items-center gap-2">
+                <Badge variant={isStreamConnected ? 'default' : 'secondary'} className="flex items-center gap-1 text-xs">
+                  {isStreamConnected ? <PlugZap className="h-3 w-3" /> : <Plug className="h-3 w-3" />}
+                  {isStreamConnected ? 'Live' : 'Reconnecting'}
+                </Badge>
+                <Button variant="ghost" size="icon" onClick={handleEventsRefresh} disabled={eventsRefreshing}>
+                  {eventsRefreshing ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+                </Button>
+              </div>
+            </CardHeader>
+            <CardContent className="flex-1 overflow-hidden p-0">
+              {isEventsLoading ? (
+                <div className="flex h-[320px] items-center justify-center text-sm text-muted-foreground">
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Loading timeline…
+                </div>
+              ) : events.length === 0 ? (
+                <EmptyState message="No timeline events yet." />
+              ) : (
+                <ScrollArea className="h-[320px]">
+                  <ul className="space-y-2 p-4">
+                    {events.map(event => {
+                      const eventMetadata = event.metadata ?? {}
+                      const reason = Object.prototype.hasOwnProperty.call(eventMetadata, 'reason')
+                        ? eventMetadata.reason
+                        : undefined
+                      const action = Object.prototype.hasOwnProperty.call(eventMetadata, 'action')
+                        ? eventMetadata.action
+                        : undefined
+
+                      return (
+                        <li key={event.event_id} className="rounded-lg border border-border/60 bg-background/80 p-3">
+                          <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
+                            <div className="flex items-center gap-2">
+                              <Badge variant="outline" className="text-xs capitalize">{event.kind}</Badge>
+                              <span className="font-medium">{event.stage}</span>
+                              <span>•</span>
+                              <span
+                                className={cn(
+                                  'font-medium',
+                                  event.status === 'complete'
+                                    ? 'text-emerald-500'
+                                    : event.status === 'error'
+                                      ? 'text-destructive'
+                                      : 'text-muted-foreground',
+                                )}
+                              >
+                                {event.status}
                               </span>
                             </div>
-                            <div className="mt-2 text-sm font-medium">
-                              {item.summary || item.raw_text || 'No summary available'}
-                            </div>
-                            {keyFacts.length > 0 && (
-                              <ul className="mt-2 list-disc space-y-1 pl-5 text-xs text-muted-foreground">
-                                {keyFacts.map(fact => (
-                                  <li key={fact}>{fact}</li>
-                                ))}
-                              </ul>
-                            )}
-                            {tags.length > 0 && (
-                              <div className="mt-2 flex flex-wrap gap-2">
-                                {tags.map(tag => (
-                                  <Badge key={tag} variant="outline" className="text-[11px] capitalize">
-                                    {tag}
-                                  </Badge>
-                                ))}
-                              </div>
-                            )}
-                            <CardFooter className="mt-3 flex items-center justify-between gap-3 p-0">
-                              <div className="text-[11px] text-muted-foreground">
-                                {item.user_id ? `Submitted by ${item.user_id}` : 'Anonymous submission'}
-                              </div>
-                              <div className="flex gap-2">
-                                {item.kind === 'correction' && (
-                                  <Button
-                                    size="sm"
-                                    onClick={() => onPromote('correction', item.id)}
-                                    disabled={actionLoading?.kind === 'correction' && actionLoading.id === item.id}
-                                  >
-                                    {actionLoading?.kind === 'correction' && actionLoading.id === item.id ? (
-                                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                                    ) : (
-                                      <Database className="mr-2 h-4 w-4" />
-                                    )}
-                                    Add to Knowledge Base
-                                  </Button>
-                                )}
-                                {item.kind === 'feedback' && (
-                                  <Button
-                                    size="sm"
-                                    variant="outline"
-                                    onClick={() => onPromote('feedback', item.id)}
-                                    disabled={actionLoading?.kind === 'feedback' && actionLoading.id === item.id}
-                                  >
-                                    {actionLoading?.kind === 'feedback' && actionLoading.id === item.id ? (
-                                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                                    ) : (
-                                      <CheckCircle2 className="mr-2 h-4 w-4" />
-                                    )}
-                                    Flag for Review
-                                  </Button>
-                                )}
-                              </div>
-                            </CardFooter>
+                            <span>{formatTimeAgo(event.created_at)}</span>
                           </div>
-                        )
-                      })}
-                    </div>
-                  </ScrollArea>
-                )}
-              </TabsContent>
-            </Tabs>
-          </CardContent>
-        </Card>
-      </div>
+                          <div className="mt-2 text-sm">
+                            {reason !== undefined && reason !== null && (
+                              <div className="text-muted-foreground">Reason: {String(reason)}</div>
+                            )}
+                            {action !== undefined && action !== null && (
+                              <div className="text-muted-foreground">Action: {String(action)}</div>
+                            )}
+                            {event.duration_ms !== null && event.duration_ms !== undefined && (
+                              <div className="text-xs text-muted-foreground">Δ {formatMilliseconds(event.duration_ms)}</div>
+                            )}
+                          </div>
+                          <div className="mt-2 flex flex-wrap gap-2 text-[11px] text-muted-foreground">
+                            {event.submission_id !== null && event.submission_id !== undefined && (
+                              <Badge variant="secondary">Submission #{event.submission_id}</Badge>
+                            )}
+                            {event.fallback_used && <Badge variant="destructive">Fallback</Badge>}
+                            {event.store_written != null && (
+                              <Badge variant={event.store_written ? 'default' : 'destructive'}>
+                                Store {event.store_written ? 'written' : 'failed'}
+                              </Badge>
+                            )}
+                          </div>
+                        </li>
+                      )
+                    })}
+                  </ul>
+                </ScrollArea>
+              )}
+            </CardContent>
+          </Card>
+        </TabsContent>
+      </Tabs>
     </div>
   )
 }

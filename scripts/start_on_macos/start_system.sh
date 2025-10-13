@@ -16,6 +16,16 @@ FRONTEND_LOG_DIR="$LOG_DIR/frontend"
 mkdir -p "$BACKEND_LOG_DIR"
 mkdir -p "$FRONTEND_LOG_DIR"
 
+# --- Environment bootstrap ---
+ENV_FILE="${ENV_PATH_OVERRIDE:-$ROOT_DIR/.env.local}"
+if [ -f "$ENV_FILE" ]; then
+  echo "Loading environment variables from $ENV_FILE"
+  set -a
+  # shellcheck disable=SC1090
+  source "$ENV_FILE"
+  set +a
+fi
+
 # --- Backend Setup ---
 echo "--- Starting Backend Server ---"
 cd "$ROOT_DIR"

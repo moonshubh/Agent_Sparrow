@@ -28,8 +28,6 @@ import {
   StatsCardSkeleton
 } from './stats/StatsCards'
 import { Alert, AlertDescription } from '@/shared/ui/alert'
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/shared/ui/tabs'
-import ObservabilityTab from '@/features/feedme/components/feedme-revamped/global-knowledge/ObservabilityTab'
 
 interface StatsPopoverProps {
   open?: boolean
@@ -43,7 +41,6 @@ export function StatsPopover({
   className
 }: StatsPopoverProps) {
   const [isRefreshing, setIsRefreshing] = useState(false)
-  const [activeTab, setActiveTab] = useState<'analytics' | 'observability'>('analytics')
 
   // Fetch stats data with auto-refresh
   const { data, isLoading, error, refetch, lastFetchTime } = useStatsData({
@@ -88,33 +85,18 @@ export function StatsPopover({
           <DialogTitle>FeedMe Statistics</DialogTitle>
         </DialogHeader>
 
-        <Tabs
-          value={activeTab}
-          onValueChange={value => setActiveTab(value as 'analytics' | 'observability')}
-          className="flex h-full flex-col"
-        >
+        <div className="flex h-full flex-col">
           <div className="flex flex-col gap-4 px-4 pb-0">
             <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
               <div className="flex items-center gap-2">
                 <BarChart3 className="h-5 w-5 text-muted-foreground" />
-                <h3 className="text-lg font-semibold">
-                  {activeTab === 'analytics' ? 'FeedMe Statistics' : 'Global Knowledge Observability'}
-                </h3>
+                <h3 className="text-lg font-semibold">FeedMe Statistics</h3>
                 <Badge variant="outline" className="text-xs">
                   Live
                 </Badge>
               </div>
-              <TabsList className="w-full md:w-auto">
-                <TabsTrigger value="analytics">Analytics</TabsTrigger>
-                <TabsTrigger value="observability">Observability</TabsTrigger>
-              </TabsList>
-            </div>
-
-            {activeTab === 'analytics' ? (
-              <div className="flex flex-wrap items-center justify-between gap-3">
-                <span className="text-xs text-muted-foreground">
-                  Updated {lastUpdatedText}
-                </span>
+              <div className="flex items-center gap-3">
+                <span className="text-xs text-muted-foreground">Updated {lastUpdatedText}</span>
                 <Button
                   variant="ghost"
                   size="icon"
@@ -122,22 +104,17 @@ export function StatsPopover({
                   onClick={handleRefresh}
                   disabled={isRefreshing || isLoading}
                 >
-                  <RefreshCw className={cn(
-                    "h-4 w-4",
-                    isRefreshing && "animate-spin"
-                  )} />
+                  <RefreshCw
+                    className={cn('h-4 w-4', isRefreshing && 'animate-spin')}
+                  />
                 </Button>
               </div>
-            ) : (
-              <div className="text-xs text-muted-foreground">
-                Live observability stream with manual controls available inside the tab.
-              </div>
-            )}
+            </div>
           </div>
 
           <Separator className="my-4" />
 
-          <TabsContent value="analytics" className="flex-1 overflow-hidden">
+          <div className="flex-1 overflow-hidden">
             <div className="flex h-full flex-col">
               <ScrollArea className="flex-1 px-4 pb-4">
                 {error && !data && (
@@ -236,16 +213,9 @@ export function StatsPopover({
                 </>
               )}
             </div>
-          </TabsContent>
-
-          <TabsContent value="observability" className="flex-1 overflow-hidden">
-            <ScrollArea className="h-[500px] px-4 pb-4">
-              <ObservabilityTab />
-            </ScrollArea>
-          </TabsContent>
-        </Tabs>
+          </div>
+        </div>
       </DialogContent>
     </Dialog>
   )
 }
-

@@ -1,4 +1,5 @@
 import { supabase } from '@/services/supabase'
+import { getAuthToken as getLocalToken } from '@/services/auth/local-auth'
 import { ChatMessage } from '@/shared/types/chat'
 
 // URL validation with proper error handling
@@ -166,7 +167,10 @@ class APIClient {
   private async getAuthHeaders(customContentType?: string): Promise<HeadersInit> {
     try {
       const session = await supabase.auth.getSession()
-      const token = session.data.session?.access_token
+      const supaToken = session.data.session?.access_token
+      const localBypass = process.env.NEXT_PUBLIC_LOCAL_AUTH_BYPASS === 'true'
+      const localToken = localBypass && typeof window !== 'undefined' ? getLocalToken() : null
+      const token = supaToken || localToken || undefined
 
       return {
         'Content-Type': customContentType || 'application/json',

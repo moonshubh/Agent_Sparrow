@@ -338,7 +338,7 @@ def create_chat_message_in_db(conn, message_data: ChatMessageCreate, user_id: st
             raise HTTPException(status_code=404, detail="Chat session not found")
         
         # Ensure metadata is properly serialized as JSON
-        metadata_json = None
+        metadata_json = '{}'
         if message_data.metadata:
             metadata_json = json.dumps(message_data.metadata) if isinstance(message_data.metadata, dict) else message_data.metadata
         
@@ -356,7 +356,10 @@ def create_chat_message_in_db(conn, message_data: ChatMessageCreate, user_id: st
         ))
         
         conn.commit()
-        return dict(cur.fetchone())
+        message_row = dict(cur.fetchone())
+        if message_row.get("metadata") is None:
+            message_row["metadata"] = {}
+        return message_row
 
 
 def append_chat_message_content_in_db(conn, session_id: int, message_id: int, user_id: str, delta: str) -> Dict[str, Any]:

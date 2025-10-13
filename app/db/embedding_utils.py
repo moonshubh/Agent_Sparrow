@@ -16,11 +16,15 @@ Prerequisites:
 """
 import os
 import logging
+from functools import lru_cache
+
 import psycopg2
 import psycopg2.extras as psycopg2_extras # For NamedTupleCursor, aliased to avoid conflict
 from pgvector.psycopg2 import register_vector
 from dotenv import load_dotenv
 from langchain_google_genai import embeddings as gen_embeddings
+from langchain_core.embeddings import Embeddings
+from langchain_core.embeddings.fake import FakeEmbeddings
 from typing import List, Optional, Dict, Any # Removed Tuple
 from pydantic import BaseModel, ConfigDict # Added Pydantic BaseModel
 
@@ -46,6 +50,89 @@ if _cfg_name != EMB_MODEL_NAME_SOT:
     raise ValueError(f"Embedding model must be '{EMB_MODEL_NAME_SOT}' but got '{_cfg_name}'")
 EMBEDDING_MODEL_NAME = _cfg_name
 
+# --- Helpers ---
+
+
+def _prefer_fake_embeddings() -> bool:
+    if os.getenv("USE_REAL_EMBEDDINGS", "").lower() in {"1", "true", "yes"}:
+        return False
+    if os.getenv("USE_FAKE_EMBEDDINGS", "").lower() in {"1", "true", "yes"}:
+        return True
+    return bool(settings.skip_auth)
+
+
+def _allow_embedding_fallback() -> bool:
+    if os.getenv("USE_FAKE_EMBEDDINGS", "").lower() in {"1", "true", "yes"}:
+        return True
+    if os.getenv("USE_REAL_EMBEDDINGS", "").lower() in {"1", "true", "yes"}:
+        return False
+    return bool(settings.skip_auth)
+
+
+@lru_cache(maxsize=1)
+def _fake_embeddings() -> Embeddings:
+    return FakeEmbeddings(size=EXPECTED_EMBEDDING_DIM)
+
+
+class ResilientEmbeddings(Embeddings):
+    """Wrap an embedding model with a fallback implementation for resilience."""
+
+    def __init__(self, primary: Embeddings, fallback: Embeddings, *, allow_fallback: bool, prefer_fallback: bool) -> None:
+        self._primary = primary
+        self._fallback = fallback
+        self._allow_fallback = allow_fallback
+        self._prefer_fallback = prefer_fallback
+
+    def _should_use_fallback(self, exc: Exception, context: str) -> bool:
+        if not self._allow_fallback:
+            raise exc
+        logger.warning("Primary embedding %s failed: %s -- using fallback", context, exc)
+        return True
+
+    def embed_query(self, text: str) -> List[float]:
+        if self._prefer_fallback:
+            return self._fallback.embed_query(text)
+        try:
+            return self._primary.embed_query(text)
+        except Exception as exc:  # pragma: no cover - defensive
+            if self._should_use_fallback(exc, "embed_query"):
+                return self._fallback.embed_query(text)
+
+    def embed_documents(self, texts: List[str]) -> List[List[float]]:
+        if self._prefer_fallback:
+            return self._fallback.embed_documents(texts)
+        try:
+            return self._primary.embed_documents(texts)
+        except Exception as exc:  # pragma: no cover - defensive
+            if self._should_use_fallback(exc, "embed_documents"):
+                return self._fallback.embed_documents(texts)
+
+    async def aembed_documents(self, texts: List[str]) -> List[List[float]]:  # pragma: no cover - async path
+        if self._prefer_fallback:
+            fallback_async = getattr(self._fallback, "aembed_documents", None)
+            if fallback_async is not None:
+                return await fallback_async(texts)
+            return self._fallback.embed_documents(texts)
+        primary_async = getattr(self._primary, "aembed_documents", None)
+        if primary_async is not None:
+            try:
+                return await primary_async(texts)
+            except Exception as exc:
+                if not self._should_use_fallback(exc, "aembed_documents"):
+                    raise
+        else:
+            try:
+                return self._primary.embed_documents(texts)
+            except Exception as exc:
+                if not self._should_use_fallback(exc, "embed_documents"):
+                    raise
+
+        fallback_async = getattr(self._fallback, "aembed_documents", None)
+        if fallback_async is not None:
+            return await fallback_async(texts)
+        return self._fallback.embed_documents(texts)
+
+
 # --- Database Connection (Updated for FeedMe v3.0 - Supabase Only) ---
 def get_db_connection():
     """
@@ -55,25 +142,47 @@ def get_db_connection():
     raise NotImplementedError("Local DB connections no longer supported. Use Supabase client instead.")
 
 # --- Embedding Generation ---
-def get_embedding_model():
-    """Initializes and returns the Google Generative AI embedding model."""
+@lru_cache(maxsize=1)
+def get_embedding_model() -> Embeddings:
+    """Initializes and returns the embedding model with local fallback support."""
+
+    allow_fallback = _allow_embedding_fallback()
+    prefer_fallback = _prefer_fake_embeddings()
+    fallback = _fake_embeddings() if (allow_fallback or prefer_fallback) else None
+
     if not GEMINI_API_KEY:
-        logger.error("GEMINI_API_KEY not found in environment variables.")
-        raise ValueError("GEMINI_API_KEY not set.")
+        if not (allow_fallback or prefer_fallback):
+            logger.error("GEMINI_API_KEY not found in environment variables.")
+            raise ValueError("GEMINI_API_KEY not set.")
+        logger.warning("GEMINI_API_KEY missing; using FakeEmbeddings fallback")
+        return fallback  # type: ignore[return-value]
+
     try:
-        emb_model = gen_embeddings.GoogleGenerativeAIEmbeddings(
-            model=EMBEDDING_MODEL_NAME, 
-            google_api_key=GEMINI_API_KEY
+        primary = gen_embeddings.GoogleGenerativeAIEmbeddings(
+            model=EMBEDDING_MODEL_NAME,
+            google_api_key=GEMINI_API_KEY,
         )
         logger.info(
             "Initialized embedding model %s (expected_dim=%s)",
             EMBEDDING_MODEL_NAME,
             EXPECTED_EMBEDDING_DIM,
         )
-        return emb_model
-    except Exception as e:
-        logger.error(f"Failed to initialize embedding model: {e}")
-        raise
+    except Exception as exc:
+        logger.error("Failed to initialize embedding model: %s", exc)
+        if not (allow_fallback or prefer_fallback) or fallback is None:
+            raise
+        logger.warning("Using FakeEmbeddings fallback due to initialization failure")
+        return fallback
+
+    if fallback is None:
+        return primary
+
+    return ResilientEmbeddings(
+        primary,
+        fallback,
+        allow_fallback=allow_fallback,
+        prefer_fallback=prefer_fallback,
+    )
 
 
 def _embedding_has_expected_dim(vector: List[float], context: str) -> bool:

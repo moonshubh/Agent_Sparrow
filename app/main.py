@@ -38,7 +38,10 @@ from app.api.v1.endpoints import rate_limit_endpoints  # Rate limiting monitorin
 from app.api.v1.endpoints import feedme_intelligence  # FeedMe AI intelligence endpoints
 from app.api.v1.endpoints import advanced_agent_endpoints  # Advanced agent reasoning and troubleshooting
 from app.api.v1.endpoints import secure_log_analysis  # Secure Log Analysis endpoints
-from app.api.v1.endpoints import global_knowledge_observability  # Global knowledge observability APIs
+from app.api.v1.endpoints import (
+    global_knowledge_observability,  # Global knowledge observability APIs
+    global_knowledge_feedback,  # Global knowledge submission APIs
+)
 from app.api.v1.websocket import feedme_websocket  # FeedMe WebSocket endpoints
 from app.core.settings import settings
 from app.db.embedding_config import EXPECTED_DIM
@@ -159,6 +162,7 @@ app.include_router(unified_endpoints.router, prefix="/api/v1", tags=["Agent Inte
 app.include_router(logs_endpoints.router, prefix="/api/v1", tags=["Agent Interaction"]) 
 app.include_router(research_endpoints.router, prefix="/api/v1", tags=["Agent Interaction"]) 
 app.include_router(global_knowledge_observability.router, prefix="/api/v1", tags=["Global Knowledge"])
+app.include_router(global_knowledge_feedback.router, prefix="/api/v1", tags=["Global Knowledge"])
 # Register FeedMe routes
 app.include_router(feedme_endpoints.router, prefix="/api/v1", tags=["FeedMe"])
 # Register FeedMe Text Approval routes  

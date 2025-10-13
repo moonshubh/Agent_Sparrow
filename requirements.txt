@@ -39,6 +39,7 @@ cryptography==45.0.7
 psycopg2-binary==2.9.10
 sqlalchemy==2.0.43
 pgvector==0.4.1
+asyncpg==0.29.0
 
 # External Tools
 tavily-python==0.3.0

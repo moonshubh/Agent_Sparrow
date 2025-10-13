@@ -50,11 +50,6 @@ export const LoginForm: React.FC = () => {
   const { loginWithOAuth, isLoading: authLoading } = useAuth()
   const [loadingProvider, setLoadingProvider] = useState<'google' | 'github' | null>(null)
   const [error, setError] = useState<string | null>(null)
-  
-  // If local auth bypass is enabled, show the local login form
-  if (isLocalAuthBypass) {
-    return <LocalDevLoginForm />
-  }
 
   // Debug logging
   useEffect(() => {
@@ -68,6 +63,11 @@ export const LoginForm: React.FC = () => {
       })
     }
   }, [])
+  
+  // If local auth bypass is enabled, show the local login form
+  if (isLocalAuthBypass) {
+    return <LocalDevLoginForm />
+  }
 
   const handleOAuthLogin = async (provider: 'google' | 'github') => {
     // Pre-flight checks with user-friendly messages

@@ -209,6 +209,7 @@ function FullErrorFallback({
 
   // Client-side navigation helper
   const NavigationButtons = () => {
+    const router = useRouter()
     const [mounted, setMounted] = React.useState(false)
 
     React.useEffect(() => {
@@ -216,8 +217,6 @@ function FullErrorFallback({
     }, [])
 
     if (!mounted) return null
-
-    const router = useRouter()
 
     return (
       <Button

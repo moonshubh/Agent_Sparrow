@@ -280,8 +280,6 @@ class SupabaseClient:
                 .table("sparrow_feedback")
                 .update(payload)
                 .eq("id", feedback_id)
-                .select("*")
-                .limit(1)
                 .execute()
             )
             return response.data[0] if response.data else None
@@ -302,8 +300,6 @@ class SupabaseClient:
                 .table("sparrow_corrections")
                 .update(payload)
                 .eq("id", correction_id)
-                .select("*")
-                .limit(1)
                 .execute()
             )
             return response.data[0] if response.data else None
