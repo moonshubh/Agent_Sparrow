@@ -56,6 +56,7 @@ class Settings(BaseSettings):
     primary_agent_provider: str = Field(default="google", alias="PRIMARY_AGENT_PROVIDER")
     primary_agent_model: str = Field(default="gemini-2.5-flash", alias="PRIMARY_AGENT_MODEL")
     primary_agent_quality_level: str = Field(default="balanced", alias="PRIMARY_AGENT_QUALITY_LEVEL")
+    primary_agent_prompt_version: str = Field(default="v10", alias="PRIMARY_AGENT_PROMPT_VERSION")
     enable_websearch: bool = Field(default=True, alias="ENABLE_WEBSEARCH")
     enable_grounded_responses: bool = Field(default=True, alias="ENABLE_GROUNDED_RESPONSES")
     primary_agent_min_kb_relevance: float = Field(default=0.65, alias="PRIMARY_AGENT_MIN_KB_RELEVANCE")

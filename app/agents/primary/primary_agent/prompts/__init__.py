@@ -11,6 +11,7 @@ from .prompt_loader import PromptLoader, PromptLoadConfig, PromptVersion, load_a
 from .emotion_templates import EmotionTemplates
 from .response_formatter import ResponseFormatter
 from .agent_sparrow_v9_prompts import AgentSparrowV9Prompts
+from .agent_sparrow_v10 import AgentSparrowV10, V10Config
 
 __all__ = [
     "AgentSparrowPrompts",
@@ -21,5 +22,7 @@ __all__ = [
     "load_agent_sparrow_prompt",
     "EmotionTemplates",
     "ResponseFormatter",
-    "AgentSparrowV9Prompts"
+    "AgentSparrowV9Prompts",
+    "AgentSparrowV10",
+    "V10Config",
 ]

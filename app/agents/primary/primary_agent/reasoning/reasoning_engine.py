@@ -20,6 +20,7 @@ from opentelemetry import trace
 
 from app.core.settings import settings
 from app.agents.primary.primary_agent.prompts.agent_sparrow_v9_prompts import AgentSparrowV9Prompts, PromptV9Config
+from app.agents.primary.primary_agent.prompts.agent_sparrow_v10 import AgentSparrowV10, V10Config
 from .schemas import (
     ReasoningState, ReasoningStep, ReasoningPhase, QueryAnalysis,
     ToolDecisionReasoning, QualityAssessment, ProblemCategory, ToolDecisionType,
@@ -118,7 +119,13 @@ class ReasoningEngine:
 
     def _compose_system_prompt(self, prompt_config: PromptV9Config, version: str = "latest") -> str:
         provider_prompt = self._get_provider_system_prompt(version=version).strip()
-        agent_prompt = AgentSparrowV9Prompts.build_system_prompt(config=prompt_config).strip()
+
+        # Select agent prompt version via settings (default v10)
+        prompt_version = getattr(settings, "primary_agent_prompt_version", "v10").lower()
+        if prompt_version == "v10":
+            agent_prompt = AgentSparrowV10.build_system_prompt(config=V10Config()).strip()
+        else:
+            agent_prompt = AgentSparrowV9Prompts.build_system_prompt(config=prompt_config).strip()
 
         if provider_prompt and agent_prompt:
             return f"{provider_prompt}\n\n{agent_prompt}"
@@ -134,7 +141,6 @@ class ReasoningEngine:
         version: str = "latest",
     ) -> str:
         """Combine provider + Agent Sparrow prompts with call-specific instructions."""
-
         base_prompt = self._compose_system_prompt(
             prompt_config or PromptV9Config(),
             version=version,
