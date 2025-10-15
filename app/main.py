@@ -6,6 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Any, List
 import os
+import asyncio
 from langchain_core.messages import HumanMessage
 
 # Rate limiting imports
@@ -45,6 +46,9 @@ from app.api.v1.endpoints import (
 from app.api.v1.websocket import feedme_websocket  # FeedMe WebSocket endpoints
 from app.core.settings import settings
 from app.db.embedding_config import EXPECTED_DIM
+from app.integrations.zendesk import router as zendesk_router
+from app.integrations.zendesk.admin_endpoints import router as zendesk_admin_router
+from app.integrations.zendesk.scheduler import start_background_scheduler
 
 # Conditional imports based on security configuration
 auth_endpoints = None
@@ -177,6 +181,9 @@ app.include_router(rate_limit_endpoints.router, prefix="/api/v1", tags=["Rate Li
 app.include_router(advanced_agent_endpoints.router, prefix="/api/v1", tags=["Advanced Agent"])
 # Register Secure Log Analysis routes
 app.include_router(secure_log_analysis.router, prefix="/api/v1", tags=["Secure Log Analysis"])
+# Register Zendesk integration routes
+app.include_router(zendesk_router, prefix="/api/v1", tags=["Zendesk"])
+app.include_router(zendesk_admin_router, prefix="/api/v1", tags=["Zendesk Admin"])
 
 # Conditionally include API Key Management router
 if api_key_endpoints and settings.should_enable_api_key_endpoints():
@@ -236,6 +243,13 @@ async def startup_event():
         logging.warning("Some security endpoints are disabled - ensure this is intentional")
     
     logging.info("==========================================")
+
+    # Start Zendesk background scheduler (feature guarded internally)
+    try:
+        asyncio.get_event_loop().create_task(start_background_scheduler())
+        logging.info("Zendesk scheduler task started")
+    except Exception as e:  # pragma: no cover
+        logging.error("Failed to start Zendesk scheduler: %s", e)
 
 # Global exception handlers for rate limiting
 

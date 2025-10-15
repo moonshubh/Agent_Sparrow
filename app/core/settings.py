@@ -231,6 +231,23 @@ class Settings(BaseSettings):
     # Internal API Security
     internal_api_token: Optional[str] = Field(default=None, alias="INTERNAL_API_TOKEN")
 
+    # Zendesk Integration (webhook + 30m batch posting, no backfill)
+    zendesk_enabled: bool = Field(default=False, alias="ZENDESK_ENABLED")
+    zendesk_subdomain: Optional[str] = Field(default=None, alias="ZENDESK_SUBDOMAIN")
+    zendesk_email: Optional[str] = Field(default=None, alias="ZENDESK_EMAIL")
+    zendesk_api_token: Optional[str] = Field(default=None, alias="ZENDESK_API_TOKEN")
+    zendesk_signing_secret: Optional[str] = Field(default=None, alias="ZENDESK_SIGNING_SECRET")
+    zendesk_brand_id: Optional[str] = Field(default=None, alias="ZENDESK_BRAND_ID")
+    zendesk_dry_run: bool = Field(default=True, alias="ZENDESK_DRY_RUN")
+    zendesk_poll_interval_sec: int = Field(default=60, alias="ZENDESK_POLL_INTERVAL_SEC")
+    zendesk_rpm_limit: int = Field(default=300, alias="ZENDESK_RPM_LIMIT")
+    zendesk_monthly_api_budget: int = Field(default=350, alias="ZENDESK_MONTHLY_API_BUDGET")
+    zendesk_gemini_daily_limit: int = Field(default=1000, alias="ZENDESK_GEMINI_DAILY_LIMIT")
+    zendesk_max_retries: int = Field(default=5, alias="ZENDESK_MAX_RETRIES")
+    zendesk_queue_retention_days: int = Field(default=30, alias="ZENDESK_QUEUE_RETENTION_DAYS")
+    # Debug: enable limited verification logs for Zendesk HMAC (do NOT enable in prod)
+    zendesk_debug_verify: bool = Field(default=False, alias="ZENDESK_DEBUG_VERIFY")
+
     @field_validator('feedme_max_pdf_size_mb')
     @classmethod
     def validate_feedme_max_pdf_size_mb(cls, v: int) -> int:
@@ -301,6 +318,27 @@ class Settings(BaseSettings):
         if value <= 0:
             raise ValueError("global_knowledge_max_chars must be greater than zero")
         return value
+
+    @field_validator('zendesk_poll_interval_sec')
+    @classmethod
+    def validate_zendesk_poll_interval(cls, v: int) -> int:
+        if v <= 0:
+            raise ValueError("zendesk_poll_interval_sec must be positive")
+        return v
+
+    @field_validator('zendesk_rpm_limit', 'zendesk_monthly_api_budget', 'zendesk_gemini_daily_limit', 'zendesk_max_retries')
+    @classmethod
+    def validate_zendesk_limits(cls, v: int) -> int:
+        if v <= 0:
+            raise ValueError("Zendesk limits must be positive integers")
+        return v
+
+    @field_validator('zendesk_queue_retention_days')
+    @classmethod
+    def validate_zendesk_retention(cls, v: int) -> int:
+        if v <= 0:
+            raise ValueError("zendesk_queue_retention_days must be positive")
+        return v
 
     def is_production_mode(self) -> bool:
         """
