@@ -19,7 +19,6 @@ from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 from opentelemetry import trace
 
 from app.core.settings import settings
-from app.agents.primary.primary_agent.prompts.agent_sparrow_v9_prompts import AgentSparrowV9Prompts, PromptV9Config
 from app.agents.primary.primary_agent.prompts.agent_sparrow_v10 import AgentSparrowV10, V10Config
 from .schemas import (
     ReasoningState, ReasoningStep, ReasoningPhase, QueryAnalysis,
@@ -30,7 +29,7 @@ from .schemas import (
 )
 from .problem_solver import ProblemSolvingFramework
 from .tool_intelligence import ToolIntelligence
-from app.agents.primary.primary_agent.prompts import EmotionTemplates, AgentSparrowV9Prompts
+from app.agents.primary.primary_agent.prompts import EmotionTemplates
 from app.agents.primary.primary_agent.prompts.emotion_templates import EmotionalState
 from app.providers.adapters import (
     get_adapter,
@@ -117,7 +116,7 @@ class ReasoningEngine:
         self._provider_prompt_cache[version] = prompt
         return prompt
 
-    def _compose_system_prompt(self, prompt_config: PromptV9Config, version: str = "latest") -> str:
+    def _compose_system_prompt(self, prompt_config: Optional[Any] = None, version: str = "latest") -> str:
         provider_prompt = self._get_provider_system_prompt(version=version).strip()
 
         # Select agent prompt version via settings (default v10)
@@ -125,7 +124,8 @@ class ReasoningEngine:
         if prompt_version == "v10":
             agent_prompt = AgentSparrowV10.build_system_prompt(config=V10Config()).strip()
         else:
-            agent_prompt = AgentSparrowV9Prompts.build_system_prompt(config=prompt_config).strip()
+            # Fallback behavior: use v10 if legacy selection encountered
+            agent_prompt = AgentSparrowV10.build_system_prompt(config=V10Config()).strip()
 
         if provider_prompt and agent_prompt:
             return f"{provider_prompt}\n\n{agent_prompt}"
@@ -137,12 +137,12 @@ class ReasoningEngine:
         self,
         instructions: str,
         *,
-        prompt_config: Optional[PromptV9Config] = None,
+        prompt_config: Optional[Any] = None,
         version: str = "latest",
     ) -> str:
         """Combine provider + Agent Sparrow prompts with call-specific instructions."""
         base_prompt = self._compose_system_prompt(
-            prompt_config or PromptV9Config(),
+            None,
             version=version,
         ).strip()
         instruction_text = dedent(instructions).strip()
@@ -573,19 +573,8 @@ Now, create a response that feels like it's from Agent Sparrow - your email-savv
 
                 response_prompt += "\nPlease do not include explicit URLs, citation markers, or numbered references in the final response. Rely on the provided evidence to stay accurate."  # noqa: E501
 
-                # Use the full Agent Sparrow V9 prompts for proper response generation
-                prompt_config = PromptV9Config(
-                    include_self_critique=False,  # Don't include critique in response generation
-                    include_reasoning=True,
-                    include_emotional_resonance=True,
-                    include_technical_excellence=True,
-                    include_conversational_excellence=True,
-                    include_solution_delivery=True,
-                    include_knowledge_integration=True,
-                    include_premium_elements=True,
-                    include_success_directives=True
-                )
-                system_prompt = self._compose_system_prompt(prompt_config)
+                # Use the Agent Sparrow v10 system prompt
+                system_prompt = self._compose_system_prompt(None)
                 
                 messages: List[BaseMessage] = [
                     SystemMessage(content=system_prompt),
@@ -1090,8 +1079,7 @@ Now, create a response that feels like it's from Agent Sparrow - your email-savv
                 confidence=0.8  # HIGH confidence
             ))
 
-            prompt_config = PromptV9Config(include_self_critique=True)
-            system_prompt = self._compose_system_prompt(prompt_config)
+            system_prompt = self._compose_system_prompt(None)
             
             critique_request_prompt = f"Here is the response I have drafted. Please provide your internal self-critique based on the framework provided in your system instructions:\n\n<draft_response>\n{draft_response}\n</draft_response>"
 
@@ -1156,18 +1144,6 @@ Now, create a response that feels like it's from Agent Sparrow - your email-savv
             span.set_attribute("thinking_budget", thinking_budget)
             
             # Create comprehensive analysis prompt
-            analysis_prompt_config = PromptV9Config(
-                include_self_critique=False,
-                include_reasoning=True,
-                include_emotional_resonance=True,
-                include_technical_excellence=True,
-                include_conversational_excellence=False,
-                include_solution_delivery=False,
-                include_knowledge_integration=True,
-                include_premium_elements=False,
-                include_success_directives=False,
-            )
-
             system_prompt = self._compose_system_prompt_with_instructions(
                 f"""You are Agent Sparrow, an advanced AI customer success expert for Mailbird email client.
 
@@ -1209,7 +1185,7 @@ This is your private thinking space - the customer won't see this reasoning proc
 </thinking>
 
 Provide your analysis in a structured format with clear sections.""",
-                prompt_config=analysis_prompt_config,
+                prompt_config=None,
             )
 
             conversation_note = "No prior conversation context provided."
@@ -1477,18 +1453,6 @@ Provide your analysis in a structured format with clear sections.""",
             context_summary = self._build_context_summary(reasoning_state)
             
             # Create enhanced response prompt
-            enhanced_prompt_config = PromptV9Config(
-                include_self_critique=False,
-                include_reasoning=True,
-                include_emotional_resonance=True,
-                include_technical_excellence=True,
-                include_conversational_excellence=True,
-                include_solution_delivery=True,
-                include_knowledge_integration=True,
-                include_premium_elements=True,
-                include_success_directives=True,
-            )
-
             system_prompt = self._compose_system_prompt_with_instructions(
                 """You are Agent Sparrow, Mailbird's friendly and knowledgeable AI customer support expert.
 
@@ -1509,7 +1473,7 @@ Based on the analysis provided, craft a response that:
 - End with a helpful follow-up question if appropriate
 
 Remember: Quality over speed. Take time to craft a thoughtful response.""",
-                prompt_config=enhanced_prompt_config,
+                prompt_config=None,
             )
 
             user_prompt = f"""Customer Query: {reasoning_state.query_text}
@@ -1650,18 +1614,6 @@ Note: You have a thinking budget of {thinking_budget} tokens available for inter
             current_response = reasoning_state.response_orchestration.final_response_preview
             
             # Create refinement prompt
-            refinement_prompt_config = PromptV9Config(
-                include_self_critique=False,
-                include_reasoning=True,
-                include_emotional_resonance=True,
-                include_technical_excellence=True,
-                include_conversational_excellence=True,
-                include_solution_delivery=True,
-                include_knowledge_integration=True,
-                include_premium_elements=False,
-                include_success_directives=True,
-            )
-
             system_prompt = self._compose_system_prompt_with_instructions(
                 """You are Agent Sparrow, tasked with improving a response that has low confidence.
 
@@ -1674,7 +1626,7 @@ Review the current response and the analysis context, then improve it by:
 4. Maintaining a warm, helpful tone
 
 Focus on accuracy and completeness while keeping the conversational style.""",
-                prompt_config=refinement_prompt_config,
+                prompt_config=None,
             )
 
             user_prompt = f"""Original Query: {reasoning_state.query_text}

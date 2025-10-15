@@ -17,7 +17,7 @@ from app.providers.limits import wrap_gemini_agent
 from app.agents.primary.primary_agent.schemas import PrimaryAgentState
 from app.agents.primary.primary_agent.tools import mailbird_kb_search, tavily_web_search
 from app.agents.primary.primary_agent.reasoning import ReasoningEngine, ReasoningConfig
-from app.agents.primary.primary_agent.prompts import AgentSparrowV9Prompts
+# v10 prompt is selected inside ReasoningEngine; no direct prompt import needed here
 from app.agents.primary.primary_agent.adapter_bridge import get_primary_agent_model
 from app.core.settings import settings
 from app.agents.primary.primary_agent.feedme_knowledge_tool import (
