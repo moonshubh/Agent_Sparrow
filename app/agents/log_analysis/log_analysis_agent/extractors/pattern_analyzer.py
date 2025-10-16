@@ -7,10 +7,10 @@ error patterns, anomalies, and recurring issues in Mailbird logs.
 
 import re
 import logging
-from collections import defaultdict, Counter
+from collections import Counter
 from datetime import datetime, timedelta
 from typing import Dict, List, Set, Optional, Tuple, Any
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, asdict
 import hashlib
 
 from ..schemas.log_schemas import (
@@ -18,6 +18,8 @@ from ..schemas.log_schemas import (
     ErrorPattern,
     ErrorCategory,
     Severity,
+    EvidenceReference,
+    SignatureInfo,
 )
 
 logger = logging.getLogger(__name__)
@@ -31,12 +33,15 @@ class PatternSignature:
     template: str
     variables: List[str] = field(default_factory=list)
     category: ErrorCategory = ErrorCategory.UNKNOWN
+    exception: Optional[str] = None
+    top_frames: List[str] = field(default_factory=list)
 
     @classmethod
     def from_message(cls, message: str, category: ErrorCategory = ErrorCategory.UNKNOWN) -> "PatternSignature":
         """Create a pattern signature from an error message."""
         # Normalize the message to create a template
         template, variables = cls._extract_template(message)
+        exception, top_frames = cls._extract_exception_and_frames(message)
         signature_hash = hashlib.md5(template.encode()).hexdigest()[:8]
 
         return cls(
@@ -44,6 +49,8 @@ class PatternSignature:
             template=template,
             variables=variables,
             category=category,
+            exception=exception,
+            top_frames=top_frames,
         )
 
     @staticmethod
@@ -70,6 +77,36 @@ class PatternSignature:
             template = re.sub(pattern, placeholder, template)
 
         return template, variables
+
+    @staticmethod
+    def _extract_exception_and_frames(message: str) -> Tuple[Optional[str], List[str]]:
+        """Extract probable exception name and top stack frames from a message block."""
+        exception_match = re.search(r"([A-Za-z0-9_.]+Exception)", message)
+        exception = exception_match.group(1) if exception_match else None
+
+        frames: List[str] = []
+        for line in message.splitlines():
+            stripped = line.strip()
+            if not stripped:
+                continue
+            lowered = stripped.lower()
+            if lowered.startswith("at "):
+                frame = stripped[3:].strip()
+            elif " at " in lowered:
+                # Handle "Exception: ... at Method" inline formats
+                parts = stripped.split(" at ", 1)
+                frame = parts[1].strip()
+            else:
+                continue
+
+            frame = re.sub(r":\d+(?=\b|$)", "", frame)
+            frame = re.sub(r"\s+in\s+<[^>]+>", "", frame)
+            if frame and frame not in frames:
+                frames.append(frame)
+            if len(frames) >= 3:
+                break
+
+        return exception, frames
 
 
 class PatternAnalyzer:
@@ -183,7 +220,7 @@ class PatternAnalyzer:
 
     def reset(self):
         """Reset internal state for new analysis."""
-        self._pattern_clusters: Dict[str, List[LogEntry]] = defaultdict(list)
+        self._pattern_clusters: Dict[str, Dict[str, Any]] = {}
         self._category_counts: Counter = Counter()
         self._temporal_clusters: List[List[LogEntry]] = []
 
@@ -275,7 +312,11 @@ class PatternAnalyzer:
         """Cluster entries by their pattern signature."""
         for entry, category in categorized_entries:
             signature = PatternSignature.from_message(entry.message, category)
-            self._pattern_clusters[signature.signature_hash].append(entry)
+            cluster = self._pattern_clusters.setdefault(
+                signature.signature_hash,
+                {"signature": signature, "entries": []}
+            )
+            cluster["entries"].append(entry)
 
     def _temporal_clustering(self, entries: List[LogEntry]):
         """Cluster errors that occur close together in time."""
@@ -313,25 +354,43 @@ class PatternAnalyzer:
         pattern_id = 0
 
         # Build patterns from signature clusters
-        for signature_hash, entries in self._pattern_clusters.items():
+        for signature_hash, payload in self._pattern_clusters.items():
+            entries = payload["entries"]
+            signature: PatternSignature = payload["signature"]
+
             if len(entries) < self.min_occurrences:
                 continue
 
             pattern_id += 1
-            # Get the signature from first entry
             first_entry = entries[0]
-            signature = PatternSignature.from_message(
-                first_entry.message,
-                self._categorize_entry(first_entry)
-            )
+            category = signature.category or self._categorize_entry(first_entry)
 
             # Extract pattern details
             components = set(e.component for e in entries)
             timestamps = [e.timestamp for e in entries]
 
+            evidence_refs: List[Dict[str, Any]] = []
+            for example in entries[:3]:
+                evidence_refs.append(
+                    asdict(
+                        EvidenceReference(
+                            source_file=example.source_file or "log_file.log",
+                            line_start=example.line_number,
+                            line_end=example.line_number,
+                            signature_id=signature_hash,
+                        )
+                    )
+                )
+
+            signature_info = SignatureInfo(
+                exception=signature.exception,
+                message_fingerprint=signature.template,
+                top_frames=signature.top_frames,
+            )
+
             pattern = ErrorPattern(
                 pattern_id=f"PAT-{pattern_id:04d}",
-                category=signature.category,
+                category=category,
                 description=self._generate_pattern_description(signature, entries),
                 occurrences=len(entries),
                 first_seen=min(timestamps),
@@ -340,6 +399,9 @@ class PatternAnalyzer:
                 sample_entries=entries[:3],  # Keep first 3 as samples
                 confidence=self._calculate_confidence(entries),
                 indicators=self._extract_indicators(entries),
+                signature_id=signature_hash,
+                signature=signature_info.__dict__,
+                evidence_refs=evidence_refs,
             )
             patterns.append(pattern)
 

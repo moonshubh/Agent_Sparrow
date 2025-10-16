@@ -55,6 +55,15 @@ const getNumber = (source: Record<string, unknown>, key: string): number | undef
 
 const getArray = (value: unknown): unknown[] | undefined => (Array.isArray(value) ? value : undefined)
 
+const confidenceLabelToScore = (label?: string): number | undefined => {
+  if (!label) return undefined
+  const normalized = label.toLowerCase()
+  if (normalized === 'high') return 0.9
+  if (normalized === 'medium') return 0.6
+  if (normalized === 'low') return 0.35
+  return undefined
+}
+
 const generateStreamId = () => {
   try {
     if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
@@ -89,34 +98,62 @@ const mapAnalysisResultsToMessageMetadata = (analysis: unknown) => {
 
   const ingestion = asRecord(analysis['ingestion_metadata']) ?? asRecord(analysis['metadata']) ?? {}
   const system = asRecord(analysis['system_metadata']) ?? {}
+  const structured = asRecord(analysis['structured_output'])
+  const overviewRecord = (structured && asRecord(structured['overview'])) ?? {}
+  const metaRecord = (structured && asRecord(structured['meta'])) ?? {}
+  const coverageRecord = (metaRecord && asRecord(metaRecord['coverage'])) ?? {}
 
-  const version =
+  let version =
     getString(system, 'app_version') ??
     getString(system, 'version') ??
     getString(analysis, 'version') ??
     null
+  if (!version) {
+    version = getString(overviewRecord, 'app_version') ?? null
+  }
 
-  const platform =
+  let platform =
     getString(system, 'platform') ??
     getString(analysis, 'platform') ??
     null
+  if (!platform) {
+    platform = getString(overviewRecord, 'platform') ?? null
+  }
 
-  const databaseSize =
-    getNumber(system, 'database_size') ??
-    getNumber(analysis, 'database_size') ??
+  // Accept numeric or string database size (e.g., "350 MB")
+  let databaseSize =
+    (getNumber(system, 'database_size') as any) ??
+    (getNumber(analysis, 'database_size') as any) ??
+    getString(system, 'database_size') ??
+    getString(analysis, 'database_size') ??
     null
+  if (!databaseSize) {
+    databaseSize = getString(overviewRecord, 'db_size') ?? null
+  }
 
-  const accountCount =
+  let accountCount =
     getNumber(system, 'account_count') ??
     getNumber(ingestion, 'account_count') ??
     null
+  if (accountCount === null) {
+    const structuredAccountCount = getNumber(overviewRecord, 'accounts_count')
+    if (structuredAccountCount !== undefined) {
+      accountCount = structuredAccountCount
+    }
+  }
 
   const accountsWithErrors = getNumber(system, 'accounts_with_errors') ?? null
 
-  const totalEntries =
+  let totalEntries =
     getNumber(ingestion, 'line_count') ??
     getNumber(system, 'total_entries') ??
     null
+  if (totalEntries === null) {
+    const coverageLines = getNumber(coverageRecord, 'lines_total')
+    if (coverageLines !== undefined) {
+      totalEntries = coverageLines
+    }
+  }
 
   const errorCount =
     getNumber(ingestion, 'error_count') ??
@@ -128,19 +165,26 @@ const mapAnalysisResultsToMessageMetadata = (analysis: unknown) => {
     getNumber(system, 'warning_count') ??
     null
 
-  const timeRange =
-    getString(ingestion, 'time_range') ??
-    getString(system, 'time_range') ??
-    null
+  // Prefer structured { start, end } time range if available
+  const timeRangeRecord = asRecord(ingestion['time_range']) ?? asRecord(system['time_range']) ?? null
+  const timeRange = timeRangeRecord
+    ? {
+        start: getString(timeRangeRecord, 'start') ?? undefined,
+        end: getString(timeRangeRecord, 'end') ?? undefined,
+      }
+    : null
 
   const performanceMetrics = asRecord(system['performance_metrics']) ?? asRecord(analysis['performance_metrics']) ?? null
 
   const healthStatus = getString(analysis, 'health_status') ?? getString(system, 'health_status') ?? null
 
-  const confidenceLevel =
+  let confidenceLevel =
     getNumber(analysis, 'confidence_level') ??
     getNumber(system, 'confidence_level') ??
     undefined
+  if (confidenceLevel === undefined) {
+    confidenceLevel = confidenceLabelToScore(getString(overviewRecord, 'confidence'))
+  }
 
   const logMetadata = {
     version,
@@ -160,8 +204,10 @@ const mapAnalysisResultsToMessageMetadata = (analysis: unknown) => {
 
   const issuesSource = getArray(analysis['identified_issues']) ?? getArray(analysis['issues']) ?? []
   const issueRecords = issuesSource.filter(isRecord)
+  const findingsSource = structured ? getArray(structured['findings']) ?? [] : []
+  const findingRecords = findingsSource.filter(isRecord)
 
-  const errorSnippets = issueRecords.length
+  let errorSnippets = issueRecords.length
     ? issueRecords.map(issue => {
         const severityRaw = getString(issue, 'severity') ?? ''
         const normalizedSeverity = severityRaw.toLowerCase()
@@ -195,11 +241,37 @@ const mapAnalysisResultsToMessageMetadata = (analysis: unknown) => {
       })
     : undefined
 
+  if (!errorSnippets && findingRecords.length) {
+    errorSnippets = findingRecords.map(finding => {
+      const severityRaw = getString(finding, 'severity') ?? 'medium'
+      const normalizedSeverity = severityRaw.toLowerCase()
+      const level = normalizedSeverity === 'high'
+        ? 'CRITICAL'
+        : normalizedSeverity === 'low'
+          ? 'WARNING'
+          : 'ERROR'
+
+      return {
+        level,
+        timestamp: undefined,
+        message: getString(finding, 'title') ?? '',
+        context: getString(finding, 'details') ?? undefined,
+        stackTrace: undefined,
+      }
+    })
+  }
+
   const priorityConcerns = getArray(analysis['priority_concerns'])
   const firstConcern = priorityConcerns?.find(item => typeof item === 'string') as string | undefined
   const overallSummary = getString(analysis, 'overall_summary') ?? undefined
 
-  const rootCauseSummary = firstConcern ?? overallSummary
+  let rootCauseSummary = firstConcern ?? overallSummary
+  if (!rootCauseSummary && findingRecords.length) {
+    rootCauseSummary =
+      getString(findingRecords[0], 'details') ??
+      getString(findingRecords[0], 'title') ??
+      undefined
+  }
 
   const rootCause = rootCauseSummary
     ? {

@@ -177,12 +177,13 @@ async def run_log_analysis_agent(state: Dict[str, Any]) -> Dict[str, Any]:
                 user_query=question,
                 user_context_input=None,
                 settings_dict=settings_dict,
+                source_name=state.get("file_name") or "uploaded.log",
             )
 
             # Produce formatted conversational response similar to Primary Agent
             try:
                 _, formatted_response = await agent._generate_response(
-                    analysis_result, question, None
+                    analysis_result, question, None, {}
                 )
                 # Defense-in-depth: sanitize any formatted response before returning
                 try:

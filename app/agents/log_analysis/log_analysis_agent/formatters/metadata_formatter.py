@@ -119,23 +119,32 @@ class MetadataFormatter:
         lines = []
         lines.append("```yaml")
         lines.append("# System Information")
-        lines.append(f"Mailbird Version: {metadata.mailbird_version}")
 
-        if metadata.build_number:
-            lines.append(f"Build: {metadata.build_number}")
+        mailbird_version = getattr(metadata, "mailbird_version", "unknown") or "unknown"
+        build_number = getattr(metadata, "build_number", None)
+        os_version = getattr(metadata, "os_version", "unknown") or "unknown"
+        os_arch = getattr(metadata, "os_architecture", "unknown") or "unknown"
+        account_count = getattr(metadata, "account_count", 0) or 0
+        error_count = getattr(metadata, "error_count", 0) or 0
+        warning_count = getattr(metadata, "warning_count", 0) or 0
+        total_entries = getattr(metadata, "total_entries", 0) or 0
 
-        lines.append(f"OS: {metadata.os_version} ({metadata.os_architecture})")
+        lines.append(f"Mailbird Version: {mailbird_version}")
+        if build_number:
+            lines.append(f"Build: {build_number}")
+        lines.append(f"OS: {os_version} ({os_arch})")
         lines.append(f"Accounts: {account_count}")
 
-        if metadata.account_providers:
-            providers = ", ".join(metadata.account_providers)
-            lines.append(f"Providers: {providers}")
+        providers = getattr(metadata, "account_providers", None)
+        if providers:
+            providers_str = ", ".join(providers)
+            lines.append(f"Providers: {providers_str}")
 
-        lines.append(f"Total Log Entries: {metadata.total_entries:,}")
+        lines.append(f"Total Log Entries: {total_entries:,}")
         lines.append(f"Errors: {error_count:,}")
         lines.append(f"Warnings: {warning_count:,}")
 
-        if metadata.session_duration_hours is not None:
+        if getattr(metadata, "session_duration_hours", None) is not None:
             lines.append(
                 f"Session Duration: {self._format_duration(metadata.session_duration_hours)}"
             )

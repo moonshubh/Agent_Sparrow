@@ -26,6 +26,19 @@ const config: Config = {
   ],
   theme: {
 	extend: {
+		fontFamily: {
+			sans: [
+				'"Source Sans Pro"',
+				'-apple-system',
+				'BlinkMacSystemFont',
+				'"Segoe UI"',
+				'Roboto',
+				'Oxygen',
+				'Ubuntu',
+				'Cantarell',
+				'sans-serif'
+			]
+		},
 			colors: {
   			background: 'hsl(var(--background))',
   			foreground: 'hsl(var(--foreground))',

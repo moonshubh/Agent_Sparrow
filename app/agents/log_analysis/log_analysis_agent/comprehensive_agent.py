@@ -21,6 +21,7 @@ from pathlib import Path
 import hashlib
 from uuid import uuid4
 import asyncio
+import time
 
 import aiofiles
 
@@ -43,6 +44,7 @@ from .reasoning.log_reasoning_engine import LogReasoningEngine
 from .reasoning.root_cause_classifier import RootCauseClassifier
 from .context.context_ingestor import ContextIngestor
 from .formatters.response_formatter import LogResponseFormatter, FormattingConfig
+from .formatters.v10_formatter import LogV10Composer
 from app.agents.primary.primary_agent.prompts.emotion_templates import EmotionalState
 
 # Import security components
@@ -181,6 +183,7 @@ class LogAnalysisAgent:
             min_quality_score=self.config.quality_score_threshold
         )
         self.response_formatter = LogResponseFormatter(formatter_config)
+        self.v10_composer = LogV10Composer(self.sanitizer if self.enable_security else None)
 
         # Model and reasoning engine will be initialized on first use
         self._model = None
@@ -236,6 +239,7 @@ class LogAnalysisAgent:
         Returns:
             Tuple of (analysis_result, user_response)
         """
+        start_time = time.perf_counter()
         log_file_path = Path(log_file_path)
 
         # Security validation if enabled
@@ -258,8 +262,17 @@ class LogAnalysisAgent:
         if use_cache and cache_key in self._analysis_cache:
             logger.info(f"Using cached analysis for {log_file_path}")
             cached_result = self._analysis_cache[cache_key]
+            if cached_result.conversational_markdown:
+                return cached_result, cached_result.conversational_markdown
             _, response = await self._generate_response(
-                cached_result, user_query, user_context_input
+                cached_result,
+                user_query,
+                user_context_input,
+                {
+                    "redactions_applied": cached_result.metadata.security_info.get("redaction_types")
+                    if getattr(cached_result.metadata, "security_info", None)
+                    else None
+                },
             )
             return cached_result, response
 
@@ -272,11 +285,14 @@ class LogAnalysisAgent:
             # Legacy non-secure path (not recommended)
             log_content = await self._read_log_file(log_file_path)
             analysis_result = await self.analyze_log_content(
-                log_content, user_query, user_context_input
+                log_content,
+                user_query,
+                user_context_input,
+                source_name=log_file_path.name,
             )
             # Properly await the coroutine before unpacking
             response_tuple = await self._generate_response(
-                analysis_result, user_query, user_context_input
+                analysis_result, user_query, user_context_input, {}
             )
             result = (analysis_result, response_tuple[1])
 
@@ -288,7 +304,16 @@ class LogAnalysisAgent:
             if is_compliant:
                 self._analysis_cache[cache_key] = result[0]
 
-        return result
+        # Update duration metadata and ensure structured payload reflects elapsed time
+        elapsed_ms = int((time.perf_counter() - start_time) * 1000)
+        analysis_result, response_text = result
+        if analysis_result.structured_output:
+            analysis_result.structured_output.meta.analysis_duration_ms = elapsed_ms
+        if analysis_result.structured_output_dict:
+            meta = analysis_result.structured_output_dict.get("meta") or {}
+            meta["analysis_duration_ms"] = elapsed_ms
+            analysis_result.structured_output_dict["meta"] = meta
+        return analysis_result, response_text
 
     async def _analyze_with_security(
         self,
@@ -335,7 +360,10 @@ class LogAnalysisAgent:
 
                 # Analyze sanitized content
                 analysis_result = await self.analyze_log_content(
-                    sanitized_content, user_query, user_context_input
+                    sanitized_content,
+                    user_query,
+                    user_context_input,
+                    source_name=log_file_path.name,
                 )
 
                 # Add security metadata
@@ -350,7 +378,12 @@ class LogAnalysisAgent:
 
                 # Generate response with sanitized data
                 _, response = await self._generate_response(
-                    analysis_result, user_query, user_context_input
+                    analysis_result,
+                    user_query,
+                    user_context_input,
+                    {
+                        "redactions_applied": list(redaction_stats.keys()),
+                    },
                 )
 
                 # Ensure response is also sanitized for display
@@ -381,6 +414,7 @@ class LogAnalysisAgent:
         user_query: Optional[str] = None,
         user_context_input: Optional[str] = None,
         settings_dict: Optional[Dict[str, Any]] = None,
+        source_name: Optional[str] = None,
     ) -> LogAnalysisResult:
         """
         Analyze raw log content.
@@ -398,6 +432,9 @@ class LogAnalysisAgent:
 
         # Parse log entries
         log_entries = self._parse_log_entries(log_content)
+        if source_name:
+            for entry in log_entries:
+                entry.source_file = source_name
 
         # Extract metadata
         metadata = self.metadata_extractor.extract_from_entries(log_entries)
@@ -405,6 +442,11 @@ class LogAnalysisAgent:
         # Also extract from raw text for additional context
         metadata_from_text = self.metadata_extractor.extract_from_text(log_content)
         metadata = self._merge_metadata(metadata, metadata_from_text)
+
+        if source_name:
+            existing_files = set(metadata.source_files or [])
+            existing_files.add(source_name)
+            metadata.source_files = list(existing_files)
 
         # Optionally merge Mailbird settings metadata
         try:
@@ -594,6 +636,12 @@ class LogAnalysisAgent:
                         logger.debug(f"Failed to parse line {line_num}: {e}")
                         continue
 
+            if entry is None and "|" in stripped:
+                pipe_entry = self._parse_pipe_delimited_entry(stripped, line, line_num)
+                if pipe_entry:
+                    entry = pipe_entry
+                    current_entry = entry
+
             # If no pattern matched, create a generic entry
             if not entry:
                 if current_entry:
@@ -678,6 +726,46 @@ class LogAnalysisAgent:
         except ValueError:
             # Default to INFO for unknown severities
             return Severity.INFO
+
+    def _parse_pipe_delimited_entry(
+        self,
+        stripped_line: str,
+        raw_line: str,
+        line_num: int,
+    ) -> Optional[LogEntry]:
+        """Parse pipe-delimited Mailbird log entries."""
+
+        parts = stripped_line.split("|")
+        if len(parts) < 6:
+            return None
+
+        timestamp_str = parts[0].strip()
+        severity_str = parts[1].strip()
+        component = parts[2].strip() or "system"
+        thread_id = parts[3].strip() or None
+        correlation_id = parts[4].strip() or None
+        message = "|".join(parts[5:]).strip()
+
+        try:
+            timestamp = self._parse_timestamp(timestamp_str)
+        except Exception:
+            return None
+
+        severity = self._parse_severity(severity_str)
+
+        if not message:
+            message = "(no message)"
+
+        return LogEntry(
+            timestamp=timestamp,
+            severity=severity,
+            component=component,
+            message=message,
+            thread_id=thread_id,
+            correlation_id=correlation_id,
+            raw_text=raw_line,
+            line_number=line_num,
+        )
 
     def _merge_metadata(
         self, primary: LogMetadata, secondary: LogMetadata
@@ -992,47 +1080,79 @@ class LogAnalysisAgent:
         analysis_result: LogAnalysisResult,
         user_query: Optional[str],
         user_context_input: Optional[str],
+        response_context: Optional[Dict[str, Any]] = None,
     ) -> Tuple[Any, str]:
         """Generate user-friendly response using the reasoning engine and formatter."""
+
+        response_context = response_context or {}
+
         # Reuse enriched user context when available
         user_context = analysis_result.user_context
         if user_context is None and user_context_input:
             user_context = self.context_ingestor.ingest_user_input(user_context_input)
 
         # Use reasoning engine for analysis and tool gathering
-        reasoning_state, initial_response = await self._reasoning_engine.analyze_logs_with_reasoning(
+        reasoning_state, _ = await self._reasoning_engine.analyze_logs_with_reasoning(
             analysis_result, user_query, user_context
         )
 
-        # Detect emotional state from user context or query
+        # Collect auxiliary signals
         emotional_state = self._detect_emotional_state(user_context, user_context_input, user_query)
-
-        # Get tool results if available from reasoning engine
         tool_results = None
         if hasattr(self._reasoning_engine, '_tool_results_cache'):
             tool_results = self._reasoning_engine._tool_results_cache.get(analysis_result.analysis_id)
 
-        # Get user name from dedicated field if available
-        user_name = getattr(user_context, 'user_name', None) if user_context else None
-
-        # Format the response using the new formatter
-        formatted_response, validation_result = await self.response_formatter.format_response(
-            analysis=analysis_result,
-            emotional_state=emotional_state,
-            user_context=user_context,
-            tool_results=tool_results,
-            attachment_data=None,  # Could be added if attachments are processed
-            user_name=user_name
-        )
-
-        # Log quality metrics
-        if validation_result.score.overall_score < self.config.quality_score_threshold:
-            logger.warning(
-                f"Response quality below threshold: {validation_result.score.overall_score:.2f} "
-                f"for analysis {analysis_result.analysis_id}"
+        # Compose conversational markdown + envelope (preferred path)
+        try:
+            markdown, envelope, envelope_dict = self.v10_composer.compose(
+                analysis_result,
+                user_query=user_query,
+                redactions_applied=response_context.get("redactions_applied"),
+                analysis_duration_ms=response_context.get("analysis_duration_ms"),
+            )
+            analysis_result.conversational_markdown = markdown
+            analysis_result.structured_output = envelope
+            analysis_result.structured_output_dict = envelope_dict
+            return reasoning_state, markdown
+        except Exception as composer_error:
+            logger.exception(
+                "v10 conversational composer failed; falling back to legacy formatter",
+                exc_info=True,
             )
 
-        return reasoning_state, formatted_response
+        # Legacy formatter fallback to guarantee a response
+        if hasattr(self, "response_formatter"):
+            try:
+                user_name = getattr(user_context, "user_name", None) if user_context else None
+                formatted_response, validation_result = await self.response_formatter.format_response(
+                    analysis=analysis_result,
+                    emotional_state=emotional_state,
+                    user_context=user_context,
+                    tool_results=tool_results,
+                    attachment_data=None,
+                    user_name=user_name,
+                )
+                analysis_result.conversational_markdown = formatted_response
+                analysis_result.structured_output = None
+                analysis_result.structured_output_dict = None
+
+                if validation_result.score.overall_score < self.config.quality_score_threshold:
+                    logger.warning(
+                        "Legacy formatter quality below threshold: %.2f for %s",
+                        validation_result.score.overall_score,
+                        analysis_result.analysis_id,
+                    )
+
+                return reasoning_state, formatted_response
+            except Exception as legacy_error:
+                logger.exception("Legacy formatter failed", exc_info=True)
+
+        # Absolute fallback when all formatting paths fail
+        fallback = analysis_result.generate_user_summary()
+        analysis_result.conversational_markdown = fallback
+        analysis_result.structured_output = None
+        analysis_result.structured_output_dict = None
+        return reasoning_state, fallback
 
     def _detect_emotional_state(
         self,

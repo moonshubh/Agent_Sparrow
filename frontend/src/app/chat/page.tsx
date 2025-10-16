@@ -480,11 +480,20 @@ function ChatContent({ sessionId, setSessionId }: ChatContentProps) {
         const lastUser = [...chatMessages].reverse().find((m) => m.role === 'user');
         const userText = lastUser ? getMessageText(lastUser).trim() : "";
         const assistantText = getMessageText(assistantMessage).trim();
+        const timelineAgent = (liveTimelineAgentRef.current ?? activeAgent) as InteractiveAgent;
+        const assistantMetadata = normalizeAssistantMetadata(assistantMessage.metadata);
+        const assistantAgent: InteractiveAgent = assistantMetadata && (
+          assistantMetadata.analysisResults ||
+          assistantMetadata.logMetadata ||
+          assistantMetadata.errorSnippets
+        )
+          ? 'log_analysis'
+          : timelineAgent;
 
         if (userText) {
           await sessionsAPI.postMessage(activeSessionId, {
             message_type: 'user',
-            agent_type: activeAgent,
+            agent_type: timelineAgent,
             content: userText,
           });
 
@@ -525,7 +534,7 @@ function ChatContent({ sessionId, setSessionId }: ChatContentProps) {
 
           await sessionsAPI.postMessage(activeSessionId, {
             message_type: 'assistant',
-            agent_type: activeAgent,
+            agent_type: assistantAgent,
             content: assistantText,
             ...(Object.keys(metadataPayload).length > 0 ? { metadata: metadataPayload } : {}),
           });

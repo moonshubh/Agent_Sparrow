@@ -5,7 +5,7 @@ This module defines the data structures used throughout the log analysis system,
 following Pythonic principles with clear type hints and comprehensive docstrings.
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, asdict
 from datetime import datetime
 from enum import Enum, auto
 from typing import Dict, List, Optional, Any, Set, Tuple
@@ -133,6 +133,7 @@ class LogEntry:
     metadata: Dict[str, Any] = field(default_factory=dict)
     raw_text: str = ""
     line_number: Optional[int] = None
+    source_file: Optional[str] = None
 
     @property
     def is_error(self) -> bool:
@@ -176,6 +177,9 @@ class ErrorPattern:
     sample_entries: List[LogEntry] = field(default_factory=list)
     confidence: float = 0.0
     indicators: List[str] = field(default_factory=list)
+    signature_id: Optional[str] = None
+    signature: Dict[str, Any] = field(default_factory=dict)
+    evidence_refs: List[Dict[str, Any]] = field(default_factory=list)
 
     @property
     def duration(self) -> float:
@@ -233,6 +237,8 @@ class LogMetadata:
     network_state: str = "Unknown"
     proxy_configured: bool = False
     plugins_enabled: List[str] = field(default_factory=list)
+    source_files: List[str] = field(default_factory=list)
+    security_info: Dict[str, Any] = field(default_factory=dict)
 
     @property
     def session_duration_hours(self) -> Optional[float]:
@@ -403,6 +409,9 @@ class LogAnalysisResult:
     affected_functionality: List[str] = field(default_factory=list)
     data_integrity_risk: bool = False
     estimated_resolution_time: int = 0  # minutes
+    structured_output: Optional["LogAnalysisEnvelope"] = None
+    structured_output_dict: Optional[Dict[str, Any]] = None
+    conversational_markdown: Optional[str] = None
 
     @property
     def has_critical_issues(self) -> bool:
@@ -470,3 +479,112 @@ class LogAnalysisResult:
             )
 
         return "\n".join(summary_parts)
+
+
+# Structured output envelopes ------------------------------------------------
+
+class StructuredConfidence(Enum):
+    HIGH = "high"
+    MEDIUM = "medium"
+    LOW = "low"
+
+
+class FindingSeverity(Enum):
+    HIGH = "high"
+    MEDIUM = "medium"
+    LOW = "low"
+
+
+@dataclass
+class EvidenceReference:
+    source_file: str
+    line_start: Optional[int]
+    line_end: Optional[int]
+    signature_id: str
+
+
+@dataclass
+class SignatureInfo:
+    exception: Optional[str]
+    message_fingerprint: Optional[str]
+    top_frames: List[str] = field(default_factory=list)
+
+
+@dataclass
+class FindingPayload:
+    severity: FindingSeverity
+    title: str
+    details: str
+    evidence_refs: List[EvidenceReference] = field(default_factory=list)
+    occurrences: Optional[int] = None
+    signature: SignatureInfo = field(default_factory=lambda: SignatureInfo(None, None, []))
+
+
+@dataclass
+class QuickActionPayload:
+    label: str
+    action_id: str
+    kind: str = "manual"
+    notes: Optional[str] = None
+
+
+@dataclass
+class FixStepPayload:
+    step: str
+    notes: Optional[str] = None
+
+
+@dataclass
+class CoveragePayload:
+    lines_total: Optional[int]
+    errors_grouped: int
+
+
+@dataclass
+class MetaPayload:
+    analysis_duration_ms: Optional[int]
+    engine_version: str
+    coverage: CoveragePayload
+
+
+@dataclass
+class OverviewPayload:
+    time_range: Optional[str]
+    files: List[str]
+    app_version: Optional[str]
+    db_size: Optional[str]
+    accounts_count: Optional[int]
+    platform: Optional[str]
+    confidence: StructuredConfidence
+    confidence_reason: str
+
+
+@dataclass
+class LogAnalysisEnvelope:
+    overview: OverviewPayload
+    findings: List[FindingPayload]
+    quick_actions: List[QuickActionPayload]
+    full_fix_steps: List[FixStepPayload]
+    checks: List[str]
+    tips: List[str]
+    redactions_applied: List[str]
+    meta: MetaPayload
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert envelope to a JSON-serializable dict."""
+
+        def _serialize(obj: Any) -> Any:
+            if isinstance(obj, Enum):
+                return obj.value
+            if dataclass_isinstance(obj):
+                return {k: _serialize(v) for k, v in asdict(obj).items()}
+            if isinstance(obj, list):
+                return [_serialize(item) for item in obj]
+            return obj
+
+        return _serialize(self)
+
+
+def dataclass_isinstance(instance: Any) -> bool:
+    """Check whether an object is an instance of a dataclass."""
+    return hasattr(instance, "__dataclass_fields__")

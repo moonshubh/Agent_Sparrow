@@ -1,6 +1,7 @@
 import json
 import logging
 import re
+from dataclasses import is_dataclass
 from datetime import datetime
 from typing import Any, Pattern
 
@@ -49,6 +50,68 @@ def safe_json_serializer(obj: Any):
 def serialize_analysis_results(final_report: Any) -> dict | Any:
     """Safely serialize analysis results for JSON streaming/response."""
     try:
+        if is_dataclass(final_report):
+            structured_output = getattr(final_report, "structured_output_dict", None)
+            if structured_output is None and getattr(final_report, "structured_output", None):
+                try:
+                    structured_output = final_report.structured_output.to_dict()  # type: ignore[union-attr]
+                except Exception:
+                    structured_output = None
+
+            metadata = getattr(final_report, "metadata", None)
+            system_metadata: dict[str, Any] = {}
+            ingestion_metadata: dict[str, Any] = {}
+
+            if metadata is not None:
+                system_metadata = {
+                    "app_version": getattr(metadata, "mailbird_version", None),
+                    "os_version": getattr(metadata, "os_version", None),
+                    "account_count": getattr(metadata, "account_count", None),
+                    "database_size": getattr(metadata, "database_size_mb", None),
+                    "error_count": getattr(metadata, "error_count", None),
+                    "warning_count": getattr(metadata, "warning_count", None),
+                    "time_range": {
+                        "start": getattr(metadata, "session_start", None),
+                        "end": getattr(metadata, "session_end", None),
+                    },
+                }
+                ingestion_metadata = {
+                    "line_count": getattr(metadata, "total_entries", None),
+                    "time_range": {
+                        "start": getattr(metadata, "session_start", None),
+                        "end": getattr(metadata, "session_end", None),
+                    },
+                }
+
+            markdown = getattr(final_report, "conversational_markdown", None) or getattr(
+                final_report, "executive_summary", ""
+            )
+
+            findings_legacy: list[dict[str, Any]] = []
+            if structured_output:
+                for finding in structured_output.get("findings", []):
+                    findings_legacy.append(
+                        {
+                            "title": finding.get("title"),
+                            "details": finding.get("details"),
+                            "severity": finding.get("severity"),
+                            "occurrences": finding.get("occurrences"),
+                            "evidence_refs": finding.get("evidence_refs", []),
+                        }
+                    )
+
+            serialized = {
+                "markdown": markdown,
+                "structured_output": structured_output,
+                "system_metadata": system_metadata,
+                "ingestion_metadata": ingestion_metadata,
+                "identified_issues": findings_legacy,
+                "overall_summary": getattr(final_report, "executive_summary", markdown),
+                "redactions_applied": structured_output.get("redactions_applied", []) if structured_output else [],
+            }
+
+            return safe_json_serializer(serialized)
+
         if hasattr(final_report, 'model_dump'):
             serialized = final_report.model_dump()
         elif hasattr(final_report, 'dict'):
