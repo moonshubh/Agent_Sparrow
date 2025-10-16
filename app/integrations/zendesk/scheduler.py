@@ -12,6 +12,11 @@ from app.core.settings import settings
 from app.db.supabase.client import get_supabase_client
 from app.agents.primary import run_primary_agent, PrimaryAgentState
 from .client import ZendeskClient
+from app.core.user_context import UserContext, user_context_scope
+from app.agents.primary.primary_agent.prompts.response_formatter import ResponseFormatter, ResponseSection
+from app.agents.primary.primary_agent.prompts.emotion_templates import EmotionalState
+from app.agents.primary.primary_agent.agent import _gather_grounding_evidence
+import re
 
 logger = logging.getLogger(__name__)
 
@@ -242,23 +247,386 @@ async def _inc_daily_usage(n: int) -> None:
 
 
 async def _generate_reply(ticket_id: int | str, subject: str | None, description: str | None) -> str:
-    """Run Primary Agent non-streaming to produce suggested public reply text."""
-    subj = subject or "(no subject)"
-    desc = description or "(no description)"
-    prompt = (
-        "You are preparing a suggested public reply for a new Zendesk ticket.\n"
-        f"Subject: {subj}\n"
-        f"Description: {desc}\n\n"
-        "Provide a helpful, accurate answer using available knowledge. Do not include private internal notes; write as a reply to the customer."
-    )
+    """Run Primary Agent with the same pipeline as chat to produce a high-quality reply.
+
+    Uses raw subject/description (no meta-prompt), optional latest public comment context,
+    user context scope for API keys, grounding preflight to decide web search, and a light
+    quality check on the final response.
+    """
+    # Basic PII redaction (align with webhook redaction)
+    _EMAIL_RE = re.compile(r'([A-Za-z0-9._%+-]{1,})@([A-Za-z0-9.-]{1,})')
+    _PHONE_RE = re.compile(r'(?<!\d)(\+?\d{1,3}[-.\s]?)?(?:\(?\d{3}\)?[-.\s]?){2}\d{4}(?!\d)')
+
+    def _redact_pii(text: str | None) -> str | None:
+        if not text or not isinstance(text, str):
+            return text
+        t = _EMAIL_RE.sub(lambda m: f"{m.group(1)[:2]}***@{m.group(2)}", text)
+        t = _PHONE_RE.sub("[redacted-phone]", t)
+        return t
+
+    # Compose the user query similar to main chat input
+    parts_in: List[str] = []
+    if subject:
+        parts_in.append(str(subject))
+
+    # Try to include the latest public comment (best-effort)
+    last_public = None
+    try:
+        if settings.zendesk_subdomain and settings.zendesk_email and settings.zendesk_api_token:
+            zc = ZendeskClient(
+                subdomain=str(settings.zendesk_subdomain),
+                email=str(settings.zendesk_email),
+                api_token=str(settings.zendesk_api_token),
+                dry_run=True,
+            )
+            last_public = await asyncio.to_thread(zc.get_last_public_comment_snippet, ticket_id)
+    except Exception:
+        last_public = None
+    if last_public:
+        parts_in.append(last_public)
+
+    if description:
+        parts_in.append(str(description))
+
+    user_query_raw = "\n\n".join([p for p in parts_in if p]) or "(no description)"
+    user_query = _redact_pii(user_query_raw) or user_query_raw
+
     session_id = f"zendesk-{ticket_id}"
-    state = PrimaryAgentState(messages=[HumanMessage(content=prompt)], session_id=session_id)
-    parts: List[str] = []
-    async for chunk in run_primary_agent(state):
-        if getattr(chunk, "content", None):
-            parts.append(str(chunk.content))
-    text = ("".join(parts)).strip()
-    return text or "Thank you for reaching out. We’re reviewing your request and will follow up shortly."
+
+    # Run inside a service user context to reuse the same key resolution path as chat
+    async with user_context_scope(UserContext(user_id="zendesk-bot")):
+        # Preflight grounding to decide if we should force web search
+        try:
+            gd = await _gather_grounding_evidence(
+                user_query,
+                context={"session_id": session_id, "message_count": 1},
+                min_results=settings.primary_agent_min_kb_results,
+                min_relevance=settings.primary_agent_min_kb_relevance,
+                force_websearch=False,
+                websearch_max_results=None,
+            )
+            kb_ok = bool((gd.get("kb") or {}).get("satisfied", False))
+        except Exception:
+            kb_ok = True  # don’t force web search if preflight fails
+
+        state = PrimaryAgentState(
+            messages=[HumanMessage(content=user_query)],
+            session_id=session_id,
+            provider=getattr(settings, "primary_agent_provider", "google"),
+            model=getattr(settings, "primary_agent_model", "gemini-2.5-flash"),
+            force_websearch=not kb_ok,
+        )
+
+        parts: List[str] = []
+        async for chunk in run_primary_agent(state):
+            if getattr(chunk, "content", None):
+                parts.append(str(chunk.content))
+        text = ("".join(parts)).strip()
+
+        # Light quality check; avoid re-running to keep daily usage accounting aligned
+        if text:
+            try:
+                score = ResponseFormatter.validate_response_quality(text)
+                missing = set(getattr(score, "missing_sections", []) or [])
+
+                # If extremely short or clearly unstructured, keep but mark for structure enforcement
+                too_short = len(text.split()) < 40
+
+                # Ensure Pro Tips section exists
+                needs_pro_tips = False
+                try:
+                    # Detect any existing 'Pro Tips' heading regardless of markdown level or emoji
+                    needs_pro_tips = not re.search(r"(?im)^\s*(#{1,6}\s*)?pro\s*tips\b", text)
+                except Exception:
+                    needs_pro_tips = (ResponseSection.PRO_TIPS in missing)
+                if needs_pro_tips:
+                    tips = ResponseFormatter._generate_contextual_pro_tips(user_query, EmotionalState.NEUTRAL)  # type: ignore[attr-defined]
+                    if tips:
+                        text += f"\n\n## Pro Tips\n{tips}"
+
+                # Ensure supportive closing + up to 2 clarifying questions
+                needs_closing = (ResponseSection.SUPPORTIVE_CLOSING in missing)
+                if needs_closing:
+                    try:
+                        qs = ResponseFormatter.generate_follow_up_questions(issue=user_query, emotion=EmotionalState.NEUTRAL, solution_provided=text)
+                    except Exception:
+                        qs = []
+                    closing = (
+                        "I'm here to help—if anything is unclear, just reply and I’ll guide you. "
+                        "If this solved it, great—otherwise I can suggest the next best step."
+                    )
+                    if qs:
+                        text += "\n\n" + closing + "\n" + "\n".join(f"- {q}" for q in qs[:2])
+                    else:
+                        text += "\n\n" + closing
+
+                # Normalize spacing/markdown
+                text = ResponseFormatter.apply_mandatory_formatting(text)
+
+                if too_short and len(text.split()) < 40:
+                    text = ""
+            except Exception:
+                pass
+
+        # Plain‑text normalization for Zendesk display (consistent headings and spacing)
+        def _to_plaintext_for_zendesk(s: str) -> str:
+            lines = []
+            for raw in (s or "").splitlines():
+                line = raw.rstrip()
+                # Strip markdown heading markers (##, ###, etc.)
+                m = re.match(r"^\s*#{1,6}\s*(.*)$", line)
+                if m:
+                    heading = m.group(1).strip()
+                    # Normalize Pro Tips heading label
+                    if re.match(r"(?im)^pro\s*tips(\s*💡)?$", heading):
+                        heading = "Pro Tips"
+                    lines.append(heading)
+                    continue
+                # Leave other lines as is
+                lines.append(line)
+
+            # Ensure single blank line after headings and between major sections
+            out = []
+            prev_was_heading = False
+            for i, l in enumerate(lines):
+                is_heading = bool(re.match(r"^(Empathetic Opening|Solution Overview|Try Now — Immediate Actions|Full Fix — Step-by-Step Instructions|Additional Context|Pro Tips|Supportive Closing)\s*$", l))
+                if is_heading:
+                    # Separate from previous content
+                    if out and out[-1].strip() != "":
+                        out.append("")
+                    out.append(l)
+                    prev_was_heading = True
+                    continue
+                if prev_was_heading and l.strip() != "":
+                    out.append("")  # blank line after heading
+                    prev_was_heading = False
+                out.append(l)
+
+            # Remove accidental duplicate Pro Tips blocks by merging headings
+            merged = []
+            seen_pro_tips = False
+            i = 0
+            while i < len(out):
+                if re.match(r"^Pro Tips\s*$", out[i]):
+                    if seen_pro_tips:
+                        # Skip duplicate heading line
+                        i += 1
+                        continue
+                    seen_pro_tips = True
+                merged.append(out[i])
+                i += 1
+
+            # Trim excessive blank lines to at most one
+            final = []
+            blank = 0
+            for l in merged:
+                if l.strip() == "":
+                    blank += 1
+                    if blank <= 1:
+                        final.append("")
+                else:
+                    blank = 0
+                    final.append(l)
+            return "\n".join(final).strip()
+
+        # HTML formatter for Zendesk internal notes (no inline CSS)
+        def _format_html_for_zendesk(s: str) -> str:
+            # Basic section detection and conversion to HTML blocks
+            raw_lines = (s or "").splitlines()
+            # Pre-normalize markdown artifacts: remove **, *, __ emphasis and convert `code` -> <code>code</code>
+            def strip_emphasis(text: str) -> str:
+                t = text
+                # convert inline code first
+                t = re.sub(r"`([^`]+)`", r"<code>\1</code>", t)
+                # remove bold/italic markers
+                t = re.sub(r"\*\*([^*]+)\*\*", r"\1", t)
+                t = re.sub(r"\*([^*]+)\*", r"\1", t)
+                t = re.sub(r"__([^_]+)__", r"\1", t)
+                t = re.sub(r"_([^_]+)_", r"\1", t)
+                return t
+            lines = [strip_emphasis(l) for l in raw_lines]
+            html_parts: List[str] = []
+            buf: List[str] = []
+
+            def flush_paragraph():
+                nonlocal buf
+                content = " ".join(x.strip() for x in buf if x.strip())
+                if content:
+                    html_parts.append(f"<p>{content}</p>")
+                buf = []
+
+            def open_list(list_type: str):
+                html_parts.append(f"<{list_type}>")
+
+            def close_list(list_type: str):
+                html_parts.append(f"</{list_type}>")
+
+            in_ol = False
+            in_ul = False
+            last_li_index: int | None = None
+
+            def ensure_lists_closed():
+                nonlocal in_ol, in_ul
+                if in_ol:
+                    close_list("ol")
+                    in_ol = False
+                if in_ul:
+                    close_list("ul")
+                    in_ul = False
+                nonlocal last_li_index
+                last_li_index = None
+
+            # Helpers to detect headings and lists
+            heading_names = {
+                "solution overview",
+                "try now — immediate actions",
+                "try now - immediate actions",
+                "full fix — step-by-step instructions",
+                "full fix - step-by-step instructions",
+                "additional context",
+                "pro tips",
+                "supportive closing",
+            }
+            hidden_headings = {"empathetic opening", "supportive closing"}
+            def is_heading(line: str) -> str | None:
+                t = re.sub(r"^\s*#+\s*", "", line).strip()
+                low = t.lower()
+                # Also handle pseudo headings like Empathetic Opening without '#'
+                if low in hidden_headings:
+                    return "empathetic opening" if low == "empathetic opening" else "supportive closing"
+                return t if low in heading_names else None
+
+            def is_ordered_item(line: str) -> str | None:
+                m = re.match(r"^\s*(\d+)[\.)]\s+(.*)$", line)
+                return m.group(2).strip() if m else None
+
+            def is_unordered_item(line: str) -> str | None:
+                # Standard bullet marks
+                m = re.match(r"^\s*[-*]\s+(.*)$", line)
+                if m:
+                    return m.group(1).strip()
+                # Pseudo bullet: Title: value
+                m2 = re.match(r"^\s*([A-Z][A-Za-z0-9 \-/()]+):\s+(.*)$", line)
+                if m2:
+                    title, rest = m2.group(1).strip(), m2.group(2).strip()
+                    return f"<strong>{title}:</strong> {rest}"
+                return None
+
+            # Control sentence breaks style
+            style = str(getattr(settings, "zendesk_format_style", "compact")).lower()
+            br_sep = "<br>" if style != "relaxed" else "<br><br>"
+
+            def sentence_breaks(text: str) -> str:
+                # Insert <br> between sentences to approximate line spacing; avoid inside <code>
+                # Simple heuristic split; safe for support prose
+                def repl(m: re.Match[str]) -> str:
+                    return m.group(1) + br_sep + " "
+                return re.sub(r"([.!?])\s+(?=[A-Z0-9\(])", repl, text)
+
+            first_paragraph_done = False
+            for raw in lines:
+                line = raw.rstrip()
+                # Detect and render headings
+                h = is_heading(line)
+                if h is not None:
+                    # 'Empathetic Opening' label is hidden; keep content as paragraph
+                    ensure_lists_closed()
+                    flush_paragraph()
+                    if h.lower() not in hidden_headings:
+                        heading_tag = getattr(settings, "zendesk_heading_level", "h3").lower()
+                        if heading_tag not in {"h2", "h3"}:
+                            heading_tag = "h3"
+                        html_parts.append(f"<{heading_tag}>{h}</{heading_tag}>")
+                    continue
+
+                # List handling
+                oi = is_ordered_item(line)
+                if oi is not None:
+                    flush_paragraph()
+                    if not in_ol:
+                        ensure_lists_closed()
+                        open_list("ol")
+                        in_ol = True
+                    html_parts.append(f"<li>{oi}</li>")
+                    last_li_index = len(html_parts) - 1
+                    continue
+                ui = is_unordered_item(line)
+                if ui is not None:
+                    flush_paragraph()
+                    if not in_ul:
+                        ensure_lists_closed()
+                        open_list("ul")
+                        in_ul = True
+                    html_parts.append(f"<li>{ui}</li>")
+                    last_li_index = len(html_parts) - 1
+                    continue
+
+                # Detect Action/Where/Expected/If different lines and render as bullet-like
+                m = re.match(r"^\s*(Action|Where|Expected Result|If different)\s*:\s*(.*)$", line)
+                if m:
+                    # Merge schema into the previous step/list item as inline text for conversational flow
+                    label = m.group(1)
+                    val = m.group(2).strip()
+                    if last_li_index is not None and 0 <= last_li_index < len(html_parts):
+                        prev = html_parts[last_li_index]
+                        # Append as inline em dash segment
+                        prev = prev.rstrip("</li>") + f" — <strong>{label}:</strong> {val}</li>"
+                        html_parts[last_li_index] = prev
+                    else:
+                        # No prior list item; append to paragraph buffer
+                        if buf:
+                            buf[-1] = (buf[-1] + f" — {label}: {val}").strip()
+                        else:
+                            buf.append(f"{label}: {val}")
+                    continue
+
+                # Default: accumulate into a paragraph buffer
+                buf.append(line)
+
+            ensure_lists_closed()
+            flush_paragraph()
+
+            # Merge duplicate Pro Tips headings (<h3>Pro Tips</h3>)
+            merged: List[str] = []
+            seen_pro = False
+            i = 0
+            while i < len(html_parts):
+                frag = html_parts[i]
+                if frag.strip().lower() in ("<h2>pro tips</h2>", "<h3>pro tips</h3>"):
+                    if seen_pro:
+                        i += 1
+                        continue
+                    seen_pro = True
+                merged.append(frag)
+                i += 1
+
+            # Post-process: sentence spacing/blocks in paragraph content
+            def transform_paragraphs(html: str) -> str:
+                sentence_blocks = bool(getattr(settings, "zendesk_sentence_blocks", True))
+                def rewriter(m: re.Match[str]) -> str:
+                    inner = m.group(1).strip()
+                    if not inner:
+                        return ""
+                    if sentence_blocks:
+                        # Split into sentences and wrap each in its own <p>
+                        parts = re.split(r"(?<=[.!?])\s+(?=[A-Z0-9\(])", inner)
+                        parts = [p.strip() for p in parts if p.strip()]
+                        return "".join(f"<p>{p}</p>" for p in parts)
+                    else:
+                        return f"<p>{sentence_breaks(inner)}</p>"
+                # Replace each <p>…</p> with transformed content
+                content = "\n".join(merged)
+                return re.sub(r"<p>(.*?)</p>", rewriter, content, flags=re.DOTALL)
+
+            return transform_paragraphs("\n".join(merged))
+
+        # Choose formatter per settings
+        if getattr(settings, "zendesk_use_html", True):
+            text = _format_html_for_zendesk(text)
+        else:
+            text = _to_plaintext_for_zendesk(text)
+
+        return text or "Thank you for reaching out. We’re reviewing your request and will follow up shortly."
 
 
 async def _process_window(window_start: datetime, window_end: datetime, dry_run: bool) -> Dict[str, Any]:
@@ -369,7 +737,11 @@ async def _process_window(window_start: datetime, window_end: datetime, dry_run:
 
             # Generate suggested reply after successful claim
             reply = await _generate_reply(tid, row.get("subject"), row.get("description"))
-            await asyncio.to_thread(zc.add_internal_note, tid, reply, add_tag="mb_auto_triaged")
+            # Try HTML if enabled; fallback signature without use_html for test stubs
+            try:
+                await asyncio.to_thread(zc.add_internal_note, tid, reply, add_tag="mb_auto_triaged", use_html=getattr(settings, "zendesk_use_html", True))
+            except TypeError:
+                await asyncio.to_thread(zc.add_internal_note, tid, reply, add_tag="mb_auto_triaged")
             await supa._exec(
                 lambda: supa.client.table("zendesk_pending_tickets")
                 .update({

@@ -45,12 +45,17 @@ async def admin_health(request: Request) -> Dict[str, Any]:
     except Exception:
         usage = {"month_key": None, "calls_used": None, "budget": settings.zendesk_monthly_api_budget}
     try:
-        from datetime import date
-        today = date.today().isoformat()
+        # Use UTC date to align with tests and backend usage
+        today = datetime.now(timezone.utc).date().isoformat()
         du = await supa._exec(lambda: supa.client.table("zendesk_daily_usage").select("gemini_calls_used,gemini_daily_limit").eq("usage_date", today).maybe_single().execute())
-        daily = getattr(du, "data", None) or {}
+        daily_raw = getattr(du, "data", None) or {}
     except Exception:
-        daily = {}
+        daily_raw = {}
+    # Normalize daily payload to always include expected keys
+    daily = {
+        "gemini_calls_used": int(daily_raw.get("gemini_calls_used", 0) or 0),
+        "gemini_daily_limit": int(daily_raw.get("gemini_daily_limit", getattr(settings, "zendesk_gemini_daily_limit", 1000)) or getattr(settings, "zendesk_gemini_daily_limit", 1000)),
+    }
 
     # Queue counts by status
     q_counts: Dict[str, Optional[int]] = {}

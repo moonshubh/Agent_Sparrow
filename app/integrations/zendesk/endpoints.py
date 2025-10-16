@@ -371,7 +371,22 @@ async def webhook(request: Request) -> Dict[str, Any]:
     )
     subject = (t.get("subject") if isinstance(t, dict) else None) or (payload.get("subject") if isinstance(payload, dict) else None)
     description = (t.get("description") if isinstance(t, dict) else None) or (payload.get("description") if isinstance(payload, dict) else None)
-    # Intentionally skip requester hashing to avoid secret-like patterns in code paths
+    # Optional requester hashing (only when signing secret is configured)
+    requester_email = None
+    try:
+        req = (t.get("requester") if isinstance(t, dict) else None) or {}
+        if isinstance(req, dict):
+            requester_email = req.get("email")
+    except Exception:
+        requester_email = None
+    requester_hashed = None
+    try:
+        if requester_email and settings.zendesk_signing_secret:
+            # HMAC(email) with signing secret; avoid storing raw email
+            key = str(settings.zendesk_signing_secret).encode("utf-8")
+            requester_hashed = hmac.new(key, str(requester_email).encode("utf-8"), digestmod="sha256").hexdigest()
+    except Exception:
+        requester_hashed = None
 
     # Filter by configured brand if provided
     configured_brand = getattr(settings, "zendesk_brand_id", None)
@@ -396,6 +411,7 @@ async def webhook(request: Request) -> Dict[str, Any]:
                 "description": description,
                 "payload": {},
                 "status": "pending",
+                "requester_hashed": requester_hashed,
             })
             .execute()
         )

@@ -248,6 +248,10 @@ class Settings(BaseSettings):
     zendesk_queue_retention_days: int = Field(default=30, alias="ZENDESK_QUEUE_RETENTION_DAYS")
     # Debug: enable limited verification logs for Zendesk HMAC (do NOT enable in prod)
     zendesk_debug_verify: bool = Field(default=False, alias="ZENDESK_DEBUG_VERIFY")
+    # Use HTML notes in Zendesk for better readability (fallback to text on failure)
+    zendesk_use_html: bool = Field(default=True, alias="ZENDESK_USE_HTML")
+    # Formatting style for paragraph sentence breaks in HTML mode: compact|relaxed
+    zendesk_format_style: str = Field(default="compact", alias="ZENDESK_FORMAT_STYLE")
 
     @field_validator('feedme_max_pdf_size_mb')
     @classmethod
