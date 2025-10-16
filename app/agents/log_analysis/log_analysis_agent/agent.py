@@ -11,7 +11,7 @@ from typing import Dict, Any, Optional
 from uuid import uuid4
 
 from app.core.logging_config import get_logger
-from app.core.user_context import get_current_user_context
+from app.core.user_context import get_current_user_context  # noqa: F401
 
 # Simplified implementation
 from .simplified_agent import run_simplified_log_analysis
@@ -96,13 +96,25 @@ async def run_log_analysis_agent(state: Dict[str, Any]) -> Dict[str, Any]:
     logger = get_logger("log_analysis_agent", trace_id=trace_id)
     
     # Log the analysis request
-    logger.info("Starting log analysis",
+    try:
+        _raw_for_len = state.get("raw_log_content", "")
+        log_size = len(_raw_for_len if isinstance(_raw_for_len, (str, bytes)) else str(_raw_for_len))
+    except Exception:
+        log_size = 0
+    logger.info(
+        "Starting log analysis",
         has_question=bool(state.get("question")),
-        log_size=len(state.get("raw_log_content", "")),
-        trace_id=trace_id
+        log_size=log_size,
+        trace_id=trace_id,
     )
     
     raw_log = state.get("raw_log_content", "")
+    if not isinstance(raw_log, str):
+        # Normalize non-string payloads to string to avoid downstream type errors
+        try:
+            raw_log = raw_log.decode("utf-8", errors="ignore")  # type: ignore[attr-defined]
+        except Exception:
+            raw_log = str(raw_log)
     question = state.get("question")
 
     # Try comprehensive pipeline when enabled/available, else fallback
@@ -159,14 +171,35 @@ async def run_log_analysis_agent(state: Dict[str, Any]) -> Dict[str, Any]:
                     setattr(agent, "force_websearch", force_ws)
             except Exception:
                 pass
-            analysis_result, _ = await agent.analyze_log_content(
+            # Run comprehensive analysis and generate a conversational response
+            analysis_result = await agent.analyze_log_content(
                 log_content=raw_log,
                 user_query=question,
                 user_context_input=None,
-                use_cache=True,
-                attachments=None,
                 settings_dict=settings_dict,
             )
+
+            # Produce formatted conversational response similar to Primary Agent
+            try:
+                _, formatted_response = await agent._generate_response(
+                    analysis_result, question, None
+                )
+                # Defense-in-depth: sanitize any formatted response before returning
+                try:
+                    if isinstance(formatted_response, str):
+                        if getattr(agent, "sanitizer", None) is not None:
+                            formatted_response = agent.sanitizer.sanitize_for_display(formatted_response)  # type: ignore[attr-defined]
+                        else:
+                            # Fallback to a local sanitizer instance if agent wasn't initialized with one
+                            from .privacy import LogSanitizer as _LS  # local import to avoid top-level dependency when unused
+                            formatted_response = _LS().sanitize_for_display(formatted_response)  # type: ignore
+                        # Normalize to a clean, non-empty string
+                        formatted_response = formatted_response.strip() or None
+                except Exception:
+                    # Never fail the analysis due to sanitization
+                    pass
+            except Exception:
+                formatted_response = None
 
             # Map comprehensive result to simplified schema for compatibility
             from .simplified_schemas import (
@@ -235,7 +268,12 @@ async def run_log_analysis_agent(state: Dict[str, Any]) -> Dict[str, Any]:
                 trace_id=trace_id,
                 method="comprehensive",
             )
-            return {"final_report": simplified, "trace_id": trace_id, "analysis_method": "comprehensive"}
+            return {
+                "final_report": simplified,
+                "trace_id": trace_id,
+                "analysis_method": "comprehensive",
+                "formatted_response": formatted_response,
+            }
 
         except Exception as e:
             logger.error(

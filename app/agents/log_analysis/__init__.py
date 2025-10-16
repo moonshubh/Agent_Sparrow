@@ -10,6 +10,10 @@ try:
         SimplifiedLogAnalysisOutput,  # noqa: F401
         SimplifiedAgentState,  # noqa: F401
     )
+    # Re-export sanitizer for SSE defense-in-depth usage
+    from app.agents.log_analysis.log_analysis_agent.privacy import (
+        LogSanitizer,  # noqa: F401
+    )
 except Exception:  # pragma: no cover
     pass
 
@@ -17,4 +21,5 @@ __all__ = [
     "run_log_analysis_agent",
     "SimplifiedLogAnalysisOutput",
     "SimplifiedAgentState",
+    "LogSanitizer",
 ]

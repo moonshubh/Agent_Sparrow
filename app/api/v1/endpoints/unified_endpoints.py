@@ -1,6 +1,4 @@
 from __future__ import annotations
-
-import json
 import logging
 import uuid
 from typing import Any, AsyncIterable, Dict, Optional
@@ -11,7 +9,7 @@ from pydantic import BaseModel
 
 from app.agents.primary import run_primary_agent, PrimaryAgentState
 from app.agents.research import get_research_graph
-from app.agents.log_analysis import run_log_analysis_agent
+from app.agents.log_analysis import run_log_analysis_agent, LogSanitizer
 from app.api.v1.endpoints.agent_common import (
     filter_system_text,
     get_user_id_for_dev_mode,
@@ -31,6 +29,10 @@ from langchain_core.messages import AIMessage, HumanMessage
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+# Single module-level sanitizer instance for SSE content (defense-in-depth).
+# Uses secure defaults; no external dependencies added.
+_SSE_SANITIZER = LogSanitizer()
 
 
 class UnifiedAgentRequest(BaseModel):
@@ -153,14 +155,51 @@ async def unified_agent_stream_generator(request: UnifiedAgentRequest, user_id: 
                         issues_list = analysis_results.get('identified_issues') or analysis_results.get('issues') or []
                         analysis_results = augment_analysis_metadata(analysis_results, request.log_content, issues_list, middleware_metadata)
 
+                    # Helper to recursively sanitize any string fields in payloads before SSE
+                    def _sanitize_payload(obj: Any) -> Any:
+                        try:
+                            if isinstance(obj, str):
+                                # Remove internal/system tags first, then sanitize for display
+                                cleaned = filter_system_text(obj)
+                                return _SSE_SANITIZER.sanitize_for_display(cleaned)
+                            if isinstance(obj, list):
+                                return [_sanitize_payload(x) for x in obj]
+                            if isinstance(obj, dict):
+                                return {k: _sanitize_payload(v) for k, v in obj.items()}
+                            return obj
+                        except Exception:
+                            return obj
+
                     try:
                         try:
                             yield format_sse_data({'type': 'step', 'data': {'type': 'Synthesizing', 'description': 'Finalizing the response...', 'status': 'complete'}})
                         except Exception:
                             pass
-                        content_md = summary if not isinstance(analysis_results, dict) else None
+                        # Prefer agent-formatted conversational response when available
+                        formatted_response = None
+                        try:
+                            if isinstance(result, dict):
+                                fr = result.get('formatted_response')
+                                if isinstance(fr, str):
+                                    # Strip internal tags then sanitize for display
+                                    fr = filter_system_text(fr)
+                                    fr = _SSE_SANITIZER.sanitize_for_display(fr)
+                                formatted_response = fr if isinstance(fr, str) and fr.strip() else None
+                        except Exception:
+                            formatted_response = None
+
+                        content_md = formatted_response or (summary if not isinstance(analysis_results, dict) else None)
                         if not content_md:
                             content_md = _format_log_analysis_content(analysis_results, request.message)
+                        # Always sanitize outgoing assistant content and metadata for SSE
+                        try:
+                            content_md = _SSE_SANITIZER.sanitize_for_display(filter_system_text(content_md))
+                        except Exception:
+                            pass
+                        try:
+                            analysis_results = _sanitize_payload(analysis_results)
+                        except Exception:
+                            pass
                         yield format_sse_data({"role": "assistant", "content": content_md, "agent_type": "log_analysis", "trace_id": request.trace_id, "analysis_results": analysis_results, "session_id": session_id})
                     except Exception as json_error:
                         logger.error(f"JSON serialization error: {json_error}")
