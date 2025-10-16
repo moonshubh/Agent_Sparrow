@@ -91,9 +91,9 @@ class Settings(BaseSettings):
     feedme_similarity_threshold: float = Field(default=0.7, alias="FEEDME_SIMILARITY_THRESHOLD")
     feedme_confidence_threshold: float = Field(default=0.7, alias="FEEDME_CONFIDENCE_THRESHOLD")
     feedme_async_processing: bool = Field(default=True, alias="FEEDME_ASYNC_PROCESSING")
-    # Simplified FeedMe configuration - disable async processing for 10-user deployment
-    feedme_celery_broker: str = Field(default="memory://", alias="FEEDME_CELERY_BROKER")
-    feedme_result_backend: str = Field(default="cache+memory://", alias="FEEDME_RESULT_BACKEND")
+    # Celery configuration (use Redis by default for multi-process workers)
+    feedme_celery_broker: str = Field(default="redis://localhost:6379/1", alias="FEEDME_CELERY_BROKER")
+    feedme_result_backend: str = Field(default="redis://localhost:6379/2", alias="FEEDME_RESULT_BACKEND")
     feedme_security_enabled: bool = Field(default=True, alias="FEEDME_SECURITY_ENABLED")
     feedme_rate_limit_per_minute: int = Field(default=15, alias="FEEDME_RATE_LIMIT_PER_MINUTE")
     feedme_requests_per_day_limit: int = Field(default=1000, alias="FEEDME_REQUESTS_PER_DAY_LIMIT")
@@ -168,7 +168,7 @@ class Settings(BaseSettings):
     global_knowledge_max_chars: int = Field(default=1600, alias="GLOBAL_KNOWLEDGE_MAX_CHARS")
     
     # Rate Limiting Configuration (free tier defaults; override via env)
-    gemini_flash_rpm_limit: int = Field(default=10, alias="GEMINI_FLASH_RPM_LIMIT")
+    gemini_flash_rpm_limit: int = Field(default=15, alias="GEMINI_FLASH_RPM_LIMIT")
     gemini_flash_rpd_limit: int = Field(default=1000, alias="GEMINI_FLASH_RPD_LIMIT")
     gemini_pro_rpm_limit: int = Field(default=5, alias="GEMINI_PRO_RPM_LIMIT")
     gemini_pro_rpd_limit: int = Field(default=100, alias="GEMINI_PRO_RPD_LIMIT")

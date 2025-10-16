@@ -23,8 +23,8 @@ class RateLimitConfig:
     """Configuration for rate limiting system."""
     
     # Gemini 2.5 Flash limits (free tier)
-    flash_rpm_limit: int = 10   # Free tier: 10 RPM
-    flash_rpd_limit: int = 250  # Free tier: 250 RPD
+    flash_rpm_limit: int = 15   # Free tier: 15 RPM (Preview)
+    flash_rpd_limit: int = 1000  # Free tier: 1000 RPD
     
     # Gemini 2.5 Pro limits (free tier)
     pro_rpm_limit: int = 5       # Free tier: 5 RPM
@@ -77,8 +77,8 @@ class RateLimitConfig:
         import os
         
         return cls(
-            flash_rpm_limit=int(os.getenv("GEMINI_FLASH_RPM_LIMIT", "10")),
-            flash_rpd_limit=int(os.getenv("GEMINI_FLASH_RPD_LIMIT", "250")),
+            flash_rpm_limit=int(os.getenv("GEMINI_FLASH_RPM_LIMIT", "15")),
+            flash_rpd_limit=int(os.getenv("GEMINI_FLASH_RPD_LIMIT", "1000")),
             pro_rpm_limit=int(os.getenv("GEMINI_PRO_RPM_LIMIT", "5")),
             pro_rpd_limit=int(os.getenv("GEMINI_PRO_RPD_LIMIT", "100")),
             redis_url=os.getenv("RATE_LIMIT_REDIS_URL", settings.redis_url),

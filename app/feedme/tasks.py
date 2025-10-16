@@ -16,6 +16,8 @@ import asyncio
 from typing import Dict, Any, List, Optional
 from datetime import datetime, timezone
 import logging
+import json
+import re
 
 from celery.exceptions import Retry
 
@@ -700,7 +702,8 @@ def generate_ai_tags(self, conversation_id: int, max_input_chars: int = 4000) ->
         if not getattr(resp, 'data', None):
             return { 'success': False, 'error': 'Conversation not found', 'conversation_id': conversation_id }
         row = resp.data
-        text = (row.get('extracted_text') or '')[:max_input_chars]
+        # Use the full extracted_text to summarize the entire conversation (no hard truncation)
+        text = (row.get('extracted_text') or '')
         if not text.strip():
             return { 'success': True, 'conversation_id': conversation_id, 'tags': [] }
 
@@ -731,37 +734,175 @@ def generate_ai_tags(self, conversation_id: int, max_input_chars: int = 4000) ->
             or 'gemini-2.5-flash-lite-preview-09-2025'
         )
         model = genai.GenerativeModel(model_name)
-        prompt = (
-            "You are tagging customer support threads. "
-            "Read the following Q/A flow and output concise JSON with keys tags (array of 5-7 short tags) and comment (<=120 chars).\n\n"
-            "Rules: no personal data, no emails, no names. Focus on issue, feature, action, resolution.\n\n"
-            f"TEXT:\n{text}\n\n"
-            "Return strictly JSON like {\"tags\":[...],\"comment\":\"...\"}."
-        )
+
+        # Chunked map-reduce summarization to capture the entire conversation
+        # Map: summarize each chunk into 3-6 bullet points (no PII). Reduce: produce final JSON with tags and a concise multi-sentence comment.
+        def chunk_text(s: str, max_chars: int = 24000) -> list[str]:
+            s = s.strip()
+            if not s:
+                return []
+            paras = [p.strip() for p in re.split(r"\n\n+", s) if p.strip()]
+            chunks: list[str] = []
+            buf: list[str] = []
+            cur = 0
+            for p in paras:
+                # +2 for paragraph spacing preservation
+                if cur + len(p) + 2 > max_chars and buf:
+                    chunks.append("\n\n".join(buf))
+                    buf = [p]
+                    cur = len(p)
+                else:
+                    buf.append(p)
+                    cur += len(p) + 2
+            if buf:
+                chunks.append("\n\n".join(buf))
+            return chunks
+
+        # Derive a conservative per-call char budget from token settings (~4 chars per token)
         try:
-            res = model.generate_content(prompt)
-            out = getattr(res, 'text', None) or (res.candidates[0].content.parts[0].text if getattr(res, 'candidates', None) else '')
-        except Exception as e:
-            logger.warning(f"Gemini tagging failed: {e}")
-            out = ''
+            per_chunk_chars = int(getattr(fallback_settings, 'feedme_max_tokens_per_chunk', 8000)) * 4
+        except Exception:
+            per_chunk_chars = 24000
+        per_chunk_chars = max(8000, min(per_chunk_chars, 32000))
+
+        # Rate limiter for generative calls (RPM/RPD)
+        try:
+            from app.feedme.rate_limiting.gemini_tracker import get_tracker
+            tracker = get_tracker(
+                daily_limit=getattr(fallback_settings, 'gemini_flash_rpd_limit', 1000),
+                rpm_limit=getattr(fallback_settings, 'gemini_flash_rpm_limit', 15),
+            )
+        except Exception:
+            tracker = None
+
+        chunks = chunk_text(text, per_chunk_chars)
+        map_summaries: list[str] = []
+
+        if len(chunks) <= 1:
+            # Single pass with improved strict prompt (concise, no hard length cap)
+            single_prompt = (
+                "You are summarizing a complete customer-support conversation.\n"
+                "Write JSON with: tags (5-7 short keywords) and comment (2-4 sentences, concise) capturing the entire conversation: primary issue, key actions/attempts, and current outcome/follow-ups.\n"
+                "Rules: no personal data (names, emails, phone, ticket IDs), neutral tone, no quotes/markdown/citations.\n\n"
+                f"TEXT:\n{text}\n\n"
+                "Return STRICT JSON only: {\"tags\":[...],\"comment\":\"...\"}."
+            )
+            try:
+                if tracker and not tracker.can_request():
+                    raise RuntimeError("Daily limit reached")
+                if tracker:
+                    tracker.throttle()
+                res = model.generate_content(single_prompt)
+                out = getattr(res, 'text', None) or (res.candidates[0].content.parts[0].text if getattr(res, 'candidates', None) else '')
+                if tracker:
+                    tracker.record()
+            except Exception as e:
+                logger.warning(f"Gemini tagging (single-pass) failed: {e}")
+                out = ''
+        else:
+            # Map stage
+            map_prompt = (
+                "Summarize the following excerpt of a customer-support conversation into 3-6 concise bullet points that capture issue/context, actions, and outcome.\n"
+                "Avoid PII (no names/emails/IDs). Output ONLY bullet points, one per line starting with '- ', no preface or trailing text.\n\n"
+            )
+            for idx, ck in enumerate(chunks):
+                try:
+                    if tracker and not tracker.can_request():
+                        logger.warning("Gemini daily limit reached during map stage; stopping early")
+                        break
+                    if tracker:
+                        tracker.throttle()
+                    resp = model.generate_content([map_prompt, ck])
+                    txt = getattr(resp, 'text', None) or (resp.candidates[0].content.parts[0].text if getattr(resp, 'candidates', None) else '')
+                    if txt and txt.strip():
+                        # Normalize to lines starting with '- '
+                        lines = [ln.strip() for ln in txt.strip().splitlines() if ln.strip()]
+                        norm = []
+                        for ln in lines:
+                            if not ln.startswith('- '):
+                                ln = f"- {ln.lstrip('-• ')}"
+                            norm.append(ln)
+                        map_summaries.append("\n".join(norm))
+                    if tracker:
+                        tracker.record()
+                except Exception as e:
+                    logger.warning(f"Map summarization failed for chunk {idx+1}/{len(chunks)}: {e}")
+
+            reduce_source = "\n".join(map_summaries).strip()
+            reduce_prompt = (
+                "You are consolidating bullet points from ALL parts of a single customer-support conversation.\n"
+                "Produce STRICT JSON with: tags (5-7 short, lowercase keywords) and comment (2-4 sentences, concise) that captures the entire conversation: primary issue, key actions/attempts, final outcome or current status, and clear follow-ups if any.\n"
+                "Rules: no PII (no names/emails/IDs), neutral tone, no markdown/quotes/citations.\n\n"
+                f"BULLETS:\n{reduce_source}\n\n"
+                "Return only: {\"tags\":[...],\"comment\":\"...\"}."
+            )
+            try:
+                if tracker and not tracker.can_request():
+                    raise RuntimeError("Daily limit reached")
+                if tracker:
+                    tracker.throttle()
+                res = model.generate_content(reduce_prompt)
+                out = getattr(res, 'text', None) or (res.candidates[0].content.parts[0].text if getattr(res, 'candidates', None) else '')
+                if tracker:
+                    tracker.record()
+            except Exception as e:
+                logger.warning(f"Gemini tagging (reduce stage) failed: {e}")
+                out = ''
 
         import json
         tags = []
         comment = None
         if out:
             try:
-                data = json.loads(out)
+                # Strip common code fences and extract the first JSON object if present
+                s = out.strip()
+                if s.startswith('```'):
+                    s = re.sub(r"^```(?:json|JSON)?\s*", "", s)
+                    s = re.sub(r"\s*```$", "", s)
+                # Try direct parse; if it fails, attempt to isolate JSON object region
+                try:
+                    data = json.loads(s)
+                except Exception:
+                    start = s.find('{')
+                    end = s.rfind('}')
+                    if start != -1 and end != -1 and end > start:
+                        data = json.loads(s[start:end+1])
+                    else:
+                        raise
+
                 if isinstance(data.get('tags'), list):
                     tags = [str(t)[:32] for t in data['tags'][:7]]
-                if isinstance(data.get('comment'), str):
-                    comment = data['comment'][:120]
+                # If comment missing or not a string, derive a brief note from the text
+                raw_comment = data.get('comment') if isinstance(data, dict) else None
+                if isinstance(raw_comment, str) and raw_comment.strip():
+                    comment = re.sub(r"\s+", " ", raw_comment).strip()
+                else:
+                    # Derive a short note from the consolidated map summaries if available, else from the text
+                    derived = None
+                    try:
+                        if map_summaries:
+                            joined = " ".join(map_summaries)
+                            derived = re.sub(r"\s+", " ", joined).strip()
+                        else:
+                            first_para = re.split(r"\n\n+", text.strip())[0] if text.strip() else ''
+                            derived = re.sub(r"\s+", " ", first_para).strip()
+                    except Exception:
+                        derived = None
+                    comment = (derived or 'Auto-tagged summary')
             except Exception:
                 # Fallback: simple keyword heuristics
                 kw = []
                 for k in ['setup','sync','smtp','imap','account','password','login','notification','attachment','crash','upgrade','settings','calendar']:
                     if k in text.lower(): kw.append(k)
                 tags = (kw[:7] or ['support'])
-                comment = 'Auto-tagged summary'
+                # Use reduce_source if available; otherwise default
+                try:
+                    fallback_note = None
+                    if 'reduce_source' in locals() and reduce_source:
+                        fallback_note = re.sub(r"\s+", " ", reduce_source).strip()
+                    comment = (fallback_note or 'Auto-tagged summary')
+                except Exception:
+                    comment = 'Auto-tagged summary'
 
         # Merge into metadata
         meta = row.get('metadata') or {}
