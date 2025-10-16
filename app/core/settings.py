@@ -150,7 +150,7 @@ class Settings(BaseSettings):
     supabase_jwt_secret: Optional[str] = Field(default=None, alias="SUPABASE_JWT_SECRET")
     
     # FeedMe AI Configuration
-    feedme_model_name: str = Field(default="gemini-2.5-flash-lite", alias="FEEDME_MODEL_NAME")
+    feedme_model_name: str = Field(default="gemini-2.5-flash-lite-preview-09-2025", alias="FEEDME_MODEL_NAME")
     feedme_ai_pdf_enabled: bool = Field(default=True, alias="FEEDME_AI_PDF_ENABLED")
     feedme_ai_max_pages: int = Field(default=10, alias="FEEDME_AI_MAX_PAGES")
     feedme_ai_pages_per_call: int = Field(default=3, alias="FEEDME_AI_PAGES_PER_CALL")

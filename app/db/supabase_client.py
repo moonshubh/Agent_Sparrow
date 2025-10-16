@@ -463,7 +463,7 @@ class SupabaseClient:
                 "pages": pages,
                 "pdf_metadata": pdf_metadata,
                 # Include processing method to avoid NULLs that break Pydantic enum validation
-                "processing_method": processing_method or "pdf_ocr",
+                "processing_method": processing_method or "pdf_ai",
             }
             
             response = await self._exec(lambda: self.client.table('feedme_conversations').insert(data).execute())

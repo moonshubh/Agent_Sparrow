@@ -77,7 +77,8 @@ def _final_merge_prompt() -> str:
 
 def _ensure_model(api_key: str):
     genai.configure(api_key=api_key)
-    return genai.GenerativeModel("gemini-2.5-flash-lite-preview-09-2025")
+    model_name = getattr(settings, "feedme_model_name", None) or "gemini-2.5-flash-lite-preview-09-2025"
+    return genai.GenerativeModel(model_name)
 
 
 def process_pdf_to_markdown(

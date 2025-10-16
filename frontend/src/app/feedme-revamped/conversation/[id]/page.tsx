@@ -28,7 +28,8 @@ export default function FeedMeConversationPage() {
   const [savingNote, setSavingNote] = useState(false)
   const [markingReady, setMarkingReady] = useState(false)
 
-  const aiNote = useMemo(() => conversation?.metadata?.ai_note as string | undefined, [conversation?.metadata])
+  // Prefer primary ai_note; gracefully fall back to legacy ai_comment when absent
+  const aiNote = useMemo(() => conversation?.metadata?.ai_note ?? conversation?.metadata?.ai_comment, [conversation?.metadata])
   const uploadedRelative = useMemo(() => conversation?.created_at ? formatDistanceToNow(new Date(conversation.created_at), { addSuffix: true }) : null, [conversation?.created_at])
   const updatedRelative = useMemo(() => conversation?.updated_at ? formatDistanceToNow(new Date(conversation.updated_at), { addSuffix: true }) : null, [conversation?.updated_at])
 
@@ -324,7 +325,7 @@ export default function FeedMeConversationPage() {
                   extractedText={conversation.extracted_text || ''}
                   metadata={conversation.metadata}
                   processingMetadata={{
-                    processing_method: (conversation.processing_method || 'pdf_ai') as 'pdf_ocr' | 'manual_text' | 'text_paste',
+                    processing_method: (conversation.processing_method || 'pdf_ai') as 'pdf_ai' | 'pdf_ocr' | 'manual_text' | 'text_paste',
                     extraction_confidence: conversation.metadata?.extraction_confidence,
                   }}
                   approvalStatus={conversation.approval_status || 'pending'}

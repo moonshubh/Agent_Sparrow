@@ -696,7 +696,7 @@ def generate_ai_tags(self, conversation_id: int, max_input_chars: int = 4000) ->
     logger.info(f"Generating AI tags for conversation {conversation_id} (task: {task_id})")
     try:
         client = get_supabase_client()
-        resp = client.client.table('feedme_conversations').select('extracted_text, metadata').eq('id', conversation_id).maybe_single().execute()
+        resp = client.client.table('feedme_conversations').select('extracted_text, metadata, uploaded_by').eq('id', conversation_id).maybe_single().execute()
         if not getattr(resp, 'data', None):
             return { 'success': False, 'error': 'Conversation not found', 'conversation_id': conversation_id }
         row = resp.data
@@ -707,10 +707,19 @@ def generate_ai_tags(self, conversation_id: int, max_input_chars: int = 4000) ->
         # Configure Gemini
         cached_settings = get_cached_settings()
         fallback_settings = get_settings()
-        api_key = (
-            getattr(cached_settings, 'gemini_api_key', None)
-            or getattr(fallback_settings, 'gemini_api_key', None)
-        )
+        # Prefer uploader's Gemini key when available
+        api_key = None
+        try:
+            uploader_id = row.get('uploaded_by')
+            if uploader_id:
+                api_key = get_user_gemini_api_key_sync(uploader_id)
+        except Exception as e:
+            logger.debug(f"Could not resolve uploader API key: {e}")
+        if not api_key:
+            api_key = (
+                getattr(cached_settings, 'gemini_api_key', None)
+                or getattr(fallback_settings, 'gemini_api_key', None)
+            )
         if not api_key:
             logger.error("Gemini API key missing for AI tag generation task")
             raise MissingAPIKeyError("Gemini API key missing for AI tag generation")
@@ -719,7 +728,7 @@ def generate_ai_tags(self, conversation_id: int, max_input_chars: int = 4000) ->
         model_name = (
             getattr(cached_settings, 'feedme_model_name', None)
             or getattr(fallback_settings, 'feedme_model_name', None)
-            or 'gemini-2.5-flash-lite'
+            or 'gemini-2.5-flash-lite-preview-09-2025'
         )
         model = genai.GenerativeModel(model_name)
         prompt = (
@@ -758,6 +767,8 @@ def generate_ai_tags(self, conversation_id: int, max_input_chars: int = 4000) ->
         meta = row.get('metadata') or {}
         meta['ai_tags'] = tags
         if comment:
+            # Write both keys for compatibility (UI prefers ai_note)
+            meta['ai_note'] = comment
             meta['ai_comment'] = comment
         client.client.table('feedme_conversations').update({ 'metadata': meta }).eq('id', conversation_id).execute()
 

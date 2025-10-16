@@ -3,6 +3,7 @@ export type PlatformTag = 'windows' | 'macos'
 export interface ConversationMetadata {
   tags?: string[]
   ai_note?: string
+  ai_comment?: string
   review_status?: 'ready' | 'pending' | 'reviewed'
   ticket_id?: string
   processing_tracker?: {

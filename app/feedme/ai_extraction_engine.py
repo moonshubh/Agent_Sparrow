@@ -29,7 +29,7 @@ logger = logging.getLogger(__name__)
 class ExtractionConfig:
     """Configuration for AI extraction engine with intelligent rate limiting"""
     model_name: str = field(
-        default_factory=lambda: getattr(settings, "feedme_model_name", "gemini-2.5-flash-lite")
+        default_factory=lambda: getattr(settings, "feedme_model_name", "gemini-2.5-flash-lite-preview-09-2025")
     )
     temperature: float = 0.3                
     max_output_tokens: int = 8192
@@ -240,7 +240,7 @@ class GeminiExtractionEngine:
 
         if not self.config.model_name:
             # Fall back to configured default if the supplied config left the model blank
-            self.config.model_name = getattr(settings, "feedme_model_name", "gemini-2.5-flash-lite")
+            self.config.model_name = getattr(settings, "feedme_model_name", "gemini-2.5-flash-lite-preview-09-2025")
 
         if not self.api_key:
             raise ValueError("Google AI API key is required for extraction engine")

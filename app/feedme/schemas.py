@@ -109,7 +109,7 @@ class FeedMeConversationBase(BaseModel):
     title: str = Field(..., min_length=1, max_length=255, description="Conversation title or subject")
     original_filename: Optional[str] = Field(None, description="Original uploaded filename")
     extracted_text: Optional[str] = Field(None, description="Unified text content extracted from PDF or manually entered")
-    processing_method: ProcessingMethod = Field(default=ProcessingMethod.PDF_OCR, description="Method used to process content")
+    processing_method: ProcessingMethod = Field(default=ProcessingMethod.PDF_AI, description="Method used to process content")
     extraction_confidence: Optional[float] = Field(None, ge=0.0, le=1.0, description="OCR confidence score for PDF extractions")
     metadata: Dict[str, Any] = Field(default_factory=dict, description="Additional metadata")
     uploaded_by: Optional[str] = Field(None, description="User who uploaded the content")
@@ -595,7 +595,7 @@ class ConversationApprovalPreview(BaseModel):
     id: int = Field(..., description="Unique conversation ID")
     title: str = Field(..., description="Conversation title")
     extracted_text: Optional[str] = Field(None, description="Extracted text content")
-    processing_method: ProcessingMethod = Field(default=ProcessingMethod.PDF_OCR)
+    processing_method: ProcessingMethod = Field(default=ProcessingMethod.PDF_AI)
     extraction_confidence: Optional[float] = Field(None, description="Confidence score from OCR")
     approval_status: ApprovalStatus = Field(default=ApprovalStatus.PENDING)
     

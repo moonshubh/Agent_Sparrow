@@ -252,7 +252,7 @@ async def get_conversation_by_id(conversation_id: int) -> Optional[FeedMeConvers
         if result:
             # Backward compatibility: ensure processing_method is not null
             if result.get('processing_method') in (None, ''):
-                result['processing_method'] = ProcessingMethod.PDF_OCR.value
+                result['processing_method'] = ProcessingMethod.PDF_AI.value
             return FeedMeConversation(**result)
         return None
     except Exception as e:
@@ -484,7 +484,7 @@ async def upload_transcript(
         raise HTTPException(status_code=400, detail="Transcript content must be at least 10 characters long")
     
     # Determine initial processing method based on input type
-    initial_method = ProcessingMethod.PDF_OCR if is_pdf_file else (
+    initial_method = ProcessingMethod.PDF_AI if is_pdf_file else (
         ProcessingMethod.MANUAL_TEXT if transcript_file else ProcessingMethod.TEXT_PASTE
     )
 
@@ -609,7 +609,7 @@ async def list_conversations(
         conversations = []
         for conv in result["conversations"]:
             if conv.get('processing_method') in (None, ''):
-                conv['processing_method'] = ProcessingMethod.PDF_OCR.value
+                conv['processing_method'] = ProcessingMethod.PDF_AI.value
             conversations.append(FeedMeConversation(**conv))
         
         return ConversationListResponse(

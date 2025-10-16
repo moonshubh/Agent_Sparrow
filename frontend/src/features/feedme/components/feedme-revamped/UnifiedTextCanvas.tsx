@@ -66,7 +66,7 @@ const formatMetricLabel = (key: string): string =>
 
 // Types
 interface ProcessingMetadata {
-  processing_method: 'pdf_ocr' | 'manual_text' | 'text_paste'
+  processing_method: 'pdf_ai' | 'pdf_ocr' | 'manual_text' | 'text_paste'
   extraction_confidence?: number
   processing_time_ms?: number
   quality_metrics?: Record<string, number>
@@ -152,6 +152,13 @@ export function UnifiedTextCanvas({
 
   const processingSummary = useMemo(() => {
     switch (processing_method) {
+      case 'pdf_ai':
+        return {
+          label: 'AI Vision',
+          description: 'LLM vision extraction (Gemini)',
+          icon: <Bot className="h-3.5 w-3.5" />,
+          badgeClass: 'bg-sky-100 text-sky-800 border-sky-200',
+        }
       case 'pdf_ocr':
         return {
           label: 'PDF OCR',

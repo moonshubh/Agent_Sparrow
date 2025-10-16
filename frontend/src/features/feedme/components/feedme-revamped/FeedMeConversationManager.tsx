@@ -57,7 +57,7 @@ interface ConversationData {
   title: string
   extracted_text?: string
   raw_transcript?: string
-  processing_method: 'pdf_ocr' | 'manual_text' | 'text_paste'
+  processing_method: 'pdf_ai' | 'pdf_ocr' | 'manual_text' | 'text_paste'
   processing_status: 'pending' | 'processing' | 'completed' | 'failed' | 'cancelled'
   approval_status: 'pending' | 'approved' | 'rejected'
   extraction_confidence?: number
@@ -116,6 +116,8 @@ function ConversationCard({ conversation, onView, onDelete, onRefresh }: Convers
 
   const getProcessingMethodInfo = (method: string) => {
     switch (method) {
+      case 'pdf_ai':
+        return { label: 'AI Vision', icon: <Bot className="h-3 w-3" />, color: 'bg-sky-100 text-sky-700' }
       case 'pdf_ocr':
         return { label: 'PDF OCR', icon: <Bot className="h-3 w-3" />, color: 'bg-blue-100 text-blue-700' }
       case 'manual_text':
@@ -439,6 +441,13 @@ export default function FeedMeConversationManager() {
                 onClick={() => setMethodFilter('all')}
               >
                 All
+              </Button>
+              <Button
+                variant={methodFilter === 'pdf_ai' ? 'default' : 'outline'}
+                size="sm"
+                onClick={() => setMethodFilter('pdf_ai')}
+              >
+                AI Vision
               </Button>
               <Button
                 variant={methodFilter === 'pdf_ocr' ? 'default' : 'outline'}
