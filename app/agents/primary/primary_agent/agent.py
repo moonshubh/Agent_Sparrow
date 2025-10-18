@@ -708,6 +708,14 @@ async def run_primary_agent(state: PrimaryAgentState) -> AsyncIterator[AIMessage
                     expected_sources=tool_raw.get("expected_sources"),
                 )
 
+            trace_id = getattr(state, "trace_id", None)
+            session_id = getattr(state, "session_id", None)
+
+            if trace_id:
+                metadata_to_send.setdefault("traceId", trace_id)
+            if session_id:
+                metadata_to_send.setdefault("sessionId", session_id)
+
             structured_payload = PrimaryAgentFinalResponse(
                 text=final_response,
                 follow_up_questions=metadata_to_send.get("followUpQuestions") or [],

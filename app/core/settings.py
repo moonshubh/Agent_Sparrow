@@ -51,6 +51,7 @@ class Settings(BaseSettings):
     cache_ttl_sec: int = Field(default=3600, alias="CACHE_TTL_SEC")
     router_conf_threshold: float = Field(default=0.6, alias="ROUTER_CONF_THRESHOLD")
     router_model: str = Field(default="gemini-2.5-flash-lite", alias="ROUTER_MODEL")
+    node_timeout_sec: float = Field(default=30.0, alias="NODE_TIMEOUT_SEC")
     use_enhanced_log_analysis: bool = Field(default=True, alias="USE_ENHANCED_LOG_ANALYSIS")
     enhanced_log_model: str = Field(default="gemini-2.5-pro", alias="ENHANCED_LOG_MODEL")
     # Provider/model selection for primary agent
@@ -175,6 +176,11 @@ class Settings(BaseSettings):
     global_store_db_uri: Optional[str] = Field(default=None, alias="GLOBAL_STORE_DB_URI")
     global_knowledge_top_k: int = Field(default=6, alias="GLOBAL_KNOWLEDGE_TOP_K")
     global_knowledge_max_chars: int = Field(default=1600, alias="GLOBAL_KNOWLEDGE_MAX_CHARS")
+    global_knowledge_min_relevance: float = Field(default=0.2, alias="GLOBAL_KNOWLEDGE_MIN_RELEVANCE")
+    global_knowledge_adapter_min_similarity: float = Field(default=0.15, alias="GLOBAL_KNOWLEDGE_ADAPTER_MIN_SIMILARITY")
+    global_knowledge_adapter_min_query_length: int = Field(default=12, alias="GLOBAL_KNOWLEDGE_ADAPTER_MIN_QUERY_LENGTH")
+    global_knowledge_adapter_max_results: int = Field(default=6, alias="GLOBAL_KNOWLEDGE_ADAPTER_MAX_RESULTS")
+    global_knowledge_enable_adapter_fallback: bool = Field(default=True, alias="GLOBAL_KNOWLEDGE_ENABLE_ADAPTER_FALLBACK")
     
     # Rate Limiting Configuration (free tier defaults; override via env)
     gemini_flash_rpm_limit: int = Field(default=15, alias="GEMINI_FLASH_RPM_LIMIT")
@@ -440,6 +446,18 @@ class Settings(BaseSettings):
     def has_global_store_configuration(self) -> bool:
         """Return True when a global store connection string is configured."""
         return bool(self.global_store_db_uri)
+
+    def should_use_adapter_fallback(self, *, top_k: int, store_hits: int, query_len: int) -> bool:
+        """Determine whether the adapter fallback should run for global knowledge."""
+        if not self.global_knowledge_enable_adapter_fallback:
+            return False
+        if store_hits >= max(1, top_k):
+            return False
+        if query_len < max(0, self.global_knowledge_adapter_min_query_length):
+            return False
+        if not (self.enable_store_adapter or self.get_retrieval_primary() == "rpc"):
+            return False
+        return True
 
 
 @lru_cache()

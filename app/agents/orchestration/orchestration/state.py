@@ -13,6 +13,7 @@ class GraphState(BaseModel):
     Represents the overall state of the agentic system.
     """
     session_id: str = "default"
+    trace_id: Optional[str] = None
     messages: List[BaseMessage] = Field(default_factory=list)
     destination: Optional[Literal["primary_agent", "log_analyst", "researcher", "__end__"]] = None
     raw_log_content: Optional[str] = None

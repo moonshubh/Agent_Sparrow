@@ -14,6 +14,10 @@ class PrimaryAgentState(BaseModel):
         default=None,
         description="Optional session identifier to maintain context."
     )
+    trace_id: Optional[str] = Field(
+        default=None,
+        description="Correlation identifier propagated to logs and SSE metadata."
+    )
     provider: Optional[str] = Field(
         default=None,
         description="LLM provider override (e.g., 'google' or 'openai')."

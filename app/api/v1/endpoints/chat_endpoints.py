@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import logging
 import os
 import uuid
 from datetime import datetime
@@ -17,11 +16,13 @@ from app.agents.primary import run_primary_agent, PrimaryAgentState
 from app.api.v1.endpoints.agent_common import (
     filter_system_text,
 )
+from app.api.v1.schemas.chat_stream import ChatStreamEvent
+from app.core.logging_config import get_logger
 from app.core.settings import settings
 from app.core.transport.sse import format_sse_comment, format_sse_data
 from app.core.user_context import create_user_context_from_user_id, user_context_scope
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 router = APIRouter()
 
@@ -49,12 +50,13 @@ async def stream_text_by_characters(
     chunk_size: int = 1,
     delay: float = 0.0,
     metrics: Optional[dict[str, int]] = None,
+    trace_id: Optional[str] = None,
 ) -> AsyncIterable[str]:
     """Stream text content character by character for smooth animation."""
     if emit_start:
         if metrics is not None:
             metrics["events"] = metrics.get("events", 0) + 1
-        yield format_sse_data({"type": "text-start", "id": stream_id})
+        yield format_sse_data(ChatStreamEvent(type="text-start", id=stream_id, trace_id=trace_id))
     for i in range(0, len(text), chunk_size):
         chunk = text[i : i + chunk_size]
         if not chunk:
@@ -62,13 +64,13 @@ async def stream_text_by_characters(
         if metrics is not None:
             metrics["events"] = metrics.get("events", 0) + 1
             metrics["text_chars"] = metrics.get("text_chars", 0) + len(chunk)
-        yield format_sse_data({"type": "text-delta", "id": stream_id, "delta": chunk})
+        yield format_sse_data(ChatStreamEvent(type="text-delta", id=stream_id, delta=chunk, trace_id=trace_id))
         if delay > 0:
             await asyncio.sleep(delay)
     if emit_end:
         if metrics is not None:
             metrics["events"] = metrics.get("events", 0) + 1
-        yield format_sse_data({"type": "text-end", "id": stream_id})
+        yield format_sse_data(ChatStreamEvent(type="text-end", id=stream_id, trace_id=trace_id))
 
 
 def _resolve_provider_model(provider: Optional[str], model: Optional[str]) -> tuple[str, str]:
@@ -96,6 +98,7 @@ async def primary_agent_stream_generator(
     websearch_profile: str | None = None,
 ) -> AsyncIterable[str]:
     stream_closed = False
+    generated_trace_id = f"trace-{uuid.uuid4().hex[:12]}"
     stream_metrics: dict[str, int] = {"events": 0, "text_chars": 0, "heartbeats": 0}
     started_at = datetime.utcnow()
     heartbeat_interval = 15.0
@@ -107,7 +110,14 @@ async def primary_agent_stream_generator(
         user_context = await create_user_context_from_user_id(user_id)
         req_provider, req_model = _resolve_provider_model(provider, model)
         logger.info(
-            f"[chat_stream] request provider={provider}, model={model} -> resolved provider={req_provider}, model={req_model}"
+            "chat_stream_request_resolved",
+            original_provider=provider,
+            original_model=model,
+            resolved_provider=req_provider,
+            resolved_model=req_model,
+            session_id=session_id,
+            user_id=user_id,
+            trace_id=generated_trace_id,
         )
 
         if req_provider == "google":
@@ -118,12 +128,19 @@ async def primary_agent_stream_generator(
                     or getattr(settings, "gemini_api_key", None)
                 )
             if not gemini_key:
-                logger.warning("[chat_stream] missing Gemini API key for user_id=%s", user_id)
+                logger.warning(
+                    "chat_stream_missing_gemini_key",
+                    user_id=user_id,
+                    trace_id=generated_trace_id,
+                )
                 stream_metrics["events"] += 1
-                yield format_sse_data({
-                    "type": "error",
-                    "errorText": "API Key Required: Please add your Google Gemini API key in Settings.",
-                })
+                yield format_sse_data(
+                    ChatStreamEvent(
+                        type="error",
+                        errorText="API Key Required: Please add your Google Gemini API key in Settings.",
+                        trace_id=generated_trace_id,
+                    )
+                )
                 return
         elif req_provider == "openai":
             openai_key = None
@@ -136,17 +153,23 @@ async def primary_agent_stream_generator(
             openai_key = openai_key or os.getenv("OPENAI_API_KEY")
             if not openai_key:
                 stream_metrics["events"] += 1
-                yield format_sse_data({
-                    "type": "error",
-                    "errorText": "OpenAI API key missing. Add it in Settings or set OPENAI_API_KEY.",
-                })
+                yield format_sse_data(
+                    ChatStreamEvent(
+                        type="error",
+                        errorText="OpenAI API key missing. Add it in Settings or set OPENAI_API_KEY.",
+                        trace_id=generated_trace_id,
+                    )
+                )
                 return
         else:
             stream_metrics["events"] += 1
-            yield format_sse_data({
-                "type": "error",
-                "errorText": f"Unsupported provider: {req_provider}",
-            })
+            yield format_sse_data(
+                ChatStreamEvent(
+                    type="error",
+                    errorText=f"Unsupported provider: {req_provider}",
+                    trace_id=generated_trace_id,
+                )
+            )
             return
 
         async with user_context_scope(user_context):
@@ -183,6 +206,7 @@ async def primary_agent_stream_generator(
             initial_state = PrimaryAgentState(
                 messages=messages,
                 session_id=session_id,
+                trace_id=generated_trace_id,
                 provider=req_provider,
                 model=req_model,
                 force_websearch=force_websearch,
@@ -190,7 +214,11 @@ async def primary_agent_stream_generator(
                 websearch_profile=websearch_profile,
             )
             logger.info(
-                f"[chat_stream] initial_state provider={initial_state.provider}, model={initial_state.model}"
+                "chat_stream_state_initialized",
+                provider=initial_state.provider,
+                model=initial_state.model,
+                trace_id=generated_trace_id,
+                session_id=session_id,
             )
 
             stream_id = f"assistant-{uuid.uuid4().hex}"
@@ -198,10 +226,12 @@ async def primary_agent_stream_generator(
             reasoning_started = False
 
             logger.info(
-                "[chat_stream] streaming ready provider=%s model=%s session=%s",
-                req_provider,
-                req_model,
-                session_id,
+                "chat_stream_ready",
+                provider=req_provider,
+                model=req_model,
+                session_id=session_id,
+                stream_id=stream_id,
+                trace_id=generated_trace_id,
             )
 
             metrics = stream_metrics
@@ -213,9 +243,10 @@ async def primary_agent_stream_generator(
                         chunk = await asyncio.wait_for(agen.__anext__(), heartbeat_interval)
                     except StopAsyncIteration:
                         logger.info(
-                            "[chat_stream] upstream completed text_started=%s reasoning_started=%s",
-                            text_started,
-                            reasoning_started,
+                            "chat_stream_upstream_complete",
+                            text_started=text_started,
+                            reasoning_started=reasoning_started,
+                            trace_id=generated_trace_id,
                         )
                         break
                     except asyncio.TimeoutError:
@@ -224,26 +255,27 @@ async def primary_agent_stream_generator(
                         yield format_sse_comment("working")
                         continue
 
-                    payloads: list[dict] = []
+                    payloads: list[ChatStreamEvent] = []
 
                     if chunk is None:
-                        logger.warning("[chat_stream] received None chunk from provider")
+                        logger.warning("chat_stream_none_chunk", trace_id=generated_trace_id)
                         continue
 
                     chunk_content = getattr(chunk, "content", None)
                     chunk_meta = getattr(chunk, "additional_kwargs", None)
                     logger.info(
-                        "[chat_stream] chunk type=%s content_len=%s has_metadata=%s",
-                        type(chunk).__name__,
-                        len(chunk_content) if isinstance(chunk_content, str) else (len(chunk_content) if hasattr(chunk_content, "__len__") else None),
-                        bool(chunk_meta),
+                        "chat_stream_chunk_received",
+                        chunk_type=type(chunk).__name__,
+                        content_length=len(chunk_content) if isinstance(chunk_content, str) else (len(chunk_content) if hasattr(chunk_content, "__len__") else None),
+                        has_metadata=bool(chunk_meta),
+                        trace_id=generated_trace_id,
                     )
                     content_piece: Optional[str] = None
 
                     def ensure_text_started() -> None:
                         nonlocal text_started
                         if not text_started:
-                            payloads.append({"type": "text-start", "id": stream_id})
+                            payloads.append(ChatStreamEvent(type="text-start", id=stream_id, trace_id=generated_trace_id))
                             text_started = True
 
                     if chunk_content is not None:
@@ -257,15 +289,17 @@ async def primary_agent_stream_generator(
                         content_piece = filter_system_text(content_piece)
                     if content_piece:
                         logger.info(
-                            "[chat_stream] streaming text chunk len=%d preview=%r",
-                            len(content_piece),
-                            content_piece[:120],
+                            "chat_stream_text_chunk",
+                            length=len(content_piece),
+                            preview=content_piece[:120],
+                            trace_id=generated_trace_id,
                         )
                         async for char_chunk in stream_text_by_characters(
                             content_piece,
                             stream_id,
                             emit_start=not text_started,
                             metrics=metrics,
+                            trace_id=generated_trace_id,
                         ):
                             yield char_chunk
                         text_started = True
@@ -275,19 +309,27 @@ async def primary_agent_stream_generator(
                         metadata = chunk_meta.get("metadata")
                     if metadata:
                         logger.info(
-                            "[chat_stream] metadata keys=%s",
-                            list(metadata.keys()),
+                            "chat_stream_metadata_received",
+                            keys=list(metadata.keys()),
+                            trace_id=generated_trace_id,
                         )
                         followups = metadata.get("followUpQuestions")
                         if followups:
                             ensure_text_started()
-                            payloads.append({"type": "data-followups", "data": followups, "transient": True})
+                            payloads.append(
+                                ChatStreamEvent(
+                                    type="data-followups",
+                                    data=followups,
+                                    transient=True,
+                                    trace_id=generated_trace_id,
+                                )
+                            )
 
                         thinking_trace = metadata.get("thinking_trace")
                         if thinking_trace:
                             # Emit reasoning events in addition to legacy data-thinking for compatibility
                             if not reasoning_started:
-                                payloads.append({"type": "reasoning-start"})
+                                payloads.append(ChatStreamEvent(type="reasoning-start", trace_id=generated_trace_id))
                                 reasoning_started = True
                             # Try to pick the latest thought text if available
                             try:
@@ -305,22 +347,50 @@ async def primary_agent_stream_generator(
                             except Exception:
                                 latest_thought = None
                             if latest_thought:
-                                payloads.append({"type": "reasoning-delta", "text": latest_thought})
+                                payloads.append(
+                                    ChatStreamEvent(
+                                        type="reasoning-delta",
+                                        text=latest_thought,
+                                        trace_id=generated_trace_id,
+                                    )
+                                )
                             # Keep sparse metadata event for downstream consumers
-                            payloads.append({"type": "data-thinking", "data": thinking_trace})
+                            payloads.append(
+                                ChatStreamEvent(
+                                    type="data-thinking",
+                                    data=thinking_trace,
+                                    trace_id=generated_trace_id,
+                                )
+                            )
 
                         tool_results = metadata.get("toolResults")
                         if tool_results:
                             ensure_text_started()
-                            payloads.append({"type": "data-tool-result", "data": tool_results})
+                            payloads.append(
+                                ChatStreamEvent(
+                                    type="data-tool-result",
+                                    data=tool_results,
+                                    trace_id=generated_trace_id,
+                                )
+                            )
 
                         leftover = {k: v for k, v in metadata.items() if k not in {"followUpQuestions", "thinking_trace", "toolResults"}}
                         if leftover:
                             ensure_text_started()
-                            payloads.append({"type": "message-metadata", "messageMetadata": leftover})
+                            payloads.append(
+                                ChatStreamEvent(
+                                    type="message-metadata",
+                                    messageMetadata=leftover,
+                                    trace_id=generated_trace_id,
+                                )
+                            )
 
                     for payload in payloads:
-                        logger.info("[chat_stream] emitting payload type=%s", payload.get("type"))
+                        logger.info(
+                            "chat_stream_emit_payload",
+                            payload_type=payload.type,
+                            trace_id=generated_trace_id,
+                        )
                         metrics["events"] = metrics.get("events", 0) + 1
                         yield format_sse_data(payload)
             finally:
@@ -328,39 +398,60 @@ async def primary_agent_stream_generator(
                     await agent_stream.aclose()
 
             if text_started:
-                async for closing in stream_text_by_characters("", stream_id, emit_end=True, metrics=metrics):
+                async for closing in stream_text_by_characters("", stream_id, emit_end=True, metrics=metrics, trace_id=generated_trace_id):
                     yield closing
 
             if reasoning_started:
                 # Close reasoning stream
                 metrics["events"] = metrics.get("events", 0) + 1
-                yield format_sse_data({"type": "reasoning-end"})
+                yield format_sse_data(ChatStreamEvent(type="reasoning-end", trace_id=generated_trace_id))
 
             metrics["events"] = metrics.get("events", 0) + 1
-            yield format_sse_data({"type": "finish", "session_id": session_id, "stream_id": stream_id})
+            yield format_sse_data(
+                ChatStreamEvent(
+                    type="finish",
+                    session_id=session_id,
+                    stream_id=stream_id,
+                    trace_id=generated_trace_id,
+                )
+            )
             stream_closed = True
 
     except Exception as e:
-        logger.error(
-            f"Error in primary_agent_stream_generator calling run_primary_agent: {e}",
-            exc_info=True,
+        logger.exception(
+            "chat_stream_generator_error",
+            trace_id=generated_trace_id,
         )
         stream_metrics["events"] += 1
-        yield format_sse_data({"type": "error", "errorText": f"An error occurred in the agent: {str(e)}"})
+        yield format_sse_data(
+            ChatStreamEvent(
+                type="error",
+                errorText=f"An error occurred in the agent: {str(e)}",
+                trace_id=generated_trace_id,
+            )
+        )
     finally:
         if not stream_closed:
             stream_metrics["events"] += 1
-            yield format_sse_data({"type": "finish", "session_id": session_id, "stream_id": locals().get("stream_id")})
+            yield format_sse_data(
+                ChatStreamEvent(
+                    type="finish",
+                    session_id=session_id,
+                    stream_id=locals().get("stream_id"),
+                    trace_id=generated_trace_id,
+                )
+            )
         elapsed_ms = int((datetime.utcnow() - started_at).total_seconds() * 1000)
         logger.info(
-            "[chat_stream] stream complete provider=%s session=%s stream_id=%s events=%d text_chars=%d heartbeats=%d elapsed_ms=%d",
-            req_provider if "req_provider" in locals() else provider,
-            session_id,
-            locals().get("stream_id"),
-            stream_metrics.get("events", 0),
-            stream_metrics.get("text_chars", 0),
-            stream_metrics.get("heartbeats", 0),
-            elapsed_ms,
+            "chat_stream_complete",
+            provider=req_provider if "req_provider" in locals() else provider,
+            session_id=session_id,
+            stream_id=locals().get("stream_id"),
+            events=stream_metrics.get("events", 0),
+            text_chars=stream_metrics.get("text_chars", 0),
+            heartbeats=stream_metrics.get("heartbeats", 0),
+            elapsed_ms=elapsed_ms,
+            trace_id=generated_trace_id,
         )
 
 

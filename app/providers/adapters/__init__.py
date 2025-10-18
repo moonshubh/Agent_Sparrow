@@ -23,6 +23,7 @@ def _bootstrap_known_adapters() -> None:
 
     combos = [
         ("google", "gemini-2.5-flash"),
+        ("google", "gemini-2.5-flash-lite"),
         ("google", "gemini-2.5-flash-preview-09-2025"),
         ("google", "gemini-2.5-pro"),
         ("openai", "gpt-5-mini-2025-08-07"),
@@ -57,4 +58,3 @@ __all__ = [
 
 # Eagerly attempt to load common adapters
 _bootstrap_known_adapters()
-

@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import asyncio
-import logging
 from time import perf_counter
 from typing import Any, Dict, List, Optional, Tuple
 
 from langgraph.store.base import SearchItem
+from opentelemetry import trace
+from opentelemetry.trace import Status, StatusCode
 
+from app.core.logging_config import get_logger
 from app.core.settings import settings
 from app.db import embedding_utils
 from app.db.embedding_config import assert_dim
@@ -16,15 +18,21 @@ from app.services.global_knowledge.store import get_async_store
 
 ALLOWED_SOURCES = {"correction", "feedback"}
 
+logger = get_logger(__name__)
+tracer = trace.get_tracer(__name__)
 
-logger = logging.getLogger(__name__)
+
+def _passes_threshold(score: Optional[float], threshold: float) -> bool:
+    if score is None:
+        return True
+    return score >= threshold
 def _resolve_adapter():
     try:
         from app.agents.orchestration.orchestration.store_adapter import get_hybrid_store_adapter
 
         return get_hybrid_store_adapter()
     except Exception:  # pragma: no cover - optional dependency or circular import
-        logger.debug("Hybrid store adapter unavailable; fallback disabled")
+        logger.debug("global_knowledge_adapter_unavailable")
         return None
 
 
@@ -149,82 +157,129 @@ async def retrieve_global_knowledge(query_text: str, *, top_k: Optional[int] = N
             "errors": ["empty_query"],
         }
 
-    k = top_k or settings.global_knowledge_top_k
-    k = max(1, min(settings.global_knowledge_top_k, k))
-    char_budget = settings.global_knowledge_max_chars
+    with tracer.start_as_current_span("global_knowledge.retrieve") as span:
+        span.set_attribute("global_knowledge.query_length", len(query))
 
-    start = perf_counter()
-    errors: List[str] = []
-    items: List[Dict[str, Any]] = []
-    memory_lines: List[str] = []
-    source = "none"
-    fallback_used = False
+        k = top_k or settings.global_knowledge_top_k
+        k = max(1, min(settings.global_knowledge_top_k, k))
+        char_budget = settings.global_knowledge_max_chars
+        min_store_relevance = max(0.0, settings.global_knowledge_min_relevance)
+        min_adapter_similarity = max(0.0, settings.global_knowledge_adapter_min_similarity)
 
-    # Attempt store retrieval when configured
-    if settings.has_global_store_configuration() and settings.should_enable_global_knowledge():
-        store = await get_async_store()
-        if store is not None:
-            try:
-                store_hits = await store.asearch(("global_knowledge",), query=query, limit=k)
-                for idx, hit in enumerate(store_hits):
-                    payload, memory_line = _format_store_item(hit, char_budget)
-                    if payload["source"] in ALLOWED_SOURCES:
-                        items.append(payload)
-                        memory_lines.append(memory_line)
-                if items:
-                    source = "store"
-            except Exception as exc:  # pragma: no cover - network failures
-                logger.warning("Global knowledge store search failed: %s", exc)
-                errors.append(f"store_error:{exc.__class__.__name__}")
+        start = perf_counter()
+        errors: List[str] = []
+        items: List[Dict[str, Any]] = []
+        memory_lines: List[str] = []
+        source = "none"
+        fallback_used = False
+
+        # Attempt store retrieval when configured
+        if settings.has_global_store_configuration() and settings.should_enable_global_knowledge():
+            store = await get_async_store()
+            if store is not None:
+                try:
+                    store_hits = await store.asearch(("global_knowledge",), query=query, limit=k)
+                    for hit in store_hits:
+                        payload, memory_line = _format_store_item(hit, char_budget)
+                        if payload["source"] in ALLOWED_SOURCES and _passes_threshold(payload.get("relevance_score"), min_store_relevance):
+                            items.append(payload)
+                            memory_lines.append(memory_line)
+                    if items:
+                        source = "store"
+                except Exception as exc:  # pragma: no cover - network failures
+                    logger.warning("global_knowledge_store_error", error=str(exc))
+                    errors.append(f"store_error:{exc.__class__.__name__}")
+                    span.record_exception(exc)
+            else:
+                errors.append("store_unavailable")
         else:
-            errors.append("store_unavailable")
-    else:
-        logger.debug("Global store not configured or injection disabled; skipping store search")
+            logger.debug("global_knowledge_store_skip", reason="disabled")
 
-    # Fallback to adapter when enabled and we need more results
-    use_adapter_fallback = settings.enable_store_adapter or settings.get_retrieval_primary() == "rpc"
+        should_fallback = settings.should_use_adapter_fallback(
+            top_k=k,
+            store_hits=len(items),
+            query_len=len(query),
+        )
 
-    if len(items) < k and use_adapter_fallback:
-        fallback_used = True
-        try:
-            embed_model = embedding_utils.get_embedding_model()
-            loop = asyncio.get_running_loop()
-            query_vector = await loop.run_in_executor(None, embed_model.embed_query, query)
-            assert_dim(query_vector, "global_knowledge_adapter_fallback")
-            adapter = _resolve_adapter()
-            if adapter is None:
-                raise RuntimeError("adapter_unavailable")
-            remaining = k - len(items)
-            adapter_rows = await adapter.search(query_vector, match_count=max(remaining, k))
-            for row in adapter_rows:
-                payload, memory_line = _format_adapter_item(row, char_budget)
-                items.append(payload)
-                memory_lines.append(memory_line)
-            if source == "none" and items:
-                source = "adapter"
-        except Exception as exc:  # pragma: no cover - network failures
-            logger.warning("Global knowledge adapter fallback failed: %s", exc)
-            errors.append(f"adapter_error:{exc.__class__.__name__}")
+        # Fallback to adapter when enabled and we need more results
+        if should_fallback:
+            fallback_used = True
+            try:
+                embed_model = embedding_utils.get_embedding_model()
+                loop = asyncio.get_running_loop()
+                query_vector = await loop.run_in_executor(None, embed_model.embed_query, query)
+                assert_dim(query_vector, "global_knowledge_adapter_fallback")
+                adapter = _resolve_adapter()
+                if adapter is None:
+                    raise RuntimeError("adapter_unavailable")
+                remaining = max(1, k - len(items))
+                match_count = max(remaining, settings.global_knowledge_adapter_max_results)
+                adapter_rows = await adapter.search(query_vector, match_count=match_count)
+                for row in adapter_rows:
+                    payload, memory_line = _format_adapter_item(row, char_budget)
+                    if not _passes_threshold(payload.get("relevance_score"), min_adapter_similarity):
+                        continue
+                    items.append(payload)
+                    memory_lines.append(memory_line)
+                    if len(memory_lines) >= k:
+                        break
+                if source == "none" and items:
+                    source = "adapter"
+            except Exception as exc:  # pragma: no cover - network failures
+                logger.warning("global_knowledge_adapter_error", error=str(exc))
+                errors.append(f"adapter_error:{exc.__class__.__name__}")
+                span.record_exception(exc)
+        else:
+            span.set_attribute("global_knowledge.fallback_skipped", True)
 
-    latency_ms = (perf_counter() - start) * 1000
+        latency_ms = (perf_counter() - start) * 1000
 
-    ranked_items = items[:k]
-    clipped_lines = memory_lines[:k]
-    memory_snippet = _truncate("\n".join(f"{idx + 1}. {line}" for idx, line in enumerate(clipped_lines)), char_budget)
+        ranked_items = items[:k]
+        clipped_lines = memory_lines[:k]
+        memory_snippet = _truncate("\n".join(f"{idx + 1}. {line}" for idx, line in enumerate(clipped_lines)), char_budget)
+
+        logger.info(
+            "global_knowledge_retrieval",
+            query_len=len(query),
+            hits=len(ranked_items),
+            source=source,
+            fallback_used=fallback_used,
+            latency_ms=round(latency_ms, 2),
+            errors=errors,
+        )
+
+        result = {
+            "items": ranked_items,
+            "memory_snippet": memory_snippet,
+            "source": source,
+            "fallback_used": fallback_used,
+            "latency_ms": latency_ms,
+            "errors": errors,
+            "top_k": k,
+            "char_budget": char_budget,
+        }
+
+        span.set_status(Status(StatusCode.OK))
+        span.set_attribute("global_knowledge.hits", len(ranked_items))
+        span.set_attribute("global_knowledge.source", source)
+        span.set_attribute("global_knowledge.fallback_used", fallback_used)
+        span.set_attribute("global_knowledge.latency_ms", round(latency_ms, 2))
+        if errors:
+            span.record_exception(Exception(";".join(errors)))
+
+        return result
 
     logger.info(
         "global_knowledge_retrieval",
-        extra={
-            "query_len": len(query),
-            "hits": len(ranked_items),
-            "source": source,
-            "fallback_used": fallback_used,
-            "latency_ms": round(latency_ms, 2),
-            "errors": errors,
-        },
+        query_len=len(query),
+        hits=len(ranked_items),
+        source=source,
+        fallback_used=fallback_used,
+        latency_ms=round(latency_ms, 2),
+        errors=errors,
     )
 
-    return {
+    result = {
         "items": ranked_items,
         "memory_snippet": memory_snippet,
         "source": source,
@@ -234,3 +289,13 @@ async def retrieve_global_knowledge(query_text: str, *, top_k: Optional[int] = N
         "top_k": k,
         "char_budget": char_budget,
     }
+
+    span.set_status(Status(StatusCode.OK))
+    span.set_attribute("global_knowledge.hits", len(ranked_items))
+    span.set_attribute("global_knowledge.source", source)
+    span.set_attribute("global_knowledge.fallback_used", fallback_used)
+    span.set_attribute("global_knowledge.latency_ms", round(latency_ms, 2))
+    if errors:
+        span.record_exception(Exception(";".join(errors)))
+
+    return result

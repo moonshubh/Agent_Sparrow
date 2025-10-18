@@ -1,22 +1,24 @@
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
-from typing import List, TYPE_CHECKING, Union  # Added Union for flexible message types
-from langchain_core.messages import BaseMessage, HumanMessage # Added HumanMessage for clarity
-from langchain_core.prompts import ChatPromptTemplate
-from langchain_google_genai import ChatGoogleGenerativeAI
+from typing import List, TYPE_CHECKING, Union
 
+from langchain_core.messages import BaseMessage, HumanMessage
+from langchain_core.prompts import ChatPromptTemplate
+from opentelemetry import trace
+from opentelemetry.trace import Status, StatusCode
+
+from app.core.logging_config import get_logger
+from app.core.rate_limiting.agent_wrapper import get_rate_limiter
 from app.core.settings import settings
+from app.providers.adapters import load_model
 
 if TYPE_CHECKING:
-    from app.agents.orchestration.orchestration.state import GraphState # Import Pydantic GraphState
+    from app.agents.orchestration.orchestration.state import GraphState
+
 from app.agents.router.router.schemas import RouteQueryWithConf
 from app.core.user_context import get_current_user_id
-
-import logging
-
-# Environment variable for the API key
-GEMINI_API_KEY = settings.gemini_api_key
 
 # Define the path to the prompt file
 PROMPT_FILE_PATH = Path(__file__).parent / "prompts" / "router_prompt.md"
@@ -28,14 +30,15 @@ try:
     router_prompt = ChatPromptTemplate.from_template(router_prompt_template_str, template_format="f-string")
 except FileNotFoundError:
     # Fallback or error if prompt file is crucial
-    logging.getLogger(__name__).error("Router prompt file not found at %s", PROMPT_FILE_PATH)
+    get_logger(__name__).error("router_prompt_missing", path=str(PROMPT_FILE_PATH))
     # Using a basic fallback prompt to allow functionality, but this should be addressed.
     router_prompt = ChatPromptTemplate.from_messages([
         ("system", "You are a router. Classify the query: {{query}} into primary_agent, log_analyst, or researcher."),
         ("user", "{query}")
     ])
 
-logger = logging.getLogger(__name__)
+tracer = trace.get_tracer(__name__)
+logger = get_logger(__name__)
 
 def get_user_query(messages: List[Union[BaseMessage, tuple, list, dict]]) -> str:
     """
@@ -67,12 +70,22 @@ def get_user_query(messages: List[Union[BaseMessage, tuple, list, dict]]) -> str
         pass
     return ""
 
+
+def _get_state_attr(state: "GraphState" | dict, key: str, default: str | None = None):
+    if isinstance(state, dict):
+        return state.get(key, default)
+    return getattr(state, key, default)
+
 async def query_router(state: 'GraphState' | dict) -> Union[dict, str]:
     """
     Routes the query to the appropriate agent based on LLM classification.
     Updates the 'destination' field in the GraphState.
     """
-    logger.debug("routing_query_start")
+    session_id = _get_state_attr(state, "session_id")
+    trace_id = _get_state_attr(state, "trace_id")
+    bound_logger = logger.bind(session_id=session_id, trace_id=trace_id)
+
+    bound_logger.debug("routing_query_start")
 
     # Support both GraphState objects and simple dicts for easier unit testing
     if isinstance(state, dict):
@@ -80,67 +93,98 @@ async def query_router(state: 'GraphState' | dict) -> Union[dict, str]:
     else:
         messages = state.messages  # type: ignore[attr-defined]
 
-    user_query = get_user_query(messages) # Access messages from Pydantic state
+    user_query = get_user_query(messages)
 
-    if not user_query:
-        logger.error("routing_error_no_user_query")
-        # Default routing or error handling if query is missing
-        return {"destination": "__end__"} # Or perhaps a default agent
+    node_timeout = getattr(settings, "node_timeout_sec", 30.0)
 
-    # Resolve user ID from context or settings fallback
-    user_id = get_current_user_id() or settings.development_user_id
+    with tracer.start_as_current_span("router.route") as span:
+        if session_id:
+            span.set_attribute("router.session_id", session_id)
+        if trace_id:
+            span.set_attribute("router.trace_id", trace_id)
 
-    # Get user-specific Gemini API key, fallback to env var
-    from app.api_keys.supabase_service import get_api_key_service
-    api_key_service = get_api_key_service()
-    gemini_api_key = await api_key_service.get_decrypted_api_key(
-        user_id=user_id,
-        api_key_type="gemini",
-        fallback_env_var="GEMINI_API_KEY"
-    )
-    
-    if not gemini_api_key:
-        logger.error("No Gemini API key available for user")
-        return {"destination": "__end__"}
-    model_name = settings.router_model or "gemini-2.5-flash-lite"
-    logger.debug("router_model=%s", model_name)
+        if not user_query:
+            bound_logger.error("routing_error_no_user_query")
+            span.set_status(Status(StatusCode.ERROR, "missing_user_query"))
+            span.set_attribute("router.destination", "__end__")
+            return {"destination": "__end__"}
 
-    llm = ChatGoogleGenerativeAI(
-        model=model_name,
-        temperature=0,
-        google_api_key=gemini_api_key
-    )
-    
-    # Use with_structured_output with the RouteQuery schema
-    # The prompt (from router_prompt.md) is designed to guide the LLM
-    # to output one of the categories defined in RouteQuery.
-    structured_llm = llm.with_structured_output(RouteQueryWithConf)
+        # Resolve user ID from context or settings fallback
+        user_id = get_current_user_id() or settings.development_user_id
+        span.set_attribute("router.user_id_fallback", bool(user_id == settings.development_user_id))
 
-    # Prepare the prompt with the user query
-    prompt_input = {"query": user_query}
+        # Get user-specific Gemini API key, fallback to env var
+        from app.api_keys.supabase_service import get_api_key_service
 
-    try:
-        # Create a chain that pipes the prompt to the LLM
+        api_key_service = get_api_key_service()
+        gemini_api_key = await api_key_service.get_decrypted_api_key(
+            user_id=user_id,
+            api_key_type="gemini",
+            fallback_env_var="GEMINI_API_KEY",
+        )
+
+        if not gemini_api_key:
+            bound_logger.error("router_missing_api_key", user_id=user_id)
+            span.set_status(Status(StatusCode.ERROR, "missing_api_key"))
+            span.set_attribute("router.destination", "__end__")
+            return {"destination": "__end__"}
+
+        model_name = (settings.router_model or "gemini-2.5-flash-lite").lower()
+        span.set_attribute("router.model", model_name)
+
+        try:
+            llm = await load_model("google", model_name, api_key=gemini_api_key, temperature=0.0)
+        except Exception as exc:  # pragma: no cover - defensive
+            bound_logger.exception("router_model_load_failed", model=model_name)
+            span.record_exception(exc)
+            span.set_status(Status(StatusCode.ERROR, "model_load_failed"))
+            span.set_attribute("router.destination", "primary_agent")
+            return {"destination": "primary_agent"}
+
+        structured_llm = llm.with_structured_output(RouteQueryWithConf)
         chain = router_prompt | structured_llm
+        prompt_input = {"query": user_query}
 
-        # Invoke the LLM to get the routing decision
-        routing_decision = await chain.ainvoke(prompt_input)
+        rate_limiter = get_rate_limiter()
+
+        try:
+            routing_decision = await asyncio.wait_for(
+                rate_limiter.execute_with_protection(model_name, chain.ainvoke, prompt_input),
+                timeout=node_timeout,
+            )
+        except asyncio.TimeoutError as exc:
+            bound_logger.warning("router_timeout", timeout=node_timeout)
+            span.record_exception(exc)
+            span.set_status(Status(StatusCode.ERROR, "router_timeout"))
+            span.set_attribute("router.destination", "primary_agent")
+            return {"destination": "primary_agent"}
+        except Exception as exc:  # pragma: no cover - fallthrough
+            bound_logger.exception("router_llm_error", model=model_name)
+            span.record_exception(exc)
+            span.set_status(Status(StatusCode.ERROR, "router_llm_error"))
+            span.set_attribute("router.destination", "primary_agent")
+            return {"destination": "primary_agent"}
+
         destination = routing_decision.destination
-        confidence = routing_decision.confidence
-        logger.info("Router decision: dest=%s confidence=%.2f", destination, confidence)
+        confidence = float(routing_decision.confidence)
+        span.set_attribute("router.confidence", confidence)
+        span.set_attribute("router.destination", destination)
+        bound_logger.info("router_decision", destination=destination, confidence=confidence)
 
-        # Apply threshold fallback
-        CONF_THRESHOLD = settings.router_conf_threshold
-        if confidence < CONF_THRESHOLD:
-            logger.warning(
-                "Low confidence (%.2f < %.2f). Falling back to primary_agent", confidence, CONF_THRESHOLD
+        threshold = settings.router_conf_threshold
+        if confidence < threshold:
+            bound_logger.warning(
+                "router_low_confidence",
+                confidence=confidence,
+                threshold=threshold,
+                fallback="primary_agent",
             )
             destination = "primary_agent"
-        logger.info("routing_to=%s", destination)
-    except Exception as e:
-        logger.exception("Routing LLM error: %s", e)
-        # Fallback routing in case of LLM error
-        destination = "primary_agent" # Or '__end__' or a specific error handling agent
-        logger.info("routing_fallback_to=%s", destination)
+            span.set_attribute("router.fallback_triggered", True)
+        else:
+            span.set_attribute("router.fallback_triggered", False)
 
-    return {"destination": destination}
+        span.set_attribute("router.destination", destination)
+        span.set_status(Status(StatusCode.OK))
+
+        return {"destination": destination}

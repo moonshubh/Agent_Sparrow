@@ -1,3 +1,10 @@
+import asyncio
+import hashlib
+from typing import Dict, Any, Optional
+
+from opentelemetry import trace
+from opentelemetry.trace import Status, StatusCode
+
 from app.agents.orchestration.orchestration.state import GraphState
 from app.agents.orchestration.orchestration.store_adapter import (
     ALLOWED_SOURCES,
@@ -5,15 +12,14 @@ from app.agents.orchestration.orchestration.store_adapter import (
 )
 from app.agents.research.research_agent.research_agent import get_research_graph
 from app.cache.redis_cache import RedisCache
-import structlog
-import hashlib
-from typing import Dict, Any, Optional
+from app.core.logging_config import get_logger
 from app.core.settings import settings
 from app.services.global_knowledge.retrieval import retrieve_global_knowledge
 
 # Instantiate global singletons
-logger = structlog.get_logger()
+logger = get_logger(__name__)
 cache_layer = RedisCache()
+tracer = trace.get_tracer(__name__)
 
 # Instantiate the research agent graph
 research_agent_graph = get_research_graph()
@@ -55,6 +61,10 @@ async def pre_process(state: GraphState) -> Dict[str, Any]:
 
     updates: Dict[str, Any] = {}
     global_context: Dict[str, Any] = {}
+    session_id = getattr(state, "session_id", "default")
+    trace_id = getattr(state, "trace_id", None)
+    bound_logger = logger.bind(session_id=session_id, trace_id=trace_id)
+
     should_use_adapter = getattr(settings, "should_use_store_adapter", lambda: False)
     if should_use_adapter():
         adapter = get_hybrid_store_adapter()
@@ -72,37 +82,46 @@ async def pre_process(state: GraphState) -> Dict[str, Any]:
         return updates
 
     user_query = state.messages[-1].content
-    session_id = getattr(state, 'session_id', 'default')
 
-    # 1. Cache check with secure key
-    cache_key = _generate_cache_key(session_id, user_query)
-    cached = cache_layer.get(cache_key)
-    if cached is not None:
-        logger.info("cache_hit", session_id=session_id)
-        updates["cached_response"] = cached
+    with tracer.start_as_current_span("orchestration.pre_process") as span:
+        span.set_attribute("session.id", session_id)
+        if trace_id:
+            span.set_attribute("trace.id", trace_id)
+        span.set_attribute("cache.query_length", len(user_query))
+
+        # 1. Cache check with secure key
+        cache_key = _generate_cache_key(session_id, user_query)
+        cached = cache_layer.get(cache_key)
+        if cached is not None:
+            bound_logger.info("cache_hit")
+            span.set_attribute("cache.hit", True)
+            updates["cached_response"] = cached
+            if global_context:
+                state.global_knowledge_context = dict(global_context)
+                updates["global_knowledge_context"] = state.global_knowledge_context
+            return updates
+
+        # 2. No vector retrieval needed - using Supabase for context
+        # Context will be retrieved directly by agents when needed
+        bound_logger.info("cache_miss")
+        span.set_attribute("cache.hit", False)
+
+        should_enable_global = getattr(settings, "should_enable_global_knowledge", lambda: False)
+        if should_enable_global():
+            retrieval = await retrieve_global_knowledge(
+                user_query,
+                top_k=settings.global_knowledge_top_k,
+            )
+            global_context["retrieval"] = retrieval
+            if retrieval.get("memory_snippet"):
+                global_context["memory_snippet"] = retrieval["memory_snippet"]
+            global_context.setdefault("sources", sorted(ALLOWED_SOURCES))
+
         if global_context:
             state.global_knowledge_context = dict(global_context)
             updates["global_knowledge_context"] = state.global_knowledge_context
-        return updates
 
-    # 2. No vector retrieval needed - using Supabase for context
-    # Context will be retrieved directly by agents when needed
-    logger.info("cache_miss", session_id=session_id)
-
-    should_enable_global = getattr(settings, "should_enable_global_knowledge", lambda: False)
-    if should_enable_global():
-        retrieval = await retrieve_global_knowledge(
-            user_query,
-            top_k=settings.global_knowledge_top_k,
-        )
-        global_context["retrieval"] = retrieval
-        if retrieval.get("memory_snippet"):
-            global_context["memory_snippet"] = retrieval["memory_snippet"]
-        global_context.setdefault("sources", sorted(ALLOWED_SOURCES))
-
-    if global_context:
-        state.global_knowledge_context = dict(global_context)
-        updates["global_knowledge_context"] = state.global_knowledge_context
+        span.set_status(Status(StatusCode.OK))
 
     return updates  # Empty dict on cache miss aside from optional adapter context
 
@@ -127,13 +146,23 @@ def post_process(state: GraphState) -> Dict[str, Any]:
 
     user_query = state.messages[-2].content
     agent_response = state.messages[-1].content
-    session_id = getattr(state, 'session_id', 'default')
+    session_id = getattr(state, "session_id", "default")
+    trace_id = getattr(state, "trace_id", None)
+    bound_logger = logger.bind(session_id=session_id, trace_id=trace_id)
 
-    # Cache store with secure key and TTL (1 hour = 3600 seconds)
-    cache_key = _generate_cache_key(session_id, user_query)
-    cache_layer.set(cache_key, agent_response, ttl=3600)
+    with tracer.start_as_current_span("orchestration.post_process") as span:
+        span.set_attribute("session.id", session_id)
+        if trace_id:
+            span.set_attribute("trace.id", trace_id)
+        span.set_attribute("cache.write_length", len(agent_response))
 
-    logger.info("post_process", session_id=session_id)
+        # Cache store with secure key and TTL (1 hour = 3600 seconds)
+        cache_key = _generate_cache_key(session_id, user_query)
+        cache_layer.set(cache_key, agent_response, ttl=3600)
+
+        bound_logger.info("post_process_cache_store")
+        span.set_status(Status(StatusCode.OK))
+
     return {"qa_retry_count": 0}
 
 from langchain_core.messages import HumanMessage, AIMessage
@@ -143,7 +172,11 @@ async def run_researcher(state: GraphState):
     Runs the research agent graph asynchronously using the last user query,
     and appends a synthesized answer + citations to the messages.
     """
-    logger.debug("running_researcher_async")
+    timeout_sec = getattr(settings, "node_timeout_sec", 30.0)
+    trace_id = getattr(state, "trace_id", None)
+    session_id = getattr(state, "session_id", "default")
+    bound_logger = logger.bind(trace_id=trace_id, session_id=session_id)
+    bound_logger.debug("running_researcher_async", timeout_sec=timeout_sec)
     # Extract the latest user query (prefer last HumanMessage)
     query_text = None
     if state.messages:
@@ -168,7 +201,31 @@ async def run_researcher(state: GraphState):
     }
 
     # Invoke the research graph asynchronously (synthesize node is async)
-    final_state = await research_agent_graph.ainvoke(initial_state)
+    with tracer.start_as_current_span("orchestration.run_researcher") as span:
+        span.set_attribute("session.id", session_id)
+        if trace_id:
+            span.set_attribute("trace.id", trace_id)
+        span.set_attribute("research.timeout_sec", timeout_sec)
+
+        try:
+            final_state = await asyncio.wait_for(
+                research_agent_graph.ainvoke(initial_state),
+                timeout=timeout_sec,
+            )
+        except asyncio.TimeoutError:
+            bound_logger.warning("research_agent_timeout", timeout_sec=timeout_sec)
+            span.set_status(Status(StatusCode.ERROR, "timeout"))
+            timeout_msg = AIMessage(
+                content="I couldn't complete the external research in time, so I'll continue with the information already gathered."
+            )
+            return {"messages": state.messages + [timeout_msg]}
+        except Exception as exc:  # pragma: no cover - defensive logging
+            bound_logger.exception("research_agent_error")
+            span.record_exception(exc)
+            span.set_status(Status(StatusCode.ERROR, str(exc)))
+            raise
+        else:
+            span.set_status(Status(StatusCode.OK))
 
     answer = final_state.get("answer") or "I'm sorry, I couldn't find relevant information to answer your question."
     citations = final_state.get("citations") or []

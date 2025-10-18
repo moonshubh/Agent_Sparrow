@@ -53,13 +53,15 @@ class GeminiRateLimiter:
         )
         
         # Initialize circuit breakers for each model
+        flash_breaker = CircuitBreaker(
+            failure_threshold=self.config.circuit_breaker_failure_threshold,
+            timeout_seconds=self.config.circuit_breaker_timeout_seconds,
+            success_threshold=self.config.circuit_breaker_success_threshold,
+            name="flash"
+        )
         self.circuit_breakers = {
-            "gemini-2.5-flash": CircuitBreaker(
-                failure_threshold=self.config.circuit_breaker_failure_threshold,
-                timeout_seconds=self.config.circuit_breaker_timeout_seconds,
-                success_threshold=self.config.circuit_breaker_success_threshold,
-                name="flash"
-            ),
+            "gemini-2.5-flash": flash_breaker,
+            "gemini-2.5-flash-lite": flash_breaker,
             "gemini-2.5-pro": CircuitBreaker(
                 failure_threshold=self.config.circuit_breaker_failure_threshold,
                 timeout_seconds=self.config.circuit_breaker_timeout_seconds,
@@ -92,7 +94,12 @@ class GeminiRateLimiter:
         rpm_limit, rpd_limit = self.config.get_effective_limits(base_model)
 
         # Determine identifier for Redis keys
-        identifier = "flash" if base_model == "gemini-2.5-flash" else "pro"
+        if base_model in {"gemini-2.5-flash", "gemini-2.5-flash-lite"}:
+            identifier = "flash"
+        elif base_model == "gemini-2.5-pro":
+            identifier = "pro"
+        else:
+            raise ValueError(f"Unsupported model: {model}")
         
         try:
             # Check rate limits
