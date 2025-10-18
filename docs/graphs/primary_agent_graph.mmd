@@ -1,0 +1,23 @@
+```mermaid
+flowchart TD
+    pre_process["pre_process"] -->|cache miss| router["router"]
+    pre_process -->|cache hit| end{{"__end__"}}
+
+    router --> primary_agent["primary_agent"]
+    router --> log_analyst["log_analyst"]
+    router --> researcher["researcher"]
+    router --> end
+
+    primary_agent --> tools["tools"]
+    tools --> primary_agent
+
+    primary_agent --> reflection["reflection"]
+    reflection -->|refine| primary_agent
+    reflection -->|post_process| post_process["post_process"]
+    reflection -->|escalate| escalate["escalate"]
+    escalate --> end
+
+    log_analyst --> post_process
+    researcher --> post_process
+    post_process --> end
+```

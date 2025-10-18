@@ -102,9 +102,11 @@ async def query_router(state: 'GraphState' | dict) -> Union[dict, str]:
     if not gemini_api_key:
         logger.error("No Gemini API key available for user")
         return {"destination": "__end__"}
-    
+    model_name = settings.router_model or "gemini-2.5-flash-lite"
+    logger.debug("router_model=%s", model_name)
+
     llm = ChatGoogleGenerativeAI(
-        model="google/gemma-2b-it",
+        model=model_name,
         temperature=0,
         google_api_key=gemini_api_key
     )

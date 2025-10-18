@@ -1,5 +1,8 @@
 import logging
-logger = logging.getLogger(__name__)
+from pathlib import Path
+from typing import Optional
+
+from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import StateGraph, END
 from langgraph.prebuilt import ToolNode
 
@@ -10,6 +13,56 @@ from app.agents.primary.primary_agent.tools import tavily_web_search
 from app.agents.router.router import query_router
 from app.agents.log_analysis.log_analysis_agent.agent import run_log_analysis_agent
 from .nodes import pre_process, post_process, run_researcher, should_continue
+from app.core.settings import settings
+
+logger = logging.getLogger(__name__)
+
+
+def _build_checkpointer() -> Optional[object]:
+    """Select an appropriate checkpointer based on settings."""
+    if not settings.checkpointer_enabled:
+        logger.info("Checkpointer disabled via settings; compiling graph without persistence")
+        return None
+
+    db_url = settings.checkpointer_db_url
+    if db_url:
+        try:
+            from app.agents.checkpointer.config import CheckpointerConfig
+            from app.agents.checkpointer.postgres_checkpointer import SupabaseCheckpointer
+
+            logger.info("Initializing Supabase checkpointer for primary graph")
+            return SupabaseCheckpointer(
+                CheckpointerConfig(
+                    db_url=db_url,
+                    pool_size=settings.checkpointer_pool_size,
+                    max_overflow=settings.checkpointer_max_overflow,
+                )
+            )
+        except Exception:
+            logger.exception("Failed to initialize Supabase checkpointer; falling back to MemorySaver")
+
+    logger.info("Using in-memory MemorySaver checkpointer for primary graph")
+    return MemorySaver()
+
+
+def _export_graph_visualization(graph_app: object) -> None:
+    """Render a Mermaid diagram for the primary graph when enabled."""
+    if not settings.graph_viz_export_enabled:
+        return
+
+    try:
+        graph_obj = getattr(graph_app, "get_graph", lambda: None)()
+        if graph_obj is None:
+            logger.warning("Graph visualization skipped; no graph object available")
+            return
+
+        mermaid_source = graph_obj.draw_mermaid()  # type: ignore[attr-defined]
+        output_path = Path(settings.graph_viz_output_path)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(mermaid_source)
+        logger.info("Primary agent graph exported to %s", output_path)
+    except Exception:  # pragma: no cover - best effort diagnostics
+        logger.exception("Failed to export primary graph visualization")
 
 # Define the graph
 workflow = StateGraph(GraphState)
@@ -114,6 +167,8 @@ workflow.add_edge("researcher", "post_process")
 workflow.add_edge("log_analyst", "post_process")
 workflow.add_edge("post_process", END)
 
-# Compile the graph
-app = workflow.compile()
+# Compile the graph with persistence
+checkpointer = _build_checkpointer()
+app = workflow.compile(checkpointer=checkpointer)
+_export_graph_visualization(app)
 logger.info("Graph compiled and setup complete")

@@ -14,7 +14,12 @@ from opentelemetry import trace
 from opentelemetry.trace import Status, StatusCode
 
 from app.providers.limits import wrap_gemini_agent
-from app.agents.primary.primary_agent.schemas import PrimaryAgentState
+from app.agents.primary.primary_agent.schemas import (
+    PrimaryAgentState,
+    PrimaryAgentFinalResponse,
+    GroundingMetadata,
+    ToolResultMetadata,
+)
 from app.agents.primary.primary_agent.tools import mailbird_kb_search, tavily_web_search
 from app.agents.primary.primary_agent.reasoning import ReasoningEngine, ReasoningConfig
 # v10 prompt is selected inside ReasoningEngine; no direct prompt import needed here
@@ -676,6 +681,43 @@ async def run_primary_agent(state: PrimaryAgentState) -> AsyncIterator[AIMessage
                     thinking_trace["passed_critique"] = reasoning_state.self_critique_result.passed_critique
 
                 metadata_to_send["thinking_trace"] = thinking_trace
+
+            grounding_structured = None
+            if "grounding" in metadata_to_send:
+                grounding_raw = metadata_to_send.get("grounding") or {}
+                grounding_structured = GroundingMetadata(
+                    kb_results=int(grounding_raw.get("kbResults", 0) or 0),
+                    avg_relevance=float(grounding_raw.get("avgRelevance", 0.0) or 0.0),
+                    used_tavily=bool(grounding_raw.get("usedTavily", False)),
+                    fallback_used=bool(grounding_raw.get("fallbackUsed", False)),
+                    mailbird_settings_loaded=bool(grounding_raw.get("mailbirdSettingsLoaded", False)),
+                )
+
+            tool_structured = None
+            if "toolResults" in metadata_to_send:
+                tool_raw = metadata_to_send.get("toolResults") or {}
+                tool_structured = ToolResultMetadata(
+                    id=tool_raw.get("id"),
+                    name=tool_raw.get("name"),
+                    summary=tool_raw.get("summary"),
+                    reasoning=tool_raw.get("reasoning"),
+                    decision=tool_raw.get("decision"),
+                    confidence=tool_raw.get("confidence"),
+                    required_information=tool_raw.get("required_information"),
+                    knowledge_gaps=tool_raw.get("knowledge_gaps"),
+                    expected_sources=tool_raw.get("expected_sources"),
+                )
+
+            structured_payload = PrimaryAgentFinalResponse(
+                text=final_response,
+                follow_up_questions=metadata_to_send.get("followUpQuestions") or [],
+                grounding=grounding_structured,
+                tool_results=tool_structured,
+                thinking_trace=metadata_to_send.get("thinking_trace"),
+            )
+
+            # Attach structured payload to metadata for downstream consumers
+            metadata_to_send["structured"] = structured_payload.model_dump()
 
             if metadata_to_send:
                 preface_metadata_chunk = AIMessageChunk(

@@ -50,6 +50,7 @@ class Settings(BaseSettings):
     redis_url: str = Field(default="redis://localhost:6379", alias="REDIS_URL")
     cache_ttl_sec: int = Field(default=3600, alias="CACHE_TTL_SEC")
     router_conf_threshold: float = Field(default=0.6, alias="ROUTER_CONF_THRESHOLD")
+    router_model: str = Field(default="gemini-2.5-flash-lite", alias="ROUTER_MODEL")
     use_enhanced_log_analysis: bool = Field(default=True, alias="USE_ENHANCED_LOG_ANALYSIS")
     enhanced_log_model: str = Field(default="gemini-2.5-pro", alias="ENHANCED_LOG_MODEL")
     # Provider/model selection for primary agent
@@ -63,6 +64,14 @@ class Settings(BaseSettings):
     primary_agent_min_kb_results: int = Field(default=1, alias="PRIMARY_AGENT_MIN_KB_RESULTS")
     reflection_default_provider: Optional[str] = Field(default=None, alias="DEFAULT_REFLECTION_PROVIDER")
     reflection_default_model: Optional[str] = Field(default=None, alias="DEFAULT_REFLECTION_MODEL")
+    checkpointer_enabled: bool = Field(default=True, alias="ENABLE_CHECKPOINTER")
+    checkpointer_db_url: Optional[str] = Field(default=None, alias="CHECKPOINTER_DB_URL")
+    checkpointer_pool_size: int = Field(default=5, alias="CHECKPOINTER_POOL_SIZE")
+    checkpointer_max_overflow: int = Field(default=10, alias="CHECKPOINTER_MAX_OVERFLOW")
+    graph_viz_export_enabled: bool = Field(default=False, alias="ENABLE_GRAPH_VIZ_EXPORT")
+    graph_viz_output_path: str = Field(
+        default="docs/graphs/primary_agent_graph.mmd", alias="GRAPH_VIZ_OUTPUT_PATH"
+    )
     
     # FeedMe Configuration
     feedme_enabled: bool = Field(default=True, alias="FEEDME_ENABLED")
