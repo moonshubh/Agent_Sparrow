@@ -1,10 +1,8 @@
 'use client'
 
 import React, { useState } from 'react'
-import dynamic from 'next/dynamic'
 import { useRouter } from 'next/navigation'
-import Dock from '@/features/feedme/components/feedme-revamped/Dock'
-import { Home, FolderOpen, Upload, MessageCircle, BarChart3 } from 'lucide-react'
+import Dock, { Card, DockCard } from '@/features/feedme/components/feedme-revamped/Dock'
 import EnhancedAnimatedLogo from '@/features/feedme/components/feedme-revamped/EnhancedAnimatedLogo'
 import FoldersDialog from '@/features/feedme/components/feedme-revamped/FoldersDialog'
 import UploadDialog from '@/features/feedme/components/feedme-revamped/UploadDialog'
@@ -12,8 +10,7 @@ import UnassignedDialog from '@/features/feedme/components/feedme-revamped/Unass
 import { StatsPopover } from '@/features/feedme/components/feedme-revamped/StatsPopover'
 import { ErrorBoundary } from '@/features/feedme/components/feedme-revamped/ErrorBoundary'
 import BackendHealthAlert from '@/shared/components/BackendHealthAlert'
-
-const LightRays = dynamic(() => import('@/shared/components/LightRays'), { ssr: false })
+import { LampContainer } from '@/shared/ui/lamp'
 
 export default function FeedMeRevampedPage() {
   const [showCenter, setShowCenter] = useState(true)
@@ -23,6 +20,54 @@ export default function FeedMeRevampedPage() {
   const [statsOpen, setStatsOpen] = useState(false)
   const [frameAdvanceTrigger, setFrameAdvanceTrigger] = useState(0)
   const router = useRouter()
+
+  const dockItems = [
+    {
+      id: 'home',
+      label: 'Home',
+      iconSrc: '/feedme-dock/Home.png',
+      onClick: () => {
+        setShowCenter(false)
+        router.push('/chat')
+      },
+    },
+    {
+      id: 'folders',
+      label: 'Folders',
+      iconSrc: '/feedme-dock/Folders.png',
+      onClick: () => {
+        setShowCenter(false)
+        setFoldersOpen(true)
+      },
+    },
+    {
+      id: 'upload',
+      label: 'Upload',
+      iconSrc: '/feedme-dock/Upload.png',
+      onClick: () => {
+        setShowCenter(false)
+        setUploadOpen(true)
+      },
+    },
+    {
+      id: 'unassigned',
+      label: 'Unassigned',
+      iconSrc: '/feedme-dock/Unassigned Conversations.png',
+      onClick: () => {
+        setShowCenter(false)
+        setUnassignedOpen(true)
+      },
+    },
+    {
+      id: 'stats',
+      label: 'Stats',
+      iconSrc: '/feedme-dock/Stats.png',
+      onClick: () => {
+        setShowCenter(false)
+        setStatsOpen(true)
+      },
+    },
+  ]
 
   // Function to advance logo frame on user actions
   const advanceLogoFrame = () => {
@@ -37,66 +82,26 @@ export default function FeedMeRevampedPage() {
           <BackendHealthAlert showWhenHealthy={false} />
         </div>
 
-        {/* No SVG filters needed; dock is icon-only */}
-
-        {/* Light rays background */}
-        <div className="pointer-events-none absolute inset-0 z-0 opacity-55">
-          <LightRays
-            className="w-full h-full"
-            raysOrigin="top-center"
-            raysColor="hsl(54.9 96.7% 88%)"
-            raysSpeed={0.6}
-            lightSpread={1.3}
-            rayLength={2.0}
-            pulsating={false}
-            fadeDistance={1.1}
-            saturation={1}
-            followMouse={false}
-            mouseInfluence={0}
-            noiseAmount={0}
-            distortion={0}
-          />
-        </div>
-
         {/* Enhanced FeedMe animated logo - positioned higher and larger */}
         {showCenter && (
-          <div className="absolute inset-0 z-5 flex items-center justify-center pointer-events-none -mt-20">
-            <EnhancedAnimatedLogo
-              className="w-[400px] h-[400px]"
-              animationDuration={5000}
-              loop={true}
-              autoPlay={false}
-              triggerAdvance={frameAdvanceTrigger}
-            />
+          <div className="absolute inset-0 z-5 -mt-20 flex items-center justify-center pointer-events-none">
+            <LampContainer>
+              <div className="relative h-[440px] w-[440px]">
+                <EnhancedAnimatedLogo className="h-full w-full" triggerAdvance={frameAdvanceTrigger} />
+              </div>
+            </LampContainer>
           </div>
         )}
 
         {/* Bottom-centered Dock with safe bottom space */}
         <div className="absolute inset-x-0 bottom-0 z-10 flex items-end justify-center px-4 pb-12">
-          <Dock
-            items={[
-              {
-                icon: <Home />,
-                label: 'Home',
-                onClick: () => {
-                  setShowCenter(false)
-                  router.push('/chat')
-                }
-              },
-              { icon: <FolderOpen />, label: 'Folders', onClick: () => { setShowCenter(false); setFoldersOpen(true) } },
-              { icon: <Upload />, label: 'Upload', onClick: () => { setShowCenter(false); setUploadOpen(true) } },
-              { icon: <MessageCircle />, label: 'Unassigned', onClick: () => { setShowCenter(false); setUnassignedOpen(true) } },
-              {
-                icon: <BarChart3 />,
-                label: 'Stats',
-                onClick: () => {
-                  setShowCenter(false)
-                  setStatsOpen(true)
-                }
-              },
-            ]}
-            baseItemSize={72}
-          />
+          <Dock className="max-w-[1024px]" baseSize={82} magnification={1.3} distance={190}>
+            {dockItems.map((item) => (
+              <DockCard key={item.id} id={item.id} label={item.label} onClick={item.onClick}>
+                <Card src={item.iconSrc} alt={`${item.label} icon`} />
+              </DockCard>
+            ))}
+          </Dock>
         </div>
 
         {/* Dialogs */}

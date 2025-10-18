@@ -33,22 +33,28 @@ export async function initializeLocalAuth(): Promise<boolean> {
     // Check if we already have a valid token
     const existingToken = localStorage.getItem('access_token')
     if (existingToken) {
-      // Validate the existing token
-      const validateResponse = await fetch(`${API_BASE_URL}/api/v1/auth/local-validate`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ token: existingToken }),
-      })
+      try {
+        // Validate the existing token (server accepts JSON or query param)
+        const validateResponse = await fetch(`${API_BASE_URL}/api/v1/auth/local-validate`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ token: existingToken }),
+        })
 
-      if (validateResponse.ok) {
-        const validation = await validateResponse.json()
-        if (validation.valid) {
-          console.log('✅ Existing local auth token is valid')
-          return true
+        if (validateResponse.ok) {
+          const validation = await validateResponse.json()
+          if (validation.valid) {
+            console.log('✅ Existing local auth token is valid')
+            return true
+          }
         }
+      } catch (e) {
+        // swallow and fall through to re-signin
       }
+      // Token invalid or validation failed → clear and reissue
+      localStorage.removeItem('access_token')
+      localStorage.removeItem('refresh_token')
+      localStorage.removeItem('user')
     }
 
     // Generate a new local auth token

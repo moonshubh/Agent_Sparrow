@@ -16,7 +16,6 @@ import {
   Terminal
 } from 'lucide-react'
 import { cn } from '@/shared/lib/utils'
-import { usePathname, useRouter } from 'next/navigation'
 
 interface SettingsLayoutProps {
   children: React.ReactNode
@@ -36,19 +35,27 @@ const settingsTabs = [
 ]
 
 export default function SettingsLayout({ children }: SettingsLayoutProps) {
-  const pathname = usePathname()
-  const router = useRouter()
+  const [activeTab, setActiveTab] = React.useState<string>('general')
+  const [mounted, setMounted] = React.useState(false)
   
-  // Determine active tab from pathname
-  const activeTab = settingsTabs.find(tab => 
-    pathname === tab.href || 
-    (tab.href !== '/settings' && pathname.startsWith(tab.href))
-  )?.id || 'general'
+  React.useEffect(() => {
+    setMounted(true)
+    try {
+      const pathname = window.location.pathname
+      const tabId = settingsTabs.find(tab => 
+        pathname === tab.href || 
+        (tab.href !== '/settings' && pathname.startsWith(tab.href))
+      )?.id || 'general'
+      setActiveTab(tabId)
+    } catch {}
+  }, [])
 
   const handleTabChange = (tabId: string) => {
     const tab = settingsTabs.find(t => t.id === tabId)
     if (tab) {
-      router.push(tab.href)
+      if (typeof window !== 'undefined') {
+        window.location.href = tab.href
+      }
     }
   }
 
@@ -73,7 +80,7 @@ export default function SettingsLayout({ children }: SettingsLayoutProps) {
 
       {/* Main Content */}
       <div className="container mx-auto px-4 py-8">
-        <Tabs value={activeTab} onValueChange={handleTabChange} className="space-y-6">
+        <Tabs value={mounted ? activeTab : undefined} onValueChange={handleTabChange} className="space-y-6">
           {/* Tab Navigation */}
           <TabsList className="w-full justify-start flex-wrap h-auto p-1 glass-effect">
             {settingsTabs.map(tab => {

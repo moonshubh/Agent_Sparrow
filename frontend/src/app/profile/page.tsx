@@ -1,10 +1,11 @@
-'use client'
+"use client"
 
 import { ProtectedRoute } from '@/features/auth/components/ProtectedRoute'
 import { UserProfile } from '@/features/auth/components/UserProfile'
 import { useAuth } from '@/features/auth/hooks/useAuth'
 import { Header } from '@/shared/components/layout/Header'
 import { UserPanel } from '@/shared/components/layout/UserPanel'
+
 
 export default function ProfilePage() {
   const { user, updateProfile, logout, isLoading } = useAuth()

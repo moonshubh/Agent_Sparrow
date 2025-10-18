@@ -9,7 +9,6 @@
     "src/features/chat/**/*",
     "src/features/api-keys/components/**/*",
     "src/features/sessions/components/**/*",
-    "src/shared/components/LightRays.tsx",
     "src/shared/components/ShinyText.tsx",
     "src/shared/types/**/*",
     "src/shared/ui/**/*",

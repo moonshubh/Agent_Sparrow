@@ -1,3 +1,5 @@
+import { EventSourceParserStream } from 'eventsource-parser/stream'
+
 import { supabase } from '@/services/supabase'
 import { getAuthToken as getLocalToken } from '@/services/auth/local-auth'
 import { ChatMessage } from '@/shared/types/chat'
@@ -129,6 +131,24 @@ const serializeBody = (data: unknown): BodyInit | undefined => {
   return JSON.stringify(data)
 }
 
+const toTextStream = (stream: ReadableStream<Uint8Array<ArrayBufferLike>>) => {
+  if (typeof TextDecoderStream !== 'undefined') {
+    return stream.pipeThrough(new TextDecoderStream())
+  }
+
+  const decoder = new TextDecoder()
+  return stream.pipeThrough(
+    new TransformStream<Uint8Array, string>({
+      transform(chunk, controller) {
+        controller.enqueue(decoder.decode(chunk, { stream: true }))
+      },
+      flush(controller) {
+        controller.enqueue(decoder.decode())
+      },
+    }),
+  )
+}
+
 export class APIRequestError extends Error {
   public readonly status: number
   public readonly statusText: string
@@ -164,6 +184,8 @@ export interface EnhancedEventSource {
 }
 
 class APIClient {
+  private streamTokenUnavailable = false
+
   private async getAuthHeaders(customContentType?: string): Promise<HeadersInit> {
     try {
       const session = await supabase.auth.getSession()
@@ -273,6 +295,25 @@ class APIClient {
 
   // Secure token exchange endpoint for SSE
   private async getStreamToken(): Promise<string | null> {
+    // In-memory short-circuit
+    if (this.streamTokenUnavailable) {
+      return null
+    }
+
+    // Persisted flag (survives HMR / reloads in dev)
+    try {
+      if (typeof window !== 'undefined') {
+        const cached = window.sessionStorage.getItem('streamTokenUnavailable')
+          || window.localStorage.getItem('streamTokenUnavailable')
+        if (cached === '1') {
+          this.streamTokenUnavailable = true
+          return null
+        }
+      }
+    } catch {
+      // ignore storage access errors
+    }
+
     try {
       const response = await this.post<{ stream_token: string }>(
         '/api/v1/auth/stream-token',
@@ -281,7 +322,23 @@ class APIClient {
       )
       return response.stream_token
     } catch (error) {
-      console.warn('Failed to get stream token, falling back to session auth:', error)
+      if (error instanceof APIRequestError && error.status === 404) {
+        this.streamTokenUnavailable = true
+        try {
+          if (typeof window !== 'undefined') {
+            window.sessionStorage.setItem('streamTokenUnavailable', '1')
+            window.localStorage.setItem('streamTokenUnavailable', '1')
+          }
+        } catch {}
+        if (process.env.NODE_ENV === 'development') {
+          // One-time notice; subsequent calls are short-circuited
+          // eslint-disable-next-line no-console
+          console.debug('Stream token endpoint unavailable (404); falling back to session auth.')
+        }
+      } else if (process.env.NODE_ENV === 'development') {
+        // eslint-disable-next-line no-console
+        console.debug('Failed to get stream token, using session auth fallback:', error)
+      }
       return null
     }
   }
@@ -309,9 +366,13 @@ class APIClient {
 
     // If we have data, we need to use POST with fetch streaming
     if (data) {
-      let reader: ReadableStreamDefaultReader<Uint8Array> | null = null
+      let reader: ReadableStreamDefaultReader<{ data: string | undefined; event?: string }> | null = null
       let isClosed = false
-      
+
+      const stopReader = () => {
+        reader?.cancel().catch(() => undefined)
+      }
+
       try {
         const requestBody: Record<string, unknown> = { ...data }
         if (streamToken) {
@@ -321,7 +382,7 @@ class APIClient {
         const response = await fetch(`${API_BASE_URL}${endpoint}`, {
           method: 'POST',
           headers,
-          body: JSON.stringify(requestBody)
+          body: JSON.stringify(requestBody),
         })
 
         if (!response.ok) {
@@ -334,135 +395,77 @@ class APIClient {
             status: response.status,
             statusText: response.statusText ?? '',
             body: parsedBody,
-            message: `HTTP error: ${message}`
+            message: `HTTP error: ${message}`,
           })
         }
 
-        reader = response.body?.getReader() ?? null
-        if (!reader) {
+        const body = response.body
+        if (!body) {
           throw new Error('No response body available')
         }
 
-        const streamReader = reader
+        const eventStream = toTextStream(body as ReadableStream<Uint8Array>).pipeThrough(new EventSourceParserStream())
+        reader = eventStream.getReader()
 
-        // Enhanced EventSource simulation with proper state management
-        const eventSource: EnhancedEventSource = {
+        const enhancedEventSource: EnhancedEventSource = {
           close: () => {
             if (!isClosed) {
               isClosed = true
-              reader?.cancel().catch(console.error)
+              enhancedEventSource.readyState = 2
+              stopReader()
               onClose?.()
             }
           },
-          readyState: 1 // OPEN
+          readyState: 1,
         }
-
-        // Enhanced stream processing with better error handling
-        const decoder = new TextDecoder()
-        let buffer = ''
 
         const processStream = async (): Promise<void> => {
           try {
-            while (!isClosed) {
+            while (!isClosed && reader) {
+              const { value, done } = await reader.read()
+              if (done) {
+                enhancedEventSource.close()
+                break
+              }
+
+              if (!value || typeof value.data !== 'string') {
+                continue
+              }
+
+              const payload = value.data
+              if (payload === '[DONE]') {
+                enhancedEventSource.close()
+                break
+              }
+
               try {
-                const { done, value } = await streamReader.read()
-                if (done) {
-                  eventSource.readyState = 2 // CLOSED
-                  onClose?.()
-                  break
-                }
-
-                buffer += decoder.decode(value, { stream: true })
-                const lines = buffer.split('\n')
-                buffer = lines.pop() || '' // Keep incomplete line in buffer
-
-                for (const line of lines) {
-                  if (!line.trim()) continue
-                  
-                  // Enhanced SSE parsing supporting multiple event types
-                  if (line.startsWith('data: ')) {
-                    const data = line.slice(6)
-                    if (data === '[DONE]') {
-                      eventSource.readyState = 2 // CLOSED
-                      onClose?.()
-                      return
-                    }
-                    
-                    try {
-                      const parsed = JSON.parse(data) as TMessage
-                      onMessage?.(parsed)
-                    } catch (parseError) {
-                      const errorMessage = parseError instanceof Error ? parseError.message : 'Unknown parse error'
-                      console.error('Error parsing SSE data:', errorMessage, 'Raw data:', data)
-                      onError?.(new Error(`Failed to parse SSE data: ${errorMessage}`))
-                    }
-                  } else if (line.startsWith('event: ')) {
-                    // Support for event types beyond 'data'
-                    const eventType = line.slice(7)
-                    console.log('SSE event type:', eventType)
-                  } else if (line.startsWith('id: ')) {
-                    // Support for event IDs
-                    const eventId = line.slice(4)
-                    console.log('SSE event ID:', eventId)
-                  } else if (line.startsWith('retry: ')) {
-                    // Support for retry intervals
-                    const retryMs = parseInt(line.slice(7), 10)
-                    console.log('SSE retry interval:', retryMs)
-                  }
-                }
-              } catch (readError) {
-                // Handle specific read errors
-                if (!isClosed) {
-                  const errorMessage = readError instanceof Error ? readError.message : 'Stream read failed'
-                  console.error('Stream read error:', errorMessage)
-                  
-                  // Only close and error if it's not a normal stream end
-                  if (!errorMessage.includes('aborted') && !errorMessage.includes('cancelled')) {
-                    eventSource.readyState = 2 // CLOSED
-                    onError?.(new Error(`Stream read failed: ${errorMessage}`))
-                    eventSource.close()
-                    break
-                  }
-                }
+                const parsed = JSON.parse(payload) as TMessage
+                onMessage?.(parsed)
+              } catch (parseError) {
+                const errorMessage = parseError instanceof Error ? parseError.message : 'Unknown parse error'
+                onError?.(new Error(`Failed to parse SSE data: ${errorMessage}`))
               }
             }
           } catch (streamError) {
-            // Handle overall stream processing errors
             if (!isClosed) {
-              eventSource.readyState = 2 // CLOSED
               const errorMessage = streamError instanceof Error ? streamError.message : 'Stream processing failed'
-              console.error('Stream processing error:', errorMessage)
               onError?.(new Error(`Stream processing failed: ${errorMessage}`))
-              eventSource.close()
+              enhancedEventSource.close()
             }
           }
         }
 
-        // Start stream processing with unified error handling (non-blocking)
         processStream().catch((error) => {
-          try {
-            if (!isClosed) {
-              const errorMessage = error instanceof Error ? error.message : 'Unhandled stream error'
-              console.error('Unhandled stream error:', errorMessage)
-              onError?.(new Error(`Unhandled stream error: ${errorMessage}`))
-              eventSource.close()
-            }
-          } catch (handlerError) {
-            // Final fallback for error handler failures
-            console.error('Error in stream error handler:', handlerError)
+          if (!isClosed) {
+            const errorMessage = error instanceof Error ? error.message : 'Unhandled stream error'
+            onError?.(new Error(`Unhandled stream error: ${errorMessage}`))
+            enhancedEventSource.close()
           }
         })
-        
-        return eventSource
+
+        return enhancedEventSource
       } catch (error) {
-        // Ensure proper cleanup on initialization error
-        if (reader) {
-          try {
-            await reader.cancel()
-          } catch (cancelError) {
-            console.error('Error canceling reader:', cancelError)
-          }
-        }
+        stopReader()
         throw error instanceof Error ? error : new Error('Stream initialization failed')
       }
     }
@@ -486,6 +489,7 @@ class APIClient {
           if (!isClosed) {
             isClosed = true
             eventSource.close()
+            enhancedEventSource.readyState = 2
             onClose?.()
           }
         },
@@ -503,15 +507,14 @@ class APIClient {
             const parsed = JSON.parse(event.data) as TMessage
             onMessage(parsed)
           } catch (e) {
-            console.error('Error parsing SSE data:', e, 'Raw data:', event.data)
-            onError?.(new Error(`Failed to parse SSE data: ${e}`))
+            const message = e instanceof Error ? e.message : 'Failed to parse SSE payload'
+            onError?.(new Error(`Failed to parse SSE data: ${message}`))
           }
         }
       }
 
-      eventSource.onerror = (error) => {
+      eventSource.onerror = () => {
         if (!isClosed) {
-          console.error('EventSource error:', error)
           const streamError = new Error('EventSource connection error')
           onError?.(streamError)
           enhancedEventSource.close()

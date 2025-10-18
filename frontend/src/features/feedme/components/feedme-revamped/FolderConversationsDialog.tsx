@@ -5,7 +5,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/shared/ui/di
 import { Button } from '@/shared/ui/button'
 import { Separator } from '@/shared/ui/separator'
 import { ScrollArea } from '@/shared/ui/scroll-area'
-import { CheckCircle2, Clock, Loader2, FileText, X, RefreshCw, Trash2, AlertCircle, ArrowLeft } from 'lucide-react'
+import { CheckCircle2, Clock, Loader2, FileText, X, RefreshCw, Trash2, AlertCircle, ArrowLeft, Maximize2 } from 'lucide-react'
 import { Input } from '@/shared/ui/input'
 import { feedMeApi } from '@/features/feedme/services/feedme-api'
 import { useRouter } from 'next/navigation'
@@ -15,6 +15,7 @@ import { formatDistanceToNow } from 'date-fns'
 import { cn } from '@/shared/lib/utils'
 import type { ProcessingStageValue } from '@/state/stores/realtime-store'
 import { DialogErrorBoundary } from './DialogErrorBoundary'
+import { GlowingEffect } from '@/shared/ui/glowing-effect'
 
 // Constants
 const MAX_CONVERSATIONS_PER_PAGE = 100
@@ -321,89 +322,131 @@ const FolderConversationsDialog = React.memo(function FolderConversationsDialog(
               )}
 
               {!loading && conversations.length > 0 && (
-                <ul className="space-y-2">
+                <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
                   {conversations.map(conv => {
                     const isEditing = editingId === conv.id
                     const createdRelative = formatDistanceToNow(new Date(conv.created_at), { addSuffix: true })
 
                     return (
-                      <li
+                      <div
                         key={conv.id}
-                        className="group relative flex items-center gap-3 rounded-lg border border-border/40 bg-background/70 p-4 transition hover:border-border hover:bg-accent/5"
+                        className="group relative flex h-full cursor-pointer flex-col overflow-hidden rounded-[1.75rem] border border-border/50 bg-background/70 p-5 shadow-[0_30px_80px_rgba(15,23,42,0.22)] transition-all duration-300 hover:-translate-y-1 hover:border-accent/40 hover:bg-background/90"
                         role="article"
                         aria-label={`Conversation: ${conv.title}`}
+                        onClick={() => {
+                          if (editingId === conv.id) return
+                          handleOpenConversation(conv.id)
+                        }}
                       >
-                        <div className="flex-shrink-0">
-                          {getStatusIcon(conv.processing_status)}
-                        </div>
+                        <GlowingEffect spread={260} proximity={180} inactiveZone={0.1} />
 
-                        <div className="flex-1 min-w-0">
-                          {isEditing ? (
-                            <Input
-                              ref={renameInputRef}
-                              value={titleDraft}
-                              onChange={e => setTitleDraft(e.target.value)}
-                              onBlur={commitRename}
-                              onKeyDown={e => {
-                                if (e.key === 'Enter') {
-                                  e.preventDefault()
-                                  void commitRename()
-                                } else if (e.key === 'Escape') {
-                                  e.preventDefault()
-                                  cancelRename()
-                                }
-                              }}
-                              className="h-7 text-sm"
-                              disabled={isRenaming}
-                              aria-label="Edit conversation title"
-                            />
-                          ) : (
-                            <div
-                              className="cursor-pointer"
-                              onClick={() => handleOpenConversation(conv.id)}
-                              onDoubleClick={() => startRename(conv)}
-                            >
-                              <h4 className="text-sm font-medium truncate hover:text-primary transition-colors">
-                                {conv.title || `Conversation ${conv.id}`}
-                              </h4>
+                        <button
+                          type="button"
+                          onClick={(event) => {
+                            event.stopPropagation()
+                            handleDelete(conv)
+                          }}
+                          className="absolute right-3 top-3 inline-flex h-8 w-8 items-center justify-center rounded-full border border-border/40 bg-background/80 text-muted-foreground/90 opacity-0 backdrop-blur transition-opacity duration-200 group-hover:opacity-100 hover:border-destructive/40 hover:text-destructive z-10"
+                          aria-label={`Delete conversation ${conv.title}`}
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </button>
+
+                        <div className="flex flex-col h-full pr-8">
+                          <div className="mb-4 flex items-start gap-3">
+                            <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl border border-white/10 bg-white/20 text-black shadow-sm backdrop-blur dark:border-white/20 dark:bg-white/10 dark:text-white">
+                              <FileText className="h-4 w-4" />
+                            </div>
+
+                            <div className="flex-1 min-w-0">
+                              {isEditing ? (
+                                <Input
+                                  ref={renameInputRef}
+                                  value={titleDraft}
+                                  onChange={e => setTitleDraft(e.target.value)}
+                                  onClick={event => event.stopPropagation()}
+                                  onBlur={commitRename}
+                                  onKeyDown={e => {
+                                    if (e.key === 'Enter') {
+                                      e.preventDefault()
+                                      void commitRename()
+                                    } else if (e.key === 'Escape') {
+                                      e.preventDefault()
+                                      cancelRename()
+                                    }
+                                  }}
+                                  className="h-9 text-sm bg-background/70"
+                                  disabled={isRenaming}
+                                  aria-label="Edit conversation title"
+                                />
+                              ) : (
+                                <h4
+                                  className="text-sm font-semibold leading-5 text-foreground transition-colors line-clamp-2 group-hover:text-primary"
+                                  onDoubleClick={event => {
+                                    event.stopPropagation()
+                                    startRename(conv)
+                                  }}
+                                >
+                                  {conv.title || `Conversation ${conv.id}`}
+                                </h4>
+                              )}
+
+                              <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                                <span>Created {createdRelative}</span>
+                                {conv.processing_method && (
+                                  <span>• {conv.processing_method.replace(/_/g, ' ')}</span>
+                                )}
+                                {conv.progress_percentage !== undefined && conv.processing_status === 'processing' && (
+                                  <span>• {conv.progress_percentage}%</span>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+
+                          <div className="mt-auto flex items-center justify-between text-xs text-muted-foreground">
+                            <div className="flex items-center gap-2">
+                              {getStatusIcon(conv.processing_status)}
+                              <span className="capitalize">
+                                {conv.processing_status}
+                              </span>
+                            </div>
+                            {conv.status_message && conv.processing_status !== 'processing' && (
+                              <span className="line-clamp-1 text-right">{conv.status_message}</span>
+                            )}
+                          </div>
+
+                          {conv.processing_status === 'processing' && conv.progress_percentage !== undefined && (
+                            <div className="mt-3">
+                              <div className="h-1.5 w-full rounded-full bg-emerald-600/15">
+                                <div
+                                  className="h-1.5 rounded-full bg-emerald-400 transition-all duration-300"
+                                  style={{ width: `${Math.min(Math.max(conv.progress_percentage, 0), 100)}%` }}
+                                />
+                              </div>
                             </div>
                           )}
 
-                          <div className="flex items-center gap-3 mt-1">
-                            <span className="text-xs text-muted-foreground">
-                              Created {createdRelative}
-                            </span>
-                            {conv.processing_method && (
-                              <span className="text-xs text-muted-foreground">
-                                • {conv.processing_method.replace(/_/g, ' ')}
-                              </span>
-                            )}
-                            {conv.progress_percentage !== undefined && conv.processing_status === 'processing' && (
-                              <span className="text-xs text-blue-600">
-                                • {conv.progress_percentage}%
-                              </span>
-                            )}
+                          {conv.status_message && conv.processing_status === 'processing' && (
+                            <p className="mt-2 text-[11px] text-muted-foreground">{conv.status_message}</p>
+                          )}
+
+                          <div className="mt-4 flex justify-end">
+                            <button
+                              className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-white/10 bg-background/80 text-muted-foreground shadow-sm opacity-0 transition-opacity duration-200 group-hover:opacity-100 hover:border-accent hover:text-accent-foreground"
+                              onClick={(event) => {
+                                event.stopPropagation()
+                                handleOpenConversation(conv.id)
+                              }}
+                              aria-label={`Open conversation ${conv.title}`}
+                            >
+                              <Maximize2 className="h-3.5 w-3.5" />
+                            </button>
                           </div>
                         </div>
-
-                        <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            className="h-8 w-8"
-                            onClick={(e) => {
-                              e.stopPropagation()
-                              handleDelete(conv)
-                            }}
-                            aria-label={`Delete conversation ${conv.title}`}
-                          >
-                            <Trash2 className="h-4 w-4 text-muted-foreground hover:text-destructive" />
-                          </Button>
-                        </div>
-                      </li>
+                      </div>
                     )
                   })}
-                </ul>
+                </div>
               )}
             </div>
           </ScrollArea>

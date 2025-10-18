@@ -13,6 +13,7 @@ import AppSidebarLeft, { LeftTab } from "@/app/chat/components/AppSidebarLeft";
 import RightContextSidebar from "@/app/chat/components/RightContextSidebar";
 import { AssistantMessage } from "./components/AssistantMessage";
 import { WorkingTimeline } from "./components/WorkingTimeline";
+import StreamingOverlay from "./components/StreamingOverlay";
 import { computeTimeline } from "@/services/trace/computeTimeline";
 import { TimelineStep } from "@/shared/types/trace";
 import { CommandBar } from "./components/CommandBar";
@@ -51,11 +52,6 @@ import {
   type ChatUIMessage,
   type ToolDecisionRecord,
 } from "@/shared/types/chat";
-
-// Defer LightRays to client only to avoid SSR/WebGL mismatches
-const LightRays = dynamic(() => import("@/shared/components/LightRays"), {
-  ssr: false,
-});
 
 // Main chat content component
 type ChatContentProps = {
@@ -133,7 +129,6 @@ function ChatContent({ sessionId, setSessionId }: ChatContentProps) {
   const [interimVoice, setInterimVoice] = useState<string>("");
   const [searchMode, setSearchMode] = useState<'auto'|'web'>("auto");
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  const [enableFx, setEnableFx] = useState<boolean>(true);
   const [reducedMotion, setReducedMotion] = useState<boolean>(false);
   type HistoryMessage = {
     id: string;
@@ -146,6 +141,13 @@ function ChatContent({ sessionId, setSessionId }: ChatContentProps) {
   const [history, setHistory] = useState<HistoryMessage[]>([]);
   const [toolDecision, setToolDecision] = useState<ToolDecisionRecord | null>(null);
   const [followUpQuestions, setFollowUpQuestions] = useState<string[] | null>(null);
+  const [overlayText, setOverlayText] = useState<string>("");
+  const [overlayAgent, setOverlayAgent] = useState<AgentType>('primary');
+  const [isOverlayActive, setIsOverlayActive] = useState<boolean>(false);
+  const streamBufferRef = useRef<string>("");
+  const overlayRafRef = useRef<number | null>(null);
+  const overlayQueueRef = useRef<string[]>([]);
+  const overlayDripTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const liveTimelinePartsRef = useRef<ChatDataPart[]>([]);
   const liveTimelineMetadataRef = useRef<ChatMessageMetadata | null>(null);
   const liveTimelineAgentRef = useRef<AgentType>('primary');
@@ -232,17 +234,6 @@ function ChatContent({ sessionId, setSessionId }: ChatContentProps) {
       agentType: liveTimelineAgentRef.current,
       isStreaming: streaming,
     });
-    if (process.env.NODE_ENV !== 'production') {
-      try {
-        // eslint-disable-next-line no-console
-        console.debug('[live:recompute]', {
-          streaming,
-          types: liveTimelinePartsRef.current.map(p => p?.type),
-          metadataKeys: liveTimelineMetadataRef.current ? Object.keys(liveTimelineMetadataRef.current || {}) : [],
-          stepTitles: steps.map(s => `${s.title}:${s.status}`),
-        });
-      } catch {}
-    }
     setLiveTimelineSteps(steps);
   };
 
@@ -253,11 +244,53 @@ function ChatContent({ sessionId, setSessionId }: ChatContentProps) {
     setLiveTimelineSteps([]);
   };
 
+  const clearOverlayQueue = () => {
+    overlayQueueRef.current = [];
+    if (overlayDripTimeoutRef.current !== null) {
+      clearTimeout(overlayDripTimeoutRef.current);
+      overlayDripTimeoutRef.current = null;
+    }
+  };
+
+  const scheduleOverlayFlush = (immediate = false) => {
+    if (overlayDripTimeoutRef.current !== null) {
+      return;
+    }
+
+    const pump = () => {
+      overlayDripTimeoutRef.current = null;
+      const nextSegment = overlayQueueRef.current.shift();
+      if (typeof nextSegment !== 'string') {
+        return;
+      }
+
+      streamBufferRef.current += nextSegment;
+      if (overlayRafRef.current === null) {
+        overlayRafRef.current = requestAnimationFrame(() => {
+          overlayRafRef.current = null;
+          setOverlayText(streamBufferRef.current);
+        });
+      }
+
+      if (overlayQueueRef.current.length > 0) {
+        overlayDripTimeoutRef.current = window.setTimeout(
+          pump,
+          reducedMotion ? 0 : 12,
+        );
+      }
+    };
+
+    overlayDripTimeoutRef.current = window.setTimeout(
+      pump,
+      immediate || reducedMotion ? 0 : 12,
+    );
+  };
+
   const { messages, sendMessage, status, error } = useChat<ClientMessage>({
     // Use a stable client-side chat id to avoid UI resets during initial send
     id: chatIdRef.current,
     transport,
-    experimental_throttle: 60,
+    experimental_throttle: 0, // Disabled throttling for character-by-character streaming
     onError: (e) => console.error("AI chat error:", e),
     onData: (chunk: unknown) => {
       if (!isRecord(chunk)) return;
@@ -265,28 +298,62 @@ function ChatContent({ sessionId, setSessionId }: ChatContentProps) {
       if (typeof typeValue !== 'string') return;
       const type = typeValue;
 
-      if (process.env.NODE_ENV !== 'production') {
-        try {
-          // eslint-disable-next-line no-console
-          console.debug('[live:onData]', type, {
-            keys: Object.keys(chunk),
-            preview:
-              'data' in chunk && chunk.data !== undefined
-                ? chunk.data
-                : 'messageMetadata' in chunk && chunk.messageMetadata !== undefined
-                  ? chunk.messageMetadata
-                  : {
-                      delta: 'delta' in chunk ? (chunk as Record<string, unknown>).delta : undefined,
-                      text: 'text' in chunk ? (chunk as Record<string, unknown>).text : undefined,
-                    },
-          });
-        } catch {
-          // ignore debug logging failures
+      if (type === 'error') {
+        if (overlayRafRef.current !== null) {
+          cancelAnimationFrame(overlayRafRef.current);
+          overlayRafRef.current = null;
         }
+        clearOverlayQueue();
+        streamBufferRef.current = '';
+        setOverlayText('');
+        setIsOverlayActive(false);
+        recomputeLiveTimeline(false);
+        return;
       }
 
       if (type === 'text-start' || type === 'start') {
+        streamBufferRef.current = '';
+        clearOverlayQueue();
+        setOverlayAgent(liveTimelineAgentRef.current ?? 'primary');
+        setIsOverlayActive(true);
+        setOverlayText('');
         recomputeLiveTimeline(true);
+        return;
+      }
+      if (type === 'text-delta') {
+        const deltaValue = typeof (chunk as Record<string, unknown>).delta === 'string'
+          ? (chunk as Record<string, unknown>).delta as string
+          : '';
+        if (deltaValue) {
+          if (reducedMotion) {
+            streamBufferRef.current += deltaValue;
+            if (overlayRafRef.current === null) {
+              overlayRafRef.current = requestAnimationFrame(() => {
+                overlayRafRef.current = null;
+                setOverlayText(streamBufferRef.current);
+              });
+            }
+          } else {
+            if (deltaValue.length > 1) {
+              overlayQueueRef.current.push(...deltaValue.split(''));
+            } else {
+              overlayQueueRef.current.push(deltaValue);
+            }
+            scheduleOverlayFlush(true);
+          }
+        }
+        return;
+      }
+
+      if (type === 'text-end') {
+        if (overlayRafRef.current !== null) {
+          cancelAnimationFrame(overlayRafRef.current);
+          overlayRafRef.current = null;
+        }
+        clearOverlayQueue();
+        streamBufferRef.current = '';
+        setIsOverlayActive(false);
+        recomputeLiveTimeline(false);
         return;
       }
 
@@ -468,11 +535,26 @@ function ChatContent({ sessionId, setSessionId }: ChatContentProps) {
         return;
       }
 
-      if (type === 'text-end' || type === 'finish') {
+      if (type === 'finish') {
+        if (overlayRafRef.current !== null) {
+          cancelAnimationFrame(overlayRafRef.current);
+          overlayRafRef.current = null;
+        }
+        clearOverlayQueue();
+        streamBufferRef.current = '';
+        setIsOverlayActive(false);
         return;
       }
     },
     onFinish: async ({ message: assistantMessage, messages: chatMessages }) => {
+      if (overlayRafRef.current !== null) {
+        cancelAnimationFrame(overlayRafRef.current);
+        overlayRafRef.current = null;
+      }
+      clearOverlayQueue();
+      streamBufferRef.current = '';
+      setOverlayText('');
+      setIsOverlayActive(false);
       const activeSessionId = sessionId || lastPersistedSessionIdRef.current;
       if (!activeSessionId) return;
 
@@ -597,19 +679,8 @@ function ChatContent({ sessionId, setSessionId }: ChatContentProps) {
     initializeLocalAuth().catch(console.error);
   }, []);
 
-  // Respect user settings and reduced motion for background FX
+  // Respect reduced-motion preference for subtle animations
   useEffect(() => {
-    try {
-      const settingsRaw = localStorage.getItem("mb-sparrow-settings");
-      if (settingsRaw) {
-        const parsed = JSON.parse(settingsRaw);
-        if (typeof parsed?.hardwareAcceleration === "boolean") {
-          setEnableFx(Boolean(parsed.hardwareAcceleration));
-        }
-      }
-    } catch {
-      // ignore
-    }
     const mq = window.matchMedia("(prefers-reduced-motion: reduce)");
     setReducedMotion(mq.matches);
     const onChange = () => setReducedMotion(mq.matches);
@@ -884,7 +955,6 @@ function ChatContent({ sessionId, setSessionId }: ChatContentProps) {
   const hasLiveMessages = messages.length > 0;
   const hasHistoryContent = displayedHistory.length > 0;
   const hasContent = hasLiveMessages || hasHistoryContent;
-  const showFx = enableFx && !reducedMotion;
   const agentLabel = activeAgent === 'log_analysis'
     ? 'Log Analysis'
     : activeAgent === 'research'
@@ -916,27 +986,6 @@ function ChatContent({ sessionId, setSessionId }: ChatContentProps) {
 
   return (
     <div className="relative min-h-svh">
-      {/* Light rays background - scoped to inset area */}
-      {showFx && (
-        <div className="pointer-events-none absolute inset-0 z-0 opacity-60">
-          <LightRays
-            className="w-full h-full"
-            raysOrigin="top-center"
-            raysColor="hsl(54.9 96.7% 88%)"
-            raysSpeed={0.65}
-            lightSpread={1.35}
-            rayLength={2.0}
-            pulsating={false}
-            fadeDistance={1.1}
-            saturation={1}
-            followMouse={true}
-            mouseInfluence={0.08}
-            noiseAmount={0}
-            distortion={0}
-          />
-        </div>
-      )}
-
       {/* Main content - centered container */}
       <div className="relative z-10 flex flex-col min-h-svh">
         {/* Header */}
@@ -1012,6 +1061,15 @@ function ChatContent({ sessionId, setSessionId }: ChatContentProps) {
         {/* Messages area */}
         <div className="flex-1 overflow-y-auto">
           <div className="max-w-4xl mx-auto px-4 py-8">
+            {/* Live Streaming Overlay (full-bleed) */}
+            {(isOverlayActive || (overlayText && overlayText.trim().length > 0)) && (
+              <StreamingOverlay
+                text={overlayText}
+                timelineSteps={liveTimelineSteps}
+                agentType={overlayAgent}
+                reducedMotion={reducedMotion}
+              />
+            )}
             {/* Welcome state */}
             {!hasContent && (
               <div className="flex flex-col items-center justify-center min-h-[60vh] animate-in fade-in duration-500">
@@ -1069,13 +1127,11 @@ function ChatContent({ sessionId, setSessionId }: ChatContentProps) {
                           {timelineSteps.length > 0 && (
                             <WorkingTimeline steps={timelineSteps} variant="final" />
                           )}
-                          <div className="rounded-2xl px-5 py-3 border border-border/50 bg-[hsl(var(--brand-surface)/0.70)]">
-                            <AssistantMessage
-                              content={m.content}
-                              metadata={assistantMetadata}
-                              isLogAnalysis={isLogHistory}
-                            />
-                          </div>
+                          <AssistantMessage
+                            content={m.content}
+                            metadata={assistantMetadata}
+                            isLogAnalysis={isLogHistory}
+                          />
                         </div>
                       ) : (
                         <div className="max-w-[85%] rounded-2xl px-5 py-3 bg-primary/10 dark:bg-primary/20 text-foreground border border-primary/20">
@@ -1117,6 +1173,9 @@ function ChatContent({ sessionId, setSessionId }: ChatContentProps) {
                     ? (liveTimelineSteps.length > 0 ? liveTimelineSteps : computedSteps)
                     : computedSteps;
 
+                  const isLastAssistant = m.role === 'assistant' && isLast;
+                  const hideAssistant = isLastAssistant && isOverlayActive;
+
                   return (
                     <div
                       key={m.id ?? idx}
@@ -1125,7 +1184,7 @@ function ChatContent({ sessionId, setSessionId }: ChatContentProps) {
                       }`}
                       style={{ animationDelay: `${idx * 50}ms` }}
                     >
-                      {m.role === "assistant" ? (
+                      {m.role === "assistant" && !hideAssistant ? (
                         <div className="w-full max-w-3xl mx-auto space-y-2">
                           {stepsToRender.length > 0 && (
                             <WorkingTimeline
@@ -1133,15 +1192,13 @@ function ChatContent({ sessionId, setSessionId }: ChatContentProps) {
                               variant={isStreamingMessage ? 'live' : 'final'}
                             />
                           )}
-                          <div className="rounded-2xl px-5 py-3 border border-border/50 bg-[hsl(var(--brand-surface)/0.70)]">
-                            <AssistantMessage
-                              content={contentText}
-                              metadata={meta}
-                              isLogAnalysis={logHints}
-                            />
-                          </div>
+                          <AssistantMessage
+                            content={contentText}
+                            metadata={meta}
+                            isLogAnalysis={logHints}
+                          />
                         </div>
-                      ) : (
+                      ) : m.role === 'assistant' && hideAssistant ? null : (
                         <div className="max-w-[85%] rounded-2xl px-5 py-3 bg-primary/10 dark:bg-primary/20 text-foreground border border-primary/20">
                           <div className="space-y-2">
                             <div className="text-[15px] leading-relaxed whitespace-pre-wrap">
@@ -1172,17 +1229,6 @@ function ChatContent({ sessionId, setSessionId }: ChatContentProps) {
                   );
                 })}
 
-                {/* Fallback live timeline when assistant message hasn't been created yet */}
-                {(status === 'streaming' || status === 'submitted') && messages.length > 0 && messages[messages.length - 1]?.role !== 'assistant' && (
-                  <div className="flex gap-4 justify-center animate-in fade-in duration-300">
-                    <div className="w-full max-w-3xl mx-auto space-y-2">
-                      <WorkingTimeline
-                        steps={liveTimelineSteps.length > 0 ? liveTimelineSteps : [DEFAULT_WORKING_STEP]}
-                        variant="live"
-                      />
-                    </div>
-                  </div>
-                )}
               </div>
             )}
 

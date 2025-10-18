@@ -1,7 +1,6 @@
 "use client"
 
 import React from 'react'
-import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { LogOverviewCard, type LogMetadata, type ErrorSnippet } from './LogOverviewCard'
 import { type ChatMessageMetadata } from '@/shared/types/chat'
@@ -10,6 +9,7 @@ import { Badge } from '@/shared/ui/badge'
 import { TooltipProvider, Tooltip, TooltipTrigger, TooltipContent } from '@/shared/ui/tooltip'
 import { useToast } from '@/shared/ui/use-toast'
 import { Copy, Check, Sparkles, Layers, ClipboardList } from 'lucide-react'
+import { Response } from '@/shared/components/Response'
 
 interface AssistantMessageProps {
   content: string
@@ -399,7 +399,7 @@ export function AssistantMessage({ content, metadata, isLogAnalysis }: Assistant
   )
 
   return (
-    <div className="space-y-3">
+    <div className="space-y-4">
       {structuredOutput && (
         <TooltipProvider>
           <div className="rounded-lg border border-border/60 bg-muted/20 p-3 space-y-3">
@@ -591,48 +591,14 @@ export function AssistantMessage({ content, metadata, isLogAnalysis }: Assistant
         />
       )}
 
-      <div className="relative rounded-lg border border-border/60 p-3 bg-[hsl(var(--brand-surface))]">
-        <div className="mt-1 text-sm text-foreground/90 prose prose-sm dark:prose-invert max-w-none">
-          <ReactMarkdown
-            remarkPlugins={[remarkGfm]}
-            components={{
-              code({ className, children, ...props }) {
-                const text = String(children)
-                const match = /language-(\w+)/.exec(className || '')
-                const isCodeBlock = match !== null
-
-                if (!isCodeBlock && !className) {
-                  return (
-                    <code className="px-1.5 py-0.5 rounded bg-muted text-[0.9em]" {...props}>
-                      {text}
-                    </code>
-                  )
-                }
-                return (
-                  <pre className="rounded border border-border/60 bg-muted p-3 overflow-x-auto">
-                    <code className={className} {...props}>{text}</code>
-                  </pre>
-                )
-              },
-              a({ children, href, ...props }) {
-                return (
-                  <a
-                    href={href}
-                    className="text-mb-blue-500 hover:text-mb-blue-400 underline"
-                    target="_blank"
-                    rel="noreferrer noopener"
-                    {...props}
-                  >
-                    {children}
-                  </a>
-                )
-              },
-            }}
-          >
-            {sanitizedContent}
-          </ReactMarkdown>
-        </div>
-      </div>
+      <Response
+        className="mt-1 text-base leading-relaxed text-foreground"
+        remarkPlugins={[remarkGfm]}
+        parseIncompleteMarkdown
+        reduceMotion={false}
+      >
+        {sanitizedContent}
+      </Response>
     </div>
   )
 }

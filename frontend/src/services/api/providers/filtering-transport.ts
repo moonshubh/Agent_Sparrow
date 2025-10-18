@@ -5,7 +5,7 @@ const SYSTEM_REGEXES = [
   /<system>[\s\S]*?<\/system>/gi,
   /<internal>[\s\S]*?<\/internal>/gi,
   /<self_critique>[\s\S]*?<\/self_critique>/gi,
-  /.*loyalty relationship.*/gi,
+  /loyalty relationship(?: disclosure)?/gi,
 ];
 
 const stripSystemMarkers = (text: string): string => {

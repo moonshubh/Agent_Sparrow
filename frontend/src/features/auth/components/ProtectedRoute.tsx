@@ -1,8 +1,7 @@
-'use client'
+"use client"
 
-import React, { useEffect } from 'react'
+import React, { useEffect, useState } from 'react'
 import { useAuth } from '@/features/auth/hooks/useAuth'
-import { useRouter, usePathname } from 'next/navigation'
 import { Loader2 } from 'lucide-react'
 
 interface ProtectedRouteProps {
@@ -19,16 +18,21 @@ export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({
   redirectTo = '/login'
 }) => {
   const { user, isLoading, isAuthenticated } = useAuth()
-  const router = useRouter()
-  const pathname = usePathname()
+  const [pathname, setPathname] = useState<string>("/")
 
   useEffect(() => {
-    if (!isLoading && !isAuthenticated) {
-      // Save the current path to redirect back after login
-      const returnUrl = encodeURIComponent(pathname)
-      router.push(`${redirectTo}?returnUrl=${returnUrl}`)
+    if (typeof window !== 'undefined') {
+      try { setPathname(window.location.pathname || "/") } catch {}
     }
-  }, [isLoading, isAuthenticated, router, pathname, redirectTo])
+  }, [])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    if (!isLoading && !isAuthenticated) {
+      const returnUrl = encodeURIComponent(pathname)
+      window.location.href = `${redirectTo}?returnUrl=${returnUrl}`
+    }
+  }, [isLoading, isAuthenticated, pathname, redirectTo])
 
   // Show loading state
   if (isLoading) {

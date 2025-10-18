@@ -1,10 +1,11 @@
-'use client'
+"use client"
 
 import React, { createContext, useContext, useEffect, useState, useCallback, useMemo } from 'react'
 import { User } from '@supabase/supabase-js'
 import { supabase } from '@/services/supabase'
 import { authAPI } from '@/services/api/api-client'
-import { useRouter } from 'next/navigation'
+// Avoid useRouter in providers mounted at RootLayout to prevent
+// "expected app router to be mounted" during server render.
 import { toast } from 'sonner'
 
 export type ProfileUpdatePayload = {
@@ -40,7 +41,6 @@ export const useAuth = () => {
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [user, setUser] = useState<User | null>(null)
   const [isLoading, setIsLoading] = useState(true)
-  const router = useRouter()
 
   // Check if auth bypass is enabled
   const bypassAuth = process.env.NEXT_PUBLIC_BYPASS_AUTH === 'true'
@@ -49,6 +49,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   // Initialize auth state
   useEffect(() => {
+    if (typeof window === 'undefined') return; // ensure router is mounted on client
     const initializeAuth = async () => {
       console.log('AuthContext: Starting initialization...')
       console.log('Local Auth Bypass:', localAuthBypass)
@@ -220,7 +221,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
       setUser(null)
       toast.success('Logged out successfully')
-      router.push('/login')
+      if (typeof window !== 'undefined') {
+        window.location.href = '/login'
+      }
     } catch (error) {
       const err = toError(error, 'Failed to log out')
       console.error('Logout error:', err)
@@ -229,7 +232,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     } finally {
       setIsLoading(false)
     }
-  }, [router])
+  }, [])
 
 
   const refreshToken = useCallback(async () => {

@@ -12,9 +12,7 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 import { useUIStore } from '@/state/stores/ui-store'
 import type { ProcessingStageValue, ProcessingStatusValue, UploadTranscriptResponse } from '@/features/feedme/services/feedme-api'
 import { DialogErrorBoundary } from './DialogErrorBoundary'
-
-// Static constants - defined outside component to prevent recreation
-const COLOR_PALETTE = ['#22d3ee', '#f97316', '#38bdf8', '#d946ef', '#4ade80', '#facc15', '#fb7185', '#a855f7', '#2dd4bf', '#f472b6'] as const
+import { GlowingEffect } from '@/shared/ui/glowing-effect'
 
 type ApiConversation = UploadTranscriptResponse & {
   id?: number
@@ -353,29 +351,35 @@ export default function UnassignedDialog({ isOpen, onClose }: Props) {
               </p>
             </div>
           ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 overflow-x-auto">
-              {conversations.map((conv, index) => {
-                const iconColor = COLOR_PALETTE[index % COLOR_PALETTE.length]
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
+              {conversations.map((conv) => {
                 const isEditing = editingId === conv.id
                 const isRenaming = renamingId === conv.id
                 return (
                 <div
                   key={conv.id}
-                  className="group relative rounded-lg border bg-card/50 hover:bg-card transition-all cursor-pointer p-4"
-                  onClick={() => handleConversationClick(conv.id)}
+                  className="group relative flex h-full cursor-pointer flex-col overflow-hidden rounded-[1.75rem] border border-border/50 bg-background/70 p-5 shadow-[0_30px_80px_rgba(15,23,42,0.22)] transition-all duration-300 hover:-translate-y-1 hover:border-accent/40 hover:bg-background/90"
+                  onClick={() => {
+                    if (editingId === conv.id) return
+                    handleConversationClick(conv.id)
+                  }}
                 >
+                  <GlowingEffect spread={260} proximity={180} inactiveZone={0.1} />
+
                   <button
                     onClick={(event) => { event.stopPropagation(); setDeleteTarget(conv) }}
-                    className="absolute right-2 top-2 inline-flex h-7 w-7 items-center justify-center rounded-full bg-background/90 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 hover:bg-destructive/10 hover:text-destructive z-10"
+                    className="absolute right-3 top-3 inline-flex h-8 w-8 items-center justify-center rounded-full border border-border/40 bg-background/80 text-muted-foreground/90 opacity-0 backdrop-blur transition-opacity duration-200 group-hover:opacity-100 hover:border-destructive/40 hover:text-destructive z-10"
                     aria-label="Delete conversation"
                   >
                     <Trash2 className="h-3.5 w-3.5" />
                   </button>
 
-                  <div className="flex flex-col h-full pr-10">
+                  <div className="flex flex-col h-full pr-8">
                     {/* Header with icon and title */}
-                    <div className="flex items-start gap-3 mb-3">
-                      <FileText className="h-5 w-5 flex-shrink-0 mt-0.5" style={{ color: iconColor }} />
+                    <div className="flex items-start gap-3 mb-4">
+                      <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl border border-white/10 bg-white/20 text-black shadow-sm backdrop-blur dark:border-white/20 dark:bg-white/10 dark:text-white">
+                        <FileText className="h-4 w-4" />
+                      </div>
                       <div className="flex-1 min-w-0">
                         {isEditing ? (
                           <Input
@@ -394,7 +398,7 @@ export default function UnassignedDialog({ isOpen, onClose }: Props) {
                             }}
                             disabled={isRenaming}
                             autoFocus
-                            className="h-8 text-sm"
+                            className="h-9 text-sm bg-background/70"
                           />
                         ) : (
                           <h4
@@ -411,8 +415,8 @@ export default function UnassignedDialog({ isOpen, onClose }: Props) {
                     </div>
 
                     {/* Status section */}
-                    <div className="flex items-center justify-between mt-auto">
-                      <div className="flex items-center gap-2 text-muted-foreground">
+                    <div className="mt-auto flex items-center justify-between">
+                      <div className="flex items-center gap-2 text-muted-foreground text-xs">
                         {getStatusIcon(conv.processing_status, conv.progress_percentage)}
                         {conv.processing_status === 'processing' && conv.status_message && (
                           <span className="text-xs text-muted-foreground">
@@ -425,9 +429,9 @@ export default function UnassignedDialog({ isOpen, onClose }: Props) {
                     {/* Progress bar for processing conversations */}
                     {conv.processing_status === 'processing' && conv.progress_percentage !== undefined && (
                       <div className="mt-3">
-                        <div className="w-full bg-emerald-600/20 rounded-full h-1.5">
+                        <div className="h-1.5 w-full rounded-full bg-emerald-600/15">
                           <div
-                            className="bg-emerald-500 h-1.5 rounded-full transition-all duration-300"
+                            className="h-1.5 rounded-full bg-emerald-400 transition-all duration-300"
                             style={{ width: `${Math.min(Math.max(conv.progress_percentage, 0), 100)}%` }}
                           />
                         </div>
@@ -438,13 +442,15 @@ export default function UnassignedDialog({ isOpen, onClose }: Props) {
                       <p className="mt-2 text-[11px] text-muted-foreground">{conv.status_message}</p>
                     )}
 
-                    <button
-                      className="absolute bottom-2 right-2 inline-flex h-7 w-7 items-center justify-center rounded-full bg-background/90 text-muted-foreground opacity-0 shadow-sm transition-opacity group-hover:opacity-100 hover:bg-accent hover:text-accent-foreground z-10"
-                      onClick={(event) => { event.stopPropagation(); handleConversationClick(conv.id) }}
-                      aria-label="Open conversation"
-                    >
-                      <Maximize2 className="h-3.5 w-3.5" />
-                    </button>
+                    <div className="mt-4 flex justify-end">
+                      <button
+                        className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-white/10 bg-background/80 text-muted-foreground shadow-sm opacity-0 transition-opacity duration-200 group-hover:opacity-100 hover:border-accent hover:text-accent-foreground"
+                        onClick={(event) => { event.stopPropagation(); handleConversationClick(conv.id) }}
+                        aria-label="Open conversation"
+                      >
+                        <Maximize2 className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
                   </div>
                 </div>
               )})}

@@ -293,22 +293,26 @@ const createUnifiedResponseStream = (
   stream: ReadableStream<Uint8Array<ArrayBufferLike>>,
 ): ReadableStream<UIMessageChunk> => {
   const messageId = generateStreamId()
-  let started = false
-  let finished = false
+  let pendingStartId: string | null = null
+  let activeId: string | null = null
 
   return toTextStream(stream)
     .pipeThrough(new EventSourceParserStream())
     .pipeThrough(
       new TransformStream<{ data: string | undefined }, UIMessageChunk>({
+        start() {
+          // Track if a finish event has been seen to avoid duplicates
+          ;(this as any)._sawFinish = false
+        },
         transform(chunk, controller) {
           const { data } = chunk
           if (!data) return
 
           if (data === '[DONE]') {
-            if (started && !finished) {
-              controller.enqueue({ type: 'text-end', id: messageId } as UIMessageChunk)
-              finished = true
+            if (activeId) {
+              controller.enqueue({ type: 'text-end', id: activeId } as UIMessageChunk)
             }
+            activeId = null
             return
           }
 
@@ -323,6 +327,23 @@ const createUnifiedResponseStream = (
           // Map generic step/result events (Stage-2 for log analysis)
           const payloadType = typeof payload?.type === 'string' ? payload.type : undefined;
 
+          // Dev trace for SSE frames
+          if (process.env.NODE_ENV === 'development') {
+            try {
+              const preview = typeof payload?.delta === 'string' ? payload.delta.slice(0, 40) : ''
+              // eslint-disable-next-line no-console
+              console.info('[UnifiedStream]', payloadType ?? typeof payload, preview)
+            } catch {}
+          }
+
+          if (process.env.NODE_ENV === 'development') {
+            try {
+              const preview = typeof payload?.delta === 'string' ? payload.delta.slice(0, 40) : ''
+              // eslint-disable-next-line no-console
+              console.debug('[UnifiedStream]', payloadType ?? typeof payload, preview)
+            } catch {}
+          }
+
           if (payloadType && (payloadType === 'reasoning' || payloadType.startsWith('reasoning-'))) {
             const dataChunk = {
               type: `data-${payloadType}` as UIMessageChunk['type'],
@@ -333,10 +354,6 @@ const createUnifiedResponseStream = (
           }
 
           if (payloadType === 'step' && payload?.data) {
-            if (!started) {
-              started = true
-              controller.enqueue({ type: 'text-start', id: messageId } as UIMessageChunk)
-            }
             const dataChunk = {
               type: 'data-timeline-step' as UIMessageChunk['type'],
               data: payload.data,
@@ -354,10 +371,95 @@ const createUnifiedResponseStream = (
             return
           }
 
+          // v2 error passthrough (backend sends { type: 'error', errorText })
+          if (payloadType === 'error') {
+            const errorText = typeof payload?.errorText === 'string'
+              ? payload.errorText
+              : (typeof payload?.message === 'string' ? payload.message : 'An error occurred')
+            controller.enqueue({ type: 'error', errorText } as UIMessageChunk)
+            if (activeId) {
+              controller.enqueue({ type: 'text-end', id: activeId } as UIMessageChunk)
+              activeId = null
+            }
+            return
+          }
+
+          // Pass through metadata/data events from v2
+          if (payloadType === 'message-metadata') {
+            const meta = payload?.messageMetadata ?? payload?.data ?? payload
+            controller.enqueue({ type: 'message-metadata', messageMetadata: meta } as UIMessageChunk)
+            return
+          }
+          if (payloadType === 'data' || (payloadType && payloadType.startsWith('data-'))) {
+            controller.enqueue({
+              type: (payloadType === 'data' ? 'data' : payloadType) as UIMessageChunk['type'],
+              data: payload.data ?? payload,
+            } as UIMessageChunk)
+            return
+          }
+
+          // Forward finish to consumers so overlays and timelines can finalize correctly
+          if (payloadType === 'finish' || payload === 'finish') {
+            if (activeId) {
+              controller.enqueue({ type: 'text-end', id: activeId } as UIMessageChunk)
+              activeId = null
+            }
+            controller.enqueue({ type: 'finish' } as UIMessageChunk)
+            ;(this as any)._sawFinish = true
+            return
+          }
+
+          // Pass through artifact events for Phase 3 UI
+          if (payloadType && payloadType.startsWith('artifact-')) {
+            controller.enqueue({
+              type: `data-${payloadType}` as UIMessageChunk['type'],
+              data: payload,
+            } as UIMessageChunk)
+            return
+          }
+
+          if (
+            payloadType === 'text-start' ||
+            payloadType === 'text-delta' ||
+            payloadType === 'text-end'
+          ) {
+            const id = typeof payload?.id === 'string' ? payload.id : messageId
+            if (payloadType === 'text-start') {
+              pendingStartId = id
+              return
+            }
+
+            if (!activeId && pendingStartId) {
+              activeId = pendingStartId
+              controller.enqueue({ type: 'text-start', id: activeId } as UIMessageChunk)
+              pendingStartId = null
+            }
+
+            if (!activeId) {
+              activeId = id
+              controller.enqueue({ type: 'text-start', id: activeId } as UIMessageChunk)
+            }
+
+            if (payloadType === 'text-delta') {
+              const delta = typeof payload.delta === 'string' ? payload.delta : ''
+              if (delta) {
+                controller.enqueue({ type: 'text-delta', id: activeId, delta } as UIMessageChunk)
+              }
+              return
+            }
+
+            if (payloadType === 'text-end') {
+              controller.enqueue({ type: 'text-end', id: payload.id ?? activeId } as UIMessageChunk)
+              activeId = null
+              pendingStartId = null
+              return
+            }
+          }
+
           if (payload === 'done' || payload?.type === 'done') {
-            if (started && !finished) {
-              controller.enqueue({ type: 'text-end', id: messageId } as UIMessageChunk)
-              finished = true
+            if (activeId) {
+              controller.enqueue({ type: 'text-end', id: activeId } as UIMessageChunk)
+              activeId = null
             }
             return
           }
@@ -367,36 +469,20 @@ const createUnifiedResponseStream = (
               ? payload.content
               : 'Log analysis failed while processing the stream.'
             controller.enqueue({ type: 'error', errorText } as UIMessageChunk)
-            finished = true
+            activeId = null
             return
           }
 
-          if (payload?.role !== 'assistant') {
-            // Ignore router/system notifications for now; UI focuses on final response
-            return
-          }
-
-          if (!started) {
-            started = true
-            controller.enqueue({ type: 'text-start', id: messageId } as UIMessageChunk)
-          }
-
-          const delta = typeof payload.content === 'string' ? payload.content : ''
-          if (delta) {
-            controller.enqueue({ type: 'text-delta', id: messageId, delta } as UIMessageChunk)
-          }
-
-          if (payload.analysis_results) {
-            const mappedMetadata = mapAnalysisResultsToMessageMetadata(payload.analysis_results)
-            controller.enqueue({
-              type: 'message-metadata',
-              messageMetadata: mappedMetadata ?? payload.analysis_results,
-            } as UIMessageChunk)
-          }
+          // Ignore other payloads by default (router/system chatter)
         },
         flush(controller) {
-          if (started && !finished) {
-            controller.enqueue({ type: 'text-end', id: messageId } as UIMessageChunk)
+          if (activeId) {
+            controller.enqueue({ type: 'text-end', id: activeId } as UIMessageChunk)
+            activeId = null
+          }
+          // Emit finish if upstream didn't send it
+          if (!(this as any)._sawFinish) {
+            controller.enqueue({ type: 'finish' } as UIMessageChunk)
           }
         },
       }),
@@ -475,9 +561,24 @@ export function createBackendChatTransport({
       const webSearchMaxResults = getNumber(dataPayload, 'webSearchMaxResults')
       const webSearchProfile = getString(dataPayload, 'webSearchProfile')
 
+      // Extract attachments (images/files) from the current user message parts for multimodal support
+      const currentUiMessage = absoluteIndex >= 0 ? messages[absoluteIndex] : undefined
+      const attachments = Array.isArray(currentUiMessage?.parts)
+        ? (currentUiMessage!.parts as any[])
+            .filter((p) => p && p.type === 'file' && typeof p.url === 'string')
+            .map((p) => ({
+              filename: typeof p.filename === 'string' ? p.filename : 'attachment',
+              media_type: typeof p.mediaType === 'string' ? p.mediaType : 'application/octet-stream',
+              data_url: p.url as string,
+            }))
+        : []
+
       const targetEndpoint = isLogAnalysis ? unifiedEndpoint : chatEndpoint
 
-      transport.setUseUnifiedStream(isLogAnalysis)
+      // Always use the unified SSE parser for both endpoints.
+      // Our backend emits normalized SSE events (text-start/delta/end, finish, data-*),
+      // and the unified parser maps them into UIMessageChunk for the AI SDK.
+      transport.setUseUnifiedStream(true)
 
       return {
         api: targetEndpoint,
@@ -496,6 +597,7 @@ export function createBackendChatTransport({
             trace_id: (resolvedBody?.session_id as string | undefined) ?? sessionId,
           } : {}),
           ...(forceWebSearch ? { force_websearch: true } : {}),
+          ...(attachments && attachments.length > 0 ? { attachments } : {}),
           ...(webSearchMaxResults ? { websearch_max_results: webSearchMaxResults } : {}),
           ...(webSearchProfile ? { websearch_profile: webSearchProfile } : {}),
           ...(dataPayload.useServerMemory ? { use_server_memory: true } : {}),

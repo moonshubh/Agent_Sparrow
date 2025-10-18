@@ -23,7 +23,13 @@ export function Header() {
       setIsNavigating(true)
       
       // Attempt navigation to login page
-      await router.push('/login')
+      if (typeof window !== 'undefined') {
+        try {
+          await router.push('/login')
+        } catch {
+          window.location.href = '/login'
+        }
+      }
     } catch (error) {
       // Handle navigation errors gracefully
       console.error('Navigation to login page failed:', error)
@@ -41,7 +47,6 @@ export function Header() {
         }
       }
     } finally {
-      // Reset loading state after a short delay to prevent flicker
       setTimeout(() => setIsNavigating(false), 100)
     }
   }
