@@ -7,7 +7,7 @@ import os
 from datetime import datetime, timedelta
 from typing import Dict, Any
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, Body, HTTPException, Query, status
 from pydantic import BaseModel
 import jwt
 
@@ -153,8 +153,15 @@ async def get_local_user():
     }
 
 
+class LocalValidateRequest(BaseModel):
+    token: str
+
+
 @router.post("/local-validate")
-async def validate_local_token(token: str):
+async def validate_local_token(
+    payload: LocalValidateRequest | None = Body(default=None),
+    token: str | None = Query(default=None),
+):
     """
     Validate a local JWT token.
     """
@@ -165,9 +172,15 @@ async def validate_local_token(token: str):
             detail="Local auth bypass is not enabled"
         )
     
+    # Accept token from JSON body or query param for flexibility
+    token_value = (payload.token if payload else None) or token
+    if not token_value:
+        # Gracefully report missing token so the frontend can re-issue without logging 422 errors
+        return {"valid": False, "error": "Missing token"}
+
     try:
         payload = jwt.decode(
-            token,
+            token_value,
             settings.jwt_secret_key,
             algorithms=[settings.jwt_algorithm]
         )

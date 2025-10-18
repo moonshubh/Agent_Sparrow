@@ -1,7 +1,9 @@
 from __future__ import annotations
+import asyncio
 import logging
 import uuid
 from typing import Any, AsyncIterable, Dict, Optional
+from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
@@ -22,7 +24,7 @@ from app.api.v1.middleware.log_analysis_middleware import (
     log_analysis_rate_limiter,
     log_analysis_session_manager,
 )
-from app.core.transport.sse import format_sse_data
+from app.core.transport.sse import format_sse_comment, format_sse_data
 from app.core.user_context import create_user_context_from_user_id, user_context_scope
 from langchain_core.messages import AIMessage, HumanMessage
 
@@ -45,6 +47,8 @@ class UnifiedAgentRequest(BaseModel):
     session_id: str | None = None
     provider: str | None = None
     model: str | None = None
+    # Optional image/file attachments (data URLs) to support multimodal
+    attachments: list[Dict[str, Any]] | None = None
     # Manual web search flags (from frontend pill)
     force_websearch: bool | None = None
     websearch_max_results: int | None = None
@@ -54,9 +58,57 @@ class UnifiedAgentRequest(BaseModel):
 LOG_AGENT_ALIASES = {"log_analyst", "log_analysis"}
 
 
+async def stream_text_by_characters(
+    text: str,
+    stream_id: str,
+    *,
+    emit_start: bool = False,
+    emit_end: bool = False,
+    chunk_size: int = 1,
+    delay: float = 0.0,
+    metrics: Optional[Dict[str, int]] = None,
+) -> AsyncIterable[str]:
+    """Stream text content character by character with standardized SSE payloads."""
+    if emit_start:
+        if metrics is not None:
+            metrics["events"] = metrics.get("events", 0) + 1
+        yield format_sse_data({"type": "text-start", "id": stream_id})
+
+    for i in range(0, len(text), chunk_size):
+        chunk = text[i : i + chunk_size]
+        if not chunk:
+            continue
+        if metrics is not None:
+            metrics["events"] = metrics.get("events", 0) + 1
+            metrics["text_chars"] = metrics.get("text_chars", 0) + len(chunk)
+        yield format_sse_data({"type": "text-delta", "id": stream_id, "delta": chunk})
+        if delay > 0:
+            await asyncio.sleep(delay)
+
+    if emit_end:
+        if metrics is not None:
+            metrics["events"] = metrics.get("events", 0) + 1
+        yield format_sse_data({"type": "text-end", "id": stream_id})
+
+
 async def unified_agent_stream_generator(request: UnifiedAgentRequest, user_id: Optional[str] = None) -> AsyncIterable[str]:
+    stream_closed = False
+    stream_metrics: Dict[str, int] = {"events": 0, "text_chars": 0, "heartbeats": 0}
+    started_at = datetime.utcnow()
+    heartbeat_interval = 15.0
+
+    def emit(payload: Dict[str, Any]) -> str:
+        stream_metrics["events"] += 1
+        return format_sse_data(payload)
+
+    def emit_comment(comment: str = "keep-alive") -> str:
+        stream_metrics["events"] += 1
+        stream_metrics["heartbeats"] += 1
+        return format_sse_comment(comment)
+
     try:
-        yield format_sse_data({"role": "system", "content": f"🤖 Analyzing your request...", "agent_type": "router", "trace_id": request.trace_id})
+        yield emit_comment()
+        yield emit({"type": "step", "data": {"type": "Router", "description": "Analyzing your request…", "status": "in_progress"}})
         message_lower = request.message.lower()
         if request.agent_type:
             agent_type = request.agent_type
@@ -69,7 +121,7 @@ async def unified_agent_stream_generator(request: UnifiedAgentRequest, user_id: 
         if agent_type in LOG_AGENT_ALIASES:
             agent_type = "log_analysis"
         agent_name = {"primary": "Primary Support", "primary_agent": "Primary Support", "log_analyst": "Log Analysis", "log_analysis": "Log Analysis", "researcher": "Research"}.get(agent_type, "Primary Support")
-        yield format_sse_data({"role": "system", "content": f"🎯 Routing to {agent_name} Agent", "agent_type": agent_type, "trace_id": request.trace_id})
+        yield emit({"type": "step", "data": {"type": "Router", "description": f"Routing to {agent_name}", "status": "completed"}})
 
         if agent_type == "log_analysis" and request.log_content:
             from app.core.settings import get_settings
@@ -86,11 +138,11 @@ async def unified_agent_stream_generator(request: UnifiedAgentRequest, user_id: 
             except HTTPException as exc:
                 detail = exc.detail
                 message = detail.get('message') if isinstance(detail, dict) else str(detail or exc)
-                yield format_sse_data({"role": "error", "content": f"Unable to start log analysis: {message}", "agent_type": "log_analysis", "trace_id": request.trace_id})
+                yield emit({"type": "error", "errorText": f"Unable to start log analysis: {message}", "agent_type": "log_analysis", "trace_id": request.trace_id})
                 return
             except Exception as middleware_error:
                 logger.error(f"Middleware failure for log analysis: {middleware_error}", exc_info=True)
-                yield format_sse_data({"role": "error", "content": "Unexpected error while preparing log analysis. Please try again shortly.", "agent_type": "log_analysis", "trace_id": request.trace_id})
+                yield emit({"type": "error", "errorText": "Unexpected error while preparing log analysis. Please try again shortly.", "agent_type": "log_analysis", "trace_id": request.trace_id})
                 return
 
             try:
@@ -105,15 +157,15 @@ async def unified_agent_stream_generator(request: UnifiedAgentRequest, user_id: 
                 user_context = await create_user_context_from_user_id(resolved_user_id)
                 gemini_key = await user_context.get_gemini_api_key()
                 if not gemini_key:
-                    yield format_sse_data({"role": "error", "content": "🔑 **API Key Required**: To analyze logs, please add your Google Gemini API key in Settings.", "agent_type": "log_analysis", "trace_id": request.trace_id})
+                    yield emit({"type": "error", "errorText": "🔑 **API Key Required**: To analyze logs, please add your Google Gemini API key in Settings.", "agent_type": "log_analysis", "trace_id": request.trace_id})
                     return
 
                 result: Optional[Dict[str, Any]] = None
                 try:
                     async with user_context_scope(user_context):
                         try:
-                            yield format_sse_data({'type': 'step', 'data': {'type': 'Starting Analysis', 'description': 'Initializing log analysis...', 'status': 'in-progress'}})
-                            yield format_sse_data({'type': 'step', 'data': {'type': 'Parsing', 'description': 'Parsing log entries...', 'status': 'in-progress'}})
+                            yield emit({'type': 'step', 'data': {'type': 'Starting Analysis', 'description': 'Initializing log analysis...', 'status': 'in_progress'}})
+                            yield emit({'type': 'step', 'data': {'type': 'Parsing', 'description': 'Parsing log entries...', 'status': 'in_progress'}})
                         except Exception:
                             pass
                         initial_state = {
@@ -126,15 +178,17 @@ async def unified_agent_stream_generator(request: UnifiedAgentRequest, user_id: 
                             "websearch_max_results": request.websearch_max_results,
                             "websearch_profile": request.websearch_profile,
                         }
+                        yield emit_comment("analyzing")
                         result = await run_log_analysis_agent(initial_state)
+                        yield emit_comment("analyzing")
                         try:
-                            yield format_sse_data({'type': 'step', 'data': {'type': 'Analyzing', 'description': 'Analyzing patterns and issues...', 'status': 'complete'}})
-                            yield format_sse_data({'type': 'step', 'data': {'type': 'Synthesizing', 'description': 'Generating final summary and recommendations...', 'status': 'in-progress'}})
+                            yield emit({'type': 'step', 'data': {'type': 'Analyzing', 'description': 'Analyzing patterns and issues...', 'status': 'completed'}})
+                            yield emit({'type': 'step', 'data': {'type': 'Synthesizing', 'description': 'Generating final summary and recommendations...', 'status': 'in_progress'}})
                         except Exception:
                             pass
                 except Exception as agent_error:
                     logger.error("Log analysis agent failed: %s", agent_error, exc_info=True)
-                    yield format_sse_data({"role": "error", "content": "Log analysis failed while processing the file. Please try again after a short break.", "agent_type": "log_analysis", "trace_id": request.trace_id})
+                    yield emit({"type": "error", "errorText": "Log analysis failed while processing the file. Please try again after a short break.", "agent_type": "log_analysis", "trace_id": request.trace_id})
                     return
 
                 final_report = result.get('final_report') if isinstance(result, dict) else None
@@ -172,7 +226,7 @@ async def unified_agent_stream_generator(request: UnifiedAgentRequest, user_id: 
 
                     try:
                         try:
-                            yield format_sse_data({'type': 'step', 'data': {'type': 'Synthesizing', 'description': 'Finalizing the response...', 'status': 'complete'}})
+                            yield emit({'type': 'step', 'data': {'type': 'Synthesizing', 'description': 'Finalizing the response...', 'status': 'completed'}})
                         except Exception:
                             pass
                         # Prefer agent-formatted conversational response when available
@@ -200,12 +254,44 @@ async def unified_agent_stream_generator(request: UnifiedAgentRequest, user_id: 
                             analysis_results = _sanitize_payload(analysis_results)
                         except Exception:
                             pass
-                        yield format_sse_data({"role": "assistant", "content": content_md, "agent_type": "log_analysis", "trace_id": request.trace_id, "analysis_results": analysis_results, "session_id": session_id})
+                        # Stream the content character by character
+                        stream_id = f"assistant-{uuid.uuid4().hex}"
+                        yield emit({
+                            "type": "message-metadata",
+                            "messageMetadata": {
+                                "analysisResults": analysis_results,
+                                "logMetadata": analysis_results.get("ingestion_metadata"),
+                            },
+                            "agent_type": "log_analysis",
+                            "trace_id": request.trace_id,
+                            "session_id": session_id,
+                        })
+                        # If attachments are present (images), emit a timeline step for visibility
+                        try:
+                            if isinstance(request.attachments, list) and any(att.get('media_type','').startswith('image/') for att in request.attachments if isinstance(att, dict)):
+                                yield emit({'type': 'step', 'data': {'type': 'Attachments', 'description': 'Processing attached images…', 'status': 'in_progress'}})
+                        except Exception:
+                            pass
+                        async for chunk in stream_text_by_characters(
+                            content_md,
+                            stream_id,
+                            emit_start=True,
+                            metrics=stream_metrics,
+                        ):
+                            yield chunk
+                        async for closing in stream_text_by_characters(
+                            "",
+                            stream_id,
+                            emit_end=True,
+                            metrics=stream_metrics,
+                        ):
+                            yield closing
+                        yield emit({"type": "result", "data": {"analysis": analysis_results}, "agent_type": "log_analysis", "trace_id": request.trace_id, "session_id": session_id})
                     except Exception as json_error:
                         logger.error(f"JSON serialization error: {json_error}")
-                        yield format_sse_data({"role": "assistant", "content": f"Log analysis complete! {summary}", "agent_type": "log_analysis", "trace_id": request.trace_id, "analysis_results": {"overall_summary": summary, "error": f"Serialization failed: {str(json_error)}", "system_metadata": {}, "identified_issues": [], "proposed_solutions": []}, "session_id": session_id})
+                        yield emit({"type": "error", "errorText": f"Log analysis serialization failed: {str(json_error)}", "agent_type": "log_analysis", "trace_id": request.trace_id, "session_id": session_id})
                 else:
-                    yield format_sse_data({"role": "error", "content": "Log analysis completed without producing a final report.", "agent_type": "log_analysis", "trace_id": request.trace_id})
+                    yield emit({"type": "error", "errorText": "Log analysis completed without producing a final report.", "agent_type": "log_analysis", "trace_id": request.trace_id})
                 return
             finally:
                 if concurrent_slot_acquired and resolved_user_id:
@@ -217,7 +303,30 @@ async def unified_agent_stream_generator(request: UnifiedAgentRequest, user_id: 
             result = await research_graph.ainvoke(initial_state)
             answer = result.get("answer", "No answer provided.")
             citations = result.get("citations", [])
-            yield format_sse_data({"role": "assistant", "content": answer, "agent_type": agent_type, "trace_id": request.trace_id, "citations": citations})
+            if citations:
+                yield emit({
+                    "type": "message-metadata",
+                    "messageMetadata": {"citations": citations},
+                    "agent_type": agent_type,
+                    "trace_id": request.trace_id,
+                })
+            # Ensure a stream id exists for character streaming in this branch
+            stream_id = f"assistant-{uuid.uuid4().hex}"
+            async for chunk in stream_text_by_characters(
+                answer,
+                stream_id,
+                emit_start=True,
+                metrics=stream_metrics,
+            ):
+                yield chunk
+            async for closing in stream_text_by_characters("", stream_id, emit_end=True, metrics=stream_metrics):
+                yield closing
+            yield emit({
+                "type": "result",
+                "data": {"answer": answer, "citations": citations},
+                "agent_type": agent_type,
+                "trace_id": request.trace_id,
+            })
         else:
             from app.core.settings import get_settings
             settings = get_settings()
@@ -227,7 +336,7 @@ async def unified_agent_stream_generator(request: UnifiedAgentRequest, user_id: 
             user_context = await create_user_context_from_user_id(user_id)
             gemini_key = await user_context.get_gemini_api_key()
             if not gemini_key:
-                yield format_sse_data({"role": "error", "content": "🔑 **API Key Required**: To use the AI assistant, please add your Google Gemini API key in Settings.\n\n**How to configure:**\n1. Click the ⚙️ Settings button in the top-right corner\n2. Navigate to the 'API Keys' section\n3. Add your Google Gemini API key (starts with 'AIza')\n4. Get your free API key at: https://makersuite.google.com/app/apikey", "trace_id": request.trace_id})
+                yield emit({"type": "error", "errorText": "🔑 **API Key Required**: To use the AI assistant, please add your Google Gemini API key in Settings.\n\n**How to configure:**\n1. Click the ⚙️ Settings button in the top-right corner\n2. Navigate to the 'API Keys' section\n3. Add your Google Gemini API key (starts with 'AIza')\n4. Get your free API key at: https://makersuite.google.com/app/apikey", "trace_id": request.trace_id})
                 return
             async with user_context_scope(user_context):
                 messages = []
@@ -237,7 +346,28 @@ async def unified_agent_stream_generator(request: UnifiedAgentRequest, user_id: 
                             messages.append(HumanMessage(content=msg.get("content", "")))
                         elif msg.get("type") in ("assistant", "agent") or msg.get("role") == "assistant":
                             messages.append(AIMessage(content=msg.get("content", "")))
-                messages.append(HumanMessage(content=request.message))
+                # Multimodal: package images with the user's question when present
+                image_parts = []
+                try:
+                    attachments = request.attachments or []
+                    MAX_ATTACHMENTS = 4
+                    for att in attachments[:MAX_ATTACHMENTS]:
+                        if not isinstance(att, dict):
+                            continue
+                        mt = str(att.get('media_type') or '').lower()
+                        if not mt.startswith('image/'):
+                            continue
+                        data_url = str(att.get('data_url') or '')
+                        if not data_url.startswith('data:'):
+                            continue
+                        image_parts.append({"type": "image_url", "image_url": {"url": data_url}})
+                except Exception:
+                    image_parts = []
+
+                if image_parts:
+                    messages.append(HumanMessage(content=[{"type": "text", "text": request.message}, *image_parts]))
+                else:
+                    messages.append(HumanMessage(content=request.message))
                 initial_state = PrimaryAgentState(
                     messages=messages,
                     session_id=request.session_id,
@@ -247,20 +377,69 @@ async def unified_agent_stream_generator(request: UnifiedAgentRequest, user_id: 
                     websearch_max_results=request.websearch_max_results,
                     websearch_profile=request.websearch_profile,
                 )
-                async for chunk in run_primary_agent(initial_state):
-                    if hasattr(chunk, 'content') and chunk.content is not None:
-                        cleaned_content = filter_system_text(chunk.content)
-                        if cleaned_content.strip():
-                            role = getattr(chunk, 'role', 'assistant') or 'assistant'
-                            yield format_sse_data({"role": role, "content": cleaned_content, "agent_type": agent_type, "trace_id": request.trace_id})
-                    elif hasattr(chunk, 'additional_kwargs') and chunk.additional_kwargs.get('metadata'):
-                        metadata = chunk.additional_kwargs['metadata']
-                        yield format_sse_data({"role": "metadata", "metadata": metadata, "agent_type": agent_type, "trace_id": request.trace_id})
+                stream_id = f"assistant-{uuid.uuid4().hex}"
+                text_started = False
+                agent_stream = run_primary_agent(initial_state)
+                agen = agent_stream.__aiter__()
+                try:
+                    while True:
+                        try:
+                            chunk = await asyncio.wait_for(agen.__anext__(), heartbeat_interval)
+                        except StopAsyncIteration:
+                            break
+                        except asyncio.TimeoutError:
+                            yield emit_comment("working")
+                            continue
 
-        yield format_sse_data({'role': 'system', 'content': '[DONE]'})
+                        if hasattr(chunk, 'content') and chunk.content is not None:
+                            cleaned_content = filter_system_text(chunk.content)
+                            if cleaned_content.strip():
+                                async for char_chunk in stream_text_by_characters(
+                                    cleaned_content,
+                                    stream_id,
+                                    emit_start=not text_started,
+                                    metrics=stream_metrics,
+                                ):
+                                    yield char_chunk
+                                text_started = True
+                                continue
+
+                        metadata = None
+                        if hasattr(chunk, 'additional_kwargs'):
+                            metadata = chunk.additional_kwargs.get('metadata')
+                        if metadata:
+                            yield emit({"type": "message-metadata", "messageMetadata": metadata, "agent_type": agent_type, "trace_id": request.trace_id})
+                finally:
+                    if hasattr(agent_stream, "aclose"):
+                        await agent_stream.aclose()
+
+                if text_started:
+                    async for closing in stream_text_by_characters("", stream_id, emit_end=True, metrics=stream_metrics):
+                        yield closing
+
+        yield emit({'type': 'finish', 'trace_id': request.trace_id, 'stream_id': locals().get('stream_id')})
+        stream_closed = True
     except Exception as e:
         logger.error(f"Error in unified_agent_stream_generator: {e}", exc_info=True)
-        yield format_sse_data({"role": "error", "content": f"An error occurred: {str(e)}", "trace_id": request.trace_id})
+        yield emit({
+            "type": "error",
+            "errorText": f"An error occurred: {str(e)}",
+            "trace_id": request.trace_id,
+        })
+    finally:
+        if not stream_closed:
+            yield emit({'type': 'finish', 'trace_id': request.trace_id, 'stream_id': locals().get('stream_id')})
+        elapsed_ms = int((datetime.utcnow() - started_at).total_seconds() * 1000)
+        logger.info(
+            "[unified_stream] stream complete agent=%s trace_id=%s stream_id=%s events=%d text_chars=%d heartbeats=%d elapsed_ms=%d",
+            request.agent_type or "auto",
+            request.trace_id,
+            locals().get('stream_id'),
+            stream_metrics.get("events", 0),
+            stream_metrics.get("text_chars", 0),
+            stream_metrics.get("heartbeats", 0),
+            elapsed_ms,
+        )
 
 
 try:
@@ -280,8 +459,15 @@ if AUTH_AVAILABLE:
             raise HTTPException(status_code=400, detail="Message cannot be empty")
         return StreamingResponse(
             unified_agent_stream_generator(request, user_id),
-            media_type="text/event-stream",
-            headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"},
+            media_type="text/event-stream; charset=utf-8",
+            headers={
+                "Cache-Control": "no-cache, no-transform",
+                "Connection": "keep-alive",
+                "Content-Type": "text/event-stream; charset=utf-8",
+                "Pragma": "no-cache",
+                "Vary": "Authorization, Accept-Encoding",
+                "X-Accel-Buffering": "no",
+            },
         )
 else:
     @router.post("/agent/unified/stream")
@@ -290,6 +476,13 @@ else:
             raise HTTPException(status_code=400, detail="Message cannot be empty")
         return StreamingResponse(
             unified_agent_stream_generator(request),
-            media_type="text/event-stream",
-            headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"},
+            media_type="text/event-stream; charset=utf-8",
+            headers={
+                "Cache-Control": "no-cache, no-transform",
+                "Connection": "keep-alive",
+                "Content-Type": "text/event-stream; charset=utf-8",
+                "Pragma": "no-cache",
+                "Vary": "Authorization, Accept-Encoding",
+                "X-Accel-Buffering": "no",
+            },
         )

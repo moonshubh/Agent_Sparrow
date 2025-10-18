@@ -14,7 +14,7 @@ SYSTEM_PATTERNS: list[Pattern[str]] = [
     re.compile(r"<system>.*?</system>", flags=re.DOTALL | re.IGNORECASE),
     re.compile(r"<internal>.*?</internal>", flags=re.DOTALL | re.IGNORECASE),
     re.compile(r"<self_critique>.*?</self_critique>", flags=re.DOTALL | re.IGNORECASE),
-    re.compile(r".*loyalty relationship.*", flags=re.IGNORECASE),
+    re.compile(r"loyalty relationship(?: disclosure)?", flags=re.IGNORECASE),
 ]
 
 
@@ -25,7 +25,10 @@ def filter_system_text(text: str | None) -> str:
     filtered = SELF_CRITIQUE_RE.sub("", text)
     for pattern in SYSTEM_PATTERNS:
         filtered = pattern.sub("", filtered)
-    return filtered
+    if filtered.strip():
+        return filtered
+    # Fallback to original content if sanitization stripped everything to avoid blank streams.
+    return text
 
 
 def safe_json_serializer(obj: Any):

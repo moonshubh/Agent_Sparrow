@@ -203,6 +203,14 @@ class LogAnalysisAgent:
                 model=self.model_name,
                 api_key=self.api_key,
             )
+            try:
+                logger.info(
+                    "LogAnalysis model initialized: provider=%s model=%s",
+                    self.provider,
+                    self.model_name,
+                )
+            except Exception:
+                pass
 
         if self._reasoning_engine is None:
             self._reasoning_engine = LogReasoningEngine(
@@ -217,6 +225,22 @@ class LogAnalysisAgent:
                     setattr(self._reasoning_engine, "force_websearch", bool(self.force_websearch))
             except Exception:
                 pass
+            # Best-effort: log provider system prompt length for observability
+            try:
+                prompt = self._reasoning_engine._get_provider_system_prompt()  # type: ignore[attr-defined]
+                logger.info(
+                    "Provider system prompt loaded: provider=%s model=%s length=%d",
+                    self.provider,
+                    self.model_name,
+                    len(prompt or ""),
+                )
+            except Exception as _e:
+                logger.warning(
+                    "Provider system prompt unavailable for %s/%s: %s",
+                    self.provider,
+                    self.model_name,
+                    str(_e),
+                )
 
     async def analyze_log_file(
         self,
@@ -1113,6 +1137,16 @@ class LogAnalysisAgent:
             analysis_result.conversational_markdown = markdown
             analysis_result.structured_output = envelope
             analysis_result.structured_output_dict = envelope_dict
+            try:
+                logger.info(
+                    "v10 composer succeeded: markdown_len=%d findings=%d actions=%d steps=%d",
+                    len(markdown or ""),
+                    len(envelope_dict.get("findings", [])),
+                    len(envelope_dict.get("quick_actions", [])),
+                    len(envelope_dict.get("full_fix_steps", [])),
+                )
+            except Exception:
+                pass
             return reasoning_state, markdown
         except Exception as composer_error:
             logger.exception(
@@ -1142,6 +1176,14 @@ class LogAnalysisAgent:
                         validation_result.score.overall_score,
                         analysis_result.analysis_id,
                     )
+                try:
+                    logger.info(
+                        "Legacy formatter used: markdown_len=%d analysis_id=%s",
+                        len(formatted_response or ""),
+                        analysis_result.analysis_id,
+                    )
+                except Exception:
+                    pass
 
                 return reasoning_state, formatted_response
             except Exception as legacy_error:
@@ -1152,6 +1194,14 @@ class LogAnalysisAgent:
         analysis_result.conversational_markdown = fallback
         analysis_result.structured_output = None
         analysis_result.structured_output_dict = None
+        try:
+            logger.warning(
+                "All formatting paths failed; using basic summary. markdown_len=%d analysis_id=%s",
+                len(fallback or ""),
+                analysis_result.analysis_id,
+            )
+        except Exception:
+            pass
         return reasoning_state, fallback
 
     def _detect_emotional_state(

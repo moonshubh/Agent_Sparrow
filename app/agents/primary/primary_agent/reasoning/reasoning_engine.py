@@ -1426,35 +1426,26 @@ Provide your analysis in a structured format with clear sections.""",
             )
             return None
 
-    async def generate_enhanced_response(
-        self, 
+    async def _build_enhanced_response_inputs(
+        self,
         reasoning_state: ReasoningState,
-        thinking_budget: Optional[int] = None
-    ) -> str:
-        """
-        Generate an enhanced response with thinking budget and conversational style.
-        
-        This is the second major LLM call that generates the final response.
-        """
-        with tracer.start_as_current_span("reasoning_engine.generate_enhanced_response") as span:
-            if not reasoning_state.query_analysis:
-                return "I apologize, but I wasn't able to properly analyze your query. Could you please rephrase it?"
-            
-            # Use provided thinking budget or determine based on complexity
-            if thinking_budget is None:
-                complexity = self._assess_initial_complexity(reasoning_state.query_text or "")
-                thinking_budget = self.get_thinking_budget(complexity)
-            
-            span.set_attribute("thinking_budget", thinking_budget)
-            
-            model_to_use = await self._load_reasoning_model_instance(thinking_budget) or self.model
-            
-            # Build context from reasoning state
-            context_summary = self._build_context_summary(reasoning_state)
-            
-            # Create enhanced response prompt
-            system_prompt = self._compose_system_prompt_with_instructions(
-                """You are Agent Sparrow, Mailbird's friendly and knowledgeable AI customer support expert.
+        thinking_budget: Optional[int] = None,
+    ) -> Tuple[Optional[BaseChatModel], List[BaseMessage], Optional[int]]:
+        """Prepare model and messages for the enhanced response call."""
+
+        if not reasoning_state.query_analysis:
+            return None, [], thinking_budget
+
+        if thinking_budget is None:
+            complexity = self._assess_initial_complexity(reasoning_state.query_text or "")
+            thinking_budget = self.get_thinking_budget(complexity)
+
+        model_to_use = await self._load_reasoning_model_instance(thinking_budget) or self.model
+
+        context_summary = self._build_context_summary(reasoning_state)
+
+        system_prompt = self._compose_system_prompt_with_instructions(
+            """You are Agent Sparrow, Mailbird's friendly and knowledgeable AI customer support expert.
 
 ## Your Task: Generate a Helpful Response
 
@@ -1473,10 +1464,10 @@ Based on the analysis provided, craft a response that:
 - End with a helpful follow-up question if appropriate
 
 Remember: Quality over speed. Take time to craft a thoughtful response.""",
-                prompt_config=None,
-            )
+            prompt_config=None,
+        )
 
-            user_prompt = f"""Customer Query: {reasoning_state.query_text}
+        user_prompt = f"""Customer Query: {reasoning_state.query_text}
 
 Analysis Summary:
 {context_summary}
@@ -1485,12 +1476,73 @@ Please think carefully about the best way to help this customer, considering the
 
 Note: You have a thinking budget of {thinking_budget} tokens available for internal reasoning."""
 
+        messages: List[BaseMessage] = [
+            SystemMessage(content=system_prompt),
+            HumanMessage(content=user_prompt)
+        ]
+
+        return model_to_use, messages, thinking_budget
+
+    async def prepare_enhanced_response(
+        self,
+        reasoning_state: ReasoningState,
+        thinking_budget: Optional[int] = None,
+    ) -> Tuple[Optional[BaseChatModel], List[BaseMessage], Optional[int]]:
+        """Expose enhanced response call inputs for streaming callers."""
+
+        return await self._build_enhanced_response_inputs(reasoning_state, thinking_budget)
+
+    def record_enhanced_response(
+        self,
+        reasoning_state: ReasoningState,
+        response_text: str,
+        thinking_budget: Optional[int],
+    ) -> None:
+        """Persist enhanced response details on the reasoning state."""
+
+        if reasoning_state.response_orchestration:
+            reasoning_state.response_orchestration.final_response_preview = response_text
+        else:
+            reasoning_state.response_orchestration = ResponseOrchestration(
+                emotional_acknowledgment_strategy="Acknowledged in response",
+                technical_solution_delivery_method="Clear step-by-step guidance",
+                relationship_strengthening_elements=[],
+                delight_injection_points=[],
+                final_response_preview=response_text
+            )
+
+        reasoning_state.add_reasoning_step(ReasoningStep(
+            phase=ReasoningPhase.RESPONSE_STRATEGY,
+            description="Generated enhanced conversational response",
+            reasoning=f"Created response with {thinking_budget} token thinking budget" if thinking_budget is not None else "Created response",
+            confidence=0.9
+        ))
+
+    async def generate_enhanced_response(
+        self, 
+        reasoning_state: ReasoningState,
+        thinking_budget: Optional[int] = None
+    ) -> str:
+        """
+        Generate an enhanced response with thinking budget and conversational style.
+        
+        This is the second major LLM call that generates the final response.
+        """
+        with tracer.start_as_current_span("reasoning_engine.generate_enhanced_response") as span:
+            if not reasoning_state.query_analysis:
+                return "I apologize, but I wasn't able to properly analyze your query. Could you please rephrase it?"
+            
+            model_to_use, messages, resolved_budget = await self._build_enhanced_response_inputs(
+                reasoning_state,
+                thinking_budget
+            )
+
+            if model_to_use is None:
+                return "I apologize, but I wasn't able to properly analyze your query. Could you please rephrase it?"
+
+            span.set_attribute("thinking_budget", resolved_budget)
+
             try:
-                messages: List[BaseMessage] = [
-                    SystemMessage(content=system_prompt),
-                    HumanMessage(content=user_prompt)
-                ]
-                
                 # Use the model's ainvoke for response generation
                 response = await model_to_use.ainvoke(messages)
 
@@ -1523,28 +1575,13 @@ Note: You have a thinking budget of {thinking_budget} tokens available for inter
                 logger.debug(f"Response preview: {response_content[:100]}...")
                 
                 span.set_attribute("response_length", len(response_content))
-                
-                # Update reasoning state with the response
-                if reasoning_state.response_orchestration:
-                    reasoning_state.response_orchestration.final_response_preview = response_content
-                else:
-                    # Create minimal orchestration if it doesn't exist
-                    reasoning_state.response_orchestration = ResponseOrchestration(
-                        emotional_acknowledgment_strategy="Acknowledged in response",
-                        technical_solution_delivery_method="Clear step-by-step guidance",
-                        relationship_strengthening_elements=[],
-                        delight_injection_points=[],
-                        final_response_preview=response_content
-                    )
-                
-                # Add reasoning step
-                reasoning_state.add_reasoning_step(ReasoningStep(
-                    phase=ReasoningPhase.RESPONSE_STRATEGY,
-                    description="Generated enhanced conversational response",
-                    reasoning=f"Created response with {thinking_budget} token thinking budget",
-                    confidence=0.9
-                ))
-                
+
+                self.record_enhanced_response(
+                    reasoning_state,
+                    response_content,
+                    resolved_budget
+                )
+
                 return response_content
                 
             except Exception as e:

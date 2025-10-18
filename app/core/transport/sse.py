@@ -9,6 +9,11 @@ import json
 from datetime import datetime
 from typing import Any
 
+
+def _sanitize_comment_text(comment: str) -> str:
+    """Ensure heartbeat comments are single-line to avoid breaking SSE frames."""
+    return comment.replace("\n", " ").strip() or "keep-alive"
+
 def _default_serializer(obj: Any):
     if isinstance(obj, datetime):
         return obj.isoformat()
@@ -25,3 +30,8 @@ def format_sse_data(payload: Any) -> str:
     except Exception:
         data = json.dumps({"type": "error", "errorText": "serialization_failed"})
     return f"data: {data}\n\n"
+
+
+def format_sse_comment(comment: str = "keep-alive") -> str:
+    """Return a correctly formatted SSE comment frame (useful for heartbeat pings)."""
+    return f": {_sanitize_comment_text(comment)}\n\n"

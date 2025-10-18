@@ -174,14 +174,15 @@ def _validate_api_key(api_key: str) -> bool:
     if not api_key or not isinstance(api_key, str):
         logger.warning(f"API key validation failed: empty or not string")
         return False
-    # Google API keys typically start with 'AIza' and are 39 characters long
-    if not api_key.startswith('AIza') or len(api_key) != 39:
-        logger.warning(f"API key format validation failed: expected format with specific prefix and length")
-        return False
+    # Google keys usually start with 'AIza', but newer formats may vary in length. Warn instead of blocking.
+    if not api_key.startswith('AIza'):
+        logger.warning("API key does not start with 'AIza'; continuing but downstream calls may fail.")
     # Additional validation for valid characters (alphanumeric, underscore, hyphen)
     if not re.match(r'^[A-Za-z0-9_-]+$', api_key):
-        logger.warning(f"API key contains invalid characters")
+        logger.warning(f"API key contains unexpected characters")
         return False
+    if len(api_key) < 30 or len(api_key) > 120:
+        logger.info("API key length is uncommon (len=%d) but will be accepted.", len(api_key))
     logger.debug(f"API key validation successful")
     return True
 
@@ -207,7 +208,7 @@ def create_user_specific_model(api_key: str, thinking_budget: Optional[int] = No
         bind_tools: Whether to bind tools to the model (default True)
     """
     if not _validate_api_key(api_key):
-        raise ValueError("Invalid API key format. Expected Google API key starting with 'AIza' and 39 characters long.")
+        raise ValueError("Invalid API key format. Please verify your Google Generative AI key.")
     
     # Check cache first (using a hash of the API key for security)
     cache_key = f"{hash(api_key)}_{_get_model_config()}_{thinking_budget}_{bind_tools}"
@@ -543,16 +544,23 @@ async def run_primary_agent(state: PrimaryAgentState) -> AsyncIterator[AIMessage
                 session_id=getattr(state, 'session_id', 'default')
             )
             
-            # Generate enhanced response with thinking budget (2nd LLM call)
-            final_response = None
+            final_response: Optional[str] = None
             if reasoning_state and reasoning_state.query_analysis:
-                enhanced_response = await reasoning_engine.generate_enhanced_response(reasoning_state)
-                
-                # Optional: Refine response if confidence is low (3rd LLM call)
-                refined_response = await reasoning_engine.refine_response_if_needed(reasoning_state)
-                
-                # Use refined response if available, otherwise use enhanced response
-                final_response = refined_response if refined_response else enhanced_response
+                try:
+                    final_response = await reasoning_engine.generate_enhanced_response(
+                        reasoning_state,
+                    )
+                except Exception as gen_exc:
+                    logger.exception("Enhanced response generation failed: %s", gen_exc)
+                    final_response = None
+
+                if final_response:
+                    try:
+                        refined_response = await reasoning_engine.refine_response_if_needed(reasoning_state)
+                        if refined_response:
+                            final_response = refined_response
+                    except Exception as refine_exc:
+                        logger.warning("Refine response step failed: %s", refine_exc)
 
             # Log key reasoning results for observability
             parent_span.set_attribute("reasoning.confidence", reasoning_state.overall_confidence)
@@ -566,8 +574,19 @@ async def run_primary_agent(state: PrimaryAgentState) -> AsyncIterator[AIMessage
             # The final, critiqued response is now ready to be streamed.
             if not final_response:
                 logger.warning("Reasoning completed but no final response was generated.")
-                yield AIMessageChunk(content="I'm sorry, I was unable to generate a response. Please try again.", role="assistant")
+                fallback_text = (
+                    "I'm sorry, I wasn't able to generate a response right now. "
+                    "This can happen when the upstream model is unreachable in the current environment. "
+                    "Please try again after verifying network access and API connectivity."
+                )
+                yield AIMessageChunk(content=fallback_text, role="assistant")
                 return
+
+            logger.info(
+                "[primary_agent] final response len=%d preview=%r",
+                len(final_response) if isinstance(final_response, str) else -1,
+                final_response[:120] if isinstance(final_response, str) else type(final_response).__name__,
+            )
 
             sanitized_response = sanitize_model_response(final_response)
             if sanitized_response:
@@ -669,13 +688,12 @@ async def run_primary_agent(state: PrimaryAgentState) -> AsyncIterator[AIMessage
                 )
                 yield preface_metadata_chunk
 
-            # Stream the final, cleaned response chunk by chunk to the client.
-            chunk_size = 200  # Increased for better performance
+            chunk_size = 200
             for i in range(0, len(final_response), chunk_size):
                 chunk_content = final_response[i:i+chunk_size]
                 yield AIMessageChunk(content=chunk_content, role="assistant")
-                await anyio.sleep(0.005)  # Reduced delay for smoother streaming
-            
+                await anyio.sleep(0.005)
+
             if metadata_to_send:
                 metadata_chunk = AIMessageChunk(
                     content="",

@@ -124,6 +124,34 @@ def _ensure_loaded(provider: str, model: str) -> None:
             logger.debug(f"No mapping found for provider={provider}, model={model}")
             return
 
+        # Prefer specialized LogAnalysis adapter if present
+        specialized_path = os.path.join(
+            base_dir, provider_folder, "LogAnalysis", model_folder, "adapter.py"
+        )
+        if os.path.exists(specialized_path):
+            specialized_module = f"app.providers.{provider_folder}.LogAnalysis.{model_folder}.adapter"
+            try:
+                loader = SourceFileLoader(specialized_module, specialized_path)
+                spec = spec_from_loader(specialized_module, loader)
+                if spec is None:
+                    logger.warning(
+                        f"Failed to create module spec for {specialized_module}"
+                    )
+                else:
+                    module = module_from_spec(spec)
+                    sys.modules[specialized_module] = module
+                    loader.exec_module(module)  # type: ignore[attr-defined]
+                    logger.debug(
+                        f"Loaded specialized LogAnalysis adapter module {specialized_module}"
+                    )
+                    return
+            except Exception as e:
+                logger.error(
+                    f"Failed to load specialized LogAnalysis adapter {specialized_module}: {e}"
+                )
+                # Fall through to default path if specialized import fails
+
+        # Default adapter path
         adapter_path = os.path.join(base_dir, provider_folder, model_folder, "adapter.py")
         if not os.path.exists(adapter_path):
             logger.debug(f"Adapter file not found at {adapter_path}")
