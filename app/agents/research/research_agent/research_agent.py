@@ -18,7 +18,7 @@ from __future__ import annotations
 import json
 import logging
 import os
-from typing import List, Optional, TypedDict
+from typing import Any, List, Optional, TypedDict
 
 from app.core.settings import settings
 from app.api_keys.supabase_service import get_api_key_service
@@ -180,7 +180,7 @@ Return JSON in this format (no markdown block):
 # Graph assembly
 # ---------------------------------------------------------------------------
 
-def get_research_graph():
+def get_research_graph(checkpointer: Any | None = None):
     graph = StateGraph(ResearchState)
 
     graph.add_node("search", search_node)
@@ -193,7 +193,7 @@ def get_research_graph():
     graph.add_edge("scrape", "synthesize")
     graph.add_edge("synthesize", END)
 
-    return graph.compile()
+    return graph.compile(checkpointer=checkpointer)
 
 
 # ---------------------------------------------------------------------------

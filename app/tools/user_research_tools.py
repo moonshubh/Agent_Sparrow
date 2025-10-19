@@ -17,7 +17,7 @@ from app.core.user_context import get_current_user_context
 from tenacity import (
     retry,
     stop_after_attempt,
-    wait_exponential,
+    wait_random_exponential,
     retry_if_exception_type,
 )
 
@@ -136,7 +136,7 @@ class UserTavilySearchTool:
     @retry(
         reraise=True,
         stop=stop_after_attempt(3),
-        wait=wait_exponential(multiplier=1, min=1, max=10),
+        wait=wait_random_exponential(multiplier=1, max=10),
         retry=retry_if_exception_type(Exception),
     )
     async def search(self, query: str, max_results: int = 10, profile: Optional[str] = None) -> Dict[str, Any]:

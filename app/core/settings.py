@@ -187,6 +187,10 @@ class Settings(BaseSettings):
     gemini_flash_rpd_limit: int = Field(default=1000, alias="GEMINI_FLASH_RPD_LIMIT")
     gemini_pro_rpm_limit: int = Field(default=5, alias="GEMINI_PRO_RPM_LIMIT")
     gemini_pro_rpd_limit: int = Field(default=100, alias="GEMINI_PRO_RPD_LIMIT")
+
+    # Application-level usage budgets
+    primary_agent_daily_budget: int = Field(default=500, alias="PRIMARY_AGENT_DAILY_BUDGET")
+    router_daily_budget: int = Field(default=300, alias="ROUTER_DAILY_BUDGET")
     
     # Gemini Embeddings Configuration
     gemini_embed_model: str = Field(default="models/gemini-embedding-001", alias="GEMINI_EMBED_MODEL")

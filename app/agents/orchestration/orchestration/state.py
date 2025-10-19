@@ -31,6 +31,8 @@ class GraphState(BaseModel):
     qa_retry_count: int = 0
     # Global knowledge adapter context
     global_knowledge_context: Optional[Dict[str, Any]] = None
+    # Supervisor decisions captured during human escalations
+    escalation_review: Optional[Dict[str, Any]] = None
 
     # ------------------------------------------------------------------
     # Dict-like access helpers (compatibility with legacy nodes)

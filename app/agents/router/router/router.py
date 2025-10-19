@@ -13,6 +13,7 @@ from app.core.logging_config import get_logger
 from app.core.rate_limiting.agent_wrapper import get_rate_limiter
 from app.core.settings import settings
 from app.providers.adapters import load_model
+from app.core.rate_limiting.budget_limiter import enforce_budget
 
 if TYPE_CHECKING:
     from app.agents.orchestration.orchestration.state import GraphState
@@ -112,6 +113,16 @@ async def query_router(state: 'GraphState' | dict) -> Union[dict, str]:
         # Resolve user ID from context or settings fallback
         user_id = get_current_user_id() or settings.development_user_id
         span.set_attribute("router.user_id_fallback", bool(user_id == settings.development_user_id))
+
+        if not await enforce_budget(
+            "router",
+            user_id,
+            limit=settings.router_daily_budget,
+        ):
+            bound_logger.warning("router_budget_exhausted", user_id=user_id)
+            span.set_status(Status(StatusCode.ERROR, "router_budget_exhausted"))
+            span.set_attribute("router.destination", "primary_agent")
+            return {"destination": "primary_agent"}
 
         # Get user-specific Gemini API key, fallback to env var
         from app.api_keys.supabase_service import get_api_key_service

@@ -4,6 +4,7 @@ from typing import Dict, Any, Optional
 
 from opentelemetry import trace
 from opentelemetry.trace import Status, StatusCode
+from langgraph.checkpoint.memory import MemorySaver
 
 from app.agents.orchestration.orchestration.state import GraphState
 from app.agents.orchestration.orchestration.store_adapter import (
@@ -21,8 +22,10 @@ logger = get_logger(__name__)
 cache_layer = RedisCache()
 tracer = trace.get_tracer(__name__)
 
-# Instantiate the research agent graph
-research_agent_graph = get_research_graph()
+# Instantiate the research agent graph with a MemorySaver fallback by default.
+_default_research_checkpointer = MemorySaver()
+_current_research_checkpointer = _default_research_checkpointer
+research_agent_graph = get_research_graph(checkpointer=_default_research_checkpointer)
 
 # ---------------------------------------------------------------------------
 # Cache key generation helper
@@ -251,3 +254,23 @@ def should_continue(state: GraphState):
     if not last_message.tool_calls:
         return "end"
     return "continue"
+def configure_research_agent_graph(checkpointer: Optional[object]) -> None:
+    """
+    Recompile the research subgraph with the supplied checkpointer.
+
+    Args:
+        checkpointer: Shared checkpointer from the primary orchestration graph.
+            If None, falls back to the module-level MemorySaver instance.
+    """
+    global research_agent_graph, _current_research_checkpointer
+
+    effective = checkpointer or _default_research_checkpointer
+    if _current_research_checkpointer is effective:
+        return
+
+    research_agent_graph = get_research_graph(checkpointer=effective)
+    logger.info(
+        "research_graph_checkpointer_configured",
+        checkpointer_type=type(effective).__name__,
+    )
+    _current_research_checkpointer = effective

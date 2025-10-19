@@ -14,6 +14,7 @@ class ChatStreamEvent(BaseModel):
         "text-start",
         "text-delta",
         "text-end",
+        "assistant-structured",
         "data-followups",
         "data-thinking",
         "data-tool-result",
@@ -32,8 +33,8 @@ class ChatStreamEvent(BaseModel):
     errorText: Optional[str] = None
     stream_id: Optional[str] = None
     session_id: Optional[str] = None
+    step: Optional[str] = None
     transient: Optional[bool] = None
     trace_id: Optional[str] = None
 
     model_config = ConfigDict(extra="allow", populate_by_name=True)
-

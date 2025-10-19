@@ -11,7 +11,13 @@ from app.agents.primary.primary_agent.tools import mailbird_kb_search
 from app.agents.primary.primary_agent.tools import tavily_web_search
 from app.agents.router.router import query_router
 from app.agents.log_analysis.log_analysis_agent.agent import run_log_analysis_agent
-from .nodes import pre_process, post_process, run_researcher, should_continue
+from .nodes import (
+    configure_research_agent_graph,
+    pre_process,
+    post_process,
+    run_researcher,
+    should_continue,
+)
 from app.core.settings import settings
 from app.core.logging_config import get_logger
 
@@ -169,6 +175,7 @@ workflow.add_edge("post_process", END)
 
 # Compile the graph with persistence
 checkpointer = _build_checkpointer()
+configure_research_agent_graph(checkpointer)
 app = workflow.compile(checkpointer=checkpointer)
 _export_graph_visualization(app)
 logger.info("graph_compile_complete")
