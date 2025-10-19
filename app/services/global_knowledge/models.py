@@ -308,5 +308,6 @@ class PersistenceResult(BaseModel):
     supabase_row: Optional[Dict[str, Any]] = None
     enhanced: EnhancedPayload
     store_written: bool = False
+    memory_written: bool = False
 
     model_config = ConfigDict(arbitrary_types_allowed=True)

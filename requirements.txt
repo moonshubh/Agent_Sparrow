@@ -21,6 +21,7 @@ langgraph==0.6.7
 # Google AI SDK (explicitly required for FeedMe modules)
 # Version 0.8.3 is compatible with langchain-google-genai 2.0.8
 google-generativeai==0.8.3
+google-genai==1.0.0
 
 # OpenAI SDK
 openai==1.58.1
@@ -40,6 +41,8 @@ psycopg2-binary==2.9.10
 sqlalchemy==2.0.43
 pgvector==0.4.1
 asyncpg==0.29.0
+mem0ai==0.1.118
+vecs==0.4.2
 
 # External Tools
 tavily-python==0.3.0

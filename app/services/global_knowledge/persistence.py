@@ -9,6 +9,7 @@ from app.core.settings import settings
 from app.db.embedding_config import assert_dim
 from app.db import embedding_utils
 from app.db.supabase_client import SupabaseClient
+from app.memory.service import memory_service
 
 from .enhancer import FeedbackEnhancer
 from .models import (
@@ -23,6 +24,33 @@ from .store import upsert_enhanced_entry
 from .observability import attach_submission_id, publish_stage, start_trace
 
 logger = logging.getLogger(__name__)
+
+
+def _render_enhanced_for_memory(enhanced: EnhancedPayload) -> str:
+    """Create a condensed string suitable for long-term memory storage."""
+
+    lines = []
+    summary = (enhanced.summary or "").strip()
+    if summary:
+        lines.append(summary)
+
+    if enhanced.key_facts:
+        top_facts = "; ".join(fact.strip() for fact in enhanced.key_facts[:3] if fact.strip())
+        if top_facts:
+            lines.append(f"Key facts: {top_facts}")
+
+    pair = enhanced.normalized_pair or {}
+    incorrect = str(pair.get("incorrect") or "").strip()
+    corrected = str(pair.get("corrected") or "").strip()
+    if incorrect and corrected:
+        lines.append(f"Correction: '{incorrect}' → '{corrected}'")
+
+    if enhanced.tags:
+        tags = ", ".join(tag.strip() for tag in enhanced.tags[:5] if tag.strip())
+        if tags:
+            lines.append(f"Tags: {tags}")
+
+    return "\n".join(lines).strip()
 
 
 async def persist_feedback(
@@ -234,20 +262,58 @@ async def _persist_submission(
             fallback_used=False,
         )
 
+    memory_written = False
+    memory_error: Optional[str] = None
+    if supabase_row:
+        memory_payload = _render_enhanced_for_memory(enhanced)
+        if memory_payload:
+            memory_metadata = {
+                "kind": enhanced.kind,
+                "source_id": supabase_row.get("id"),
+                "tags": enhanced.tags[:5],
+                "store_written": store_written,
+                "user_id": submission.user_id,
+            }
+            try:
+                memory_result = await memory_service.add_global_knowledge_entry(
+                    content=memory_payload,
+                    metadata=memory_metadata,
+                )
+                if isinstance(memory_result, dict):
+                    if memory_result.get("results"):
+                        memory_written = True
+                    if memory_result.get("unchanged"):
+                        memory_written = True
+            except Exception as exc:  # pragma: no cover
+                memory_error = str(exc)
+                logger.debug("mem0_global_write_failed", error=memory_error)
+
+    publish_stage(
+        timeline_id,
+        stage="memory_upserted",
+        status="complete" if memory_written else ("error" if memory_error else "skipped"),
+        kind=submission.kind,
+        user_id=submission.user_id,
+        memory_written=memory_written,
+        metadata={"error": memory_error} if memory_error else {},
+    )
+
     publish_stage(
         timeline_id,
         stage="completed",
         status="complete" if supabase_row else "error",
         kind=submission.kind,
         user_id=submission.user_id,
-        metadata={"store_written": store_written},
+        metadata={"store_written": store_written, "memory_written": memory_written},
         store_written=store_written,
+        memory_written=memory_written,
     )
 
     return PersistenceResult(
         supabase_row=supabase_row,
         enhanced=enhanced,
         store_written=store_written,
+        memory_written=memory_written,
     )
 
 

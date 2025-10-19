@@ -4,7 +4,7 @@ import os
 import logging
 from functools import lru_cache
 from pathlib import Path
-from typing import Optional, List
+from typing import Optional, List, Dict
 
 from dotenv import load_dotenv
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -158,7 +158,20 @@ class Settings(BaseSettings):
     supabase_anon_key: Optional[str] = Field(default=None, alias="SUPABASE_ANON_KEY")
     supabase_service_key: Optional[str] = Field(default=None, alias="SUPABASE_SERVICE_KEY")
     supabase_jwt_secret: Optional[str] = Field(default=None, alias="SUPABASE_JWT_SECRET")
-    
+    supabase_db_conn: Optional[str] = Field(default=None, alias="SUPABASE_DB_CONN")
+
+    # Agent Memory Configuration
+    enable_agent_memory: bool = Field(default=False, alias="ENABLE_AGENT_MEMORY")
+    memory_backend: str = Field(default="supabase", alias="MEMORY_BACKEND")
+    memory_collection_primary: str = Field(default="mem_primary", alias="MEMORY_COLLECTION_PRIMARY")
+    memory_collection_logs: str = Field(default="mem_logs", alias="MEMORY_COLLECTION_LOGS")
+    memory_top_k: int = Field(default=5, alias="MEMORY_TOP_K")
+    memory_char_budget: int = Field(default=2000, alias="MEMORY_CHAR_BUDGET")
+    memory_ttl_sec: int = Field(default=180, alias="MEMORY_TTL_SEC")
+    memory_embed_provider: str = Field(default="gemini", alias="MEMORY_EMBED_PROVIDER")
+    memory_embed_model: str = Field(default="models/gemini-embedding-001", alias="MEMORY_EMBED_MODEL")
+    memory_embed_dims: int = Field(default=3072, alias="MEMORY_EMBED_DIMS")
+
     # FeedMe AI Configuration
     feedme_model_name: str = Field(default="gemini-2.5-flash-lite-preview-09-2025", alias="FEEDME_MODEL_NAME")
     feedme_ai_pdf_enabled: bool = Field(default=True, alias="FEEDME_AI_PDF_ENABLED")
@@ -343,6 +356,34 @@ class Settings(BaseSettings):
             raise ValueError("global_knowledge_max_chars must be greater than zero")
         return value
 
+    @field_validator("memory_top_k")
+    @classmethod
+    def validate_memory_top_k(cls, value: int) -> int:
+        if value <= 0:
+            raise ValueError("memory_top_k must be greater than zero")
+        return value
+
+    @field_validator("memory_char_budget")
+    @classmethod
+    def validate_memory_char_budget(cls, value: int) -> int:
+        if value <= 0:
+            raise ValueError("memory_char_budget must be greater than zero")
+        return value
+
+    @field_validator("memory_ttl_sec")
+    @classmethod
+    def validate_memory_ttl_sec(cls, value: int) -> int:
+        if value <= 0:
+            raise ValueError("memory_ttl_sec must be greater than zero")
+        return value
+
+    @field_validator("memory_embed_dims")
+    @classmethod
+    def validate_memory_embed_dims(cls, value: int) -> int:
+        if value <= 0:
+            raise ValueError("memory_embed_dims must be greater than zero")
+        return value
+
     @field_validator('zendesk_poll_interval_sec')
     @classmethod
     def validate_zendesk_poll_interval(cls, v: int) -> int:
@@ -462,6 +503,29 @@ class Settings(BaseSettings):
         if not (self.enable_store_adapter or self.get_retrieval_primary() == "rpc"):
             return False
         return True
+
+    def memory_backend_is_supabase(self) -> bool:
+        """Return True when the memory backend is Supabase."""
+        return str(self.memory_backend or "").strip().lower() == "supabase"
+
+    def should_enable_agent_memory(self) -> bool:
+        """Evaluate if the agent memory layer should be enabled."""
+        if not self.enable_agent_memory:
+            return False
+        if not self.memory_backend_is_supabase():
+            return False
+        return bool(self.supabase_db_conn)
+
+    def get_memory_connection_string(self) -> Optional[str]:
+        """Return the connection string for the memory backend, if configured."""
+        return self.supabase_db_conn
+
+    def get_memory_collections(self) -> Dict[str, str]:
+        """Return configured memory collections."""
+        return {
+            "primary": self.memory_collection_primary,
+            "logs": self.memory_collection_logs,
+        }
 
 
 @lru_cache()
