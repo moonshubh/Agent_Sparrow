@@ -1,18 +1,22 @@
 "use client"
 
-import React, { useEffect, useState } from "react"
+import React, { useEffect, useState, useCallback } from "react"
 import { useTheme } from "next-themes"
-import { Label } from "@/shared/ui/label"
-import { RadioGroup, RadioGroupItem } from "@/shared/ui/radio-group"
 import { Separator } from "@/shared/ui/separator"
+import { Switch } from "@/shared/ui/switch"
+import { Label } from "@/shared/ui/label"
 
 export function GeneralPanel() {
   const { theme, setTheme, resolvedTheme } = useTheme()
   const [mounted, setMounted] = useState(false)
   useEffect(() => setMounted(true), [])
 
-  // Keep a stable selected value once mounted
   const selected = mounted ? (theme === "system" ? resolvedTheme : theme) : "light"
+
+  const isDark = selected === "dark"
+  const onToggleDark = useCallback((next: boolean) => {
+    setTheme(next ? "dark" : "light")
+  }, [setTheme])
 
   return (
     <div className="space-y-6">
@@ -23,31 +27,20 @@ export function GeneralPanel() {
 
       <Separator />
 
-      <div className="grid gap-3">
-        <div className="flex items-center justify-between">
+      <div className="rounded-md border p-4 space-y-4">
+        <h3 className="text-sm font-medium">Appearance</h3>
+        <div className="flex items-center justify-between gap-4">
           <div>
-            <div className="text-sm font-medium">Theme</div>
-            <div className="text-xs text-muted-foreground">Choose Light or Dark.</div>
+            <div className="text-sm font-medium">Dark Mode</div>
+            <div className="text-xs text-muted-foreground">Toggle application theme</div>
           </div>
-          <div>
-            <RadioGroup
-              value={selected === "dark" ? "dark" : "light"}
-              onValueChange={(v) => setTheme(v)}
-              className="flex items-center gap-4"
-            >
-              <div className="flex items-center space-x-2">
-                <RadioGroupItem id="theme-light" value="light" />
-                <Label htmlFor="theme-light">Light</Label>
-              </div>
-              <div className="flex items-center space-x-2">
-                <RadioGroupItem id="theme-dark" value="dark" />
-                <Label htmlFor="theme-dark">Dark</Label>
-              </div>
-            </RadioGroup>
-          </div>
+          <Switch
+            checked={isDark}
+            onCheckedChange={(v) => onToggleDark(Boolean(v))}
+            aria-label="Toggle dark mode"
+          />
         </div>
       </div>
     </div>
   )
 }
-

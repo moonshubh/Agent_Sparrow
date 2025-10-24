@@ -3,7 +3,38 @@
  * Automatically generates and stores a local JWT token for development
  */
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
+const defaultApiBaseUrl = 'http://localhost:8000'
+
+const resolveApiBaseUrl = () => {
+  const envUrl = process.env.NEXT_PUBLIC_API_URL
+  if (envUrl && envUrl.trim().length > 0) {
+    return envUrl
+  }
+
+  if (typeof window !== 'undefined') {
+    try {
+      const { protocol, hostname, port, origin } = window.location
+      const normalizedPort = port || (protocol === 'https:' ? '443' : '80')
+      const isLocalhost = hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '0.0.0.0'
+
+      if (!isLocalhost) {
+        // Deployed environment → assume same-origin API
+        return origin
+      }
+
+      if (normalizedPort === '8000') {
+        return origin
+      }
+
+      // Local dev frontend (usually 3000/3001) → use backend default
+      return defaultApiBaseUrl
+    } catch {
+      return defaultApiBaseUrl
+    }
+  }
+
+  return defaultApiBaseUrl
+}
 
 interface LocalAuthResponse {
   access_token: string
@@ -24,6 +55,7 @@ interface LocalAuthResponse {
  * This will automatically create a local JWT token if in local auth bypass mode
  */
 export async function initializeLocalAuth(): Promise<boolean> {
+  const API_BASE_URL = resolveApiBaseUrl()
   // Only run in local auth bypass mode
   if (process.env.NEXT_PUBLIC_LOCAL_AUTH_BYPASS !== 'true') {
     return false
@@ -65,6 +97,8 @@ export async function initializeLocalAuth(): Promise<boolean> {
       headers: {
         'Content-Type': 'application/json',
       },
+      mode: 'cors',
+      credentials: 'include',
       body: JSON.stringify({
         email: 'dev@localhost.com',
         password: 'dev',

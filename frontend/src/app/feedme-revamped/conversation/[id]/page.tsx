@@ -4,6 +4,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import { ArrowLeft, Loader2, AlertCircle, RefreshCcw, CheckCircle2, Clock, Pencil } from 'lucide-react'
 import { Button } from '@/shared/ui/button'
+import { Input } from '@/shared/ui/input'
 import UnifiedTextCanvas from '@/features/feedme/components/feedme-revamped/UnifiedTextCanvas'
 import ConversationSidebar from '@/features/feedme/components/feedme-revamped/ConversationSidebar'
 import { ErrorBoundary } from '@/features/feedme/components/feedme-revamped/ErrorBoundary'
@@ -12,7 +13,7 @@ import { feedMeApi } from '@/features/feedme/services/feedme-api'
 import { useUIStore } from '@/state/stores/ui-store'
 import { cn } from '@/shared/lib/utils'
 import { formatDistanceToNow } from 'date-fns'
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/shared/ui/tooltip'
+// Removed tooltip import as edit control moved to header actions
 import type { ConversationDetail, PlatformTag } from '@/shared/types/feedme'
 
 export default function FeedMeConversationPage() {
@@ -27,6 +28,9 @@ export default function FeedMeConversationPage() {
   const [savingFolder, setSavingFolder] = useState(false)
   const [savingNote, setSavingNote] = useState(false)
   const [markingReady, setMarkingReady] = useState(false)
+  const [isEditingTitle, setIsEditingTitle] = useState(false)
+  const [titleDraft, setTitleDraft] = useState('')
+  const [isRenamingTitle, setIsRenamingTitle] = useState(false)
 
   // Prefer primary ai_note; gracefully fall back to legacy ai_comment when absent
   const aiNote = useMemo(() => conversation?.metadata?.ai_note ?? conversation?.metadata?.ai_comment, [conversation?.metadata])
@@ -126,6 +130,40 @@ export default function FeedMeConversationPage() {
       setSavingNote(false)
     }
   }, [conversation, showToast])
+
+  const startTitleEdit = useCallback(() => {
+    if (!conversation) return
+    setIsEditingTitle(true)
+    setTitleDraft(conversation.title || `Conversation ${conversation.id}`)
+  }, [conversation])
+
+  const cancelTitleEdit = useCallback(() => {
+    setIsEditingTitle(false)
+    setTitleDraft('')
+    setIsRenamingTitle(false)
+  }, [])
+
+  const commitTitleEdit = useCallback(async () => {
+    if (!conversation) return
+    const trimmed = titleDraft.trim()
+    if (!trimmed || trimmed === conversation.title) {
+      cancelTitleEdit()
+      return
+    }
+    try {
+      setIsRenamingTitle(true)
+      await feedMeApi.updateConversation(conversation.id, { title: trimmed })
+      setConversation(prev => prev ? { ...prev, title: trimmed } : prev)
+      // Broadcast rename so open lists can update immediately
+      document.dispatchEvent(new CustomEvent('feedme:conversation-renamed', { detail: { id: conversation.id, title: trimmed } }))
+      showToast({ type: 'success', title: 'Title updated', message: 'Conversation name saved.', duration: 3000 })
+    } catch (error) {
+      console.error('Failed to rename conversation', error)
+      showToast({ type: 'error', title: 'Rename failed', message: 'Please try again.', duration: 4000 })
+    } finally {
+      cancelTitleEdit()
+    }
+  }, [conversation, titleDraft, cancelTitleEdit, showToast])
 
   const handleMarkReady = useCallback(async () => {
     if (!conversation) return
@@ -251,34 +289,51 @@ export default function FeedMeConversationPage() {
     <ErrorBoundary>
       <div className="flex h-screen flex-col bg-background">
         <header className="border-b border-border/60 bg-card">
-          <div className="mx-auto flex w-full max-w-6xl flex-col gap-4 px-6 py-6">
-          <div className="flex items-start justify-between gap-4">
-            <div className="space-y-3">
+          <div className="mx-auto flex w-full max-w-6xl flex-col gap-3 px-6 py-4">
+          <div className="flex items-start justify-between gap-3">
+            <div className="space-y-2">
               <div className="flex items-center gap-3">
                 <Button variant="ghost" size="sm" onClick={handleBack}>
                   <ArrowLeft className="mr-2 h-4 w-4" /> Back
                 </Button>
                 <div className="space-y-1">
-                  <h1 className="text-xl font-semibold leading-tight">{conversation.title || `Conversation ${conversation.id}`}</h1>
+                  {isEditingTitle ? (
+                    <Input
+                      value={titleDraft}
+                      onChange={(e) => setTitleDraft(e.target.value)}
+                      onBlur={() => { if (!isRenamingTitle) void commitTitleEdit() }}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') { e.preventDefault(); void commitTitleEdit() }
+                        if (e.key === 'Escape') { e.preventDefault(); cancelTitleEdit() }
+                      }}
+                      disabled={isRenamingTitle}
+                      autoFocus
+                      className="h-9 text-sm bg-background/70"
+                    />
+                  ) : (
+                    <h1
+                      className="text-lg font-semibold leading-tight"
+                      onDoubleClick={(e) => { e.stopPropagation(); startTitleEdit() }}
+                      title="Double-click to rename"
+                    >
+                      {conversation.title || `Conversation ${conversation.id}`}
+                    </h1>
+                  )}
                   <div className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
-                    <span className="flex items-center gap-1 text-emerald-600">
-                      {statusIcon}
-                      {conversation.processing_status === 'processing' && conversation.metadata?.processing_tracker?.message ? conversation.metadata.processing_tracker.message : null}
-                    </span>
-                    {conversation.processing_method && (
-                      <span className="inline-flex items-center gap-1 rounded-full bg-slate-200 px-2 py-0.5 text-xs font-medium text-slate-700">
-                        {conversation.processing_method === 'pdf_ai' ? 'AI Vision' : conversation.processing_method.replace(/_/g, ' ')}
-                      </span>
-                    )}
-                    <span className="text-muted-foreground">Conversation #{conversation.id}</span>
+                    <span className="flex items-center gap-1 text-emerald-600">{statusIcon}</span>
+                    <span className="text-muted-foreground">#{conversation.id}</span>
                     {uploadedRelative && <span>Uploaded {uploadedRelative}</span>}
                     {updatedRelative && <span>Updated {updatedRelative}</span>}
-                    {conversation.uploaded_by && <span>Uploader: {conversation.uploaded_by}</span>}
                   </div>
                 </div>
               </div>
             </div>
             <div className="flex items-center gap-2">
+              {canEdit && (
+                <Button variant="outline" size="sm" onClick={() => triggerEdit()}>
+                  <Pencil className="mr-2 h-4 w-4" /> Edit
+                </Button>
+              )}
               {canEdit && (
                 <PlatformTagSelector
                   conversationId={conversation.id}
@@ -298,26 +353,9 @@ export default function FeedMeConversationPage() {
         <div className="flex flex-1 flex-col overflow-hidden">
           <div className="mx-auto grid h-full w-full max-w-6xl grid-cols-1 gap-8 px-6 py-8 lg:grid-cols-[minmax(0,1fr)_340px] xl:grid-cols-[minmax(0,1fr)_360px]">
           <main className="relative min-h-0 overflow-hidden rounded-lg border border-border/60 bg-card shadow-sm">
-            {canEdit && (
-              <TooltipProvider>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <Button
-                      size="icon"
-                      variant="outline"
-                      className="absolute right-4 top-4 z-20 h-8 w-8 rounded-full"
-                      onClick={(event) => { event.stopPropagation(); triggerEdit() }}
-                    >
-                      <Pencil className="h-4 w-4" />
-                    </Button>
-                  </TooltipTrigger>
-                  <TooltipContent>Edit Canvas</TooltipContent>
-                </Tooltip>
-              </TooltipProvider>
-            )}
 
             <div className="h-full overflow-hidden">
-              {canEdit ? (
+            {canEdit ? (
                 <UnifiedTextCanvas
                   conversationId={conversation.id}
                   title={conversation.title}
@@ -333,7 +371,8 @@ export default function FeedMeConversationPage() {
                   onTextUpdate={handleTextUpdate}
                   readOnly={false}
                   showApprovalControls={false}
-                  fullPageMode
+                fullPageMode
+                showProcessingSummary={false}
                 />
               ) : (
                 <div className="flex h-full flex-col items-center justify-center space-y-3 text-center">

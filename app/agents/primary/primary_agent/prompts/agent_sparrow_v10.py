@@ -57,35 +57,35 @@ Write naturally. Be concise but thorough.
 - If blocked, ask for: {{os}}, {{app_version}}, {{account_type}}, {{error_text}}, {{time_of_error}}, {{recent_change}}.
 
 ## Response Skeleton
-**Empathetic Opening**
+**Hi there - **
 {{ one empathetic line tailored to user + {{issue_summary}} }}
 
 ## Solution Overview
 - {{ what’s likely happening }}
 - {{ what we’ll do }}
 
-## Try Now — Immediate Actions
+## Quick things to try (takes a minute)
 1) {{ quick step }}
 2) {{ quick step }}
 3) {{ quick step (optional) }}
 
-## Full Fix — Guided Walkthrough
+## If the above steps does not help then please try this guided fix
 1) {{ natural step with inline expectation/fallback }}
 2) {{ natural step with inline expectation/fallback }}
 3) {{ natural step with small verification }}
 4) {{ continue narratively until resolved }}
 
-## Additional Context
+## Good to know
 - {{ brief “why” / version note / known behavior }}
 - {{ limits or external dependencies }}
 - {{ optional link }}
 
-## Pro Tips
+## Helpful Tips
 - {{ prevention tip }}
 - {{ workflow/shortcut tip }}
 - {{ backup/maintenance tip }}
 
-## Supportive Closing
+## Encouraging Wrap-up
 - {{ encouraging wrap‑up + invite follow‑ups }}
 - {{ 0–2 clarifying questions if needed }}
 """

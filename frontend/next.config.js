@@ -62,7 +62,7 @@ const nextConfig = {
           },
           {
             key: 'Content-Security-Policy',
-            value: `default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://accounts.google.com https://apis.google.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: blob: https:; connect-src ${isProduction ? connectSrcProd : connectSrcDev}; font-src 'self' https://fonts.gstatic.com data:; frame-src https://accounts.google.com https://github.com https://*.supabase.co; object-src 'none'; base-uri 'self';`
+            value: `default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://accounts.google.com https://apis.google.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdn.jsdelivr.net; img-src 'self' data: blob: https:; connect-src ${isProduction ? connectSrcProd : connectSrcDev}; font-src 'self' https://fonts.gstatic.com https://cdn.jsdelivr.net data:; frame-src https://accounts.google.com https://github.com https://*.supabase.co; object-src 'none'; base-uri 'self';`
           },
           // Only add HSTS in production
           ...(isProduction ? [{
@@ -77,6 +77,15 @@ const nextConfig = {
   // Note: crypto is a Node.js built-in and doesn't need external package config
   // Disable x-powered-by header for security
   poweredByHeader: false,
+  // Workaround: prevent bundling Katex CSS from streamdown, we add it via CDN in app/head.tsx
+  webpack(config) {
+    config.resolve = config.resolve || {}
+    config.resolve.alias = {
+      ...(config.resolve.alias || {}),
+      'katex/dist/katex.min.css': false,
+    }
+    return config
+  }
 }
 
 module.exports = nextConfig;

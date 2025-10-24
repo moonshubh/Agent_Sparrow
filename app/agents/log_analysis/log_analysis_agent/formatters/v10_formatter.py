@@ -69,12 +69,18 @@ class SensitiveDataMasker:
         return payload
 
     def _standardize_tokens(self, text: str) -> str:
-        text = re.sub(r"\[REDACTED_EMAIL_[^\]]+\]", "***@***", text)
-        text = re.sub(r"\[REDACTED_IP_[^\]]+\]", "***.***.***.***", text)
-        text = re.sub(r"\[REDACTED_(?:API_KEY|TOKEN|PASSWORD|SECRET|JWT|CLOUD)[^\]]*\]", "[SECRET]", text)
-        text = re.sub(r"\[REDACTED_PATH_[^\]]+\]", "[user]/…", text)
-        text = re.sub(r"\[REDACTED_SUSPICIOUS_[^\]]+\]", "[SECRET]", text)
-        text = self.EMAIL_RE.sub("***@***", text)
+        def _mask_email(m: re.Match[str]) -> str:
+            raw = m.group(0)
+            try:
+                name, domain = raw.split("@", 1)
+            except ValueError:
+                return "***@***"
+            masked_name = (name[0] + "***") if name else "***"
+            return f"{masked_name}@{domain}"
+
+        # Preserve hashed redaction tags from sanitizer for correlation.
+        # Only mask raw patterns that slipped through.
+        text = self.EMAIL_RE.sub(_mask_email, text)
         text = self.IP_RE.sub("***.***.***.***", text)
         text = self.TOKEN_RE.sub("[SECRET]", text)
         return text
@@ -236,7 +242,7 @@ class LogV10Composer:
         )
 
         overview_section = (
-            "## Overview\n\n"
+            "## Solution Overview\n\n"
             f"* **Scope analyzed:** {scope_line}\n"
             f"* **Environment:** {environment_line}\n"
             f"* **Top issue(s):** {top_issues}\n"
@@ -251,24 +257,23 @@ class LogV10Composer:
             )
         findings_section = "\n".join(findings_lines)
 
-        quick_section_lines = ["## Try this now (safe actions)"]
+        quick_section_lines = ["## Quick things to try (takes a minute)"]
         for index, action in enumerate(quick_actions[:4], start=1):
             quick_section_lines.append(f"{index}. {action['label']}")
         quick_section = "\n".join(quick_section_lines)
 
-        fix_section_lines = ["## Full fix (step-by-step)"]
+        fix_section_lines = ["## If the above steps does not help then please try this guided fix"]
         for index, step in enumerate(fix_steps[:7], start=1):
             fix_section_lines.append(f"{index}. {step['step']}")
         fix_section = "\n".join(fix_section_lines)
 
-        why_section = "## Why this happens\n"
-        why_section += self._derive_root_cause_summary(analysis)
-
-        checks_section = "## Extra checks\n" + "\n".join(f"* {item}" for item in checks[:4])
-        tips_section = "## Tips\n" + "\n".join(f"* {item}" for item in tips[:4])
+        good_to_know_lines = [self._derive_root_cause_summary(analysis)]
+        good_to_know_lines.extend([f"* {item}" for item in checks[:4]])
+        good_to_know_section = "## Good to know\n" + "\n".join(good_to_know_lines)
+        tips_section = "## Helpful Tips\n" + "\n".join(f"* {item}" for item in tips[:4])
 
         closing = (
-            "## Supportive closing\n"
+            "## Encouraging Wrap-up\n"
             "You’ve got this. Let me know how things look after Step 2 and we’ll iterate together."
         )
 
@@ -278,8 +283,7 @@ class LogV10Composer:
             findings_section,
             quick_section,
             fix_section,
-            why_section,
-            checks_section,
+            good_to_know_section,
             tips_section,
             closing,
         ]

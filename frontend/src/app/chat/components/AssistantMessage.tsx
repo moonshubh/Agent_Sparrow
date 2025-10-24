@@ -8,13 +8,15 @@ import { Button } from '@/shared/ui/button'
 import { Badge } from '@/shared/ui/badge'
 import { TooltipProvider, Tooltip, TooltipTrigger, TooltipContent } from '@/shared/ui/tooltip'
 import { useToast } from '@/shared/ui/use-toast'
-import { Copy, Check, Sparkles, Layers, ClipboardList } from 'lucide-react'
+import { Copy, Check, Sparkles, Layers, ClipboardList, ThumbsUp, ThumbsDown } from 'lucide-react'
 import { Response } from '@/shared/components/Response'
+import { FollowUps } from './FollowUps'
 
 interface AssistantMessageProps {
   content: string
   metadata?: ChatMessageMetadata
   isLogAnalysis?: boolean
+  showActions?: boolean
 }
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -162,11 +164,11 @@ const toStructuredOutput = (value: unknown): LogStructuredOutput | undefined => 
             severity,
             title: typeof item.title === 'string' ? item.title : 'Finding',
             details: typeof item.details === 'string' ? item.details : '',
-            signature_id: typeof item.signature?.message_fingerprint === 'string'
-              ? item.signature.message_fingerprint
-              : typeof item.signature_id === 'string'
-                ? item.signature_id
-                : undefined,
+            signature_id: (isRecord((item as any).signature) && typeof (item as any).signature.message_fingerprint === 'string')
+              ? (item as any).signature.message_fingerprint
+              : (typeof (item as any).signature_id === 'string'
+                ? (item as any).signature_id
+                : undefined),
             occurrences: typeof item.occurrences === 'number' ? item.occurrences : null,
             evidence_refs: evidenceRefs,
           }
@@ -316,7 +318,7 @@ const buildStepsCopy = (structured: LogStructuredOutput): string => {
   return lines.join('\n')
 }
 
-export function AssistantMessage({ content, metadata, isLogAnalysis }: AssistantMessageProps) {
+export function AssistantMessage({ content, metadata, isLogAnalysis, showActions = true }: AssistantMessageProps) {
   const { toast } = useToast()
 
   const baseLogMetadata = toLogMetadata(metadata?.logMetadata)
@@ -368,8 +370,10 @@ export function AssistantMessage({ content, metadata, isLogAnalysis }: Assistant
 
   const [summaryCopied, setSummaryCopied] = React.useState(false)
   const [stepsCopied, setStepsCopied] = React.useState(false)
+  const [copiedAll, setCopiedAll] = React.useState(false)
   const summaryTimeoutRef = React.useRef<NodeJS.Timeout | null>(null)
   const stepsTimeoutRef = React.useRef<NodeJS.Timeout | null>(null)
+  const allTimeoutRef = React.useRef<NodeJS.Timeout | null>(null)
 
   React.useEffect(() => {
     return () => {
@@ -380,6 +384,10 @@ export function AssistantMessage({ content, metadata, isLogAnalysis }: Assistant
       if (stepsTimeoutRef.current) {
         clearTimeout(stepsTimeoutRef.current)
         stepsTimeoutRef.current = null
+      }
+      if (allTimeoutRef.current) {
+        clearTimeout(allTimeoutRef.current)
+        allTimeoutRef.current = null
       }
     }
   }, [])
@@ -591,6 +599,35 @@ export function AssistantMessage({ content, metadata, isLogAnalysis }: Assistant
         />
       )}
 
+      {(() => {
+        const memSnippet = (metadata as any)?.memory_snippet
+          || (metadata as any)?.memorySnippet
+          || (metadata as any)?.memory?.snippet
+        const topK = (metadata as any)?.top_k
+          ?? (metadata as any)?.memory?.top_k
+        const charBudget = (metadata as any)?.char_budget
+          ?? (metadata as any)?.memory?.char_budget
+        const source = (metadata as any)?.source
+          ?? (metadata as any)?.memory?.source
+        const latencyMs = (metadata as any)?.latency_ms
+          ?? (metadata as any)?.memory?.latency_ms
+        if (typeof memSnippet !== 'string' || memSnippet.trim().length === 0) return null
+        return (
+          <div className="rounded-lg border border-border/60 bg-muted/20 p-3 space-y-2">
+            <div className="flex items-center gap-2">
+              <h3 className="text-sm font-semibold">Memory context</h3>
+              <div className="ml-auto flex flex-wrap gap-2 text-xs text-muted-foreground">
+                {typeof topK === 'number' && <Badge variant="outline">top_k: {topK}</Badge>}
+                {typeof charBudget === 'number' && <Badge variant="outline">chars: {charBudget}</Badge>}
+                {typeof source === 'string' && source && <Badge variant="outline">{source}</Badge>}
+                {typeof latencyMs === 'number' && <Badge variant="outline">{Math.round(latencyMs)} ms</Badge>}
+              </div>
+            </div>
+            <div className="text-xs text-muted-foreground whitespace-pre-wrap">{memSnippet}</div>
+          </div>
+        )
+      })()}
+
       <Response
         className="mt-1 text-base leading-relaxed text-foreground"
         remarkPlugins={[remarkGfm]}
@@ -599,6 +636,108 @@ export function AssistantMessage({ content, metadata, isLogAnalysis }: Assistant
       >
         {sanitizedContent}
       </Response>
+
+      {/* Action bar: feedback + copy full response */}
+      {showActions && (
+      <TooltipProvider>
+        <div className="flex items-center justify-between pt-1">
+          <div className="flex items-center gap-1.5">
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  size="icon"
+                  variant="ghost"
+                  aria-label="Helpful"
+                  onClick={() => {
+                    try {
+                      const selected = typeof window !== 'undefined' ? (window.getSelection()?.toString() || '') : ''
+                      window.dispatchEvent(
+                        new CustomEvent('chat:open-feedback-dialog', {
+                          detail: {
+                            feedbackText: 'This answer was helpful',
+                            selectedText: selected,
+                            metadata: { agentType: derivedIsLog ? 'log_analysis' : 'primary' },
+                          },
+                        }),
+                      )
+                    } catch {}
+                  }}
+                >
+                  <ThumbsUp className="w-4 h-4" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>Helpful</TooltipContent>
+            </Tooltip>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  size="icon"
+                  variant="ghost"
+                  aria-label="Not helpful"
+                  onClick={() => {
+                    try {
+                      const selected = typeof window !== 'undefined' ? (window.getSelection()?.toString() || '') : ''
+                      window.dispatchEvent(
+                        new CustomEvent('chat:open-feedback-dialog', {
+                          detail: {
+                            feedbackText: 'This answer was not helpful because ...',
+                            selectedText: selected,
+                            metadata: { agentType: derivedIsLog ? 'log_analysis' : 'primary' },
+                          },
+                        }),
+                      )
+                    } catch {}
+                  }}
+                >
+                  <ThumbsDown className="w-4 h-4" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>Not helpful</TooltipContent>
+            </Tooltip>
+          </div>
+
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                size="icon"
+                variant="ghost"
+                aria-label="Copy response"
+                onClick={() =>
+                  copyText(sanitizedContent, 'Response copied to clipboard', () => {
+                    if (allTimeoutRef.current) clearTimeout(allTimeoutRef.current)
+                    setCopiedAll(true)
+                    allTimeoutRef.current = setTimeout(() => {
+                      setCopiedAll(false)
+                      allTimeoutRef.current = null
+                    }, 1600)
+                  })
+                }
+              >
+                {copiedAll ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Copy response</TooltipContent>
+          </Tooltip>
+        </div>
+      </TooltipProvider>
+      )}
+
+      {(() => {
+        const fromCamel = Array.isArray((metadata as any)?.followUpQuestions) ? (metadata as any).followUpQuestions : undefined
+        const fromSnake = Array.isArray((metadata as any)?.follow_up_questions) ? (metadata as any).follow_up_questions : undefined
+        const followUps = (fromCamel ?? fromSnake)?.filter((q: unknown): q is string => typeof q === 'string' && q.trim().length > 0)
+        if (!followUps || followUps.length === 0) return null
+        return (
+          <FollowUps
+            questions={followUps}
+            onClick={(q) => {
+              if (typeof window !== 'undefined') {
+                window.dispatchEvent(new CustomEvent('chat:followup', { detail: { question: q } }))
+              }
+            }}
+          />
+        )
+      })()}
     </div>
   )
 }

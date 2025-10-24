@@ -40,6 +40,15 @@ export interface ChatMessageMetadata {
   analysisResults?: Record<string, unknown>
   follow_up_questions?: string[]
   followUpQuestions?: string[]
+  // Memory fields (when server memory/global knowledge retrieval is enabled)
+  memory_snippet?: string
+  memory?: {
+    snippet?: string
+    top_k?: number
+    char_budget?: number
+    source?: string
+    latency_ms?: number
+  }
   [key: string]: unknown
 }
 

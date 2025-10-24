@@ -9,6 +9,7 @@ export interface ResponseProps extends Omit<StreamdownProps, "children"> {
   children?: React.ReactNode
   className?: string
   reduceMotion?: boolean
+  dripDelayMs?: number
 }
 
 const baseClasses =
@@ -55,6 +56,7 @@ export const Response = React.memo(function Response({
   children,
   className,
   reduceMotion,
+  dripDelayMs,
   components,
   remarkPlugins,
   rehypePlugins,
@@ -62,6 +64,12 @@ export const Response = React.memo(function Response({
 }: ResponseProps) {
   const prefersReduced = typeof window !== 'undefined' && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
   const isAnimating = React.useMemo(() => !(reduceMotion ?? prefersReduced), [reduceMotion, prefersReduced])
+  const dripDelay = React.useMemo(() => {
+    if (typeof dripDelayMs === 'number' && Number.isFinite(dripDelayMs) && dripDelayMs >= 0) {
+      return dripDelayMs
+    }
+    return 12
+  }, [dripDelayMs])
 
   const mergedComponents = React.useMemo<Components>(() => {
     if (!components) return defaultComponents
@@ -74,6 +82,7 @@ export const Response = React.memo(function Response({
   const streamdownProps: StreamdownProps = {
     ...rest,
     isAnimating,
+    dripDelayMs: dripDelay,
     components: mergedComponents,
     className: cn(baseClasses, 'prose-headings:mt-3 prose-headings:mb-2 prose-p:my-2 prose-pre:my-3 prose-blockquote:my-3', className),
   }

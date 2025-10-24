@@ -72,6 +72,14 @@ export default function AuthCallbackPage() {
 
         console.log('Auth callback - user validated:', session.user.email)
 
+        // Enforce allowed email domain client-side for better UX (server enforces too)
+        const allowedDomain = (process.env.NEXT_PUBLIC_ALLOWED_EMAIL_DOMAIN || 'getmailbird.com').trim().toLowerCase()
+        const userDomain = (session.user.email || '').split('@').pop()?.toLowerCase()
+        if (!userDomain || userDomain !== allowedDomain) {
+          await supabase.auth.signOut()
+          throw new Error('Your account is not authorized for this application')
+        }
+
         // Get the return URL from session storage
         const returnUrl = sessionStorage.getItem('authReturnUrl')
         sessionStorage.removeItem('authReturnUrl')

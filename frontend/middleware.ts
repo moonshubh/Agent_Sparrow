@@ -18,6 +18,24 @@ const authRoutes = ['/login']
 export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl
 
+  // Consolidate legacy /settings* routes into the header Settings dialog
+  // Map: /settings -> ?settings=general, /settings/api-keys -> ?settings=api-keys, /settings/zendesk -> ?settings=zendesk
+  if (pathname === '/settings' || pathname.startsWith('/settings/')) {
+    const map: Record<string, string> = {
+      '/settings': 'general',
+      '/settings/api-keys': 'api-keys',
+      '/settings/zendesk': 'zendesk',
+      '/settings/global-knowledge': 'global-knowledge',
+      '/settings/sessions': 'account',
+      '/settings/rate-limits': 'rate-limits',
+    }
+    const matched = Object.keys(map).find((p) => pathname === p)
+    const tab = matched ? map[matched] : 'general'
+    const url = new URL('/', request.url)
+    url.searchParams.set('settings', tab)
+    return NextResponse.redirect(url)
+  }
+
   // Skip middleware for static files and health check
   if (
     pathname.startsWith('/_next') ||

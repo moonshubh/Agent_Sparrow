@@ -24,7 +24,12 @@ from app.api.v1.middleware.log_analysis_middleware import (
     log_analysis_rate_limiter,
     log_analysis_session_manager,
 )
-from app.core.transport.sse import format_sse_comment, format_sse_data
+from app.core.transport.sse import (
+    DEFAULT_SSE_HEARTBEAT_COMMENT,
+    build_sse_prelude,
+    format_sse_comment,
+    format_sse_data,
+)
 from app.core.user_context import create_user_context_from_user_id, user_context_scope
 from langchain_core.messages import AIMessage, HumanMessage
 
@@ -95,19 +100,27 @@ async def unified_agent_stream_generator(request: UnifiedAgentRequest, user_id: 
     stream_closed = False
     stream_metrics: Dict[str, int] = {"events": 0, "text_chars": 0, "heartbeats": 0}
     started_at = datetime.utcnow()
-    heartbeat_interval = 15.0
+    from app.core.settings import get_settings
+
+    settings = get_settings()
+    heartbeat_interval = getattr(settings, "sse_heartbeat_interval", 5.0)
+    heartbeat_comment = getattr(settings, "sse_heartbeat_comment", DEFAULT_SSE_HEARTBEAT_COMMENT)
+    prelude_size = getattr(settings, "sse_prelude_size", 2048)
 
     def emit(payload: Dict[str, Any]) -> str:
         stream_metrics["events"] += 1
         return format_sse_data(payload)
 
-    def emit_comment(comment: str = "keep-alive") -> str:
+    def emit_comment(comment: str = heartbeat_comment) -> str:
         stream_metrics["events"] += 1
         stream_metrics["heartbeats"] += 1
         return format_sse_comment(comment)
 
     try:
-        yield emit_comment()
+        prelude = build_sse_prelude(prelude_size)
+        stream_metrics["events"] += 1
+        stream_metrics["heartbeats"] += 1
+        yield prelude if prelude else format_sse_comment(heartbeat_comment)
         yield emit({"type": "step", "data": {"type": "Router", "description": "Analyzing your request…", "status": "in_progress"}})
         message_lower = request.message.lower()
         if request.agent_type:
@@ -166,6 +179,7 @@ async def unified_agent_stream_generator(request: UnifiedAgentRequest, user_id: 
                         try:
                             yield emit({'type': 'step', 'data': {'type': 'Starting Analysis', 'description': 'Initializing log analysis...', 'status': 'in_progress'}})
                             yield emit({'type': 'step', 'data': {'type': 'Parsing', 'description': 'Parsing log entries...', 'status': 'in_progress'}})
+                            yield emit({'type': 'step', 'data': {'type': 'Analyzing', 'description': 'Analyzing patterns and issues...', 'status': 'in_progress'}})
                         except Exception:
                             pass
                         initial_state = {
@@ -178,10 +192,11 @@ async def unified_agent_stream_generator(request: UnifiedAgentRequest, user_id: 
                             "websearch_max_results": request.websearch_max_results,
                             "websearch_profile": request.websearch_profile,
                         }
-                        yield emit_comment("analyzing")
+                        yield emit_comment(heartbeat_comment)
                         result = await run_log_analysis_agent(initial_state)
-                        yield emit_comment("analyzing")
+                        yield emit_comment(heartbeat_comment)
                         try:
+                            yield emit({'type': 'step', 'data': {'type': 'Parsing', 'description': 'Parsing log entries...', 'status': 'completed'}})
                             yield emit({'type': 'step', 'data': {'type': 'Analyzing', 'description': 'Analyzing patterns and issues...', 'status': 'completed'}})
                             yield emit({'type': 'step', 'data': {'type': 'Synthesizing', 'description': 'Generating final summary and recommendations...', 'status': 'in_progress'}})
                         except Exception:
@@ -256,16 +271,24 @@ async def unified_agent_stream_generator(request: UnifiedAgentRequest, user_id: 
                             pass
                         # Stream the content character by character
                         stream_id = f"assistant-{uuid.uuid4().hex}"
-                        yield emit({
-                            "type": "message-metadata",
-                            "messageMetadata": {
-                                "analysisResults": analysis_results,
-                                "logMetadata": analysis_results.get("ingestion_metadata"),
-                            },
-                            "agent_type": "log_analysis",
-                            "trace_id": request.trace_id,
-                            "session_id": session_id,
-                        })
+                        try:
+                            light_log_meta = None
+                            try:
+                                if isinstance(analysis_results, dict):
+                                    light_log_meta = analysis_results.get("ingestion_metadata") or analysis_results.get("system_metadata")
+                            except Exception:
+                                light_log_meta = None
+                            yield emit({
+                                "type": "message-metadata",
+                                "messageMetadata": {
+                                    "logMetadata": light_log_meta,
+                                },
+                                "agent_type": "log_analysis",
+                                "trace_id": request.trace_id,
+                                "session_id": session_id,
+                            })
+                        except Exception:
+                            pass
                         # If attachments are present (images), emit a timeline step for visibility
                         try:
                             if isinstance(request.attachments, list) and any(att.get('media_type','').startswith('image/') for att in request.attachments if isinstance(att, dict)):
@@ -276,6 +299,7 @@ async def unified_agent_stream_generator(request: UnifiedAgentRequest, user_id: 
                             content_md,
                             stream_id,
                             emit_start=True,
+                            chunk_size=64,
                             metrics=stream_metrics,
                         ):
                             yield chunk
@@ -286,6 +310,11 @@ async def unified_agent_stream_generator(request: UnifiedAgentRequest, user_id: 
                             metrics=stream_metrics,
                         ):
                             yield closing
+                        # Finalize the last in-progress timeline step for UI compaction
+                        try:
+                            yield emit({'type': 'data', 'data': {'type': 'finish-step'}, 'agent_type': 'log_analysis', 'trace_id': request.trace_id, 'session_id': session_id})
+                        except Exception:
+                            pass
                         yield emit({"type": "result", "data": {"analysis": analysis_results}, "agent_type": "log_analysis", "trace_id": request.trace_id, "session_id": session_id})
                     except Exception as json_error:
                         logger.error(f"JSON serialization error: {json_error}")
@@ -316,6 +345,7 @@ async def unified_agent_stream_generator(request: UnifiedAgentRequest, user_id: 
                 answer,
                 stream_id,
                 emit_start=True,
+                chunk_size=64,
                 metrics=stream_metrics,
             ):
                 yield chunk
@@ -330,10 +360,10 @@ async def unified_agent_stream_generator(request: UnifiedAgentRequest, user_id: 
         else:
             from app.core.settings import get_settings
             settings = get_settings()
-            user_id = get_user_id_for_dev_mode(settings)
-            if user_id != "anonymous":
+            resolved_user_id = user_id or get_user_id_for_dev_mode(settings)
+            if user_id is None and resolved_user_id != "anonymous":
                 logger.info("Using development user ID for testing")
-            user_context = await create_user_context_from_user_id(user_id)
+            user_context = await create_user_context_from_user_id(resolved_user_id)
             gemini_key = await user_context.get_gemini_api_key()
             if not gemini_key:
                 yield emit({"type": "error", "errorText": "🔑 **API Key Required**: To use the AI assistant, please add your Google Gemini API key in Settings.\n\n**How to configure:**\n1. Click the ⚙️ Settings button in the top-right corner\n2. Navigate to the 'API Keys' section\n3. Add your Google Gemini API key (starts with 'AIza')\n4. Get your free API key at: https://makersuite.google.com/app/apikey", "trace_id": request.trace_id})
@@ -388,7 +418,7 @@ async def unified_agent_stream_generator(request: UnifiedAgentRequest, user_id: 
                         except StopAsyncIteration:
                             break
                         except asyncio.TimeoutError:
-                            yield emit_comment("working")
+                            yield emit_comment(heartbeat_comment)
                             continue
 
                         if hasattr(chunk, 'content') and chunk.content is not None:
@@ -398,6 +428,7 @@ async def unified_agent_stream_generator(request: UnifiedAgentRequest, user_id: 
                                     cleaned_content,
                                     stream_id,
                                     emit_start=not text_started,
+                                    chunk_size=48,
                                     metrics=stream_metrics,
                                 ):
                                     yield char_chunk
@@ -464,9 +495,11 @@ if AUTH_AVAILABLE:
                 "Cache-Control": "no-cache, no-transform",
                 "Connection": "keep-alive",
                 "Content-Type": "text/event-stream; charset=utf-8",
+                "Content-Encoding": "identity",
                 "Pragma": "no-cache",
                 "Vary": "Authorization, Accept-Encoding",
                 "X-Accel-Buffering": "no",
+                "X-Content-Type-Options": "nosniff",
             },
         )
 else:

@@ -40,6 +40,7 @@ export interface GlobalKnowledgeObservabilityState {
   setQueueFilter: (next: Partial<{ kind: QueueKind; status: GlobalKnowledgeQueueStatus }>) => void
   promoteCorrection: (correctionId: number) => Promise<GlobalKnowledgeActionResponse>
   promoteFeedback: (feedbackId: number) => Promise<GlobalKnowledgeActionResponse>
+  removeQueueItem: (itemId: number, kind: 'feedback' | 'correction') => Promise<void>
 }
 
 const INITIAL_QUEUE_FILTER: GlobalKnowledgeObservabilityState['queueFilter'] = {
@@ -209,6 +210,19 @@ export const useGlobalKnowledgeObservability = (): GlobalKnowledgeObservabilityS
     void refreshQueue()
   }, [refreshQueue])
 
+  // Allow other parts of the app to force-refresh the queue (e.g., after submission)
+  useEffect(() => {
+    const onRefresh = () => { void refreshQueue() }
+    if (typeof window !== 'undefined') {
+      window.addEventListener('global-knowledge:queue-refresh', onRefresh)
+    }
+    return () => {
+      if (typeof window !== 'undefined') {
+        window.removeEventListener('global-knowledge:queue-refresh', onRefresh)
+      }
+    }
+  }, [refreshQueue])
+
   useEffect(() => {
     void refreshEvents()
   }, [refreshEvents])
@@ -256,6 +270,10 @@ export const useGlobalKnowledgeObservability = (): GlobalKnowledgeObservabilityS
     return response
   }, [])
 
+  const removeQueueItem = useCallback(async (itemId: number, kind: 'feedback' | 'correction') => {
+    setQueue(prev => prev.filter(item => item.id !== itemId || item.kind !== kind))
+  }, [])
+
   return {
     summary,
     queue,
@@ -275,6 +293,7 @@ export const useGlobalKnowledgeObservability = (): GlobalKnowledgeObservabilityS
     setQueueFilter,
     promoteCorrection,
     promoteFeedback,
+    removeQueueItem,
   }
 }
 

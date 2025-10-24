@@ -27,8 +27,6 @@
 
 /* FeedMe Navigation Polish */
 @import './feedme-navigation.css';
-/* Katex styles required by Streamdown (math blocks) */
-@import 'katex/dist/katex.min.css';
 
 /* Chat Layout Overrides for Centered Content */
 @layer components {

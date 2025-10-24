@@ -181,7 +181,7 @@ export function ChatHistorySidebar({ sessionId, onSelect }: Props) {
       <SidebarHeader className="px-3 py-3 border-b bg-[hsl(var(--brand-surface))]">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
-            <Image src="/agent-sparrow-logo.png" alt="Mailbird" width={22} height={22} className="rounded" />
+            <Image src="/Sparrow_logo.png" alt="Mailbird" width={24} height={24} className="rounded object-contain" />
             <span className="text-sm font-medium group-data-[collapsible=icon]:hidden">Mailbird</span>
           </div>
           {/* Top collapse icon removed by request */}

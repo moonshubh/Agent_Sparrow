@@ -1,7 +1,7 @@
 "use client"
 
-import React, { useRef } from 'react'
-import { Plus, Mic } from 'lucide-react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
+import { Plus } from 'lucide-react'
 import { VoiceButton } from './VoiceButton'
 import { SendIcon } from './SendIcon'
 
@@ -21,6 +21,8 @@ type Props = {
   // Web search pill state
   searchMode?: 'auto' | 'web'
   onChangeSearchMode?: (mode: 'auto' | 'web') => void
+  memoryEnabled?: boolean
+  onToggleMemory?: (enabled: boolean) => void
 }
 
 export function CommandBar({ 
@@ -38,13 +40,55 @@ export function CommandBar({
   onChangeModel,
   searchMode = 'auto',
   onChangeSearchMode,
+  memoryEnabled = true,
+  onToggleMemory,
 }: Props) {
   const fileRef = useRef<HTMLInputElement>(null)
+  const [showSlashMenu, setShowSlashMenu] = useState(false)
+  const [slashIndex, setSlashIndex] = useState(0)
+
+  const slashCommands = useMemo(
+    () => [
+      {
+        cmd: '/feedback',
+        title: 'Feedback',
+        description: 'Share corrections or improvements for global knowledge',
+      },
+      {
+        cmd: '/correct',
+        title: 'Correct',
+        description: 'Prefill selected text as incorrect and provide the corrected version',
+      },
+    ],
+    [],
+  )
+
+  const filtered = useMemo(() => {
+    const trimmed = (value || '').trimStart()
+    if (!trimmed.startsWith('/')) return []
+    const term = trimmed.slice(1).split(/\s+/)[0]?.toLowerCase() || ''
+    if (!term) return slashCommands
+    return slashCommands.filter((s) => s.cmd.includes(term))
+  }, [slashCommands, value])
+
+  useEffect(() => {
+    const active = !disabled && filtered.length > 0
+    setShowSlashMenu(active)
+    setSlashIndex(0)
+  }, [filtered.length, disabled])
   const submit = (e: React.FormEvent) => { 
     e.preventDefault()
     if (!disabled && (value.trim() || interimText?.trim())) {
       onSubmit()
     }
+  }
+  
+  const acceptSlash = (idx: number) => {
+    const item = filtered[idx]
+    if (!item) return
+    const next = item.cmd + ' '
+    onChange(next)
+    setShowSlashMenu(false)
   }
   
   return (
@@ -61,6 +105,21 @@ export function CommandBar({
               placeholder={placeholder || 'Ask anything...'}
               value={value}
               onChange={(e) => onChange(e.target.value)}
+              onKeyDown={(e) => {
+                if (!showSlashMenu) return
+                if (e.key === 'ArrowDown') {
+                  e.preventDefault()
+                  setSlashIndex((i) => (i + 1) % filtered.length)
+                } else if (e.key === 'ArrowUp') {
+                  e.preventDefault()
+                  setSlashIndex((i) => (i - 1 + filtered.length) % filtered.length)
+                } else if (e.key === 'Enter' || e.key === 'Tab') {
+                  e.preventDefault()
+                  acceptSlash(slashIndex)
+                } else if (e.key === 'Escape') {
+                  setShowSlashMenu(false)
+                }
+              }}
               disabled={disabled}
             />
             {!!interimText && (
@@ -103,6 +162,24 @@ export function CommandBar({
                 />
                 {searchMode === 'web' ? 'Web search' : 'Auto'}
               </button>
+              {process.env.NEXT_PUBLIC_ENABLE_MEMORY !== 'false' && (
+                <button
+                  type="button"
+                  aria-label="Use server memory"
+                  onClick={(e) => {
+                    e.preventDefault()
+                    onToggleMemory?.(!memoryEnabled)
+                  }}
+                  className="px-3 h-8 rounded-full border border-border/40 text-xs flex items-center gap-1 hover:bg-secondary/50 text-foreground/90 bg-background/60 backdrop-blur-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/70 focus-visible:ring-offset-2 focus-visible:ring-offset-background leading-none"
+                  title={memoryEnabled ? 'Server memory enabled' : 'Server memory disabled'}
+                >
+                  <span
+                    className="inline-block w-1.5 h-1.5 rounded-full"
+                    style={{ background: memoryEnabled ? 'hsl(var(--primary))' : 'hsl(var(--muted-foreground))' }}
+                  />
+                  {memoryEnabled ? 'Memory on' : 'Memory off'}
+                </button>
+              )}
             </div>
             {/* Right cluster */}
             <div className="pointer-events-auto flex items-center gap-2">
@@ -121,6 +198,40 @@ export function CommandBar({
             </div>
           </div>
         </div>
+
+        {/* Slash command suggestions */}
+        {showSlashMenu && (
+          <div
+            role="listbox"
+            aria-label="Slash commands"
+            className="absolute left-4 right-4 bottom-[76px] z-[60] overflow-hidden rounded-lg border border-border/50 bg-popover shadow-xl"
+          >
+            {filtered.map((item, idx) => (
+              <button
+                key={item.cmd}
+                role="option"
+                aria-selected={slashIndex === idx}
+                className={
+                  'flex w-full items-start gap-3 px-3 py-2 text-left text-sm hover:bg-muted/40 data-[selected=true]:bg-muted/50'
+                }
+                data-selected={slashIndex === idx}
+                onMouseEnter={() => setSlashIndex(idx)}
+                onClick={(e) => {
+                  e.preventDefault()
+                  acceptSlash(idx)
+                }}
+              >
+                <span className="inline-flex h-6 min-w-20 items-center rounded-md bg-muted/50 px-2 font-mono text-xs text-foreground/80">
+                  {item.cmd}
+                </span>
+                <span className="flex-1">
+                  <span className="block text-foreground/90 font-medium">{item.title}</span>
+                  <span className="block text-muted-foreground text-xs">{item.description}</span>
+                </span>
+              </button>
+            ))}
+          </div>
+        )}
 
         {/* Hidden file input */}
         <input
@@ -144,3 +255,4 @@ export function CommandBar({
     </form>
   )
 }
+

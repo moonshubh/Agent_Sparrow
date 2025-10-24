@@ -1,6 +1,8 @@
 import { redirect } from "next/navigation";
 import { buildAuthCookieHeader, verifyZendeskAdminAccess } from "@/services/security/zendesk-admin-auth";
 import { retryTicketAction } from "./actions";
+import { ZendeskStats } from "@/features/zendesk/components/ZendeskStats";
+import { FeatureToggles } from "./FeatureToggles";
 
 export const dynamic = "force-dynamic";
 
@@ -63,6 +65,25 @@ export default async function ZendeskSettingsPage() {
         <h1 className="text-xl font-semibold">Zendesk Integration (Admin)</h1>
         <span className="text-xs text-muted-foreground">Logged in as {auth.user?.email ?? "admin"}</span>
       </header>
+
+      {/* Stats summary */}
+      <ZendeskStats
+        health={{
+          enabled: Boolean(health?.enabled),
+          dry_run: Boolean(health?.dry_run),
+          usage: health?.usage ?? null,
+          daily: health?.daily ?? null,
+          queue: health?.queue ?? null,
+        }}
+      />
+
+      {/* Feature toggles */}
+      {health && (
+        <FeatureToggles
+          initialEnabled={Boolean(health?.enabled)}
+          initialDryRun={Boolean(health?.dry_run)}
+        />
+      )}
 
       <section className="rounded-md border p-4">
         <h2 className="font-medium">Status</h2>

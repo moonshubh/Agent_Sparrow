@@ -285,6 +285,8 @@ export default function UnassignedDialog({ isOpen, onClose }: Props) {
     try {
       await feedMeApi.updateConversation(conversation.id, { title: trimmed })
       setConversations(prev => prev.map(item => item.id === conversation.id ? { ...item, title: trimmed } : item))
+      // Broadcast rename so other views can update
+      document.dispatchEvent(new CustomEvent('feedme:conversation-renamed', { detail: { id: conversation.id, title: trimmed } }))
       showToast({ type: 'success', title: 'Title updated', message: 'Conversation name saved.', duration: 3000 })
     } catch (error) {
       console.error('Failed to rename conversation', error)
@@ -294,6 +296,17 @@ export default function UnassignedDialog({ isOpen, onClose }: Props) {
       resetEditing()
     }
   }, [editingId, titleDraft, originalTitle, resetEditing, showToast])
+
+  // Listen for external rename events to update list titles live
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent<{ id: number; title: string }>).detail
+      if (!detail) return
+      setConversations(prev => prev.map(c => c.id === detail.id ? { ...c, title: detail.title } : c))
+    }
+    document.addEventListener('feedme:conversation-renamed', handler)
+    return () => document.removeEventListener('feedme:conversation-renamed', handler)
+  }, [])
 
   const handleDeleteConversation = useCallback(async () => {
     if (!deleteTarget) return
@@ -442,15 +455,13 @@ export default function UnassignedDialog({ isOpen, onClose }: Props) {
                       <p className="mt-2 text-[11px] text-muted-foreground">{conv.status_message}</p>
                     )}
 
-                    <div className="mt-4 flex justify-end">
-                      <button
-                        className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-white/10 bg-background/80 text-muted-foreground shadow-sm opacity-0 transition-opacity duration-200 group-hover:opacity-100 hover:border-accent hover:text-accent-foreground"
-                        onClick={(event) => { event.stopPropagation(); handleConversationClick(conv.id) }}
-                        aria-label="Open conversation"
-                      >
-                        <Maximize2 className="h-3.5 w-3.5" />
-                      </button>
-                    </div>
+                    <button
+                      className="absolute right-3 bottom-3 inline-flex h-8 w-8 items-center justify-center rounded-full border border-white/10 bg-background/80 text-muted-foreground/90 opacity-0 backdrop-blur transition-opacity duration-200 group-hover:opacity-100 hover:border-accent hover:text-accent-foreground z-10 shadow-sm"
+                      onClick={(event) => { event.stopPropagation(); handleConversationClick(conv.id) }}
+                      aria-label="Open conversation"
+                    >
+                      <Maximize2 className="h-3.5 w-3.5" />
+                    </button>
                   </div>
                 </div>
               )})}

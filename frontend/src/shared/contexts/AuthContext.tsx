@@ -182,10 +182,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         sessionStorage.setItem('authReturnUrl', currentPath)
       }
       
+      const allowedDomain = (process.env.NEXT_PUBLIC_ALLOWED_EMAIL_DOMAIN || 'getmailbird.com').trim()
       const { error } = await supabase.auth.signInWithOAuth({
         provider,
         options: {
-          redirectTo: process.env.NEXT_PUBLIC_AUTH_REDIRECT_URL || `${window.location.origin}/auth/callback`
+          redirectTo: process.env.NEXT_PUBLIC_AUTH_REDIRECT_URL || `${window.location.origin}/auth/callback`,
+          // Hint Google to restrict account chooser to the workspace domain
+          // (backend still enforces domain for security)
+          queryParams: provider === 'google' ? { hd: allowedDomain, prompt: 'select_account' } : undefined
         }
       })
 

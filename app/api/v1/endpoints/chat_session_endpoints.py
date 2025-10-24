@@ -745,22 +745,29 @@ async def get_chat_session(
 async def update_chat_session(
     session_id: int,
     updates: ChatSessionUpdate,
-    current_user: TokenPayload = Depends(get_current_user)
+    request: Request,
+    response: Response,
+    current_user: Optional[TokenPayload] = Depends(get_optional_current_user)
 ):
     """Update a chat session"""
     try:
-        conn = get_db_connection()
-        if conn is not None:
-            try:
-                updated_session = update_chat_session_in_db(conn, session_id, current_user.sub, updates)
+        if current_user:
+            conn = get_db_connection()
+            if conn is not None:
+                try:
+                    updated_session = update_chat_session_in_db(conn, session_id, current_user.sub, updates)
+                finally:
+                    conn.close()
                 if not updated_session:
                     raise HTTPException(status_code=404, detail="Chat session not found")
                 return ChatSession(**updated_session)
-            finally:
-                conn.close()
 
-        # Fallback to in-memory store when DB is unavailable
-        session = _get_local_session(current_user.sub, session_id)
+            # Fallback for authenticated users when DB is unavailable
+            user_id = current_user.sub
+        else:
+            user_id = get_or_create_guest_user_id(request, response)
+
+        session = _get_local_session(user_id, session_id)
         if session is None:
             raise HTTPException(status_code=404, detail="Chat session not found")
 
@@ -772,7 +779,7 @@ async def update_chat_session(
             session['metadata'] = updates.metadata
 
         session['updated_at'] = datetime.utcnow()
-        _persist_local_session(current_user.sub, session)
+        _persist_local_session(user_id, session)
         return ChatSession(**session)
     except HTTPException:
         raise
@@ -784,15 +791,34 @@ async def update_chat_session(
 @router.delete("/chat-sessions/{session_id}", tags=["Chat Sessions"])
 async def delete_chat_session(
     session_id: int,
-    current_user: TokenPayload = Depends(get_current_user)
+    request: Request,
+    response: Response,
+    current_user: Optional[TokenPayload] = Depends(get_optional_current_user)
 ):
     """Soft delete a chat session (mark as inactive)"""
     try:
-        updates = ChatSessionUpdate(is_active=False)
-        updated_session = update_chat_session_in_db(session_id, current_user.sub, updates)
+        if current_user:
+            user_id = current_user.sub
+            conn = get_db_connection()
+            try:
+                updates = ChatSessionUpdate(is_active=False)
+                updated_session = update_chat_session_in_db(conn, session_id, user_id, updates)
+            finally:
+                if conn:
+                    conn.close()
+        else:
+            user_id = get_or_create_guest_user_id(request, response)
+            session = _get_local_session(user_id, session_id)
+            if session is None:
+                raise HTTPException(status_code=404, detail="Chat session not found")
+            session['is_active'] = False
+            session['updated_at'] = datetime.utcnow()
+            _persist_local_session(user_id, session)
+            updated_session = session
+
         if not updated_session:
             raise HTTPException(status_code=404, detail="Chat session not found")
-        
+
         return {"message": "Chat session deleted successfully", "session_id": session_id}
     except HTTPException:
         raise

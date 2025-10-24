@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import Script from "next/script";
 import { ThemeProvider } from "next-themes";
-import { cookies } from "next/headers";
+// no server-side cookies read here; keep layout minimal
 import "./globals.css";
 import { Toaster } from "@/shared/ui/sonner";
 import { AuthProvider } from "@/shared/contexts/AuthContext";
@@ -13,18 +13,13 @@ export const metadata: Metadata = {
   generator: 'MB-Sparrow',
 }
 
-export default async function RootLayout({
+export default function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode
 }>) {
-  // Read theme from cookies on server side for consistent SSR/CSR
-  const cookieStore = await cookies();
-  const themeCookie = cookieStore.get('theme');
-  const initialTheme = themeCookie?.value || 'dark'; // Default to dark per design direction
-
   return (
-    <html lang="en" data-theme={initialTheme} suppressHydrationWarning>
+    <html lang="en" suppressHydrationWarning>
       <body className="antialiased" suppressHydrationWarning>
         <Script 
           id="disable-grammarly" 
@@ -40,7 +35,7 @@ export default async function RootLayout({
         />
         <ThemeProvider
           attribute="class"
-          defaultTheme={initialTheme}
+          defaultTheme="dark"
           enableSystem
           disableTransitionOnChange
         >

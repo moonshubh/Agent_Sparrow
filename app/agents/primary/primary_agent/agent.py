@@ -631,7 +631,14 @@ async def run_primary_agent(state: PrimaryAgentState) -> AsyncIterator[AIMessage
                     except Exception:
                         pass
 
-            if follow_up_questions:
+            final_text = final_response.strip()
+            followup_confidence = getattr(reasoning_state, "overall_confidence", 0.0) if reasoning_state else 0.0
+            if (
+                follow_up_questions
+                and len(final_text) >= 200
+                and followup_confidence >= 0.6
+                and not final_text.endswith("?")
+            ):
                 metadata_to_send["followUpQuestions"] = follow_up_questions[:5]
                 metadata_to_send["followUpQuestionsUsed"] = 0
 
@@ -724,7 +731,9 @@ async def run_primary_agent(state: PrimaryAgentState) -> AsyncIterator[AIMessage
                 thinking_trace=metadata_to_send.get("thinking_trace"),
             )
 
-            # Attach structured payload to metadata for downstream consumers
+            preface_metadata = dict(metadata_to_send)
+            preface_metadata["structured"] = structured_payload.model_dump(exclude={"text"})
+
             metadata_to_send["structured"] = structured_payload.model_dump()
 
             if metadata_to_send:
@@ -732,13 +741,13 @@ async def run_primary_agent(state: PrimaryAgentState) -> AsyncIterator[AIMessage
                     content="",
                     role="assistant",
                     additional_kwargs={
-                        "metadata": metadata_to_send,
+                        "metadata": preface_metadata,
                         "metadata_stage": "reasoning_snapshot"
                     }
                 )
                 yield preface_metadata_chunk
 
-            chunk_size = 200
+            chunk_size = 140
             for i in range(0, len(final_response), chunk_size):
                 chunk_content = final_response[i:i+chunk_size]
                 yield AIMessageChunk(content=chunk_content, role="assistant")

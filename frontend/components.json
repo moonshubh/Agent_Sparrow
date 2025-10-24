@@ -9,8 +9,12 @@
     "baseColor": "zinc",
     "cssVariables": true
   },
+  "iconLibrary": "lucide",
   "aliases": {
     "components": "@/shared/ui",
     "utils": "@/shared/lib/utils"
+  },
+  "registries": {
+    "@aceternity": "https://ui.aceternity.com/registry/{name}.json"
   }
 }

@@ -3,6 +3,7 @@ import { DefaultChatTransport } from 'ai'
 import { resolve } from '@ai-sdk/provider-utils'
 import { EventSourceParserStream } from 'eventsource-parser/stream'
 
+import { apiClient } from '@/services/api/api-client'
 import { filterUIMessageStream } from '@/services/api/providers/filtering-transport'
 import { getApiBaseUrl } from '@/shared/lib/utils/environment'
 
@@ -327,23 +328,6 @@ const createUnifiedResponseStream = (
           // Map generic step/result events (Stage-2 for log analysis)
           const payloadType = typeof payload?.type === 'string' ? payload.type : undefined;
 
-          // Dev trace for SSE frames
-          if (process.env.NODE_ENV === 'development') {
-            try {
-              const preview = typeof payload?.delta === 'string' ? payload.delta.slice(0, 40) : ''
-              // eslint-disable-next-line no-console
-              console.info('[UnifiedStream]', payloadType ?? typeof payload, preview)
-            } catch {}
-          }
-
-          if (process.env.NODE_ENV === 'development') {
-            try {
-              const preview = typeof payload?.delta === 'string' ? payload.delta.slice(0, 40) : ''
-              // eslint-disable-next-line no-console
-              console.debug('[UnifiedStream]', payloadType ?? typeof payload, preview)
-            } catch {}
-          }
-
           if (payloadType && (payloadType === 'reasoning' || payloadType.startsWith('reasoning-'))) {
             const dataChunk = {
               type: `data-${payloadType}` as UIMessageChunk['type'],
@@ -351,6 +335,30 @@ const createUnifiedResponseStream = (
             } as UIMessageChunk
             controller.enqueue(dataChunk)
             return;
+          }
+
+          if (payloadType === 'assistant-structured') {
+            controller.enqueue({
+              type: 'data-assistant-structured' as UIMessageChunk['type'],
+              data: payload?.data ?? payload,
+            } as UIMessageChunk)
+            return
+          }
+
+          if (payloadType && payloadType.startsWith('interrupt-')) {
+            controller.enqueue({
+              type: (`data-${payloadType}`) as UIMessageChunk['type'],
+              data: payload?.data ?? payload,
+            } as UIMessageChunk)
+            return
+          }
+
+          if (payloadType && payloadType.startsWith('tool-')) {
+            controller.enqueue({
+              type: (`data-${payloadType}`) as UIMessageChunk['type'],
+              data: payload?.data ?? payload,
+            } as UIMessageChunk)
+            return
           }
 
           if (payloadType === 'step' && payload?.data) {
@@ -425,7 +433,9 @@ const createUnifiedResponseStream = (
           ) {
             const id = typeof payload?.id === 'string' ? payload.id : messageId
             if (payloadType === 'text-start') {
-              pendingStartId = id
+              activeId = id
+              pendingStartId = null
+              controller.enqueue({ type: 'text-start', id: activeId } as UIMessageChunk)
               return
             }
 
@@ -460,6 +470,10 @@ const createUnifiedResponseStream = (
             if (activeId) {
               controller.enqueue({ type: 'text-end', id: activeId } as UIMessageChunk)
               activeId = null
+            } else if (pendingStartId) {
+              controller.enqueue({ type: 'text-start', id: pendingStartId } as UIMessageChunk)
+              controller.enqueue({ type: 'text-end', id: pendingStartId } as UIMessageChunk)
+              pendingStartId = null
             }
             return
           }
@@ -491,9 +505,23 @@ const createUnifiedResponseStream = (
 
 class UnifiedAwareTransport<UI_MESSAGE extends UIMessage> extends DefaultChatTransport<UI_MESSAGE> {
   private useUnifiedStream = false
+  private fallbackPayload?: {
+    api: string
+    body: Record<string, unknown>
+    headers: Record<string, string>
+    isLogAnalysis: boolean
+  }
 
   setUseUnifiedStream(value: boolean) {
     this.useUnifiedStream = value
+  }
+
+  setFallbackPayload(payload: UnifiedAwareTransport<UI_MESSAGE>['fallbackPayload']) {
+    this.fallbackPayload = payload
+  }
+
+  private clearFallbackPayload() {
+    this.fallbackPayload = undefined
   }
 
   protected processResponseStream(
@@ -505,6 +533,90 @@ class UnifiedAwareTransport<UI_MESSAGE extends UIMessage> extends DefaultChatTra
 
     return filterUIMessageStream(super.processResponseStream(stream))
   }
+
+  // fetch override removed to match AI SDK transport; rely on default streaming
+
+  private async tryGetFallback(
+    payload: UnifiedAwareTransport<UI_MESSAGE>['fallbackPayload'],
+    originalError: Error,
+  ): Promise<Response> {
+    if (!payload) {
+      throw originalError
+    }
+
+    try {
+      const fallbackResponse = await this.openGetFallback(payload)
+      this.clearFallbackPayload()
+      return fallbackResponse
+    } catch (fallbackError) {
+      console.warn('[UnifiedChatTransport] SSE GET fallback failed', fallbackError)
+      throw originalError
+    }
+  }
+
+  private async openGetFallback(payload: NonNullable<UnifiedAwareTransport<UI_MESSAGE>['fallbackPayload']>) {
+    const encoder = new TextEncoder()
+    const headers = {
+      ...payload.headers,
+      Accept: 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      Pragma: 'no-cache',
+    }
+
+    const params = new URLSearchParams()
+    Object.entries(payload.body ?? {}).forEach(([key, value]) => {
+      if (value === undefined || value === null) return
+      if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+        params.set(key, String(value))
+      } else {
+        try {
+          params.set(key, JSON.stringify(value))
+        } catch {
+          params.set(key, String(value))
+        }
+      }
+    })
+    const endpoint = params.size > 0 ? `${payload.api}?${params.toString()}` : payload.api
+
+    let eventSource: Awaited<ReturnType<typeof apiClient.stream>> | null = null
+
+    const stream = new ReadableStream<Uint8Array>({
+      async start(controller) {
+        try {
+          eventSource = await apiClient.stream<unknown>(
+            endpoint,
+            undefined,
+            data => {
+              try {
+                const eventFrame = `data: ${JSON.stringify(data)}\n\n`
+                controller.enqueue(encoder.encode(eventFrame))
+              } catch (serializeError) {
+                console.warn('[UnifiedChatTransport] Failed to serialize fallback chunk', serializeError)
+              }
+            },
+            {
+              headers,
+              onError: error => controller.error(error),
+              onClose: () => {
+                controller.enqueue(encoder.encode('data: [DONE]\n\n'))
+                controller.close()
+              },
+            },
+          )
+        } catch (error) {
+          controller.error(error)
+        }
+      },
+      cancel() {
+        eventSource?.close()
+      },
+    })
+
+    return new Response(stream, {
+      status: 200,
+      headers: { 'Content-Type': 'text/event-stream' },
+    })
+  }
 }
 
 export function createBackendChatTransport({
@@ -515,11 +627,17 @@ export function createBackendChatTransport({
   endpoint,
 }: UnifiedTransportOptions) {
   const apiBaseUrl = getApiBaseUrl()
-  const chatEndpoint = endpoint ?? (apiBaseUrl ? `${apiBaseUrl}/v2/agent/chat/stream` : '/api/v1/v2/agent/chat/stream')
-  const unifiedEndpoint = apiBaseUrl ? `${apiBaseUrl}/agent/unified/stream` : '/api/v1/agent/unified/stream'
+  const defaultChatEndpoint = '/api/v1/v2/agent/chat/stream'
+  const defaultUnifiedEndpoint = '/api/v1/agent/unified/stream'
+  const chatEndpoint = endpoint ?? (apiBaseUrl ? `${apiBaseUrl}/v2/agent/chat/stream` : defaultChatEndpoint)
+  const unifiedEndpoint = apiBaseUrl ? `${apiBaseUrl}/agent/unified/stream` : defaultUnifiedEndpoint
 
   const headersResolvable: () => Promise<Record<string, string>> = async () => {
-    const headers: Record<string, string> = {}
+    const headers: Record<string, string> = {
+      Accept: 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      Pragma: 'no-cache',
+    }
     const token = (await getAuthToken?.()) ?? null
     if (token) {
       headers.Authorization = `Bearer ${token}`
@@ -580,28 +698,52 @@ export function createBackendChatTransport({
       // and the unified parser maps them into UIMessageChunk for the AI SDK.
       transport.setUseUnifiedStream(true)
 
+      const generatedTraceId = (() => {
+        try {
+          if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+            return crypto.randomUUID()
+          }
+        } catch (_) {}
+        return `trace-${Math.random().toString(36).slice(2)}`
+      })()
+
+      const requestBody = {
+        message: currentMessage,
+        messages: history,
+        provider: (resolvedBody?.provider as string | undefined) ?? provider,
+        model: (resolvedBody?.model as string | undefined) ?? model,
+        session_id: (resolvedBody?.session_id as string | undefined) ?? sessionId,
+        trace_id: (resolvedBody?.trace_id as string | undefined) ?? generatedTraceId,
+        ...(isLogAnalysis
+          ? {
+              agent_type: 'log_analysis',
+              log_content: attachedLogText,
+              log_metadata: logMetadata,
+            }
+          : {}),
+        ...(forceWebSearch ? { force_websearch: true } : {}),
+        ...(attachments && attachments.length > 0 ? { attachments } : {}),
+        ...(webSearchMaxResults ? { websearch_max_results: webSearchMaxResults } : {}),
+        ...(webSearchProfile ? { websearch_profile: webSearchProfile } : {}),
+        ...(dataPayload.useServerMemory ? { use_server_memory: true } : {}),
+      }
+
+      if (typeof window !== 'undefined' && process.env.NEXT_PUBLIC_SSE_GET_FALLBACK === 'true') {
+        // Fallback disabled: rely on default transport streaming to avoid overriding fetch
+      } else {
+        transport.setFallbackPayload(undefined)
+      }
+
       return {
         api: targetEndpoint,
         credentials,
-        headers: resolvedHeaders,
-        body: {
-          message: currentMessage,
-          messages: history,
-          provider: (resolvedBody?.provider as string | undefined) ?? provider,
-          model: (resolvedBody?.model as string | undefined) ?? model,
-          session_id: (resolvedBody?.session_id as string | undefined) ?? sessionId,
-          ...(isLogAnalysis ? {
-            agent_type: 'log_analysis',
-            log_content: attachedLogText,
-            log_metadata: logMetadata,
-            trace_id: (resolvedBody?.session_id as string | undefined) ?? sessionId,
-          } : {}),
-          ...(forceWebSearch ? { force_websearch: true } : {}),
-          ...(attachments && attachments.length > 0 ? { attachments } : {}),
-          ...(webSearchMaxResults ? { websearch_max_results: webSearchMaxResults } : {}),
-          ...(webSearchProfile ? { websearch_profile: webSearchProfile } : {}),
-          ...(dataPayload.useServerMemory ? { use_server_memory: true } : {}),
+        headers: {
+          Accept: 'text/event-stream',
+          'Cache-Control': 'no-cache',
+          Pragma: 'no-cache',
+          ...resolvedHeaders,
         },
+        body: requestBody,
       }
     },
   })

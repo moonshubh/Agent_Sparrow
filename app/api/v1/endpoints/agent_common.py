@@ -199,7 +199,7 @@ def get_user_id_for_dev_mode(settings) -> str:
 
 
 def _format_log_analysis_content(analysis: dict | Any, question: str | None) -> str:
-    """Build a cohesive markdown answer for log analysis results."""
+    """Build a cohesive markdown answer for log analysis results (v10-aligned)."""
     try:
         if not isinstance(analysis, dict):
             if hasattr(analysis, 'model_dump'):
@@ -214,16 +214,18 @@ def _format_log_analysis_content(analysis: dict | Any, question: str | None) -> 
         solutions = analysis.get("proposed_solutions") or analysis.get("solutions") or analysis.get("actions") or []
 
         parts: list[str] = []
+        # Empathetic opener
         if question:
             parts.append(
-                f"Thanks for sharing the log file. I reviewed it in the context of your question: \"{question}\". Here's what I found and how to fix it."
+                f"Thanks for sharing the log — I reviewed it in the context of your question: \"{question}\". I have a clear plan for you."
             )
         else:
             parts.append(
-                "Thanks for sharing the log file. I’ve completed the analysis — here’s what’s going on and how to fix it."
+                "Thanks for sharing the log — I’ve completed the analysis and have a clear plan for you."
             )
 
-        parts.append("## Problem analysis\n" + str(overall_summary))
+        # Solution Overview
+        parts.append("## Solution Overview\n" + str(overall_summary))
 
         if isinstance(issues, list) and len(issues) > 0:
             findings: list[str] = []
@@ -240,8 +242,20 @@ def _format_log_analysis_content(analysis: dict | Any, question: str | None) -> 
                     bullet += f": {details}"
                 findings.append(bullet)
             if findings:
-                parts.append("### Critical findings\n" + "\n".join(findings))
+                parts.append("## What I found\n" + "\n".join(findings))
 
+        # Quick things to try (use first few steps from the first solution if present)
+        first_steps: list[str] = []
+        if isinstance(solutions, list) and len(solutions) > 0 and isinstance(solutions[0], dict):
+            s0 = solutions[0]
+            steps0 = s0.get("steps") or []
+            if isinstance(steps0, list):
+                first_steps = [str(x).rstrip('.') for x in steps0[:3] if isinstance(x, str)]
+        if first_steps:
+            quick_lines = ["## Quick things to try (takes a minute)"] + [f"{i+1}) {st}" for i, st in enumerate(first_steps)]
+            parts.append("\n".join(quick_lines))
+
+        # Guided fix (enumerate solutions and their steps)
         step_sections: list[str] = []
         if isinstance(solutions, list) and len(solutions) > 0:
             for idx, sol in enumerate(solutions[:3], start=1):
@@ -255,9 +269,17 @@ def _format_log_analysis_content(analysis: dict | Any, question: str | None) -> 
                     for j, step in enumerate(steps, start=1):
                         section_lines.append(f"{j}. {step}")
                 step_sections.append("\n".join(section_lines))
-
         if step_sections:
-            parts.append("## Step-by-step solution\n" + "\n\n".join(step_sections))
+            parts.append("## If the above steps does not help then please try this guided fix\n" + "\n\n".join(step_sections))
+
+        # Good to know fallback
+        parts.append("## Good to know\n* These steps are safe and reversible. If anything looks different, let me know and I’ll adapt the plan.")
+
+        # Helpful tips placeholder (kept minimal for simplified path)
+        parts.append("## Helpful Tips\n* After fixing, watch the app for a few minutes to confirm no new error banners appear.")
+
+        # Encouraging wrap-up
+        parts.append("## Encouraging Wrap-up\nYou’ve got this. Tell me how it looks after the first two steps and we’ll iterate together.")
 
         return "\n\n".join(parts)
     except Exception:

@@ -12,6 +12,8 @@ import {
   feedMeApi,
   type GeminiUsage,
   type EmbeddingUsage,
+  searchExamples,
+  listConversations,
 } from '@/features/feedme/services/feedme-api'
 import { useAnalyticsStore } from '@/state/stores/analytics-store'
 
@@ -21,8 +23,6 @@ export interface ConversationStats {
   byPlatform: {
     windows: number
     macos: number
-    linux: number
-    other: number
   }
   byStatus: {
     pending: number
@@ -49,7 +49,10 @@ export interface ApiUsage {
     dailyUtilization: number // percentage
     rpmLimit: number
     callsInWindow: number
+    tpmLimit: number
+    tokensInWindow: number
     windowSecondsRemaining: number
+    tokenWindowSecondsRemaining: number
     status: 'healthy' | 'warning' | 'critical'
   }
   embedding: {
@@ -131,16 +134,13 @@ export function useStatsData(options: UseStatsDataOptions = {}): UseStatsDataRet
     workflowStats: ApprovalWorkflowStats,
     geminiUsage: GeminiUsage | null,
     embeddingUsage: EmbeddingUsage | null,
-    analyticsData: ReturnType<typeof useAnalyticsStore.getState>
+    analyticsData: ReturnType<typeof useAnalyticsStore.getState>,
+    extras?: { totalOverride?: number; platformCounts?: { windows: number; macos: number } }
   ): StatsData => {
-    // Calculate platform breakdown - use actual data when API provides it
-    const totalConversations = workflowStats.total_conversations || 0
-    // TODO: Replace with actual platform data from API when available
-    // For now, show 0 distribution until backend provides platform breakdown
-    const windowsRatio = 0
-    const macosRatio = 0
-    const linuxRatio = 0
-    const otherRatio = 0
+    // Prefer totals/platform counts from extras when available
+    const totalConversations = (extras?.totalOverride ?? workflowStats.total_conversations) || 0
+    const platformWindows = extras?.platformCounts?.windows ?? 0
+    const platformMac = extras?.platformCounts?.macos ?? 0
 
     // Processing metrics
     const avgProcessingTime = workflowStats.avg_processing_time_ms
@@ -202,10 +202,8 @@ export function useStatsData(options: UseStatsDataOptions = {}): UseStatsDataRet
       conversations: {
         total: totalConversations,
         byPlatform: {
-          windows: Math.round(totalConversations * windowsRatio),
-          macos: Math.round(totalConversations * macosRatio),
-          linux: Math.round(totalConversations * linuxRatio),
-          other: Math.round(totalConversations * otherRatio)
+          windows: platformWindows,
+          macos: platformMac
         },
         byStatus: {
           pending: workflowStats.pending_approval || 0,
@@ -226,19 +224,24 @@ export function useStatsData(options: UseStatsDataOptions = {}): UseStatsDataRet
       apiUsage: {
         gemini: {
           dailyUsed: geminiUsage?.daily_used || 0,
-          dailyLimit: geminiUsage?.daily_limit || 1500,
+          // Free tier limits (Gemini 2.5 Flash-Lite Preview): RPD 1000, RPM 15, TPM 250k
+          dailyLimit: Math.min(geminiUsage?.daily_limit ?? 1000, 1000),
           dailyUtilization: geminiUsage?.utilization?.daily || 0,
-          rpmLimit: geminiUsage?.rpm_limit || 15,
+          rpmLimit: Math.min(geminiUsage?.rpm_limit ?? 15, 15),
           callsInWindow: geminiUsage?.calls_in_window || 0,
+          tpmLimit: 250_000,
+          tokensInWindow: 0,
           windowSecondsRemaining: geminiUsage?.window_seconds_remaining || 60,
+          tokenWindowSecondsRemaining: 60,
           status: geminiUsage?.status || 'healthy'
         },
         embedding: {
           dailyUsed: embeddingUsage?.daily_used || 0,
-          dailyLimit: embeddingUsage?.daily_limit || 3000,
+          // Free tier limits (Gemini Embeddings): RPD 1000, RPM 100, TPM 30k
+          dailyLimit: Math.min(embeddingUsage?.daily_limit ?? 1000, 1000),
           dailyUtilization: embeddingUsage?.utilization?.daily || 0,
-          rpmLimit: embeddingUsage?.rpm_limit || 3000,
-          tpmLimit: embeddingUsage?.tpm_limit || 1000000,
+          rpmLimit: Math.min(embeddingUsage?.rpm_limit ?? 100, 100),
+          tpmLimit: Math.min(embeddingUsage?.tpm_limit ?? 30_000, 30_000),
           callsInWindow: embeddingUsage?.calls_in_window || 0,
           tokensInWindow: embeddingUsage?.tokens_in_window || 0,
           windowSecondsRemaining: embeddingUsage?.window_seconds_remaining || 60,
@@ -284,6 +287,13 @@ export function useStatsData(options: UseStatsDataOptions = {}): UseStatsDataRet
       await analyticsActions.loadUsageStats()
       const analyticsData = useAnalyticsStore.getState()
 
+      // Supplement totals and platforms using existing endpoints
+      const [windowsRes, macosRes, listRes] = await Promise.allSettled([
+        searchExamples({ query: '', page: 1, page_size: 1, filters: { platforms: ['windows'] } }),
+        searchExamples({ query: '', page: 1, page_size: 1, filters: { platforms: ['macos'] } }),
+        listConversations(1, 1, undefined, undefined, null)
+      ])
+
       // Process results
       const workflow = workflowStats.status === 'fulfilled'
         ? workflowStats.value
@@ -307,7 +317,22 @@ export function useStatsData(options: UseStatsDataOptions = {}): UseStatsDataRet
         : null
 
       // Transform and set data
-      const transformedData = transformData(workflow, gemini, embedding, analyticsData)
+      const transformedData = transformData(
+        workflow,
+        gemini,
+        embedding,
+        analyticsData,
+        {
+          totalOverride:
+            listRes.status === 'fulfilled'
+              ? (listRes.value.total_conversations ?? listRes.value.total_count ?? 0)
+              : undefined,
+          platformCounts: {
+            windows: windowsRes.status === 'fulfilled' ? windowsRes.value.total_count : 0,
+            macos: macosRes.status === 'fulfilled' ? macosRes.value.total_count : 0,
+          }
+        }
+      )
 
       if (isMountedRef.current) {
         setData(transformedData)

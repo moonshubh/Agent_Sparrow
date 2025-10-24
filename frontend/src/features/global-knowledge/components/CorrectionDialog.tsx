@@ -1,14 +1,17 @@
 "use client"
 
 import { useEffect, useMemo, useState } from 'react'
-import { Loader2 } from 'lucide-react'
 import { toast } from 'sonner'
 
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/shared/ui/dialog'
-import { Button } from '@/shared/ui/button'
 import { Textarea } from '@/shared/ui/textarea'
 import { Label } from '@/shared/ui/label'
 import { ScrollArea } from '@/shared/ui/scroll-area'
+import {
+  PopoverForm,
+  PopoverFormButton,
+  PopoverFormSeparator,
+  PopoverFormSuccess,
+} from '@/shared/ui/popover-form'
 import type { CorrectionSubmissionPayload } from '@/features/global-knowledge/services/global-knowledge-submissions'
 import { submitCorrection } from '@/features/global-knowledge/services/global-knowledge-submissions'
 
@@ -16,6 +19,8 @@ interface CorrectionDialogProps {
   open: boolean
   initialIncorrect?: string
   initialCorrected?: string
+  initialExplanation?: string
+  metadata?: Record<string, unknown>
   sessionId?: string | null
   agent?: string
   model?: string
@@ -34,6 +39,8 @@ export function CorrectionDialog({
   open,
   initialIncorrect,
   initialCorrected,
+  initialExplanation,
+  metadata: initialMetadata,
   sessionId,
   agent,
   model,
@@ -41,9 +48,10 @@ export function CorrectionDialog({
 }: CorrectionDialogProps) {
   const [incorrectText, setIncorrectText] = useState(initialIncorrect ?? '')
   const [correctedText, setCorrectedText] = useState(initialCorrected ?? '')
-  const [explanation, setExplanation] = useState('')
+  const [explanation, setExplanation] = useState(initialExplanation ?? '')
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [showSuccess, setShowSuccess] = useState(false)
 
   useEffect(() => {
     if (open) {
@@ -54,7 +62,7 @@ export function CorrectionDialog({
     }
   }, [open, initialIncorrect, initialCorrected])
 
-  const metadata = useMemo(() => buildMetadata(sessionId, agent, model), [agent, model, sessionId])
+  const metadata = useMemo(() => ({ ...buildMetadata(sessionId, agent, model), ...(initialMetadata || {}) }), [agent, model, sessionId, initialMetadata])
 
   const handleSubmit = async () => {
     const incorrect = incorrectText.trim()
@@ -81,7 +89,14 @@ export function CorrectionDialog({
     try {
       await submitCorrection(payload)
       toast.success('Correction submitted for review')
-      onClose()
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new Event('global-knowledge:queue-refresh'))
+      }
+      setShowSuccess(true)
+      setTimeout(() => {
+        setShowSuccess(false)
+        onClose()
+      }, 1400)
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to submit correction'
       toast.error('Submission failed', { description: message })
@@ -92,66 +107,82 @@ export function CorrectionDialog({
   }
 
   return (
-    <Dialog open={open} onOpenChange={(isOpen) => (isOpen ? undefined : onClose())}>
-      <DialogContent className="max-w-2xl">
-        <DialogHeader>
-          <DialogTitle>Submit Correction</DialogTitle>
-          <DialogDescription>
-            Highlight the incorrect response and provide the correct information so we can update the global knowledge base.
-          </DialogDescription>
-        </DialogHeader>
+    <PopoverForm
+      title="Submit Correction"
+      open={open}
+      setOpen={(v) => {
+        if (!v) onClose()
+      }}
+      width="600px"
+      showCloseButton={!showSuccess}
+      showSuccess={showSuccess}
+      openChild={
+        <form
+          onSubmit={(e) => {
+            e.preventDefault()
+            if (!isSubmitting) handleSubmit()
+          }}
+        >
+          <div className="grid gap-4">
+            <div className="space-y-2">
+              <Label htmlFor="incorrect-text">Incorrect response</Label>
+              <Textarea
+                id="incorrect-text"
+                value={incorrectText}
+                onChange={(event) => setIncorrectText(event.target.value)}
+                placeholder="Paste the incorrect assistant response..."
+                rows={4}
+              />
+            </div>
 
-        <div className="grid gap-4">
-          <div className="space-y-2">
-            <Label htmlFor="incorrect-text">Incorrect response</Label>
-            <Textarea
-              id="incorrect-text"
-              value={incorrectText}
-              onChange={(event) => setIncorrectText(event.target.value)}
-              placeholder="Paste the incorrect assistant response..."
-              rows={4}
-            />
+            <div className="space-y-2">
+              <Label htmlFor="corrected-text">Corrected response</Label>
+              <Textarea
+                id="corrected-text"
+                value={correctedText}
+                onChange={(event) => setCorrectedText(event.target.value)}
+                placeholder="Provide the corrected version..."
+                rows={4}
+              />
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="explanation-text">Explanation (optional)</Label>
+              <Textarea
+                id="explanation-text"
+                value={explanation}
+                onChange={(event) => setExplanation(event.target.value)}
+                placeholder="Add any additional context or links that help reviewers understand the change."
+                rows={3}
+              />
+            </div>
+
+            {error && (
+              <ScrollArea className="rounded border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive">
+                {error}
+              </ScrollArea>
+            )}
           </div>
 
-          <div className="space-y-2">
-            <Label htmlFor="corrected-text">Corrected response</Label>
-            <Textarea
-              id="corrected-text"
-              value={correctedText}
-              onChange={(event) => setCorrectedText(event.target.value)}
-              placeholder="Provide the corrected version..."
-              rows={4}
-            />
+          <div className="relative mt-4 flex items-center justify-end gap-2">
+            <PopoverFormSeparator />
+            <PopoverFormButton
+              loading={isSubmitting}
+              onClick={() => {
+                if (!isSubmitting) handleSubmit()
+              }}
+            >
+              Submit Correction
+            </PopoverFormButton>
           </div>
-
-          <div className="space-y-2">
-            <Label htmlFor="explanation-text">Explanation (optional)</Label>
-            <Textarea
-              id="explanation-text"
-              value={explanation}
-              onChange={(event) => setExplanation(event.target.value)}
-              placeholder="Add any additional context or links that help reviewers understand the change."
-              rows={3}
-            />
-          </div>
-
-          {error && (
-            <ScrollArea className="rounded border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive">
-              {error}
-            </ScrollArea>
-          )}
-        </div>
-
-        <DialogFooter className="flex gap-2">
-          <Button variant="ghost" onClick={onClose} disabled={isSubmitting}>
-            Cancel
-          </Button>
-          <Button onClick={handleSubmit} disabled={isSubmitting}>
-            {isSubmitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-            Submit Correction
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+        </form>
+      }
+      successChild={
+        <PopoverFormSuccess
+          title="Correction Received"
+          description="Thank you! We'll review and incorporate it."
+        />
+      }
+    />
   )
 }

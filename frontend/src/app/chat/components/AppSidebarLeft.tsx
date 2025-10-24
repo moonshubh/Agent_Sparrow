@@ -14,7 +14,7 @@ import {
 } from "@/shared/ui/sidebar"
 import { Avatar, AvatarFallback, AvatarImage } from "@/shared/ui/avatar"
 import { Button } from "@/shared/ui/button"
-import { MessageSquare, FolderGit2, FileText, Wrench, PanelLeft } from "lucide-react"
+import { MessageSquare, FolderGit2, FileText, Wrench, PanelLeft, Plus } from "lucide-react"
 
 export type LeftTab = "primary" | "log" | "feedbacks" | "corrects"
 
@@ -22,6 +22,7 @@ type Props = {
   activeTab: LeftTab
   onChangeTab: (tab: LeftTab) => void
   onOpenRightSidebar: (anchorTop: number, anchorLeft?: number) => void
+  onNewChat: () => void
 }
 
 const LEFT_ITEMS: Array<{
@@ -35,15 +36,15 @@ const LEFT_ITEMS: Array<{
   { id: "corrects", label: "Corrects", Icon: Wrench },
 ]
 
-export function AppSidebarLeft({ activeTab, onChangeTab, onOpenRightSidebar }: Props) {
+export function AppSidebarLeft({ activeTab, onChangeTab, onOpenRightSidebar, onNewChat }: Props) {
   const { toggleSidebar } = useSidebar()
   return (
     <Sidebar side="left" variant="sidebar" collapsible="offcanvas" className="w-64 border-r">
-      <SidebarHeader className="px-3 py-3 border-b">
-        <div className="flex items-center justify-between">
+      <SidebarHeader className="h-14 px-4 border-b flex-row items-center">
+        <div className="flex items-center justify-between w-full">
           <div className="flex items-center gap-3">
-            <Avatar className="h-9 w-9 rounded-xl">
-              <AvatarImage src="/agent-sparrow-logo.png" alt="Agent Sparrow" />
+            <Avatar className="h-10 w-10 rounded-xl bg-transparent overflow-hidden">
+              <AvatarImage className="object-contain p-0.5" src="/agent_sparrow_logo.png" alt="Agent Sparrow" />
               <AvatarFallback className="rounded-xl">AS</AvatarFallback>
             </Avatar>
             <div className="leading-tight">
@@ -65,6 +66,17 @@ export function AppSidebarLeft({ activeTab, onChangeTab, onOpenRightSidebar }: P
       </SidebarHeader>
 
       <SidebarContent>
+        <div className="p-2">
+          <Button
+            className="w-full h-9 justify-center"
+            variant="default"
+            onClick={onNewChat}
+            aria-label="New Chat"
+          >
+            <Plus className="h-4 w-4" />
+            <span className="ml-2">New Chat</span>
+          </Button>
+        </div>
         <SidebarGroup>
           <SidebarGroupContent>
             <SidebarMenu>

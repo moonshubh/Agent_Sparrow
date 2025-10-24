@@ -33,7 +33,7 @@ export function RateLimitIndicator({ model = 'gemini-2.5-flash', className }: Ra
           // Free tier defaults: Pro 5 RPM, Flash 10 RPM
           rpm_limit: stats.rpm_limit || (model === 'gemini-2.5-pro' ? 5 : 10),
           rpd_used: stats.rpd_used || 0,
-          // Free tier defaults: Pro 100 RPD, Flash 250 RPD
+          // Defaults: Pro 100 RPD, Flash 250 RPD
           rpd_limit: stats.rpd_limit || (model === 'gemini-2.5-pro' ? 100 : 250)
         })
       }

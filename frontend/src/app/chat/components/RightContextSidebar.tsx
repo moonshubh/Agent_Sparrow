@@ -31,6 +31,7 @@ export function RightContextSidebar({ activeTab, sessionId, onSelectSession, isO
   const [hoveredItem, setHoveredItem] = useState<string | null>(null)
   const [deletingItem, setDeletingItem] = useState<string | null>(null)
   const { queue, isQueueLoading, queueError, promoteFeedback, promoteCorrection, removeQueueItem } = useGlobalKnowledgeObservability()
+  const memoryUiEnabled = process.env.NEXT_PUBLIC_ENABLE_MEMORY !== 'false'
 
   const fetchSessions = useCallback(async () => {
     try {
@@ -184,7 +185,44 @@ export function RightContextSidebar({ activeTab, sessionId, onSelectSession, isO
                           onMouseLeave={() => setHoveredItem(null)}
                           className="relative group"
                         >
-                          <SidebarMenuButton className="gap-2 pr-24" disabled={isDeleting}>
+                          <SidebarMenuButton
+                            className="gap-2 pr-24"
+                            disabled={isDeleting}
+                            onClick={(e) => {
+                              e.preventDefault()
+                              try {
+                                const md = (item.metadata || {}) as Record<string, unknown>
+                                if (item.kind === 'feedback') {
+                                  const selected = typeof md['selected_text'] === 'string' ? (md['selected_text'] as string)
+                                    : (typeof md['selectedText'] === 'string' ? (md['selectedText'] as string) : '')
+                                  window.dispatchEvent(
+                                    new CustomEvent('chat:open-feedback-dialog', {
+                                      detail: {
+                                        feedbackText: item.raw_text || '',
+                                        selectedText: selected || undefined,
+                                        metadata: md,
+                                      },
+                                    })
+                                  )
+                                } else {
+                                  const pair = (md['normalized_pair'] as Record<string, unknown> | undefined) || undefined
+                                  const incorrect = pair && typeof pair['incorrect'] === 'string' ? (pair['incorrect'] as string) : (item.raw_text || '')
+                                  const corrected = pair && typeof pair['corrected'] === 'string' ? (pair['corrected'] as string) : ''
+                                  const explanation = typeof md['explanation'] === 'string' ? (md['explanation'] as string) : ''
+                                  window.dispatchEvent(
+                                    new CustomEvent('chat:open-correction-dialog', {
+                                      detail: {
+                                        incorrectText: incorrect,
+                                        correctedText: corrected,
+                                        explanation,
+                                        metadata: md,
+                                      },
+                                    })
+                                  )
+                                }
+                              } catch {}
+                            }}
+                          >
                             {activeTab === 'feedbacks' ? <FileText className="h-4 w-4" /> : <Wrench className="h-4 w-4" />}
                             <span className="truncate">{item.summary}</span>
                           </SidebarMenuButton>
@@ -197,13 +235,20 @@ export function RightContextSidebar({ activeTab, sessionId, onSelectSession, isO
                                 disabled={isDeleting}
                                 onClick={(e) => {
                                   e.stopPropagation()
-                                  if (activeTab === 'feedbacks') {
-                                    void promoteFeedback(item.id)
-                                  } else {
-                                    void promoteCorrection(item.id)
-                                  }
+                                  const action = activeTab === 'feedbacks' ? promoteFeedback(item.id) : promoteCorrection(item.id)
+                                  void action.then((res) => {
+                                    if (res?.success) {
+                                      if (memoryUiEnabled) {
+                                        toast.success('Promoted to Memory and Knowledge Base')
+                                      } else {
+                                        toast.success(activeTab === 'feedbacks' ? 'Promoted to feedback store' : 'Promoted to knowledge base')
+                                      }
+                                    } else if (res) {
+                                      toast.error(res.message || 'Promotion failed')
+                                    }
+                                  })
                                 }}
-                                title={activeTab === 'feedbacks' ? 'Promote to feedback store' : 'Promote to knowledge base'}
+                                title={memoryUiEnabled ? 'Promote to Memory' : (activeTab === 'feedbacks' ? 'Promote to feedback store' : 'Promote to knowledge base')}
                               >
                                 <Check className="h-3 w-3" />
                               </Button>

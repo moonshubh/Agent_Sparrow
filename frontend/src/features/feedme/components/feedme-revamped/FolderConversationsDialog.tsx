@@ -179,6 +179,8 @@ const FolderConversationsDialog = React.memo(function FolderConversationsDialog(
     try {
       await feedMeApi.updateConversation(editingId, { title: trimmed })
       setConversations(prev => prev.map(c => c.id === editingId ? { ...c, title: trimmed } : c))
+      // Broadcast rename to synchronize other open views
+      document.dispatchEvent(new CustomEvent('feedme:conversation-renamed', { detail: { id: editingId, title: trimmed } }))
       showToast({
         type: 'success',
         title: 'Conversation renamed',
@@ -230,6 +232,17 @@ const FolderConversationsDialog = React.memo(function FolderConversationsDialog(
       setDeleteTarget(null)
     }
   }, [deleteTarget, showToast])
+
+  // Listen for external rename events to update titles in this dialog
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent<{ id: number; title: string }>).detail
+      if (!detail) return
+      setConversations(prev => prev.map(c => c.id === detail.id ? { ...c, title: detail.title } : c))
+    }
+    document.addEventListener('feedme:conversation-renamed', handler)
+    return () => document.removeEventListener('feedme:conversation-renamed', handler)
+  }, [])
 
   const getStatusIcon = useCallback((status: ConversationItem['processing_status']) => {
     switch (status) {
@@ -430,18 +443,16 @@ const FolderConversationsDialog = React.memo(function FolderConversationsDialog(
                             <p className="mt-2 text-[11px] text-muted-foreground">{conv.status_message}</p>
                           )}
 
-                          <div className="mt-4 flex justify-end">
-                            <button
-                              className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-white/10 bg-background/80 text-muted-foreground shadow-sm opacity-0 transition-opacity duration-200 group-hover:opacity-100 hover:border-accent hover:text-accent-foreground"
-                              onClick={(event) => {
-                                event.stopPropagation()
-                                handleOpenConversation(conv.id)
-                              }}
-                              aria-label={`Open conversation ${conv.title}`}
-                            >
-                              <Maximize2 className="h-3.5 w-3.5" />
-                            </button>
-                          </div>
+                          <button
+                            className="absolute right-3 bottom-3 inline-flex h-8 w-8 items-center justify-center rounded-full border border-white/10 bg-background/80 text-muted-foreground/90 opacity-0 backdrop-blur transition-opacity duration-200 group-hover:opacity-100 hover:border-accent hover:text-accent-foreground z-10 shadow-sm"
+                            onClick={(event) => {
+                              event.stopPropagation()
+                              handleOpenConversation(conv.id)
+                            }}
+                            aria-label={`Open conversation ${conv.title}`}
+                          >
+                            <Maximize2 className="h-3.5 w-3.5" />
+                          </button>
                         </div>
                       </div>
                     )

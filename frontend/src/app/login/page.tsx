@@ -26,12 +26,12 @@ export default function LoginPage() {
       <div className="relative z-10 w-full max-w-md px-4">
         {/* Logo */}
         <div className="mb-8 text-center">
-          <div className="mx-auto mb-4 w-20 h-20">
+          <div className="mx-auto mb-4 w-16 h-16">
             <Image
-              src="/agent-sparrow-logo.png"
+              src="/Sparrow_logo.png"
               alt="Agent Sparrow"
-              width={80}
-              height={80}
+              width={64}
+              height={64}
               className="w-full h-full object-contain"
               priority
             />

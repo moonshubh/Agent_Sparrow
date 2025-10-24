@@ -1,14 +1,17 @@
 "use client"
 
 import { useEffect, useMemo, useState } from 'react'
-import { Loader2 } from 'lucide-react'
 import { toast } from 'sonner'
 
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/shared/ui/dialog'
-import { Button } from '@/shared/ui/button'
 import { Textarea } from '@/shared/ui/textarea'
 import { Label } from '@/shared/ui/label'
 import { ScrollArea } from '@/shared/ui/scroll-area'
+import {
+  PopoverForm,
+  PopoverFormButton,
+  PopoverFormSeparator,
+  PopoverFormSuccess,
+} from '@/shared/ui/popover-form'
 import type { FeedbackSubmissionPayload } from '@/features/global-knowledge/services/global-knowledge-submissions'
 import { submitFeedback } from '@/features/global-knowledge/services/global-knowledge-submissions'
 
@@ -16,6 +19,7 @@ interface FeedbackDialogProps {
   open: boolean
   initialFeedback?: string
   selectedText?: string
+  metadata?: Record<string, unknown>
   sessionId?: string | null
   agent?: string
   model?: string
@@ -34,6 +38,7 @@ export function FeedbackDialog({
   open,
   initialFeedback,
   selectedText,
+  metadata: initialMetadata,
   sessionId,
   agent,
   model,
@@ -42,6 +47,7 @@ export function FeedbackDialog({
   const [feedback, setFeedback] = useState(initialFeedback ?? '')
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [showSuccess, setShowSuccess] = useState(false)
 
   useEffect(() => {
     if (open) {
@@ -50,7 +56,7 @@ export function FeedbackDialog({
     }
   }, [open, initialFeedback])
 
-  const metadata = useMemo(() => buildMetadata(sessionId, agent, model), [agent, model, sessionId])
+  const metadata = useMemo(() => ({ ...buildMetadata(sessionId, agent, model), ...(initialMetadata || {}) }), [agent, model, sessionId, initialMetadata])
 
   const handleSubmit = async () => {
     const trimmed = feedback.trim()
@@ -70,7 +76,14 @@ export function FeedbackDialog({
     try {
       await submitFeedback(payload)
       toast.success('Feedback submitted for review')
-      onClose()
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new Event('global-knowledge:queue-refresh'))
+      }
+      setShowSuccess(true)
+      setTimeout(() => {
+        setShowSuccess(false)
+        onClose()
+      }, 1400)
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to submit feedback'
       toast.error('Submission failed', { description: message })
@@ -81,50 +94,66 @@ export function FeedbackDialog({
   }
 
   return (
-    <Dialog open={open} onOpenChange={(isOpen) => (isOpen ? undefined : onClose())}>
-      <DialogContent className="max-w-lg">
-        <DialogHeader>
-          <DialogTitle>Submit Feedback</DialogTitle>
-          <DialogDescription>
-            Share corrections or improvements that should apply globally.
-          </DialogDescription>
-        </DialogHeader>
+    <PopoverForm
+      title="Submit Feedback"
+      open={open}
+      setOpen={(v) => {
+        if (!v) onClose()
+      }}
+      width="520px"
+      showCloseButton={!showSuccess}
+      showSuccess={showSuccess}
+      openChild={
+        <form
+          onSubmit={(e) => {
+            e.preventDefault()
+            if (!isSubmitting) handleSubmit()
+          }}
+        >
+          <div className="space-y-4">
+            {selectedText && (
+              <div>
+                <Label className="text-xs text-muted-foreground uppercase tracking-wide">Selected snippet</Label>
+                <ScrollArea className="mt-2 max-h-40 rounded-md border border-border/50 bg-muted/30 p-3 text-sm leading-relaxed">
+                  <pre className="whitespace-pre-wrap font-sans text-muted-foreground">
+                    {selectedText}
+                  </pre>
+                </ScrollArea>
+              </div>
+            )}
 
-        <div className="space-y-4">
-          {selectedText && (
-            <div>
-              <Label className="text-xs text-muted-foreground uppercase tracking-wide">Selected snippet</Label>
-              <ScrollArea className="mt-2 max-h-40 rounded-md border border-border/50 bg-muted/30 p-3 text-sm leading-relaxed">
-                <pre className="whitespace-pre-wrap font-sans text-muted-foreground">
-                  {selectedText}
-                </pre>
-              </ScrollArea>
+            <div className="space-y-2">
+              <Label htmlFor="feedback-text">Feedback</Label>
+              <Textarea
+                id="feedback-text"
+                value={feedback}
+                onChange={(event) => setFeedback(event.target.value)}
+                placeholder="Describe what needs to be updated or corrected..."
+                rows={6}
+              />
+              {error && <p className="text-sm text-destructive">{error}</p>}
             </div>
-          )}
-
-          <div className="space-y-2">
-            <Label htmlFor="feedback-text">Feedback</Label>
-            <Textarea
-              id="feedback-text"
-              value={feedback}
-              onChange={(event) => setFeedback(event.target.value)}
-              placeholder="Describe what needs to be updated or corrected..."
-              rows={6}
-            />
-            {error && <p className="text-sm text-destructive">{error}</p>}
           </div>
-        </div>
 
-        <DialogFooter className="flex gap-2">
-          <Button variant="ghost" onClick={onClose} disabled={isSubmitting}>
-            Cancel
-          </Button>
-          <Button onClick={handleSubmit} disabled={isSubmitting}>
-            {isSubmitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-            Submit Feedback
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+          <div className="relative mt-4 flex items-center justify-end gap-2">
+            <PopoverFormSeparator />
+            <PopoverFormButton
+              loading={isSubmitting}
+              onClick={() => {
+                if (!isSubmitting) handleSubmit()
+              }}
+            >
+              Submit Feedback
+            </PopoverFormButton>
+          </div>
+        </form>
+      }
+      successChild={
+        <PopoverFormSuccess
+          title="Feedback Received"
+          description="Thank you for supporting our project!"
+        />
+      }
+    />
   )
 }

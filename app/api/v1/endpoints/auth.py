@@ -181,6 +181,21 @@ async def get_current_user_id(
             detail=f"Token verification error: {str(e)}",
         )
     
+    # Enforce allowed email domain restriction (production)
+    email = token_data.get("email") if token_data else None
+    if not email:
+        try:
+            user = await auth_client.get_user_from_token(credentials.credentials)
+            email = getattr(user, 'email', None) if user else None
+        except Exception:
+            email = None
+    if not settings.is_email_domain_allowed(email):
+        logger.warning(f"Access denied due to unauthorized email domain: {email}")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access restricted to authorized email domains",
+        )
+
     user_id = token_data.get("sub")
     if not user_id:
         raise HTTPException(
@@ -206,6 +221,13 @@ async def sign_up(
     
     Rate limited to 5 attempts per minute per IP.
     """
+    # Enforce OAuth-only in production
+    if settings.is_production_mode():
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Password-based sign up is disabled. Use Google login."
+        )
+
     ip_address, user_agent = get_client_info(request)
     
     try:
@@ -266,6 +288,13 @@ async def sign_in(
     
     Rate limited to 10 attempts per minute per IP.
     """
+    # Enforce OAuth-only in production
+    if settings.is_production_mode():
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Password-based sign in is disabled. Use Google login."
+        )
+
     ip_address, user_agent = get_client_info(request)
     
     try:
@@ -473,6 +502,13 @@ async def reset_password(
     
     Rate limited to 5 attempts per minute per IP.
     """
+    # Enforce OAuth-only in production
+    if settings.is_production_mode():
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Password reset is disabled. Use Google login."
+        )
+
     ip_address, user_agent = get_client_info(request)
     
     try:

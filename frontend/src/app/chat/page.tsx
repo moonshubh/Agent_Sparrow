@@ -1,14 +1,14 @@
 "use client";
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import dynamic from "next/dynamic";
+ 
 import { getAuthToken, initializeLocalAuth } from "@/services/auth/local-auth";
 import {
   SidebarProvider,
   SidebarInset,
   useSidebar,
 } from "@/shared/ui/sidebar";
-import { ChevronDown, PanelLeft } from "lucide-react";
+import { PanelLeft } from "lucide-react";
 import AppSidebarLeft, { LeftTab } from "@/app/chat/components/AppSidebarLeft";
 import RightContextSidebar from "@/app/chat/components/RightContextSidebar";
 import { AssistantMessage } from "./components/AssistantMessage";
@@ -24,23 +24,13 @@ import { type UIMessagePart, type FileUIPart, type UITools } from "ai";
 import { sessionsAPI } from "@/services/api/endpoints/sessions";
 import { rateLimitApi } from "@/services/api/endpoints/rateLimitApi";
 import { APIKeyStatusBadge } from "@/features/api-keys/components/APIKeyStatusBadge";
-import { SessionStatusChip } from "@/features/sessions/components/SessionStatusChip";
-import { AutoSaveIndicator } from "@/features/sessions/components/AutoSaveIndicator";
 import { SettingsButtonV2 } from "@/shared/ui/SettingsButtonV2";
+import { FeedMeButton } from "@/shared/ui/FeedMeButton";
 import { FeedbackDialog } from "@/features/global-knowledge/components/FeedbackDialog";
 import { CorrectionDialog } from "@/features/global-knowledge/components/CorrectionDialog";
-import { FeedMeButton } from "@/shared/ui/FeedMeButton";
 import ShinyText from "@/shared/components/ShinyText";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuSub,
-  DropdownMenuSubContent,
-  DropdownMenuSubTrigger,
-  DropdownMenuTrigger,
-} from "@/shared/ui/dropdown-menu";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/shared/ui/select";
+ 
 import { Button } from "@/shared/ui/button";
 import { createBackendChatTransport } from "@/services/api/providers/unified-client";
 import {
@@ -52,6 +42,11 @@ import {
   type ChatUIMessage,
   type ToolDecisionRecord,
 } from "@/shared/types/chat";
+import { agentGraphApi, type HumanDecisionPayload } from "@/services/api/endpoints/agentGraphApi";
+import InterruptOverlay from "./components/InterruptOverlay";
+import { BackgroundBeamsWithCollision } from "@/components/ui/background-beams-with-collision";
+import { MultiStepLoader } from "@/components/ui/multi-step-loader";
+import { toast } from "sonner";
 
 // Main chat content component
 type ChatContentProps = {
@@ -94,8 +89,8 @@ const toChatDataPart = (part: unknown): ChatDataPart | null => {
   return {
     type: part.type,
     data: part.data,
-    transient: typeof part.transient === 'boolean' ? part.transient : undefined,
   };
+
 };
 
 const readStringProperty = (
@@ -121,7 +116,13 @@ const DEFAULT_WORKING_STEP: TimelineStep = {
 function ChatContent({ sessionId, setSessionId }: ChatContentProps) {
   const [input, setInput] = useState("");
   const [provider, setProvider] = useState<"google" | "openai">("google");
-  const [model, setModel] = useState<string>("gemini-2.5-flash-preview-09-2025");
+  const [model, setModel] = useState<string>("gemini-2.5-flash");
+  const [primaryProvider, setPrimaryProvider] = useState<"google" | "openai">("google");
+  const [primaryModel, setPrimaryModel] = useState<string>("gemini-2.5-flash");
+  const [logProvider, setLogProvider] = useState<"google" | "openai">("google");
+  const [logModel, setLogModel] = useState<string>("gemini-2.5-pro");
+  const [primaryModels, setPrimaryModels] = useState<string[]>([]);
+  const [logModels, setLogModels] = useState<string[]>([]);
   const [mediaFiles, setMediaFiles] = useState<File[]>([]);
   const [logFile, setLogFile] = useState<File | null>(null);
   const [attachError, setAttachError] = useState<string | null>(null);
@@ -130,6 +131,14 @@ function ChatContent({ sessionId, setSessionId }: ChatContentProps) {
   const [searchMode, setSearchMode] = useState<'auto'|'web'>("auto");
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const [reducedMotion, setReducedMotion] = useState<boolean>(false);
+  const [memoryEnabled, setMemoryEnabled] = useState<boolean>(process.env.NEXT_PUBLIC_ENABLE_MEMORY !== 'false');
+  const interruptsEnabled = process.env.NEXT_PUBLIC_ENABLE_INTERRUPTS !== 'false';
+  const [showBeams, setShowBeams] = useState<boolean>(true);
+  const [interruptOpen, setInterruptOpen] = useState<boolean>(false);
+  const [interruptThreadId, setInterruptThreadId] = useState<string>("");
+  const [pendingInterrupts, setPendingInterrupts] = useState<Array<Record<string, unknown>>>([]);
+  const [interruptLoading, setInterruptLoading] = useState<boolean>(false);
+  const interruptPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   type HistoryMessage = {
     id: string;
     role: 'user' | 'assistant';
@@ -147,11 +156,14 @@ function ChatContent({ sessionId, setSessionId }: ChatContentProps) {
   const streamBufferRef = useRef<string>("");
   const overlayRafRef = useRef<number | null>(null);
   const overlayQueueRef = useRef<string[]>([]);
-  const overlayDripTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const overlayDripTimeoutRef = useRef<number | null>(null);
   const liveTimelinePartsRef = useRef<ChatDataPart[]>([]);
   const liveTimelineMetadataRef = useRef<ChatMessageMetadata | null>(null);
   const liveTimelineAgentRef = useRef<AgentType>('primary');
   const [liveTimelineSteps, setLiveTimelineSteps] = useState<TimelineStep[]>([]);
+  const timelineRafRef = useRef<number | null>(null);
+  const timelineTimeoutRef = useRef<number | null>(null);
+  const lastSelectionRef = useRef<string>("");
   type FeedbackDialogState = { open: boolean; feedbackText: string; selectedText: string };
   type CorrectionDialogState = { open: boolean; incorrectText: string; correctedText: string };
   const [feedbackDialogState, setFeedbackDialogState] = useState<FeedbackDialogState>({
@@ -169,7 +181,8 @@ function ChatContent({ sessionId, setSessionId }: ChatContentProps) {
   const chatIdRef = useRef<string>(crypto.randomUUID());
   const previousSessionIdRef = useRef<string>("");
   const lastPersistedSessionIdRef = useRef<string>("");
-  const hasRenamedRef = useRef<boolean>(Boolean(sessionId));
+  const hasRenamedRef = useRef<boolean>(false);
+  const latestCreatedSessionRef = useRef<string | null>(null);
 
   if (!sessionId && previousSessionIdRef.current) {
     fallbackSessionRef.current = crypto.randomUUID();
@@ -204,6 +217,155 @@ function ChatContent({ sessionId, setSessionId }: ChatContentProps) {
       .filter((part): part is ChatDataPart => part !== null);
   };
 
+  const startInterruptPolling = useCallback((threadId: string) => {
+    if (interruptPollRef.current) {
+      clearInterval(interruptPollRef.current);
+      interruptPollRef.current = null;
+    }
+    interruptPollRef.current = setInterval(async () => {
+      try {
+        const snap = await agentGraphApi.getThreadState(threadId);
+        const next = Array.isArray(snap.interrupts) ? snap.interrupts : [];
+        if (!next.length) {
+          setInterruptOpen(false);
+          setPendingInterrupts([]);
+          setInterruptThreadId("");
+          if (interruptPollRef.current) {
+            clearInterval(interruptPollRef.current);
+            interruptPollRef.current = null;
+          }
+          toast.success("Run completed");
+        } else {
+          setPendingInterrupts(next as Array<Record<string, unknown>>);
+        }
+      } catch {
+        // ignore transient errors
+      }
+    }, 2500);
+  }, []);
+
+  const handleStartSupervisedRun = useCallback(async () => {
+    if (!interruptsEnabled) return;
+    const query = input.trim() || "";
+    let log_content: string | undefined = undefined;
+    try {
+      if (logFile) {
+        const raw = await logFile.text();
+        log_content = sanitizeLogContent(raw);
+      }
+    } catch {}
+    try {
+      setInterruptLoading(true);
+      const res = await agentGraphApi.run({ query, log_content });
+      if (res.status === 'interrupted' && Array.isArray(res.interrupts) && res.interrupts.length > 0) {
+        setInterruptThreadId(res.thread_id);
+        setPendingInterrupts(res.interrupts as Array<Record<string, unknown>>);
+        setInterruptOpen(true);
+        startInterruptPolling(res.thread_id);
+        toast.message("Supervised run started — awaiting your decision");
+      } else {
+        toast.success("Run completed with no interrupts");
+      }
+    } catch {
+      toast.error("Failed to start supervised run");
+    } finally {
+      setInterruptLoading(false);
+    }
+  }, [interruptsEnabled, input, logFile, startInterruptPolling]);
+
+  const handleInterruptDecision = useCallback(async (payload: HumanDecisionPayload) => {
+    if (!interruptThreadId) return;
+    try {
+      setInterruptLoading(true);
+      const res = await agentGraphApi.run({ thread_id: interruptThreadId, resume: payload });
+      if (res.status === 'interrupted' && Array.isArray(res.interrupts) && res.interrupts.length > 0) {
+        setPendingInterrupts(res.interrupts as Array<Record<string, unknown>>);
+        toast.message("Decision applied — further input required");
+      } else {
+        setInterruptOpen(false);
+        setPendingInterrupts([]);
+        setInterruptThreadId("");
+        if (interruptPollRef.current) {
+          clearInterval(interruptPollRef.current);
+          interruptPollRef.current = null;
+        }
+        toast.success("Run resumed to completion");
+      }
+    } catch {
+      toast.error("Failed to apply decision");
+    } finally {
+      setInterruptLoading(false);
+    }
+  }, [interruptThreadId]);
+
+  useEffect(() => {
+    return () => {
+      if (interruptPollRef.current) {
+        clearInterval(interruptPollRef.current);
+        interruptPollRef.current = null;
+      }
+      if (timelineRafRef.current !== null) {
+        cancelAnimationFrame(timelineRafRef.current);
+        timelineRafRef.current = null;
+      }
+      if (timelineTimeoutRef.current !== null) {
+        window.clearTimeout(timelineTimeoutRef.current);
+        timelineTimeoutRef.current = null;
+      }
+    };
+  }, []);
+
+  // Track last non-empty text selection anywhere in the document
+  useEffect(() => {
+    const updateSelection = () => {
+      try {
+        const sel = window.getSelection();
+        const t = sel && !sel.isCollapsed ? sel.toString().trim() : "";
+        if (t) {
+          lastSelectionRef.current = t;
+        }
+      } catch {}
+    };
+    document.addEventListener('selectionchange', updateSelection);
+    document.addEventListener('mouseup', updateSelection);
+    return () => {
+      document.removeEventListener('selectionchange', updateSelection);
+      document.removeEventListener('mouseup', updateSelection);
+    };
+  }, []);
+
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const anyEvt = e as CustomEvent<{ question?: string }>
+      const q = anyEvt?.detail?.question
+      if (typeof q === 'string') {
+        setInput(q)
+      }
+    }
+    const openFeedback = (e: Event) => {
+      const detail = (e as CustomEvent<{ feedbackText?: string; selectedText?: string; metadata?: Record<string, unknown> }>).detail || {}
+      setFeedbackDialogState({ open: true, feedbackText: detail.feedbackText || '', selectedText: detail.selectedText || '' })
+      ;(window as any).__gk_feedback_metadata__ = detail.metadata || {}
+    }
+    const openCorrection = (e: Event) => {
+      const detail = (e as CustomEvent<{ incorrectText?: string; correctedText?: string; explanation?: string; metadata?: Record<string, unknown> }>).detail || {}
+      setCorrectionDialogState({ open: true, incorrectText: detail.incorrectText || '', correctedText: detail.correctedText || '' })
+      ;(window as any).__gk_correction_meta__ = { explanation: detail.explanation || '', metadata: detail.metadata || {} }
+    }
+    if (typeof window !== 'undefined') {
+      window.addEventListener('chat:followup', handler as EventListener)
+      window.addEventListener('chat:open-feedback-dialog', openFeedback as EventListener)
+      window.addEventListener('chat:open-correction-dialog', openCorrection as EventListener)
+    }
+    return () => {
+      if (typeof window !== 'undefined') {
+        window.removeEventListener('chat:followup', handler as EventListener)
+        window.removeEventListener('chat:open-feedback-dialog', openFeedback as EventListener)
+        window.removeEventListener('chat:open-correction-dialog', openCorrection as EventListener)
+      }
+    }
+  }, [])
+
   type ClientMessage = ChatUIMessage;
 
   const normalizeAssistantMetadata = (meta: unknown): ChatMessageMetadata | undefined => {
@@ -214,6 +376,20 @@ function ChatContent({ sessionId, setSessionId }: ChatContentProps) {
     }
     return meta as ChatMessageMetadata;
   };
+
+  const overlayDripMs = useMemo(() => {
+    const raw = process.env.NEXT_PUBLIC_STREAM_DRIP_MS
+    const parsed = raw ? Number(raw) : NaN
+    return Number.isFinite(parsed) && parsed >= 0 ? parsed : 16
+  }, [])
+
+  const streamInBubble = useMemo(() => {
+    return process.env.NEXT_PUBLIC_STREAM_IN_BUBBLE !== 'false'
+  }, [])
+
+  const enableMultiStepLoader = useMemo(() => {
+    return process.env.NEXT_PUBLIC_ENABLE_MULTI_STEP_LOADER === 'true'
+  }, [])
 
   const transport = useMemo(
     () =>
@@ -237,6 +413,27 @@ function ChatContent({ sessionId, setSessionId }: ChatContentProps) {
     setLiveTimelineSteps(steps);
   };
 
+  const scheduleTimelineRecompute = (streaming: boolean) => {
+    if (timelineTimeoutRef.current !== null) return;
+    const flush = () => {
+      timelineTimeoutRef.current = null;
+      if (timelineRafRef.current === null) {
+        timelineRafRef.current = requestAnimationFrame(() => {
+          timelineRafRef.current = null;
+          const steps = computeTimeline({
+            dataParts: liveTimelinePartsRef.current,
+            metadata: liveTimelineMetadataRef.current,
+            content: '',
+            agentType: liveTimelineAgentRef.current,
+            isStreaming: streaming,
+          });
+          setLiveTimelineSteps(steps);
+        });
+      }
+    };
+    timelineTimeoutRef.current = window.setTimeout(flush, 16);
+  };
+
   const resetLiveTimeline = (agent: AgentType) => {
     liveTimelinePartsRef.current = [];
     liveTimelineMetadataRef.current = null;
@@ -247,10 +444,11 @@ function ChatContent({ sessionId, setSessionId }: ChatContentProps) {
   const clearOverlayQueue = () => {
     overlayQueueRef.current = [];
     if (overlayDripTimeoutRef.current !== null) {
-      clearTimeout(overlayDripTimeoutRef.current);
+      window.clearTimeout(overlayDripTimeoutRef.current);
       overlayDripTimeoutRef.current = null;
     }
   };
+
 
   const scheduleOverlayFlush = (immediate = false) => {
     if (overlayDripTimeoutRef.current !== null) {
@@ -273,16 +471,13 @@ function ChatContent({ sessionId, setSessionId }: ChatContentProps) {
       }
 
       if (overlayQueueRef.current.length > 0) {
-        overlayDripTimeoutRef.current = window.setTimeout(
-          pump,
-          reducedMotion ? 0 : 12,
-        );
+        overlayDripTimeoutRef.current = window.setTimeout(pump, reducedMotion ? 0 : overlayDripMs)
       }
     };
 
     overlayDripTimeoutRef.current = window.setTimeout(
       pump,
-      immediate || reducedMotion ? 0 : 12,
+      immediate || reducedMotion ? 0 : overlayDripMs,
     );
   };
 
@@ -290,7 +485,7 @@ function ChatContent({ sessionId, setSessionId }: ChatContentProps) {
     // Use a stable client-side chat id to avoid UI resets during initial send
     id: chatIdRef.current,
     transport,
-    experimental_throttle: 0, // Disabled throttling for character-by-character streaming
+    experimental_throttle: 16, // Slightly faster updates for in-bubble streaming
     onError: (e) => console.error("AI chat error:", e),
     onData: (chunk: unknown) => {
       if (!isRecord(chunk)) return;
@@ -307,20 +502,26 @@ function ChatContent({ sessionId, setSessionId }: ChatContentProps) {
         streamBufferRef.current = '';
         setOverlayText('');
         setIsOverlayActive(false);
-        recomputeLiveTimeline(false);
+        scheduleTimelineRecompute(false);
         return;
       }
 
       if (type === 'text-start' || type === 'start') {
-        streamBufferRef.current = '';
-        clearOverlayQueue();
-        setOverlayAgent(liveTimelineAgentRef.current ?? 'primary');
-        setIsOverlayActive(true);
-        setOverlayText('');
-        recomputeLiveTimeline(true);
+        if (!streamInBubble) {
+          streamBufferRef.current = '';
+          clearOverlayQueue();
+          setOverlayAgent(liveTimelineAgentRef.current ?? 'primary');
+          setIsOverlayActive(true);
+          setOverlayText('');
+        }
+        scheduleTimelineRecompute(true);
         return;
       }
       if (type === 'text-delta') {
+        if (streamInBubble) {
+          // Bubble handles live text; no overlay updates needed
+          return;
+        }
         const deltaValue = typeof (chunk as Record<string, unknown>).delta === 'string'
           ? (chunk as Record<string, unknown>).delta as string
           : '';
@@ -346,20 +547,56 @@ function ChatContent({ sessionId, setSessionId }: ChatContentProps) {
       }
 
       if (type === 'text-end') {
-        if (overlayRafRef.current !== null) {
-          cancelAnimationFrame(overlayRafRef.current);
-          overlayRafRef.current = null;
+        if (!streamInBubble) {
+          if (overlayRafRef.current !== null) {
+            cancelAnimationFrame(overlayRafRef.current);
+            overlayRafRef.current = null;
+          }
+          clearOverlayQueue();
+          streamBufferRef.current = '';
+          setIsOverlayActive(false);
         }
-        clearOverlayQueue();
-        streamBufferRef.current = '';
-        setIsOverlayActive(false);
-        recomputeLiveTimeline(false);
+        scheduleTimelineRecompute(false);
         return;
       }
 
       if (type === 'data' || type.startsWith('data-')) {
         const dataPart = (chunk as Record<string, unknown>).data;
         if (dataPart !== undefined) {
+          if (type === 'data-assistant-structured') {
+            liveTimelinePartsRef.current = [
+              ...liveTimelinePartsRef.current,
+              {
+                type: 'timeline-step',
+                data: {
+                  type: 'Structured summary',
+                  description: 'Final structured payload available',
+                  status: 'completed',
+                },
+              },
+            ];
+          }
+
+          if (type.startsWith('data-interrupt-')) {
+            const suffix = type.replace('data-interrupt-', '');
+            const reason = isRecord(dataPart) && typeof (dataPart as any).reason === 'string' ? (dataPart as any).reason : undefined;
+            const required = isRecord(dataPart) && typeof (dataPart as any).required_action === 'string' ? (dataPart as any).required_action : undefined;
+            const title = 'Human approval';
+            const desc = [reason, required].filter(Boolean).join(' — ');
+            const status = suffix === 'pending' ? 'in_progress' : suffix === 'resumed' ? 'completed' : 'failed';
+            liveTimelinePartsRef.current = [
+              ...liveTimelinePartsRef.current,
+              {
+                type: 'timeline-step',
+                data: {
+                  type: title,
+                  description: desc,
+                  status,
+                },
+              },
+            ];
+          }
+
           if (type === 'data-tool-result' && isRecord(dataPart)) {
             const statusSource = dataPart.status ?? dataPart.state ?? 'completed';
             const statusRaw =
@@ -428,7 +665,7 @@ function ChatContent({ sessionId, setSessionId }: ChatContentProps) {
             liveTimelinePartsRef.current = [...liveTimelinePartsRef.current, fallbackPart];
           }
 
-          recomputeLiveTimeline(true);
+          scheduleTimelineRecompute(true);
         }
         return;
       }
@@ -470,7 +707,7 @@ function ChatContent({ sessionId, setSessionId }: ChatContentProps) {
           thinking_trace: { thinking_steps: mergedSteps },
         };
 
-        recomputeLiveTimeline(true);
+        scheduleTimelineRecompute(true);
         return;
       }
 
@@ -510,7 +747,7 @@ function ChatContent({ sessionId, setSessionId }: ChatContentProps) {
             },
           },
         ];
-        recomputeLiveTimeline(true);
+        scheduleTimelineRecompute(true);
         return;
       }
 
@@ -530,7 +767,22 @@ function ChatContent({ sessionId, setSessionId }: ChatContentProps) {
             liveTimelineAgentRef.current = 'log_analysis';
           }
 
-          recomputeLiveTimeline(true);
+          const memSnippet = (meta as any)?.memory_snippet || (meta as any)?.memorySnippet || (meta as any)?.memory?.snippet;
+          if (typeof memSnippet === 'string' && memSnippet.trim().length > 0) {
+            liveTimelinePartsRef.current = [
+              ...liveTimelinePartsRef.current,
+              {
+                type: 'timeline-step',
+                data: {
+                  type: 'Memory context',
+                  description: memSnippet,
+                  status: 'completed',
+                },
+              },
+            ];
+          }
+
+          scheduleTimelineRecompute(true);
         }
         return;
       }
@@ -590,11 +842,12 @@ function ChatContent({ sessionId, setSessionId }: ChatContentProps) {
             );
           }
 
-          if (!hasRenamedRef.current) {
+          if (!hasRenamedRef.current && latestCreatedSessionRef.current === String(activeSessionId)) {
             const nextTitle = deriveChatTitle(userText);
             try {
               const updatedSession = await sessionsAPI.rename(activeSessionId, nextTitle);
               hasRenamedRef.current = true;
+              latestCreatedSessionRef.current = null;
 
               if (typeof window !== 'undefined') {
                 window.dispatchEvent(
@@ -665,9 +918,15 @@ function ChatContent({ sessionId, setSessionId }: ChatContentProps) {
   // Ensure we show at least the minimal in-progress step as soon as message is submitted
   useEffect(() => {
     if ((status === 'submitted' || status === 'streaming') && liveTimelineSteps.length === 0) {
-      recomputeLiveTimeline(true);
+      scheduleTimelineRecompute(true);
     }
   }, [status, liveTimelineSteps.length]);
+
+  useEffect(() => {
+    if (status === 'submitted' || status === 'streaming') {
+      setShowBeams(false);
+    }
+  }, [status]);
 
   // Auto-scroll to bottom when new messages arrive
   useEffect(() => {
@@ -678,6 +937,52 @@ function ChatContent({ sessionId, setSessionId }: ChatContentProps) {
   useEffect(() => {
     initializeLocalAuth().catch(console.error);
   }, []);
+
+  // Sync active agent -> current provider/model from saved per-agent selections
+  useEffect(() => {
+    if (activeAgent === 'log_analysis') {
+      setProvider(logProvider);
+      setModel(logModel);
+    } else {
+      setProvider(primaryProvider);
+      setModel(primaryModel);
+    }
+  }, [activeAgent]);
+
+  // Model list fetch (parallel) on mount with graceful fallback
+  useEffect(() => {
+    let mounted = true;
+    const fetchLists = async () => {
+      const fallbackPrimary = ['gemini-2.5-flash', 'gpt-5-mini'];
+      const fallbackLog = ['gemini-2.5-pro'];
+      try {
+        const [p, l] = await Promise.all([
+          fetch('/api/v1/models?agent=primary').then(r => r.ok ? r.json() : Promise.reject()).catch(() => ({ models: fallbackPrimary })),
+          fetch('/api/v1/models?agent=log_analysis').then(r => r.ok ? r.json() : Promise.reject()).catch(() => ({ models: fallbackLog })),
+        ]);
+        if (!mounted) return;
+        const priRaw = Array.isArray(p?.models) ? (p.models as string[]) : fallbackPrimary;
+        const logRaw = Array.isArray(l?.models) ? (l.models as string[]) : fallbackLog;
+        // Enforce allowed sets
+        const pri = priRaw.filter(m => m === 'gemini-2.5-flash' || m === 'gpt-5-mini');
+        const log = logRaw.filter(m => m === 'gemini-2.5-pro');
+        setPrimaryModels(pri.length ? pri : fallbackPrimary);
+        setLogModels(log.length ? log : fallbackLog);
+        // Ensure current selections are valid
+        if (!(pri.length ? pri : fallbackPrimary).includes(primaryModel)) setPrimaryModel((pri.length ? pri : fallbackPrimary)[0]);
+        if (!(log.length ? log : fallbackLog).includes(logModel)) setLogModel('gemini-2.5-pro');
+      } catch {
+        if (!mounted) return;
+        setPrimaryModels(fallbackPrimary);
+        setLogModels(fallbackLog);
+      }
+    };
+    fetchLists();
+    return () => { mounted = false };
+  }, []);
+
+  const providerForModel = (m: string): 'google' | 'openai' =>
+    (m || '').toLowerCase().startsWith('gpt') ? 'openai' : 'google';
 
   // Respect reduced-motion preference for subtle animations
   useEffect(() => {
@@ -717,12 +1022,17 @@ function ChatContent({ sessionId, setSessionId }: ChatContentProps) {
 
   useEffect(() => {
     if (sessionId) {
-      hasRenamedRef.current = true;
+      if (latestCreatedSessionRef.current === sessionId) {
+        hasRenamedRef.current = false;
+      } else {
+        hasRenamedRef.current = true;
+      }
       lastPersistedSessionIdRef.current = sessionId;
     } else {
-      hasRenamedRef.current = false;
       fallbackSessionRef.current = crypto.randomUUID();
       lastPersistedSessionIdRef.current = "";
+      latestCreatedSessionRef.current = null;
+      hasRenamedRef.current = false;
     }
 
     // Reset per-session UI state to avoid showing stale data when switching chats
@@ -775,7 +1085,7 @@ function ChatContent({ sessionId, setSessionId }: ChatContentProps) {
       const spaceIndex = trimmed.indexOf(" ");
       const command = spaceIndex === -1 ? trimmed : trimmed.slice(0, spaceIndex);
       const remainder = spaceIndex === -1 ? "" : trimmed.slice(spaceIndex + 1).trim();
-      const selectionText = captureSelection();
+      const selectionText = captureSelection() || lastSelectionRef.current;
 
       if (command === "/feedback") {
         setFeedbackDialogState({
@@ -786,6 +1096,9 @@ function ChatContent({ sessionId, setSessionId }: ChatContentProps) {
         setMediaFiles([]);
         setLogFile(null);
         setAttachError(null);
+        if (selectionText) {
+          toast.message("Selected text captured for feedback.");
+        }
         return true;
       }
 
@@ -793,11 +1106,14 @@ function ChatContent({ sessionId, setSessionId }: ChatContentProps) {
         setCorrectionDialogState({
           open: true,
           incorrectText: selectionText || remainder,
-          correctedText: remainder,
+          correctedText: selectionText ? "" : remainder,
         });
         setMediaFiles([]);
         setLogFile(null);
         setAttachError(null);
+        if (selectionText) {
+          toast.message("Selected text prefilled into Incorrect response.");
+        }
         return true;
       }
 
@@ -867,6 +1183,8 @@ function ChatContent({ sessionId, setSessionId }: ChatContentProps) {
         nextSessionId = createdId;
         lastPersistedSessionIdRef.current = createdId;
         fallbackSessionRef.current = createdId;
+        latestCreatedSessionRef.current = createdId;
+        hasRenamedRef.current = false;
         if (typeof window !== 'undefined') {
           window.dispatchEvent(
             new CustomEvent('chat-session-updated', {
@@ -935,7 +1253,7 @@ function ChatContent({ sessionId, setSessionId }: ChatContentProps) {
             modelProvider: provider,
             model,
             sessionId: nextSessionId || fallbackSessionRef.current,
-            useServerMemory: true,
+            useServerMemory: memoryEnabled,
             // Manual web search flags
             forceWebSearch: searchMode === 'web',
             webSearchMaxResults: 6,
@@ -955,105 +1273,88 @@ function ChatContent({ sessionId, setSessionId }: ChatContentProps) {
   const hasLiveMessages = messages.length > 0;
   const hasHistoryContent = displayedHistory.length > 0;
   const hasContent = hasLiveMessages || hasHistoryContent;
-  const agentLabel = activeAgent === 'log_analysis'
-    ? 'Log Analysis'
-    : activeAgent === 'research'
-      ? 'Research'
-      : 'Primary Agent';
-  const modelLabel = (() => {
-    if (activeAgent === 'log_analysis') return 'Gemini 2.5 Pro';
-    if (activeAgent === 'research') return 'GPT-5 Mini';
-    return model.startsWith('gpt') ? 'GPT-5 Mini' : 'Gemini 2.5 Flash (09-2025 preview)';
-  })();
 
-  const handleModelSelect = (nextProvider: 'google' | 'openai', nextModel: string) => {
-    setProvider(nextProvider);
-    setModel(nextModel);
-    setActiveAgent('primary');
-  };
+  // Hide beams when any content (history or live messages) exists; show when empty/new chat
+  useEffect(() => {
+    if (hasContent) {
+      setShowBeams(false);
+    } else {
+      setShowBeams(true);
+    }
+  }, [hasContent, sessionId]);
 
-  const handleLogAnalysisSelect = () => {
-    setProvider('google');
-    setModel('gemini-2.5-pro');
-    setActiveAgent('log_analysis');
-  };
-
-  const handleResearchSelect = () => {
-    setProvider('openai');
-    setModel('gpt-5-mini-2025-08-07');
-    setActiveAgent('research');
-  };
 
   return (
     <div className="relative min-h-svh">
+      {showBeams && (
+        <div className="absolute inset-0 z-0 pointer-events-none">
+          <BackgroundBeamsWithCollision className="h-full from-transparent to-transparent dark:from-transparent dark:to-transparent">
+            <div />
+          </BackgroundBeamsWithCollision>
+        </div>
+      )}
       {/* Main content - centered container */}
       <div className="relative z-10 flex flex-col min-h-svh">
         {/* Header */}
-        <header className="sticky top-0 z-50 backdrop-blur-lg border-b border-border/40 bg-[hsl(var(--brand-surface)/0.95)]">
-          <div className="w-full px-4 py-3">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                <DropdownMenu>
-                  <DropdownMenuTrigger asChild>
-                    <Button
-                      variant="ghost"
-                      className="flex items-center gap-2 px-3 py-2 text-sm font-medium"
-                    >
-                      <span>{agentLabel}</span>
-                      <span className="text-xs text-muted-foreground">{modelLabel}</span>
-                      <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
-                    </Button>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align="start" className="w-56">
-                    <DropdownMenuSub>
-                      <DropdownMenuSubTrigger>Primary Agent</DropdownMenuSubTrigger>
-                      <DropdownMenuSubContent>
-                        <DropdownMenuItem
-                          onSelect={(event) => {
-                            event.preventDefault();
-                            handleModelSelect('google', 'gemini-2.5-flash-preview-09-2025');
-                          }}
-                        >
-                          Gemini 2.5 Flash
-                        </DropdownMenuItem>
-                        <DropdownMenuItem
-                          onSelect={(event) => {
-                            event.preventDefault();
-                            handleModelSelect('openai', 'gpt-5-mini-2025-08-07');
-                          }}
-                        >
-                          GPT-5 Mini
-                        </DropdownMenuItem>
-                      </DropdownMenuSubContent>
-                    </DropdownMenuSub>
-                    <DropdownMenuSeparator />
-                    <DropdownMenuItem
-                      onSelect={(event) => {
-                        event.preventDefault();
-                        handleLogAnalysisSelect();
-                      }}
-                    >
-                      Log Analysis
-                    </DropdownMenuItem>
-                    <DropdownMenuItem
-                      onSelect={(event) => {
-                        event.preventDefault();
-                        handleResearchSelect();
-                      }}
-                    >
-                      Research
-                    </DropdownMenuItem>
-                  </DropdownMenuContent>
-                </DropdownMenu>
+        <header className="sticky top-0 z-50 h-14 backdrop-blur-lg border-b border-border/40 bg-[hsl(var(--brand-surface)/0.95)]">
+          <div className="w-full h-full px-4">
+            <div className="flex h-full items-center justify-start gap-3 sm:gap-4">
+              <div className="flex items-center gap-2" aria-label="Primary agent model">
+                <span className="text-xs text-muted-foreground">Primary</span>
+                <Select value={primaryModel} onValueChange={(m) => {
+                  setPrimaryModel(m);
+                  const p = providerForModel(m);
+                  setPrimaryProvider(p);
+                  if (activeAgent === 'primary' && !logFile) {
+                    setProvider(p);
+                    setModel(m);
+                  }
+                }}>
+                  <SelectTrigger className="h-8 w-48" aria-label="Primary model selector">
+                    <SelectValue placeholder="Select model" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {(primaryModels.length ? primaryModels : [primaryModel]).map((m) => (
+                      <SelectItem key={m} value={m}>{m}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </div>
 
-              <div className="flex items-center gap-3">
-                {sessionId && <SessionStatusChip sessionId={sessionId} />}
-                {status === "streaming" && <AutoSaveIndicator status="saving" />}
-                <APIKeyStatusBadge />
-                <FeedMeButton />
-                <SettingsButtonV2 />
+              <div className="flex items-center gap-2" aria-label="Log analysis model">
+                <span className="text-xs text-muted-foreground">Log Analysis</span>
+                <Select value={logModel} onValueChange={(m) => {
+                  setLogModel(m);
+                  const p = providerForModel(m);
+                  setLogProvider(p);
+                  if (activeAgent === 'log_analysis') {
+                    setProvider(p);
+                    setModel(m);
+                  }
+                }}>
+                  <SelectTrigger className="h-8 w-48" aria-label="Log analysis model selector">
+                    <SelectValue placeholder="Select model" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {(logModels.length ? logModels : [logModel]).map((m) => (
+                      <SelectItem key={m} value={m}>{m}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </div>
+
+              {interruptsEnabled && (
+                <Button size="sm" variant="default" onClick={handleStartSupervisedRun} aria-label="Start supervised run" disabled={interruptLoading}>
+                  Start supervised run
+                </Button>
+              )}
+
+              <APIKeyStatusBadge
+                className="bg-muted text-foreground/70 border-border/40 hover:scale-100 active:scale-100 cursor-default text-sm py-1"
+              />
+
+              <FeedMeButton />
+              <SettingsButtonV2 />
             </div>
           </div>
         </header>
@@ -1068,6 +1369,7 @@ function ChatContent({ sessionId, setSessionId }: ChatContentProps) {
                 timelineSteps={liveTimelineSteps}
                 agentType={overlayAgent}
                 reducedMotion={reducedMotion}
+                dripDelayMs={overlayDripMs}
               />
             )}
             {/* Welcome state */}
@@ -1124,7 +1426,7 @@ function ChatContent({ sessionId, setSessionId }: ChatContentProps) {
                     >
                       {m.role === 'assistant' ? (
                         <div className="w-full max-w-3xl mx-auto space-y-2">
-                          {timelineSteps.length > 0 && (
+                          {!enableMultiStepLoader && timelineSteps.length > 0 && (
                             <WorkingTimeline steps={timelineSteps} variant="final" />
                           )}
                           <AssistantMessage
@@ -1153,6 +1455,14 @@ function ChatContent({ sessionId, setSessionId }: ChatContentProps) {
                   const contentText = getMessageText(m);
                   const meta = normalizeAssistantMetadata(m.metadata);
                   const dataParts = getDataParts(m);
+                  const followupsFromParts = (() => {
+                    const fp = dataParts.find((part) => part.type === 'data-followups');
+                    const arr = (fp && (fp as any).data) as unknown;
+                    return Array.isArray(arr) && arr.every((x) => typeof x === 'string') ? (arr as string[]) : undefined;
+                  })();
+                  const metaEnhanced = followupsFromParts && followupsFromParts.length > 0
+                    ? ({ ...meta, followUpQuestions: followupsFromParts } as typeof meta)
+                    : meta;
                   const logHints = Boolean(
                     m.agentType === 'log_analysis' ||
                       meta?.logMetadata ||
@@ -1164,7 +1474,7 @@ function ChatContent({ sessionId, setSessionId }: ChatContentProps) {
                   const agentTypeForTimeline = logHints ? 'log_analysis' : 'primary';
                   const computedSteps = computeTimeline({
                     dataParts,
-                    metadata: meta,
+                    metadata: metaEnhanced,
                     content: contentText,
                     agentType: agentTypeForTimeline,
                     isStreaming: m.role === 'assistant' ? isStreamingMessage : false,
@@ -1185,19 +1495,63 @@ function ChatContent({ sessionId, setSessionId }: ChatContentProps) {
                       style={{ animationDelay: `${idx * 50}ms` }}
                     >
                       {m.role === "assistant" && !hideAssistant ? (
-                        <div className="w-full max-w-3xl mx-auto space-y-2">
-                          {stepsToRender.length > 0 && (
-                            <WorkingTimeline
-                              steps={stepsToRender}
-                              variant={isStreamingMessage ? 'live' : 'final'}
+                        enableMultiStepLoader && isStreamingMessage ? (
+                          (() => {
+                            const gridCols = "md:grid-cols-[320px_minmax(0,1fr)]";
+                            const LoaderPanel = () => {
+                              const loaderSteps = (liveTimelineSteps.length > 0 ? liveTimelineSteps : stepsToRender)
+                              const states = loaderSteps.map(s => ({ text: s.title }))
+                              let activeIndex = 0
+                              if (loaderSteps.length > 0) {
+                                const lastInProgress = [...loaderSteps].map((s, i) => ({ s, i })).reverse().find(x => x.s.status === 'in_progress')
+                                const lastCompleted = [...loaderSteps].map((s, i) => ({ s, i })).reverse().find(x => x.s.status === 'completed')
+                                activeIndex = lastInProgress?.i ?? lastCompleted?.i ?? 0
+                              }
+                              return (
+                                <div className="hidden md:block self-start">
+                                  <MultiStepLoader
+                                    variant="inline"
+                                    className=""
+                                    loading={true}
+                                    loadingStates={states}
+                                    activeIndex={activeIndex}
+                                    duration={1200}
+                                    loop={true}
+                                  />
+                                </div>
+                              )
+                            }
+                            return (
+                              <div className={`grid grid-cols-1 ${gridCols} gap-4 w-full`}>
+                                <LoaderPanel />
+                                <div className="w-full max-w-3xl space-y-2">
+                                  {/* Hide WorkingTimeline while loader is active to avoid duplication */}
+                                  <AssistantMessage
+                                    content={contentText}
+                                    metadata={metaEnhanced}
+                                    isLogAnalysis={logHints}
+                                    showActions={false}
+                                  />
+                                </div>
+                              </div>
+                            )
+                          })()
+                        ) : (
+                          <div className="w-full max-w-3xl mx-auto space-y-2">
+                            {!enableMultiStepLoader && stepsToRender.length > 0 && (
+                              <WorkingTimeline
+                                steps={stepsToRender}
+                                variant={isStreamingMessage ? 'live' : 'final'}
+                              />
+                            )}
+                            <AssistantMessage
+                              content={contentText}
+                              metadata={metaEnhanced}
+                              isLogAnalysis={logHints}
+                              showActions={false}
                             />
-                          )}
-                          <AssistantMessage
-                            content={contentText}
-                            metadata={meta}
-                            isLogAnalysis={logHints}
-                          />
-                        </div>
+                          </div>
+                        )
                       ) : m.role === 'assistant' && hideAssistant ? null : (
                         <div className="max-w-[85%] rounded-2xl px-5 py-3 bg-primary/10 dark:bg-primary/20 text-foreground border border-primary/20">
                           <div className="space-y-2">
@@ -1232,25 +1586,7 @@ function ChatContent({ sessionId, setSessionId }: ChatContentProps) {
               </div>
             )}
 
-            {toolDecision && (
-              <div className="mt-6 rounded-2xl border border-border/40 bg-secondary/40 p-4 text-sm text-muted-foreground">
-                <p className="font-semibold text-foreground">Tool decision</p>
-                <p className="mt-1 text-foreground/80">{toolDecision.decision}</p>
-                {toolDecision.reasoning && (
-                  <p className="mt-2 leading-relaxed">{toolDecision.reasoning}</p>
-                )}
-                {Array.isArray(toolDecision.required_information) && toolDecision.required_information.length > 0 && (
-                  <div className="mt-3">
-                    <p className="text-xs uppercase tracking-wide text-muted-foreground">Required information</p>
-                    <ul className="mt-1 list-disc list-inside space-y-1">
-                      {toolDecision.required_information.map((item: string, idx: number) => (
-                        <li key={idx}>{item}</li>
-                      ))}
-                    </ul>
-                  </div>
-                )}
-              </div>
-            )}
+            {/* Tool decision card removed */}
 
             {/* Error message */}
             {error && (
@@ -1295,21 +1631,6 @@ function ChatContent({ sessionId, setSessionId }: ChatContentProps) {
         {/* Input area - fixed at bottom */}
         <div className="sticky bottom-0 bg-gradient-to-t from-background via-background to-transparent">
           <div className="max-w-4xl mx-auto px-4 pb-6 pt-4">
-            {followUpQuestions && followUpQuestions.length > 0 && (
-              <div className="mb-3 flex flex-wrap gap-2">
-                {followUpQuestions.map((question, idx) => (
-                  <Button
-                    key={idx}
-                    variant="outline"
-                    size="sm"
-                    className="rounded-full border-border/40 text-xs"
-                    onClick={() => setInput(question)}
-                  >
-                    {question}
-                  </Button>
-                ))}
-              </div>
-            )}
             <FileDropZone
               onFiles={async (files) => {
                 setAttachError(null);
@@ -1384,6 +1705,8 @@ function ChatContent({ sessionId, setSessionId }: ChatContentProps) {
                 onChangeModel={(m) => setModel(m)}
                 searchMode={searchMode}
                 onChangeSearchMode={setSearchMode}
+                memoryEnabled={memoryEnabled}
+                onToggleMemory={setMemoryEnabled}
               />
             </FileDropZone>
           </div>
@@ -1404,6 +1727,7 @@ function ChatContent({ sessionId, setSessionId }: ChatContentProps) {
         open={feedbackDialogState.open}
         initialFeedback={feedbackDialogState.feedbackText}
         selectedText={feedbackDialogState.selectedText}
+        metadata={typeof window !== 'undefined' ? (window as any).__gk_feedback_metadata__ : undefined}
         sessionId={sessionId}
         agent={activeAgent}
         model={model}
@@ -1419,6 +1743,8 @@ function ChatContent({ sessionId, setSessionId }: ChatContentProps) {
         open={correctionDialogState.open}
         initialIncorrect={correctionDialogState.incorrectText}
         initialCorrected={correctionDialogState.correctedText}
+        initialExplanation={typeof window !== 'undefined' ? ( ( (window as any).__gk_correction_meta__?.explanation ) || '' ) : ''}
+        metadata={typeof window !== 'undefined' ? ( (window as any).__gk_correction_meta__?.metadata ) : undefined}
         sessionId={sessionId}
         agent={activeAgent}
         model={model}
@@ -1429,6 +1755,14 @@ function ChatContent({ sessionId, setSessionId }: ChatContentProps) {
             correctedText: "",
           })
         }
+      />
+      <InterruptOverlay
+        open={interruptOpen}
+        threadId={interruptThreadId}
+        interrupts={pendingInterrupts}
+        loading={interruptLoading}
+        onDecision={handleInterruptDecision}
+        onClose={() => setInterruptOpen(false)}
       />
     </div>
   );
@@ -1490,7 +1824,7 @@ export default function AIChatPage() {
 
   const handleSelectSession = (id?: string) => {
     setSessionId(id || '');
-    setViewKey((prev) => prev + 1);
+    setViewKey((prev: number) => prev + 1);
   };
 
   const activeSessionId = sessionId || undefined;
@@ -1547,12 +1881,33 @@ export default function AIChatPage() {
     };
   }, [isRightSidebarOpen]);
 
+  const handleNewChat = useCallback(async () => {
+    try {
+      const desiredAgent: 'primary' | 'log_analysis' = activeTab === 'log' ? 'log_analysis' : 'primary';
+      const session = await sessionsAPI.create(desiredAgent);
+      const createdId = String(session.id);
+      setSessionId(createdId);
+      setViewKey((prev: number) => prev + 1);
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(
+          new CustomEvent('chat-session-updated', {
+            detail: { sessionId: createdId, agentType: desiredAgent },
+          }),
+        );
+        window.dispatchEvent(new Event('chat-sessions:refresh'));
+      }
+    } catch (e) {
+      console.error('Failed to create new chat session:', e);
+    }
+  }, [activeTab]);
+
   return (
     <SidebarProvider defaultOpen={true}>
       <AppSidebarLeft
         activeTab={activeTab}
         onChangeTab={setActiveTab}
         onOpenRightSidebar={openRightSidebar}
+        onNewChat={handleNewChat}
       />
       <RightContextSidebar 
         activeTab={activeTab} 

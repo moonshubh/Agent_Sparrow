@@ -57,13 +57,16 @@ export function Header() {
       role="banner"
     >
       <div className="flex items-center gap-2">
-        <Image
-          src="/agent-sparrow-logo.png"
-          alt="Agent Sparrow"
-          width={32}
-          height={32}
-          className="object-contain"
-        />
+        <div className="h-10 w-10 overflow-hidden rounded-sm">
+          <Image
+            src="/Sparrow_logo_cropped.png"
+            alt="Agent Sparrow"
+            width={40}
+            height={40}
+            className="object-contain"
+            priority
+          />
+        </div>
         <span className="text-base font-semibold text-accent">Agent Sparrow</span>
       </div>
       <div className="flex items-center gap-3">

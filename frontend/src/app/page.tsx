@@ -1,5 +1,5 @@
-import AIChatPage from "@/app/chat/page"
+import { redirect } from "next/navigation";
 
 export default function HomePage() {
-  return <AIChatPage />
+  redirect("/chat");
 }

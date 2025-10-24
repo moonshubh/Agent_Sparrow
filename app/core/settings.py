@@ -118,6 +118,11 @@ class Settings(BaseSettings):
     reasoning_enable_reasoning_transparency: bool = Field(default=True, alias="REASONING_ENABLE_REASONING_TRANSPARENCY")
     reasoning_debug_mode: bool = Field(default=False, alias="REASONING_DEBUG_MODE")
     reasoning_enable_thinking_trace: bool = Field(default=True, alias="ENABLE_THINKING_TRACE")
+
+    # SSE Streaming Controls
+    sse_prelude_size: int = Field(default=2048, alias="SSE_PRELUDE_SIZE")
+    sse_heartbeat_interval: float = Field(default=5.0, alias="SSE_HEARTBEAT_INTERVAL")
+    sse_heartbeat_comment: str = Field(default="ping", alias="SSE_HEARTBEAT_COMMENT")
     
     # Enhanced Log Analysis v3.0 Configuration
     log_analysis_use_optimized_analysis: bool = Field(default=True, alias="USE_OPTIMIZED_ANALYSIS")
@@ -263,6 +268,13 @@ class Settings(BaseSettings):
     
     # Internal API Security
     internal_api_token: Optional[str] = Field(default=None, alias="INTERNAL_API_TOKEN")
+
+    # OAuth Email Domain Restrictions
+    # Comma-separated list of allowed email domains for OAuth (e.g., "getmailbird.com,example.org")
+    # In production, only emails from these domains will be accepted after OAuth sign-in.
+    allowed_oauth_email_domains: List[str] = Field(
+        default=["getmailbird.com"], alias="ALLOWED_OAUTH_EMAIL_DOMAINS"
+    )
 
     # Zendesk Integration (webhook + 30m batch posting, no backfill)
     zendesk_enabled: bool = Field(default=False, alias="ZENDESK_ENABLED")
@@ -427,6 +439,33 @@ class Settings(BaseSettings):
         ]
         
         return any(env_indicators)
+
+    @field_validator('allowed_oauth_email_domains', mode='before')
+    @classmethod
+    def parse_allowed_domains(cls, v):
+        """Parse env into a normalized list of domains."""
+        if v is None:
+            return []
+        if isinstance(v, str):
+            return [d.strip().lower() for d in v.split(',') if d and d.strip()]
+        if isinstance(v, list):
+            return [str(d).strip().lower() for d in v if str(d).strip()]
+        return []
+
+    def is_email_domain_allowed(self, email: Optional[str]) -> bool:
+        """Return True if email's domain is in the allowed list (or list is empty)."""
+        if not email:
+            return False
+        try:
+            domain = email.split('@')[-1].strip().lower()
+        except Exception:
+            return False
+        allowed = [d.strip().lower() for d in (self.allowed_oauth_email_domains or []) if d]
+        # If list provided, enforce it. If empty (misconfigured), deny by default in prod.
+        if self.is_production_mode():
+            return domain in allowed if allowed else False
+        # In non-prod, allow if list empty; otherwise enforce
+        return True if not allowed else domain in allowed
     
     def _is_production_database_url(self) -> bool:
         """

@@ -4,6 +4,7 @@ const config: Config = {
     darkMode: ["class"],
     content: [
     "./src/app/**/*.{js,ts,jsx,tsx,mdx}",
+    "./src/components/**/*.{js,ts,jsx,tsx,mdx}",
     "./src/features/**/*.{js,ts,jsx,tsx,mdx}",
     "./src/shared/**/*.{js,ts,jsx,tsx,mdx}",
     "./src/services/**/*.{js,ts,jsx,tsx,mdx}",
@@ -22,7 +23,9 @@ const config: Config = {
     'focus-visible:ring-mb-blue-300',
     'text-mb-blue-400',
     'text-mb-blue-500',
-    'hover:text-mb-blue-400'
+    'hover:text-mb-blue-400',
+    // Ensure arbitrary width used by beams is generated
+    'w-[2px]'
   ],
   theme: {
 	extend: {

@@ -4,7 +4,7 @@ import React from "react"
 import remarkGfm from "remark-gfm"
 
 import { WorkingTimeline } from "./WorkingTimeline"
-import Response from "@/shared/components/Response"
+import { Response } from "@/shared/components/Response"
 import { type TimelineStep } from "@/shared/types/trace"
 import { type AgentType } from "@/shared/types/chat"
 
@@ -13,6 +13,7 @@ type StreamingOverlayProps = {
   timelineSteps: TimelineStep[]
   agentType: AgentType
   reducedMotion?: boolean
+  dripDelayMs?: number
 }
 
 const agentAccent: Record<AgentType, string> = {
@@ -22,7 +23,7 @@ const agentAccent: Record<AgentType, string> = {
   unknown: "from-[hsl(216,20%,90%)]/50 via-transparent to-transparent",
 }
 
-export function StreamingOverlay({ text, timelineSteps, agentType, reducedMotion }: StreamingOverlayProps) {
+export function StreamingOverlay({ text, timelineSteps, agentType, reducedMotion, dripDelayMs }: StreamingOverlayProps) {
   const hasTimeline = Array.isArray(timelineSteps) && timelineSteps.length > 0
   const hasText = Boolean(text && text.trim().length > 0)
 
@@ -52,6 +53,7 @@ export function StreamingOverlay({ text, timelineSteps, agentType, reducedMotion
           remarkPlugins={[remarkGfm]}
           parseIncompleteMarkdown
           reduceMotion={reducedMotion}
+          dripDelayMs={dripDelayMs}
         >
           {text}
         </Response>

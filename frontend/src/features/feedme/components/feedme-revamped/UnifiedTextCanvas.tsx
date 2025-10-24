@@ -117,6 +117,7 @@ interface UnifiedTextCanvasProps {
   readOnly?: boolean
   showApprovalControls?: boolean
   fullPageMode?: boolean
+  showProcessingSummary?: boolean
 }
 
 export function UnifiedTextCanvas({
@@ -132,6 +133,7 @@ export function UnifiedTextCanvas({
   readOnly = false,
   showApprovalControls = false,
   fullPageMode = false,
+  showProcessingSummary = true,
 }: UnifiedTextCanvasProps) {
   const [isEditing, setIsEditing] = useState(false)
   const [editedText, setEditedText] = useState(extractedText)
@@ -591,19 +593,21 @@ export function UnifiedTextCanvas({
   return (
     <Card className="border-0 shadow-none bg-transparent h-full">
       <CardContent className="flex h-full flex-col gap-4 p-0">
-        <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border/60 bg-muted/10 px-4 py-3 text-xs text-muted-foreground">
-          <div className="flex items-center gap-2">
-            <Badge variant="outline" className={cn('inline-flex items-center gap-1 border', processingSummary.badgeClass)}>
-              {processingSummary.icon}
-              {processingSummary.label}
-            </Badge>
-            <span>{processingSummary.description}</span>
+        {showProcessingSummary && (
+          <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border/60 bg-muted/10 px-4 py-3 text-xs text-muted-foreground">
+            <div className="flex items-center gap-2">
+              <Badge variant="outline" className={cn('inline-flex items-center gap-1 border', processingSummary.badgeClass)}>
+                {processingSummary.icon}
+                {processingSummary.label}
+              </Badge>
+              <span>{processingSummary.description}</span>
+            </div>
+            {confidenceBadge}
           </div>
-          {confidenceBadge}
-        </div>
+        )}
 
         {textStats && (
-          <div className="flex flex-wrap gap-3 px-1 text-xs text-muted-foreground">
+          <div className="flex flex-wrap gap-4 rounded-md border border-border/40 bg-card/50 px-3 py-2 text-xs text-muted-foreground">
             <span>{textStats.word_count.toLocaleString()} words</span>
             <span>{textStats.paragraph_count.toLocaleString()} paragraphs</span>
             <span>~{textStats.estimated_read_time_minutes.toLocaleString()} min read</span>

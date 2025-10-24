@@ -33,7 +33,7 @@ import {
   Server
 } from 'lucide-react'
 import { cn } from '@/shared/lib/utils'
-import { formatTimeAgo, getStatusColor } from '@/features/feedme/hooks/use-stats-data'
+import { getStatusColor } from '@/features/feedme/hooks/use-stats-data'
 import type {
   ConversationStats,
   ProcessingMetrics,
@@ -69,8 +69,6 @@ export function ConversationStatsCard({ data, className }: ConversationStatsCard
   const platforms = useMemo(() => [
     { name: 'Windows', value: data.byPlatform.windows, icon: <Laptop className="h-3 w-3" /> },
     { name: 'macOS', value: data.byPlatform.macos, icon: <MonitorSmartphone className="h-3 w-3" /> },
-    { name: 'Linux', value: data.byPlatform.linux, icon: <Server className="h-3 w-3" /> },
-    { name: 'Other', value: data.byPlatform.other, icon: <Globe className="h-3 w-3" /> }
   ], [data.byPlatform])
 
   return (
@@ -208,12 +206,12 @@ export function ApiUsageCard({ data, className }: ApiUsageCardProps) {
         </div>
       </CardHeader>
       <CardContent className="space-y-4">
-        {/* Gemini API */}
+        {/* Gemini Vision (Flash-Lite Preview) */}
         <div className="space-y-2">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-1.5">
               <Gauge className="h-3 w-3 text-muted-foreground" />
-              <span className="text-xs font-medium">Gemini Vision</span>
+              <span className="text-xs font-medium">Gemini 2.5 Flash-Lite</span>
             </div>
             <Badge variant={data.gemini.status === 'healthy' ? 'default' : data.gemini.status === 'warning' ? 'secondary' : 'destructive'} className="text-xs">
               {data.gemini.status}
@@ -221,10 +219,22 @@ export function ApiUsageCard({ data, className }: ApiUsageCardProps) {
           </div>
           <div className="space-y-1">
             <div className="flex justify-between text-xs">
-              <span className="text-muted-foreground">Daily Limit</span>
+              <span className="text-muted-foreground">Daily Limit (RPD)</span>
               <span className="font-medium">{data.gemini.dailyUsed}/{data.gemini.dailyLimit}</span>
             </div>
             <Progress value={geminiPercent} className={cn("h-1.5", geminiPercent > 80 && "bg-yellow-100")} />
+          </div>
+          <div className="grid grid-cols-2 gap-2 text-xs">
+            <div className="flex items-center gap-1">
+              <Hash className="h-3 w-3 text-muted-foreground" />
+              <span className="text-muted-foreground">RPM:</span>
+              <span className="font-medium">{data.gemini.callsInWindow}/{data.gemini.rpmLimit}</span>
+            </div>
+            <div className="flex items-center gap-1">
+              <BarChart3 className="h-3 w-3 text-muted-foreground" />
+              <span className="text-muted-foreground">TPM:</span>
+              <span className="font-medium">{(data.gemini.tokensInWindow / 1000).toFixed(0)}k / {(data.gemini.tpmLimit / 1000).toFixed(0)}k</span>
+            </div>
           </div>
         </div>
 
@@ -233,7 +243,7 @@ export function ApiUsageCard({ data, className }: ApiUsageCardProps) {
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-1.5">
               <Database className="h-3 w-3 text-muted-foreground" />
-              <span className="text-xs font-medium">Embeddings</span>
+              <span className="text-xs font-medium">Gemini Embeddings</span>
             </div>
             <Badge variant={data.embedding.status === 'healthy' ? 'default' : data.embedding.status === 'warning' ? 'secondary' : 'destructive'} className="text-xs">
               {data.embedding.status}
@@ -241,7 +251,7 @@ export function ApiUsageCard({ data, className }: ApiUsageCardProps) {
           </div>
           <div className="space-y-1">
             <div className="flex justify-between text-xs">
-              <span className="text-muted-foreground">Daily Limit</span>
+              <span className="text-muted-foreground">Daily Limit (RPD)</span>
               <span className="font-medium">{data.embedding.dailyUsed}/{data.embedding.dailyLimit}</span>
             </div>
             <Progress value={embeddingPercent} className={cn("h-1.5", embeddingPercent > 80 && "bg-yellow-100")} />
@@ -255,7 +265,7 @@ export function ApiUsageCard({ data, className }: ApiUsageCardProps) {
             <div className="flex items-center gap-1">
               <BarChart3 className="h-3 w-3 text-muted-foreground" />
               <span className="text-muted-foreground">TPM:</span>
-              <span className="font-medium">{(data.embedding.tokensInWindow / 1000).toFixed(0)}k</span>
+              <span className="font-medium">{(data.embedding.tokensInWindow / 1000).toFixed(0)}k / {(data.embedding.tpmLimit / 1000).toFixed(0)}k</span>
             </div>
           </div>
         </div>
@@ -271,31 +281,6 @@ interface RecentActivityCardProps {
 }
 
 export function RecentActivityCard({ data, className }: RecentActivityCardProps) {
-  // Memoize activities array to prevent recreation on every render
-  const activities = useMemo(() => [
-    {
-      icon: <Upload className="h-3 w-3" />,
-      label: 'Uploads',
-      value: data.todayUploads,
-      time: data.lastUploadTime,
-      color: 'text-blue-500'
-    },
-    {
-      icon: <Search className="h-3 w-3" />,
-      label: 'Searches',
-      value: data.todaySearches,
-      time: data.lastSearchTime,
-      color: 'text-purple-500'
-    },
-    {
-      icon: <ThumbsUp className="h-3 w-3" />,
-      label: 'Approvals',
-      value: data.todayApprovals,
-      time: data.lastApprovalTime,
-      color: 'text-green-500'
-    }
-  ], [data.todayUploads, data.todaySearches, data.todayApprovals, data.lastUploadTime, data.lastSearchTime, data.lastApprovalTime])
-
   return (
     <Card className={className}>
       <CardHeader className="pb-3">
@@ -305,24 +290,33 @@ export function RecentActivityCard({ data, className }: RecentActivityCardProps)
         </div>
       </CardHeader>
       <CardContent className="space-y-3">
-        {activities.map((activity) => (
-          <div key={activity.label} className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <div className={cn("p-1.5 rounded-md bg-muted/50", activity.color)}>
-                {activity.icon}
-              </div>
-              <div>
-                <div className="text-sm font-medium">{activity.value}</div>
-                <div className="text-xs text-muted-foreground">{activity.label}</div>
-              </div>
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <div className="p-1.5 rounded-md bg-muted/50 text-blue-500"><Upload className="h-3 w-3" /></div>
+            <div>
+              <div className="text-sm font-medium">{data.todayUploads}</div>
+              <div className="text-xs text-muted-foreground">Uploads</div>
             </div>
-            {activity.time && (
-              <span className="text-xs text-muted-foreground">
-                {formatTimeAgo(activity.time)}
-              </span>
-            )}
           </div>
-        ))}
+        </div>
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <div className="p-1.5 rounded-md bg-muted/50 text-purple-500"><Search className="h-3 w-3" /></div>
+            <div>
+              <div className="text-sm font-medium">{data.todaySearches}</div>
+              <div className="text-xs text-muted-foreground">Searches</div>
+            </div>
+          </div>
+        </div>
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <div className="p-1.5 rounded-md bg-muted/50 text-green-500"><ThumbsUp className="h-3 w-3" /></div>
+            <div>
+              <div className="text-sm font-medium">{data.todayApprovals}</div>
+              <div className="text-xs text-muted-foreground">Approvals</div>
+            </div>
+          </div>
+        </div>
       </CardContent>
     </Card>
   )

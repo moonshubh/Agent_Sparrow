@@ -20,8 +20,17 @@ from app.api.v1.schemas.chat_stream import ChatStreamEvent
 from app.core.logging_config import get_logger
 from app.core.settings import settings
 from app.core.rate_limiting.budget_limiter import enforce_budget
-from app.core.transport.sse import format_sse_comment, format_sse_data
+from app.core.transport.sse import (
+    DEFAULT_SSE_HEARTBEAT_COMMENT,
+    format_sse_comment,
+    format_sse_data,
+    build_sse_prelude,
+)
 from app.core.user_context import create_user_context_from_user_id, user_context_scope
+from app.services.global_knowledge.observability import (
+    start_trace as obs_start_trace,
+    publish_stage as obs_publish_stage,
+)
 
 logger = get_logger(__name__)
 
@@ -128,12 +137,19 @@ async def primary_agent_stream_generator(
     generated_trace_id = f"trace-{uuid.uuid4().hex[:12]}"
     stream_metrics: dict[str, int] = {"events": 0, "text_chars": 0, "heartbeats": 0}
     started_at = datetime.utcnow()
-    heartbeat_interval = 15.0
+    heartbeat_interval = getattr(settings, "sse_heartbeat_interval", 5.0)
+    heartbeat_comment = getattr(settings, "sse_heartbeat_comment", DEFAULT_SSE_HEARTBEAT_COMMENT)
+    prelude_size = getattr(settings, "sse_prelude_size", 2048)
+    obs_timeline_id: Optional[str] = None
+    obs_completed: bool = False
+    fallback_used_local: bool = False
+    obs_error: Optional[str] = None
     try:
-        # Emit an initial heartbeat comment so intermediaries keep the connection open.
+        # Emit a prelude large enough to defeat proxy buffering and an initial heartbeat.
+        prelude = build_sse_prelude(prelude_size)
         stream_metrics["events"] += 1
         stream_metrics["heartbeats"] += 1
-        yield format_sse_comment()
+        yield prelude if prelude else format_sse_comment(heartbeat_comment)
         user_context = await create_user_context_from_user_id(user_id)
         req_provider, req_model = _resolve_provider_model(provider, model)
         logger.info(
@@ -216,6 +232,17 @@ async def primary_agent_stream_generator(
             )
             return
 
+        obs_timeline_id = obs_start_trace(
+            kind="primary_chat",
+            user_id=user_id,
+            metadata={
+                "provider": req_provider,
+                "model": req_model,
+                "session_id": session_id,
+                "trace_id": generated_trace_id,
+            },
+        )
+
         async with user_context_scope(user_context):
             messages = []
             if message_history:
@@ -265,6 +292,20 @@ async def primary_agent_stream_generator(
                 session_id=session_id,
             )
 
+            # Begin the initial analysis step before streaming starts
+            try:
+                yield format_sse_data({
+                    "type": "step",
+                    "data": {
+                        "type": "Understanding request",
+                        "status": "in_progress",
+                    },
+                    "trace_id": generated_trace_id,
+                    "session_id": session_id,
+                })
+            except Exception:
+                pass
+
             stream_id = f"assistant-{uuid.uuid4().hex}"
             text_started = False
             reasoning_started = False
@@ -278,13 +319,74 @@ async def primary_agent_stream_generator(
                 trace_id=generated_trace_id,
             )
 
+            # Complete the initial analysis step
+            try:
+                yield format_sse_data({
+                    "type": "step",
+                    "data": {
+                        "type": "Understanding request",
+                        "description": "Analyzed prompt and context",
+                        "status": "completed",
+                    },
+                    "trace_id": generated_trace_id,
+                    "session_id": session_id,
+                })
+            except Exception:
+                pass
+
             metrics = stream_metrics
+            metrics["events"] = metrics.get("events", 0) + 1
+            yield format_sse_data(
+                ChatStreamEvent(
+                    type="text-start",
+                    id=stream_id,
+                    trace_id=generated_trace_id,
+                    session_id=session_id,
+                    step="assistant",
+                )
+            )
+            text_started = True
+
+            # Mark drafting phase started
+            try:
+                yield format_sse_data({
+                    "type": "step",
+                    "data": {
+                        "type": "Drafting response",
+                        "status": "in_progress",
+                    },
+                    "trace_id": generated_trace_id,
+                    "session_id": session_id,
+                })
+            except Exception:
+                pass
+            if obs_timeline_id:
+                obs_publish_stage(
+                    obs_timeline_id,
+                    stage="stream_started",
+                    status="in_progress",
+                    kind="primary_chat",
+                    user_id=user_id,
+                    metadata={"stream_id": stream_id},
+                )
             agent_stream = run_primary_agent(initial_state)
             agen = agent_stream.__aiter__()
             try:
+                next_task: asyncio.Task | None = None
                 while True:
+                    if next_task is None:
+                        next_task = asyncio.create_task(agen.__anext__())
+
+                    done, _pending = await asyncio.wait({next_task}, timeout=heartbeat_interval)
+                    if not done:
+                        metrics["events"] = metrics.get("events", 0) + 1
+                        metrics["heartbeats"] = metrics.get("heartbeats", 0) + 1
+                        yield format_sse_comment(heartbeat_comment)
+                        continue
+
+                    # Task completed
                     try:
-                        chunk = await asyncio.wait_for(agen.__anext__(), heartbeat_interval)
+                        chunk = next_task.result()
                     except StopAsyncIteration:
                         logger.info(
                             "chat_stream_upstream_complete",
@@ -293,11 +395,8 @@ async def primary_agent_stream_generator(
                             trace_id=generated_trace_id,
                         )
                         break
-                    except asyncio.TimeoutError:
-                        metrics["events"] = metrics.get("events", 0) + 1
-                        metrics["heartbeats"] = metrics.get("heartbeats", 0) + 1
-                        yield format_sse_comment("working")
-                        continue
+                    finally:
+                        next_task = None
 
                     payloads: list[ChatStreamEvent] = []
 
@@ -350,6 +449,7 @@ async def primary_agent_stream_generator(
                             content_piece,
                             stream_id,
                             emit_start=not text_started,
+                            chunk_size=48,
                             metrics=metrics,
                             trace_id=generated_trace_id,
                             session_id=session_id,
@@ -488,10 +588,71 @@ async def primary_agent_stream_generator(
                         metrics["events"] = metrics.get("events", 0) + 1
                         yield format_sse_data(payload)
             finally:
+                # Gracefully stop upstream async generator
+                try:
+                    if 'next_task' in locals() and next_task is not None and not next_task.done():
+                        next_task.cancel()
+                        try:
+                            await next_task
+                        except asyncio.CancelledError:
+                            pass
+                except Exception:
+                    pass
+
                 if hasattr(agent_stream, "aclose"):
-                    await agent_stream.aclose()
+                    try:
+                        await agent_stream.aclose()
+                    except RuntimeError as e:
+                        # Handle race: aclose() called while generator is mid-yield
+                        if "already running" in str(e).lower():
+                            try:
+                                await asyncio.sleep(0)
+                                await agent_stream.aclose()
+                            except Exception:
+                                pass
+                        else:
+                            raise
+
+            if metrics.get("text_chars", 0) == 0:
+                fallback_text = (
+                    "I'm sorry, I wasn't able to generate a response right now. "
+                    "Please verify API connectivity and keys in Settings, then try again."
+                )
+                async for fb in stream_text_by_characters(
+                    fallback_text,
+                    stream_id,
+                    emit_start=not text_started,
+                    chunk_size=48,
+                    metrics=metrics,
+                    trace_id=generated_trace_id,
+                    session_id=session_id,
+                ):
+                    yield fb
+                text_started = True
+                fallback_used_local = True
 
             if text_started:
+                # Mark drafting completed before closing
+                try:
+                    yield format_sse_data({
+                        "type": "step",
+                        "data": {
+                            "type": "Drafting response",
+                            "status": "completed",
+                        },
+                        "trace_id": generated_trace_id,
+                        "session_id": session_id,
+                    })
+                    # Emit a finish-step marker for UI timeline compaction
+                    yield format_sse_data({
+                        "type": "data",
+                        "data": { "type": "finish-step" },
+                        "trace_id": generated_trace_id,
+                        "session_id": session_id,
+                    })
+                except Exception:
+                    pass
+
                 async for closing in stream_text_by_characters(
                     "",
                     stream_id,
@@ -531,16 +692,38 @@ async def primary_agent_stream_generator(
             "chat_stream_generator_error",
             trace_id=generated_trace_id,
         )
-        stream_metrics["events"] += 1
-        yield format_sse_data(
-            ChatStreamEvent(
-                type="error",
-                errorText=f"An error occurred in the agent: {str(e)}",
+        # If this is an async generator concurrency issue, stream a friendly fallback
+        # instead of emitting a hard error which collapses the UI overlay.
+        msg = str(e).lower()
+        if ("already running" in msg) or ("anext" in msg and "running" in msg):
+            fallback_text = (
+                "I'm sorry, something interrupted the live response. "
+                "Here’s a quick summary while I stabilize the stream: "
+                "Mailbird helps you manage multiple email accounts, unify your inbox, and customize your workflow. "
+                "To add an account: Open Settings → Accounts → Add Account, enter your email and password, then follow prompts."
+            )
+            async for fb in stream_text_by_characters(
+                fallback_text,
+                locals().get("stream_id") or f"assistant-{uuid.uuid4().hex}",
+                emit_start=not locals().get("text_started", False),
+                metrics=stream_metrics,
                 trace_id=generated_trace_id,
                 session_id=session_id,
-                step="lifecycle",
+            ):
+                yield fb
+            fallback_used_local = True
+        else:
+            stream_metrics["events"] += 1
+            yield format_sse_data(
+                ChatStreamEvent(
+                    type="error",
+                    errorText=f"An error occurred in the agent: {str(e)}",
+                    trace_id=generated_trace_id,
+                    session_id=session_id,
+                    step="lifecycle",
+                )
             )
-        )
+            obs_error = str(e)
     finally:
         if not stream_closed:
             stream_metrics["events"] += 1
@@ -565,6 +748,23 @@ async def primary_agent_stream_generator(
             elapsed_ms=elapsed_ms,
             trace_id=generated_trace_id,
         )
+        if obs_timeline_id and not obs_completed:
+            obs_publish_stage(
+                obs_timeline_id,
+                stage="completed",
+                status="error" if obs_error else "complete",
+                kind="primary_chat",
+                user_id=user_id,
+                metadata={
+                    "events": stream_metrics.get("events", 0),
+                    "text_chars": stream_metrics.get("text_chars", 0),
+                    "heartbeats": stream_metrics.get("heartbeats", 0),
+                    "elapsed_ms": elapsed_ms,
+                    "stream_id": locals().get("stream_id"),
+                },
+                fallback_used=fallback_used_local,
+            )
+            obs_completed = True
 
 
 # Conditional import for authentication
@@ -600,9 +800,11 @@ async def chat_stream_v2_authenticated(request: ChatRequest, user_id: str = Depe
             "Cache-Control": "no-cache, no-transform",
             "Connection": "keep-alive",
             "Content-Type": "text/event-stream; charset=utf-8",
+            "Content-Encoding": "identity",
             "Pragma": "no-cache",
             "Vary": "Authorization, Accept-Encoding",
             "X-Accel-Buffering": "no",
+            "X-Content-Type-Options": "nosniff",
             "X-API-Version": "2.0",
         },
     )
