@@ -8,7 +8,7 @@ from dotenv import load_dotenv
 from typing import AsyncIterator, Dict, Optional, Any, List
 from functools import lru_cache
 
-from langchain_core.messages import AIMessageChunk
+from langchain_core.messages import AIMessageChunk, AIMessage
 from langchain_google_genai import ChatGoogleGenerativeAI, HarmCategory, HarmBlockThreshold
 from opentelemetry import trace
 from opentelemetry.trace import Status, StatusCode
@@ -273,7 +273,7 @@ def create_user_specific_model(api_key: str, thinking_budget: Optional[int] = No
         _model_cache.pop(cache_key, None)
         raise ValueError(f"Failed to create AI model: {str(e)}")
 
-async def run_primary_agent(state: PrimaryAgentState) -> AsyncIterator[AIMessageChunk]:
+async def run_primary_agent(state: PrimaryAgentState) -> Dict[str, Any]:
     """
     Asynchronously processes a user query using the primary agent system, yielding AI message chunks as a streaming response.
 
@@ -296,8 +296,7 @@ async def run_primary_agent(state: PrimaryAgentState) -> AsyncIterator[AIMessage
             if len(user_query) > MAX_QUERY_LENGTH:
                 parent_span.set_attribute("input.query.error", "Query too long")
                 parent_span.set_status(Status(StatusCode.ERROR, "Query too long"))
-                yield AIMessageChunk(content="Your query is too long. Please shorten it and try again.", role="assistant")
-                return
+                return {"messages": state.messages + [AIMessage(content="Your query is too long. Please shorten it and try again.")]}
 
             grounding_data: Dict[str, Any] = {}
             kb_summary_obj: Optional[SearchResultSummary] = None
@@ -394,31 +393,19 @@ async def run_primary_agent(state: PrimaryAgentState) -> AsyncIterator[AIMessage
                         "• The email address used to buy the license\n\n"
                         "Please don’t post any full payment details. Once I have those, I’ll route this to Billing or guide you to the right next step."
                     )
-                    # Send a minimal metadata snapshot before the safe fallback
-                    try:
-                        metadata_snapshot = {
-                            "grounding": {
-                                "kbResults": kb_summary.get("total_results", 0),
-                                "avgRelevance": kb_summary.get("avg_relevance", 0.0),
-                                "usedTavily": grounding_data.get("used_tavily", False),
-                                "fallbackUsed": bool(kb_summary.get("fallback_used", False)),
-                                "mailbirdSettingsLoaded": grounding_data.get("mailbird_settings_loaded", False),
-                            },
-                            "safeFallback": True,
-                        }
-                        yield AIMessageChunk(
-                            content="",
-                            role="assistant",
-                            additional_kwargs={
-                                "metadata": metadata_snapshot,
-                                "metadata_stage": "reasoning_snapshot"
-                            }
-                        )
-                    except Exception:
-                        pass
-                    # Stream safe fallback immediately
-                    yield AIMessageChunk(content=safe_text, role="assistant")
-                    return
+                    # Return safe fallback as final assistant message with metadata
+                    metadata_snapshot = {
+                        "grounding": {
+                            "kbResults": kb_summary.get("total_results", 0),
+                            "avgRelevance": kb_summary.get("avg_relevance", 0.0),
+                            "usedTavily": grounding_data.get("used_tavily", False),
+                            "fallbackUsed": bool(kb_summary.get("fallback_used", False)),
+                            "mailbirdSettingsLoaded": grounding_data.get("mailbird_settings_loaded", False),
+                        },
+                        "safeFallback": True,
+                    }
+                    msg = AIMessage(content=safe_text, additional_kwargs={"messageMetadata": metadata_snapshot})
+                    return {"messages": state.messages + [msg]}
             else:
                 parent_span.set_attribute("grounding.kb_results", 0)
                 parent_span.set_attribute("grounding.avg_relevance", 0.0)
@@ -584,8 +571,7 @@ async def run_primary_agent(state: PrimaryAgentState) -> AsyncIterator[AIMessage
                     "This can happen when the upstream model is unreachable in the current environment. "
                     "Please try again after verifying network access and API connectivity."
                 )
-                yield AIMessageChunk(content=fallback_text, role="assistant")
-                return
+                return {"messages": state.messages + [AIMessage(content=fallback_text)]}
 
             logger.info(
                 "[primary_agent] final response len=%d preview=%r",
@@ -606,7 +592,7 @@ async def run_primary_agent(state: PrimaryAgentState) -> AsyncIterator[AIMessage
                     emotion=reasoning_state.query_analysis.emotional_state,
                     solution_provided=final_response
                 )
-            # Prepare metadata (thinking trace, follow-ups, tool decisions) before streaming
+            # Prepare metadata (thinking trace, follow-ups, tool decisions) for message
             metadata_to_send = {}
 
             if grounding_data:
@@ -736,35 +722,17 @@ async def run_primary_agent(state: PrimaryAgentState) -> AsyncIterator[AIMessage
 
             metadata_to_send["structured"] = structured_payload.model_dump()
 
-            if metadata_to_send:
-                preface_metadata_chunk = AIMessageChunk(
-                    content="",
-                    role="assistant",
-                    additional_kwargs={
-                        "metadata": preface_metadata,
-                        "metadata_stage": "reasoning_snapshot"
-                    }
-                )
-                yield preface_metadata_chunk
-
-            chunk_size = 140
-            for i in range(0, len(final_response), chunk_size):
-                chunk_content = final_response[i:i+chunk_size]
-                yield AIMessageChunk(content=chunk_content, role="assistant")
-                await anyio.sleep(0.005)
-
-            if metadata_to_send:
-                metadata_chunk = AIMessageChunk(
-                    content="",
-                    role="assistant",
-                    additional_kwargs={
-                        "metadata": metadata_to_send,
-                        "metadata_stage": "final_snapshot"
-                    }
-                )
-                yield metadata_chunk
-
+            # Return a single assistant message with final text and metadata
+            final_msg = AIMessage(
+                content=final_response,
+                additional_kwargs={
+                    "messageMetadata": metadata_to_send,
+                    "metadata_stage": "final_snapshot",
+                    "preface": preface_metadata,
+                },
+            )
             parent_span.set_status(Status(StatusCode.OK))
+            return {"messages": state.messages + [final_msg]}
 
         except Exception as e:
             import traceback
@@ -778,4 +746,4 @@ async def run_primary_agent(state: PrimaryAgentState) -> AsyncIterator[AIMessage
                 parent_span.set_status(Status(StatusCode.ERROR, str(e)))
             # Include more specific error info in development
             error_msg = f"I'm sorry, an unexpected error occurred: {type(e).__name__}: {str(e)}"
-            yield AIMessageChunk(content=error_msg, role="assistant") 
+            return {"messages": state.messages + [AIMessage(content=error_msg)]}

@@ -31,6 +31,7 @@ from app.api.v1.endpoints import (
     logs_endpoints,  # Log analysis (JSON + SSE + sessions)
     research_endpoints,  # Research (JSON + SSE)
     copilot_endpoints,  # CopilotKit runtime endpoint
+    models_endpoints,  # Models listing for frontend selector
 )
 from app.api.v1.endpoints import tavily_selftest  # Dev-only Tavily diagnostics
 from app.api.v1.endpoints import feedme_endpoints  # FeedMe transcript ingestion
@@ -119,7 +120,34 @@ app = FastAPI(
     description="API server for the MB-Sparrow multi-agent system."
 )
 
-# CopilotKit endpoint mounted via router in app/api/v1/endpoints/copilot_endpoints.py
+# CopilotKit endpoints
+# 1) AG-UI LangGraph stream endpoint via router: /api/v1/copilot/stream
+# 2) CopilotKit SDK GraphQL runtime endpoint: /api/v1/copilotkit (if SDK available)
+try:
+    # Lazy import to avoid hard dependency during cold starts
+    from copilotkit.integrations.fastapi import add_fastapi_endpoint  # type: ignore
+    from copilotkit import CopilotKitSDK, LangGraphAGUIAgent, LangGraphAgent  # type: ignore
+    from app.agents.orchestration.orchestration.graph import app as compiled_graph  # type: ignore
+
+    # Monkey-patch to ensure dict_repr exists (copilotkit 0.1.70 AGUI agent lacks it)
+    if not hasattr(LangGraphAGUIAgent, "dict_repr"):
+        def _agui_dict_repr(self):
+            return {"name": getattr(self, "name", ""), "description": getattr(self, "description", "") or ""}
+        setattr(LangGraphAGUIAgent, "dict_repr", _agui_dict_repr)
+
+    _sdk = CopilotKitSDK(
+        agents=lambda _ctx: [
+            LangGraphAgent(
+                name="sparrow",
+                description="Primary Sparrow agent",
+                graph=compiled_graph,
+            )
+        ]
+    )
+    add_fastapi_endpoint(app, _sdk, "/api/v1/copilotkit")
+    logging.info("CopilotKit SDK GraphQL endpoint registered at /api/v1/copilotkit")
+except Exception as _sdk_exc:  # pragma: no cover - optional integration
+    logging.warning(f"CopilotKit SDK endpoint not registered: {_sdk_exc}")
 
 # Add SlowAPI middleware for rate limiting
 app.state.limiter = limiter
@@ -170,6 +198,7 @@ app.include_router(unified_endpoints.router, prefix="/api/v1", tags=["Agent Inte
 app.include_router(logs_endpoints.router, prefix="/api/v1", tags=["Agent Interaction"]) 
 app.include_router(research_endpoints.router, prefix="/api/v1", tags=["Agent Interaction"]) 
 app.include_router(copilot_endpoints.router, prefix="/api/v1", tags=["Copilot"])  # /api/v1/copilot/stream
+app.include_router(models_endpoints.router, prefix="/api/v1", tags=["Models"])  # /api/v1/models
 app.include_router(global_knowledge_observability.router, prefix="/api/v1", tags=["Global Knowledge"])
 app.include_router(global_knowledge_feedback.router, prefix="/api/v1", tags=["Global Knowledge"])
 # Register FeedMe routes

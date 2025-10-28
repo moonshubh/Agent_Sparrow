@@ -2,7 +2,7 @@
 
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/shared/ui/select'
 import { Label } from '@/shared/ui/label'
-import { useEffect } from 'react'
+import { useEffect, useMemo } from 'react'
 
 type Provider = 'google' | 'openai'
 
@@ -12,16 +12,7 @@ interface ModelSelectorProps {
   onChangeProvider: (provider: Provider) => void
   onChangeModel: (model: string) => void
   align?: 'left' | 'right'
-}
-
-const MODELS_BY_PROVIDER: Record<Provider, string[]> = {
-  google: ['gemini-2.5-flash-preview-09-2025', 'gemini-2.5-flash'],
-  openai: ['gpt-5-mini', 'gpt5-mini'],
-}
-
-const DEFAULT_MODELS: Record<Provider, string> = {
-  google: 'gemini-2.5-flash-preview-09-2025',
-  openai: 'gpt-5-mini',
+  modelsByProvider: Record<Provider, string[]>
 }
 
 export function ModelSelector({
@@ -30,21 +21,24 @@ export function ModelSelector({
   onChangeProvider,
   onChangeModel,
   align = 'right',
+  modelsByProvider,
 }: ModelSelectorProps) {
-  const models = MODELS_BY_PROVIDER[provider] || []
+  const models = modelsByProvider?.[provider] || []
+  const defaultModel = useMemo(() => (models.length ? models[0] : model), [models, model])
 
   // Validate and reset model when provider changes
   useEffect(() => {
     if (!models.includes(model)) {
       // Model is invalid for current provider, reset to default
-      onChangeModel(DEFAULT_MODELS[provider])
+      onChangeModel(defaultModel)
     }
-  }, [provider, model, models, onChangeModel])
+  }, [provider, model, models, onChangeModel, defaultModel])
 
   const handleProviderChange = (newProvider: Provider) => {
     onChangeProvider(newProvider)
     // Also set the default model for the new provider
-    onChangeModel(DEFAULT_MODELS[newProvider])
+    const next = (modelsByProvider?.[newProvider] || [])[0]
+    if (next) onChangeModel(next)
   }
 
   return (

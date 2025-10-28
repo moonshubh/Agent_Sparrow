@@ -15,7 +15,7 @@
 
 ## System Overview
 
-Agent Sparrow is a sophisticated multi-agent AI system built on FastAPI with a Next.js frontend. The backend implements an orchestrated agent graph using LangGraph, with specialized agents for different tasks (primary agent, log analysis, research, reflection). The system integrates with Supabase for data persistence and supports multiple AI providers.
+Agent Sparrow is a sophisticated multi-agent AI system built on FastAPI with a Next.js frontend. The backend implements an orchestrated agent graph using LangGraph, with specialized agents for different tasks (primary agent, log analysis, research, reflection). The system integrates with Supabase for data persistence, supports multiple AI providers, and now includes a CopilotKit-compatible streaming runtime at `/api/v1/copilot/stream`.
 
 Re-organization note: canonical imports are `app.agents.*` and legacy `app.agents_v2.*` paths have been removed; all endpoints now import from `app.agents.*`.
 
@@ -711,6 +711,94 @@ state = GraphState(
 - Regular security audits
 - API key rotation policy
 - Audit log retention
+
+## CopilotKit Runtime Integration
+
+### Overview
+The backend provides two CopilotKit-compatible runtimes:
+
+- `/api/v1/copilotkit` – CopilotKit SDK GraphQL runtime (preferred for React provider).
+- `/api/v1/copilot/stream` – AG-UI LangGraph streaming adapter (SSE).
+
+Both connect to the existing LangGraph orchestration layer.
+
+### Endpoint Details
+- **POST** `/api/v1/copilotkit` – GraphQL runtime used by the `<CopilotKit>` provider.
+- **POST** `/api/v1/copilot/stream` – Auth-protected streaming endpoint (SSE adapter).
+- **GET** `/api/v1/copilot/stream/health` – Health check returns `{ "status": "ok", "agent": "sparrow" }` when adapter available.
+
+Companion utility:
+- **GET** `/api/v1/models?agent_type=primary|log_analysis` – Returns provider model lists used by the frontend `ModelSelector`.
+
+### Dependencies
+- CopilotKit SDK runtime: `pip install copilotkit`
+- AG-UI adapter (optional SSE path): `pip install "ag-ui-langgraph[fastapi]"`
+- Requires FastAPI >=0.115.x
+
+### Implementation
+- GraphQL runtime: Registered in `app/main.py` (lazy import) via `copilotkit.integrations.fastapi.add_fastapi_endpoint` using `CopilotKitSDK` + `LangGraphAgent` with our compiled graph.
+- SSE adapter: `app/api/v1/endpoints/copilot_endpoints.py` wraps the compiled LangGraph graph and streams via `EventEncoder`.
+- Auth: Existing `get_current_user_id` dependency (Supabase JWT) applies.
+- Streaming: `EventEncoder` produces SSE or HTTP events based on `Accept` header for the SSE path.
+
+### Expected Request Schema (SSE adapter)
+The SSE adapter expects a Pydantic `RunAgentInput` with:
+- `messages`: List of messages with discriminator `role` and `id`/`content`
+- `threadId`, `runId`: Session and run identifiers
+- `state`, `tools`, `context`: Runtime objects (often empty)
+- `forwardedProps`: Our custom per-request properties:
+  - `session_id`: Session identifier for persistence
+  - `use_server_memory`: Boolean for memory toggle
+  - `provider`/`model`: Provider and model selection
+  - `agent_type`: 'primary' | 'log_analysis'
+  - `trace_id`: Optional tracing identifier
+  - `attachments`: Array of `{ filename, media_type, data_url }`
+
+### Example Payload (SSE adapter)
+```json
+{
+  "messages": [
+    {
+      "role": "user",
+      "id": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+      "content": "Hello, Sparrow!"
+    }
+  ],
+  "threadId": "session-123",
+  "runId": "run-abc",
+  "state": {},
+  "tools": [],
+  "context": [],
+  "forwardedProps": {
+    "session_id": "session-123",
+    "use_server_memory": true,
+    "provider": "google",
+    "model": "gemini-2.5-flash-preview-09-2025",
+    "agent_type": "primary",
+    "trace_id": "trace-xyz",
+    "attachments": []
+  }
+}
+```
+
+### Runtime Behavior
+- GraphQL runtime handles discovery and streaming via the CopilotKit SDK; used by the React provider.
+- SSE adapter path validates the request via `RunAgentInput`, instantiates `LangGraphAgent(name="sparrow", graph=compiled_graph)`, and streams events from `agent.run(input_data)` via `EventEncoder`.
+- Both paths support LangGraph interrupts where applicable and include user context from JWT in downstream calls.
+
+### Compatibility Fixes
+- Normalizes inbound payloads at `/api/v1/copilot/stream` to avoid 422 errors:
+  - Accepts `{ data: {...} }` wrappers and GraphQL `{ query, variables: { input|data } }` shapes.
+  - Accepts `forwardedProps | forwardedProperties | properties` and serializes when necessary.
+  - Normalizes `messages` from GraphQL-like inputs and preserves `id`.
+  - Provides multiple validation variants (dict/string) for forwarded props.
+  - Returns structured validation errors for quick debugging.
+
+### Integration Notes
+- Reuses existing provider/model selection logic
+- Forwards attachments to tools as before
+- Respects session memory and preferences
+- Emits CopilotKit runtime events compatible with CopilotKit client
 
 ## Conclusion
 
