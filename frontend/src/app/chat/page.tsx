@@ -1,16 +1,7 @@
 "use client";
 
-import { useEffect } from "react";
-import { useRouter } from "next/navigation";
+import CopilotChatClient from "./copilot/CopilotChatClient";
 
 export default function AIChatPage() {
-  const router = useRouter();
-  useEffect(() => {
-    router.replace('/chat/copilot');
-  }, [router]);
-  return (
-    <div className="min-h-svh w-full flex items-center justify-center p-8">
-      <div className="text-center text-sm text-muted-foreground">Redirecting to Copilot chat…</div>
-    </div>
-  );
+  return <CopilotChatClient />;
 }

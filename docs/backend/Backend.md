@@ -424,21 +424,17 @@ RLS policies compare `user_id` to `auth.uid()::text`. Apply these before enablin
 
 ## Frontend-Backend Communication
 
-### Unified Client (`frontend/lib/providers/unified-client.ts`)
-- Abstracts backend communication
-- Handles streaming responses
-- Manages authentication tokens
-- Message history management
+[DEPRECATED] Unified client removed after CopilotKit migration.
 
 #### SSE Helpers
 Streaming endpoints use `app/core/transport/sse.py` → `format_sse_data(payload)` for consistent Server‑Sent Event formatting across agents.
 
 ### Communication Flow
-1. Frontend sends request via unified client
-2. Request includes auth token, session ID, message
-3. Backend processes through agent graph
-4. Streaming response sent back via SSE/WebSocket
-5. Frontend renders incremental updates
+1. Frontend sends request via CopilotKit runtime to `/api/v1/copilot/stream`
+2. Request includes Supabase JWT, session ID, memory toggle, attachments, provider/model/agent_type, trace_id
+3. Backend CopilotKit adapter invokes our LangGraph graph
+4. Streaming events sent back via CopilotKit protocol
+5. Frontend renders incremental updates in Copilot chat UI
 
 ### Authentication Flow
 1. User logs in via Supabase Auth

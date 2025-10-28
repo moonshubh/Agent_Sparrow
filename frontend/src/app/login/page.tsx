@@ -1,12 +1,13 @@
 'use client'
 
-import { useEffect } from 'react'
+import { useEffect, Suspense } from 'react'
 import { useSearchParams } from 'next/navigation'
 import { LoginForm } from '@/features/auth/components/LoginForm'
 import { Card, CardContent, CardHeader, CardTitle } from '@/shared/ui/card'
+import { Loader2 } from 'lucide-react'
 import Image from 'next/image'
 
-export default function LoginPage() {
+function LoginInner() {
   const searchParams = useSearchParams()
   const returnUrl = searchParams.get('returnUrl')
 
@@ -53,5 +54,17 @@ export default function LoginPage() {
         </Card>
       </div>
     </div>
+  )
+}
+
+export default function LoginPage() {
+  return (
+    <Suspense fallback={
+      <div className="flex min-h-screen items-center justify-center">
+        <Loader2 className="h-8 w-8 animate-spin text-accent" />
+      </div>
+    }>
+      <LoginInner />
+    </Suspense>
   )
 }
