@@ -2,7 +2,6 @@ import { EventSourceParserStream } from 'eventsource-parser/stream'
 
 import { supabase } from '@/services/supabase'
 import { getAuthToken as getLocalToken } from '@/services/auth/local-auth'
-import { ChatMessage } from '@/shared/types/chat'
 
 // URL validation with proper error handling
 const validateApiBaseUrl = (url: string): string => {
@@ -568,11 +567,11 @@ export const agentAPI = {
    * @returns Promise resolving to an EnhancedEventSource for managing the stream
    */
   chat: <TMessage = unknown>(
-    message: string, 
+    message: string,
     onMessage: (data: TMessage) => void,
     onError?: (error: Error) => void,
     onClose?: () => void,
-    messages?: ChatMessage[],
+    messages?: Array<{ role: string; content: string; [key: string]: unknown }>,
     sessionId?: string
   ): Promise<EnhancedEventSource> =>
     apiClient.stream<TMessage>(

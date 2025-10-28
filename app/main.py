@@ -30,6 +30,7 @@ from app.api.v1.endpoints import (
     unified_endpoints,  # Unified router (SSE)
     logs_endpoints,  # Log analysis (JSON + SSE + sessions)
     research_endpoints,  # Research (JSON + SSE)
+    copilot_endpoints,  # CopilotKit runtime endpoint
 )
 from app.api.v1.endpoints import tavily_selftest  # Dev-only Tavily diagnostics
 from app.api.v1.endpoints import feedme_endpoints  # FeedMe transcript ingestion
@@ -118,6 +119,8 @@ app = FastAPI(
     description="API server for the MB-Sparrow multi-agent system."
 )
 
+# CopilotKit endpoint mounted via router in app/api/v1/endpoints/copilot_endpoints.py
+
 # Add SlowAPI middleware for rate limiting
 app.state.limiter = limiter
 app.add_middleware(SlowAPIMiddleware)
@@ -166,6 +169,7 @@ app.include_router(chat_endpoints.router, prefix="/api/v1", tags=["Agent Interac
 app.include_router(unified_endpoints.router, prefix="/api/v1", tags=["Agent Interaction"])
 app.include_router(logs_endpoints.router, prefix="/api/v1", tags=["Agent Interaction"]) 
 app.include_router(research_endpoints.router, prefix="/api/v1", tags=["Agent Interaction"]) 
+app.include_router(copilot_endpoints.router, prefix="/api/v1", tags=["Copilot"])  # /api/v1/copilot/stream
 app.include_router(global_knowledge_observability.router, prefix="/api/v1", tags=["Global Knowledge"])
 app.include_router(global_knowledge_feedback.router, prefix="/api/v1", tags=["Global Knowledge"])
 # Register FeedMe routes

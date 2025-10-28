@@ -14,9 +14,9 @@
     "verify:env": "node scripts/verify-env.js"
   },
   "dependencies": {
-    "@ai-sdk/google": "^2.0.11",
-    "@ai-sdk/openai": "^2.0.11",
-    "@ai-sdk/react": "^2.0.28",
+    "@copilotkit/react-core": "^1.10.6",
+    "@copilotkit/react-ui": "^1.10.6",
+    "@copilotkit/runtime": "^1.10.6",
     "@hello-pangea/dnd": "^18.0.1",
     "@hookform/resolvers": "^3.9.1",
     "@radix-ui/react-accordion": "1.2.2",
@@ -61,7 +61,7 @@
     "@types/react-window": "^1.8.8",
     "@types/tinycolor2": "^1.4.6",
     "@types/uuid": "^10.0.0",
-    "ai": "^5.0.28",
+    
     "autoprefixer": "^10.4.20",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
@@ -74,7 +74,7 @@
     "lucide-react": "^0.454.0",
     "marked": "^16.3.0",
     "motion": "^12.23.24",
-    "next": "15.2.4",
+    "next": "^15.3.5",
     "next-themes": "^0.4.4",
     "ogl": "^1.0.11",
     "react": "19.1.1",
@@ -116,14 +116,12 @@
     "eslint": "^9.30.1",
     "eslint-config-next": "15.3.5",
     "jsdom": "^24.1.1",
-    "mini-css-extract-plugin": "^2.9.2",
     "postcss": "^8.5",
     "puppeteer": "^22.15.0",
     "tailwindcss": "^3.4.17",
     "typescript": "^5",
     "vitest": "^2.0.4"
-  }
-  ,
+  },
   "pnpm": {
     "overrides": {
       "tailwind-merge": "^3.3.1"

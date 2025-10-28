@@ -17,6 +17,7 @@ langchain-community==0.3.25
 langchain-google-genai==2.0.8  # Compatible with google-generativeai 0.8.3
 langchain-openai==0.3.0
 langgraph==0.6.7
+copilotkit>=0.1.3
 
 # Google AI SDK (explicitly required for FeedMe modules)
 # Version 0.8.3 is compatible with langchain-google-genai 2.0.8
