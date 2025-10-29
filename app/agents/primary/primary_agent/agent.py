@@ -3,12 +3,13 @@ import logging
 import os
 import anyio
 import re
+from datetime import datetime
 from pathlib import Path
 from dotenv import load_dotenv
-from typing import AsyncIterator, Dict, Optional, Any, List
+from typing import Dict, Optional, Any, List
 from functools import lru_cache
 
-from langchain_core.messages import AIMessageChunk, AIMessage
+from langchain_core.messages import AIMessage
 from langchain_google_genai import ChatGoogleGenerativeAI, HarmCategory, HarmBlockThreshold
 from opentelemetry import trace
 from opentelemetry.trace import Status, StatusCode
@@ -275,16 +276,21 @@ def create_user_specific_model(api_key: str, thinking_budget: Optional[int] = No
 
 async def run_primary_agent(state: PrimaryAgentState) -> Dict[str, Any]:
     """
-    Asynchronously processes a user query using the primary agent system, yielding AI message chunks as a streaming response.
+    Asynchronously processes a user query using the primary agent system and returns
+    the updated conversation payload.
 
-    This function orchestrates the reasoning engine to generate a comprehensive, self-critiqued answer.
-    It handles input validation, calls the reasoning engine, logs telemetry, and streams the final response.
+    This function orchestrates the reasoning engine to generate a comprehensive,
+    self-critiqued answer. It handles input validation, calls the reasoning engine,
+    logs telemetry, and packages the final response (including metadata) as an
+    assistant message appended to the existing conversation state.
 
     Parameters:
-        state (PrimaryAgentState): The current agent state, including user messages and session context.
+        state (PrimaryAgentState): The current agent state, including user messages
+        and session context.
 
-    Yields:
-        AIMessageChunk: Streamed chunks of the AI assistant's response.
+    Returns:
+        Dict[str, Any]: A dictionary containing the updated message history under
+        the ``"messages"`` key. The last message is the assistant reply.
     """
     with tracer.start_as_current_span("primary_agent.run") as parent_span:
         try:
@@ -296,7 +302,25 @@ async def run_primary_agent(state: PrimaryAgentState) -> Dict[str, Any]:
             if len(user_query) > MAX_QUERY_LENGTH:
                 parent_span.set_attribute("input.query.error", "Query too long")
                 parent_span.set_status(Status(StatusCode.ERROR, "Query too long"))
-                return {"messages": state.messages + [AIMessage(content="Your query is too long. Please shorten it and try again.")]}
+                error_payload = {
+                    "type": "validation_error",
+                    "code": "query_too_long",
+                    "message": "Your query is too long. Please shorten it and try again.",
+                    "maxLength": MAX_QUERY_LENGTH,
+                    "actualLength": len(user_query),
+                    "timestamp": datetime.utcnow().isoformat(timespec="seconds") + "Z",
+                }
+                error_message = AIMessage(
+                    content=error_payload["message"],
+                    additional_kwargs={
+                        "messageMetadata": {"error": error_payload},
+                        "metadata_stage": "final_snapshot",
+                    },
+                )
+                return {
+                    "messages": state.messages + [error_message],
+                    "metadata": {"error": error_payload},
+                }
 
             grounding_data: Dict[str, Any] = {}
             kb_summary_obj: Optional[SearchResultSummary] = None
@@ -451,8 +475,21 @@ async def run_primary_agent(state: PrimaryAgentState) -> Dict[str, Any]:
                         "4. Save your settings and try again\n\n"
                         "Your API key should start with 'AIza' and be 39 characters long."
                     )
-                    yield AIMessageChunk(content=detailed_guidance, role="error")
-                    return
+                    metadata_snapshot = {
+                        "error": {
+                            "type": "missing_api_key",
+                            "provider": "google",
+                            "message": error_msg,
+                        }
+                    }
+                    guidance_msg = AIMessage(
+                        content=detailed_guidance,
+                        additional_kwargs={
+                            "messageMetadata": metadata_snapshot,
+                            "metadata_stage": "final_snapshot",
+                        },
+                    )
+                    return {"messages": state.messages + [guidance_msg]}
 
                 # Helper to detect auth errors that imply invalid/expired key
                 def _is_auth_error(exc: Exception) -> bool:
@@ -489,8 +526,21 @@ async def run_primary_agent(state: PrimaryAgentState) -> Dict[str, Any]:
                     logger.warning(error_msg)
                     parent_span.set_attribute("error", error_msg)
                     parent_span.set_status(Status(StatusCode.ERROR, "No OpenAI API key"))
-                    yield AIMessageChunk(content="OpenAI API key missing. Please set it in Settings or as OPENAI_API_KEY and try again.", role="error")
-                    return
+                    metadata_snapshot = {
+                        "error": {
+                            "type": "missing_api_key",
+                            "provider": "openai",
+                            "message": error_msg,
+                        }
+                    }
+                    guidance_msg = AIMessage(
+                        content="OpenAI API key missing. Please set it in Settings or as OPENAI_API_KEY and try again.",
+                        additional_kwargs={
+                            "messageMetadata": metadata_snapshot,
+                            "metadata_stage": "final_snapshot",
+                        },
+                    )
+                    return {"messages": state.messages + [guidance_msg]}
 
                 # Load model via providers registry (tools binding is optional here)
                 logger.debug(f"Loading OpenAI model via providers registry: {model_name}")
@@ -571,7 +621,25 @@ async def run_primary_agent(state: PrimaryAgentState) -> Dict[str, Any]:
                     "This can happen when the upstream model is unreachable in the current environment. "
                     "Please try again after verifying network access and API connectivity."
                 )
-                return {"messages": state.messages + [AIMessage(content=fallback_text)]}
+                error_payload = {
+                    "type": "fallback_error",
+                    "code": "final_response_missing",
+                    "message": fallback_text,
+                    "timestamp": datetime.utcnow().isoformat(timespec="seconds") + "Z",
+                    "severity": "error",
+                    "source": "primary_agent",
+                }
+                fallback_message = AIMessage(
+                    content=fallback_text,
+                    additional_kwargs={
+                        "messageMetadata": {"error": error_payload},
+                        "metadata_stage": "final_snapshot",
+                    },
+                )
+                return {
+                    "messages": state.messages + [fallback_message],
+                    "metadata": {"error": error_payload},
+                }
 
             logger.info(
                 "[primary_agent] final response len=%d preview=%r",

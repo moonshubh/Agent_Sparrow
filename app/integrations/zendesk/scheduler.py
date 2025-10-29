@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone, date
 from typing import Any, Dict, List
 import time
 
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage
 
 from app.core.settings import settings
 from app.db.supabase.client import get_supabase_client
@@ -317,11 +317,32 @@ async def _generate_reply(ticket_id: int | str, subject: str | None, description
             force_websearch=not kb_ok,
         )
 
-        parts: List[str] = []
-        async for chunk in run_primary_agent(state):
-            if getattr(chunk, "content", None):
-                parts.append(str(chunk.content))
-        text = ("".join(parts)).strip()
+        result = await run_primary_agent(state)
+        result_messages = list((result or {}).get("messages") or [])
+        final_msg = None
+        for candidate in reversed(result_messages):
+            if isinstance(candidate, AIMessage):
+                final_msg = candidate
+                break
+        if final_msg is None:
+            trace_id = getattr(state, "trace_id", None)
+            preview_payload = []
+            for msg in result_messages[-3:]:
+                content = getattr(msg, "content", "")
+                if isinstance(content, str):
+                    preview_payload.append(content[:120])
+                else:
+                    preview_payload.append(str(type(content)))
+            logger.warning(
+                "zendesk_primary_agent_no_ai_message session_id=%s trace_id=%s message_types=%s previews=%s",
+                session_id,
+                trace_id,
+                [type(msg).__name__ for msg in result_messages],
+                preview_payload,
+            )
+        text = ""
+        if final_msg and getattr(final_msg, "content", None):
+            text = str(final_msg.content).strip()
 
         # Light quality check; avoid re-running to keep daily usage accounting aligned
         if text:

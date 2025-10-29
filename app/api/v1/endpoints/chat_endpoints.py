@@ -120,6 +120,24 @@ def _resolve_provider_model(provider: Optional[str], model: Optional[str]) -> tu
     return req_provider, req_model
 
 
+def _extract_latest_thought(thinking_trace: Any) -> Optional[str]:
+    """Derive the latest textual thought from a thinking trace payload."""
+    try:
+        if isinstance(thinking_trace, dict):
+            steps = thinking_trace.get("thinking_steps")
+            if isinstance(steps, list) and steps:
+                last_step = steps[-1]
+                if isinstance(last_step, dict):
+                    thought = last_step.get("thought") or last_step.get("text")
+                    if isinstance(thought, str):
+                        return thought
+        if isinstance(thinking_trace, str):
+            return thinking_trace
+    except Exception:
+        return None
+    return None
+
+
 async def primary_agent_stream_generator(
     query: str,
     user_id: str,
@@ -334,19 +352,6 @@ async def primary_agent_stream_generator(
             except Exception:
                 pass
 
-            metrics = stream_metrics
-            metrics["events"] = metrics.get("events", 0) + 1
-            yield format_sse_data(
-                ChatStreamEvent(
-                    type="text-start",
-                    id=stream_id,
-                    trace_id=generated_trace_id,
-                    session_id=session_id,
-                    step="assistant",
-                )
-            )
-            text_started = True
-
             # Mark drafting phase started
             try:
                 yield format_sse_data({
@@ -360,6 +365,28 @@ async def primary_agent_stream_generator(
                 })
             except Exception:
                 pass
+
+            metrics = stream_metrics
+            agent_task: asyncio.Task | None = None
+            result: Optional[Dict[str, Any]] = None
+            try:
+                agent_task = asyncio.create_task(run_primary_agent(initial_state))
+                while True:
+                    try:
+                        result = await asyncio.wait_for(agent_task, timeout=heartbeat_interval)
+                        break
+                    except asyncio.TimeoutError:
+                        metrics["events"] = metrics.get("events", 0) + 1
+                        metrics["heartbeats"] = metrics.get("heartbeats", 0) + 1
+                        yield format_sse_comment(heartbeat_comment)
+            finally:
+                if agent_task is not None and not agent_task.done():
+                    agent_task.cancel()
+                    try:
+                        await agent_task
+                    except asyncio.CancelledError:
+                        pass
+
             if obs_timeline_id:
                 obs_publish_stage(
                     obs_timeline_id,
@@ -369,251 +396,50 @@ async def primary_agent_stream_generator(
                     user_id=user_id,
                     metadata={"stream_id": stream_id},
                 )
-            agent_stream = run_primary_agent(initial_state)
-            agen = agent_stream.__aiter__()
-            try:
-                next_task: asyncio.Task | None = None
-                while True:
-                    if next_task is None:
-                        next_task = asyncio.create_task(agen.__anext__())
 
-                    done, _pending = await asyncio.wait({next_task}, timeout=heartbeat_interval)
-                    if not done:
-                        metrics["events"] = metrics.get("events", 0) + 1
-                        metrics["heartbeats"] = metrics.get("heartbeats", 0) + 1
-                        yield format_sse_comment(heartbeat_comment)
-                        continue
+            result_messages = list((result or {}).get("messages") or [])
+            final_msg: Optional[AIMessage] = None
+            for candidate in reversed(result_messages):
+                if isinstance(candidate, AIMessage):
+                    final_msg = candidate
+                    break
 
-                    # Task completed
+            metadata_kwargs = {}
+            if final_msg and isinstance(final_msg.additional_kwargs, dict):
+                metadata_kwargs = dict(final_msg.additional_kwargs)
+            message_metadata = metadata_kwargs.get("messageMetadata") or {}
+            if not isinstance(message_metadata, dict):
+                message_metadata = {}
+            else:
+                message_metadata = dict(message_metadata)
+            preface_metadata = metadata_kwargs.get("preface")
+            if preface_metadata is not None and not isinstance(preface_metadata, dict):
+                preface_metadata = None
+
+            content_piece = ""
+            if final_msg and getattr(final_msg, "content", None):
+                content_piece = final_msg.content
+                if not isinstance(content_piece, str):
                     try:
-                        chunk = next_task.result()
-                    except StopAsyncIteration:
-                        logger.info(
-                            "chat_stream_upstream_complete",
-                            text_started=text_started,
-                            reasoning_started=reasoning_started,
-                            trace_id=generated_trace_id,
-                        )
-                        break
-                    finally:
-                        next_task = None
+                        content_piece = json.dumps(content_piece, ensure_ascii=False)
+                    except TypeError:
+                        content_piece = str(content_piece)
+            content_piece = filter_system_text(content_piece or "")
 
-                    payloads: list[ChatStreamEvent] = []
-
-                    if chunk is None:
-                        logger.warning("chat_stream_none_chunk", trace_id=generated_trace_id)
-                        continue
-
-                    chunk_content = getattr(chunk, "content", None)
-                    chunk_meta = getattr(chunk, "additional_kwargs", None)
-                    logger.info(
-                        "chat_stream_chunk_received",
-                        chunk_type=type(chunk).__name__,
-                        content_length=len(chunk_content) if isinstance(chunk_content, str) else (len(chunk_content) if hasattr(chunk_content, "__len__") else None),
-                        has_metadata=bool(chunk_meta),
-                        trace_id=generated_trace_id,
-                    )
-                    content_piece: Optional[str] = None
-
-                    def ensure_text_started() -> None:
-                        nonlocal text_started
-                        if not text_started:
-                            payloads.append(
-                                ChatStreamEvent(
-                                    type="text-start",
-                                    id=stream_id,
-                                    trace_id=generated_trace_id,
-                                    session_id=session_id,
-                                    step="assistant",
-                                )
-                            )
-                            text_started = True
-
-                    if chunk_content is not None:
-                        content_piece = chunk_content
-                        if not isinstance(content_piece, str):
-                            try:
-                                content_piece = json.dumps(content_piece, ensure_ascii=False)
-                            except TypeError:
-                                content_piece = str(content_piece)
-
-                        content_piece = filter_system_text(content_piece)
-                    if content_piece:
-                        logger.info(
-                            "chat_stream_text_chunk",
-                            length=len(content_piece),
-                            preview=content_piece[:120],
-                            trace_id=generated_trace_id,
-                        )
-                        async for char_chunk in stream_text_by_characters(
-                            content_piece,
-                            stream_id,
-                            emit_start=not text_started,
-                            chunk_size=48,
-                            metrics=metrics,
-                            trace_id=generated_trace_id,
-                            session_id=session_id,
-                        ):
-                            yield char_chunk
-                        text_started = True
-
-                    metadata = None
-                    if isinstance(chunk_meta, dict):
-                        metadata = chunk_meta.get("metadata")
-                    if metadata:
-                        logger.info(
-                            "chat_stream_metadata_received",
-                            keys=list(metadata.keys()),
-                            trace_id=generated_trace_id,
-                        )
-                        followups = metadata.get("followUpQuestions")
-                        if followups:
-                            ensure_text_started()
-                            payloads.append(
-                                ChatStreamEvent(
-                                    type="data-followups",
-                                    data=followups,
-                                    transient=True,
-                                    trace_id=generated_trace_id,
-                                    session_id=session_id,
-                                    step="metadata",
-                                )
-                            )
-
-                        structured_payload = metadata.get("structured")
-                        if structured_payload:
-                            ensure_text_started()
-                            payloads.append(
-                                ChatStreamEvent(
-                                    type="assistant-structured",
-                                    data=structured_payload,
-                                    trace_id=generated_trace_id,
-                                    session_id=session_id,
-                                    stream_id=stream_id,
-                                    step="structured",
-                                )
-                            )
-
-                        thinking_trace = metadata.get("thinking_trace")
-                        if thinking_trace:
-                            # Emit reasoning events in addition to legacy data-thinking for compatibility
-                            if not reasoning_started:
-                                payloads.append(
-                                    ChatStreamEvent(
-                                        type="reasoning-start",
-                                        trace_id=generated_trace_id,
-                                        session_id=session_id,
-                                        step="reasoning",
-                                    )
-                                )
-                                reasoning_started = True
-                            # Try to pick the latest thought text if available
-                            try:
-                                latest_thought = None
-                                if isinstance(thinking_trace, dict):
-                                    steps = thinking_trace.get("thinking_steps")
-                                    if isinstance(steps, list) and steps:
-                                        last = steps[-1]
-                                        if isinstance(last, dict):
-                                            t = last.get("thought") or last.get("text")
-                                            if isinstance(t, str):
-                                                latest_thought = t
-                                if isinstance(thinking_trace, str) and not latest_thought:
-                                    latest_thought = thinking_trace
-                            except Exception:
-                                latest_thought = None
-                            if latest_thought:
-                                payloads.append(
-                                    ChatStreamEvent(
-                                        type="reasoning-delta",
-                                        text=latest_thought,
-                                        trace_id=generated_trace_id,
-                                        session_id=session_id,
-                                        step="reasoning",
-                                    )
-                                )
-                            # Keep sparse metadata event for downstream consumers
-                            payloads.append(
-                                ChatStreamEvent(
-                                    type="data-thinking",
-                                    data=thinking_trace,
-                                    trace_id=generated_trace_id,
-                                    session_id=session_id,
-                                    step="reasoning",
-                                )
-                            )
-
-                        tool_results = metadata.get("toolResults")
-                        if tool_results:
-                            ensure_text_started()
-                            payloads.append(
-                                ChatStreamEvent(
-                                    type="data-tool-result",
-                                    data=tool_results,
-                                    trace_id=generated_trace_id,
-                                    session_id=session_id,
-                                    step="tool",
-                                )
-                            )
-
-                        leftover = {
-                            k: v
-                            for k, v in metadata.items()
-                            if k
-                            not in {
-                                "followUpQuestions",
-                                "thinking_trace",
-                                "toolResults",
-                                "structured",
-                            }
-                        }
-                        if leftover:
-                            ensure_text_started()
-                            payloads.append(
-                                ChatStreamEvent(
-                                    type="message-metadata",
-                                    messageMetadata=leftover,
-                                    trace_id=generated_trace_id,
-                                    session_id=session_id,
-                                    step="metadata",
-                                )
-                            )
-
-                    for payload in payloads:
-                        logger.info(
-                            "chat_stream_emit_payload",
-                            payload_type=payload.type,
-                            trace_id=generated_trace_id,
-                        )
-                        metrics["events"] = metrics.get("events", 0) + 1
-                        yield format_sse_data(payload)
-            finally:
-                # Gracefully stop upstream async generator
-                try:
-                    if 'next_task' in locals() and next_task is not None and not next_task.done():
-                        next_task.cancel()
-                        try:
-                            await next_task
-                        except asyncio.CancelledError:
-                            pass
-                except Exception:
-                    pass
-
-                if hasattr(agent_stream, "aclose"):
-                    try:
-                        await agent_stream.aclose()
-                    except RuntimeError as e:
-                        # Handle race: aclose() called while generator is mid-yield
-                        if "already running" in str(e).lower():
-                            try:
-                                await asyncio.sleep(0)
-                                await agent_stream.aclose()
-                            except Exception:
-                                pass
-                        else:
-                            raise
-
-            if metrics.get("text_chars", 0) == 0:
+            if content_piece:
+                async for char_chunk in stream_text_by_characters(
+                    content_piece,
+                    stream_id,
+                    emit_start=True,
+                    emit_end=False,
+                    chunk_size=48,
+                    metrics=metrics,
+                    trace_id=generated_trace_id,
+                    session_id=session_id,
+                ):
+                    yield char_chunk
+                text_started = True
+            else:
                 fallback_text = (
                     "I'm sorry, I wasn't able to generate a response right now. "
                     "Please verify API connectivity and keys in Settings, then try again."
@@ -621,7 +447,8 @@ async def primary_agent_stream_generator(
                 async for fb in stream_text_by_characters(
                     fallback_text,
                     stream_id,
-                    emit_start=not text_started,
+                    emit_start=True,
+                    emit_end=False,
                     chunk_size=48,
                     metrics=metrics,
                     trace_id=generated_trace_id,
@@ -630,6 +457,110 @@ async def primary_agent_stream_generator(
                     yield fb
                 text_started = True
                 fallback_used_local = True
+
+            if message_metadata:
+                logger.info(
+                    "chat_stream_metadata_received",
+                    keys=list(message_metadata.keys()),
+                    trace_id=generated_trace_id,
+                )
+            payloads: list[ChatStreamEvent] = []
+
+            followups = message_metadata.get("followUpQuestions")
+            if followups:
+                payloads.append(
+                    ChatStreamEvent(
+                        type="data-followups",
+                        data=followups,
+                        transient=True,
+                        trace_id=generated_trace_id,
+                        session_id=session_id,
+                        step="metadata",
+                    )
+                )
+
+            structured_payload = message_metadata.get("structured")
+            if structured_payload:
+                payloads.append(
+                    ChatStreamEvent(
+                        type="assistant-structured",
+                        data=structured_payload,
+                        trace_id=generated_trace_id,
+                        session_id=session_id,
+                        stream_id=stream_id,
+                        step="structured",
+                    )
+                )
+
+            thinking_trace = message_metadata.get("thinking_trace")
+            if thinking_trace:
+                payloads.append(
+                    ChatStreamEvent(
+                        type="reasoning-start",
+                        trace_id=generated_trace_id,
+                        session_id=session_id,
+                        step="reasoning",
+                    )
+                )
+                reasoning_started = True
+                latest_thought = _extract_latest_thought(thinking_trace)
+                if latest_thought:
+                    payloads.append(
+                        ChatStreamEvent(
+                            type="reasoning-delta",
+                            text=latest_thought,
+                            trace_id=generated_trace_id,
+                            session_id=session_id,
+                            step="reasoning",
+                        )
+                    )
+                payloads.append(
+                    ChatStreamEvent(
+                        type="data-thinking",
+                        data=thinking_trace,
+                        trace_id=generated_trace_id,
+                        session_id=session_id,
+                        step="reasoning",
+                    )
+                )
+
+            tool_results = message_metadata.get("toolResults")
+            if tool_results:
+                payloads.append(
+                    ChatStreamEvent(
+                        type="data-tool-result",
+                        data=tool_results,
+                        trace_id=generated_trace_id,
+                        session_id=session_id,
+                        step="tool",
+                    )
+                )
+
+            reserved_keys = {"followUpQuestions", "thinking_trace", "toolResults", "structured"}
+            leftover = {
+                key: value for key, value in message_metadata.items() if key not in reserved_keys
+            }
+            if preface_metadata:
+                leftover.setdefault("preface", preface_metadata)
+            if leftover:
+                payloads.append(
+                    ChatStreamEvent(
+                        type="message-metadata",
+                        messageMetadata=leftover,
+                        trace_id=generated_trace_id,
+                        session_id=session_id,
+                        step="metadata",
+                    )
+                )
+
+            for payload in payloads:
+                logger.info(
+                    "chat_stream_emit_payload",
+                    payload_type=payload.type,
+                    trace_id=generated_trace_id,
+                )
+                metrics["events"] = metrics.get("events", 0) + 1
+                yield format_sse_data(payload)
 
             if text_started:
                 # Mark drafting completed before closing

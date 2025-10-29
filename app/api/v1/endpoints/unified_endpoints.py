@@ -1,5 +1,6 @@
 from __future__ import annotations
 import asyncio
+import json
 import logging
 import uuid
 from typing import Any, AsyncIterable, Dict, Optional
@@ -61,6 +62,149 @@ class UnifiedAgentRequest(BaseModel):
 
 
 LOG_AGENT_ALIASES = {"log_analyst", "log_analysis"}
+
+
+def _emit_followups_if_present(
+    message_metadata: Dict[str, Any],
+    emit,
+    agent_type: Optional[str],
+    request: UnifiedAgentRequest,
+    stream_id: str,
+    preface_metadata: Optional[Dict[str, Any]],
+):
+    followups = message_metadata.get("followUpQuestions")
+    if not followups:
+        return
+    yield emit({
+        "type": "data-followups",
+        "data": followups,
+        "agent_type": agent_type,
+        "trace_id": request.trace_id,
+        "stream_id": stream_id,
+    })
+
+
+def _emit_structured_if_present(
+    message_metadata: Dict[str, Any],
+    emit,
+    agent_type: Optional[str],
+    request: UnifiedAgentRequest,
+    stream_id: str,
+    preface_metadata: Optional[Dict[str, Any]],
+):
+    structured_payload = message_metadata.get("structured")
+    if not structured_payload:
+        return
+    yield emit({
+        "type": "assistant-structured",
+        "data": structured_payload,
+        "agent_type": agent_type,
+        "trace_id": request.trace_id,
+        "stream_id": stream_id,
+    })
+
+
+def _extract_latest_thought_from_trace(thinking_trace: Any) -> Optional[str]:
+    try:
+        if isinstance(thinking_trace, dict):
+            steps = thinking_trace.get("thinking_steps")
+            if isinstance(steps, list) and steps:
+                last_step = steps[-1]
+                if isinstance(last_step, dict):
+                    thought = last_step.get("thought") or last_step.get("text")
+                    if isinstance(thought, str):
+                        return thought
+        if isinstance(thinking_trace, str):
+            return thinking_trace
+    except Exception:
+        return None
+    return None
+
+
+def _emit_thinking_trace_if_present(
+    message_metadata: Dict[str, Any],
+    emit,
+    agent_type: Optional[str],
+    request: UnifiedAgentRequest,
+    stream_id: str,
+    preface_metadata: Optional[Dict[str, Any]],
+):
+    reasoning_started = False
+
+    def _generator():
+        nonlocal reasoning_started
+        thinking_trace = message_metadata.get("thinking_trace")
+        if not thinking_trace:
+            return
+        reasoning_started = True
+        yield emit({
+            "type": "reasoning-start",
+            "agent_type": agent_type,
+            "trace_id": request.trace_id,
+            "stream_id": stream_id,
+        })
+        latest_thought = _extract_latest_thought_from_trace(thinking_trace)
+        if latest_thought:
+            yield emit({
+                "type": "reasoning-delta",
+                "text": latest_thought,
+                "agent_type": agent_type,
+                "trace_id": request.trace_id,
+                "stream_id": stream_id,
+            })
+        yield emit({
+            "type": "data-thinking",
+            "data": thinking_trace,
+            "agent_type": agent_type,
+            "trace_id": request.trace_id,
+            "stream_id": stream_id,
+        })
+
+    gen = _generator()
+    setattr(gen, "reasoning_started_flag", lambda: reasoning_started)
+    return gen
+
+
+def _emit_tool_results_if_present(
+    message_metadata: Dict[str, Any],
+    emit,
+    agent_type: Optional[str],
+    request: UnifiedAgentRequest,
+    stream_id: str,
+    preface_metadata: Optional[Dict[str, Any]],
+):
+    tool_results = message_metadata.get("toolResults")
+    if not tool_results:
+        return
+    yield emit({
+        "type": "data-tool-result",
+        "data": tool_results,
+        "agent_type": agent_type,
+        "trace_id": request.trace_id,
+        "stream_id": stream_id,
+    })
+
+
+def _emit_leftover_metadata_if_present(
+    message_metadata: Dict[str, Any],
+    emit,
+    agent_type: Optional[str],
+    request: UnifiedAgentRequest,
+    stream_id: str,
+    preface_metadata: Optional[Dict[str, Any]],
+    reserved_keys: set[str],
+):
+    leftover = {key: value for key, value in message_metadata.items() if key not in reserved_keys}
+    if preface_metadata:
+        leftover.setdefault("preface", preface_metadata)
+    if not leftover:
+        return
+    yield emit({
+        "type": "message-metadata",
+        "messageMetadata": leftover,
+        "agent_type": agent_type,
+        "trace_id": request.trace_id,
+    })
 
 
 async def stream_text_by_characters(
@@ -409,40 +553,122 @@ async def unified_agent_stream_generator(request: UnifiedAgentRequest, user_id: 
                 )
                 stream_id = f"assistant-{uuid.uuid4().hex}"
                 text_started = False
-                agent_stream = run_primary_agent(initial_state)
-                agen = agent_stream.__aiter__()
                 try:
+                    agent_task = asyncio.create_task(run_primary_agent(initial_state))
+                    result = None
                     while True:
                         try:
-                            chunk = await asyncio.wait_for(agen.__anext__(), heartbeat_interval)
-                        except StopAsyncIteration:
+                            result = await asyncio.wait_for(agent_task, heartbeat_interval)
                             break
                         except asyncio.TimeoutError:
                             yield emit_comment(heartbeat_comment)
-                            continue
-
-                        if hasattr(chunk, 'content') and chunk.content is not None:
-                            cleaned_content = filter_system_text(chunk.content)
-                            if cleaned_content.strip():
-                                async for char_chunk in stream_text_by_characters(
-                                    cleaned_content,
-                                    stream_id,
-                                    emit_start=not text_started,
-                                    chunk_size=48,
-                                    metrics=stream_metrics,
-                                ):
-                                    yield char_chunk
-                                text_started = True
-                                continue
-
-                        metadata = None
-                        if hasattr(chunk, 'additional_kwargs'):
-                            metadata = chunk.additional_kwargs.get('metadata')
-                        if metadata:
-                            yield emit({"type": "message-metadata", "messageMetadata": metadata, "agent_type": agent_type, "trace_id": request.trace_id})
+                    if result is None:
+                        raise RuntimeError("Primary agent returned no result")
                 finally:
-                    if hasattr(agent_stream, "aclose"):
-                        await agent_stream.aclose()
+                    if 'agent_task' in locals() and not agent_task.done():
+                        agent_task.cancel()
+                        try:
+                            await agent_task
+                        except asyncio.CancelledError:
+                            pass
+
+                result_messages = list((result or {}).get("messages") or [])
+                final_msg: Optional[AIMessage] = None
+                for candidate in reversed(result_messages):
+                    if isinstance(candidate, AIMessage):
+                        final_msg = candidate
+                        break
+
+                metadata_kwargs = {}
+                if final_msg and isinstance(final_msg.additional_kwargs, dict):
+                    metadata_kwargs = dict(final_msg.additional_kwargs)
+                message_metadata = metadata_kwargs.get("messageMetadata") or {}
+                if not isinstance(message_metadata, dict):
+                    message_metadata = {}
+                else:
+                    message_metadata = dict(message_metadata)
+                preface_metadata = metadata_kwargs.get("preface")
+                if preface_metadata is not None and not isinstance(preface_metadata, dict):
+                    preface_metadata = None
+
+                content_piece = ""
+                if final_msg and getattr(final_msg, "content", None):
+                    content_piece = final_msg.content
+                    if not isinstance(content_piece, str):
+                        try:
+                            content_piece = json.dumps(content_piece, ensure_ascii=False)
+                        except TypeError:
+                            content_piece = str(content_piece)
+                content_piece = filter_system_text(content_piece or "")
+
+                if content_piece:
+                    async for char_chunk in stream_text_by_characters(
+                        content_piece,
+                        stream_id,
+                        emit_start=True,
+                        emit_end=True,
+                        chunk_size=48,
+                        metrics=stream_metrics,
+                    ):
+                        yield char_chunk
+                    text_started = True
+                else:
+                    fallback_text = (
+                        "I'm sorry, I wasn't able to generate a response right now. "
+                        "Please verify API connectivity and keys in Settings, then try again."
+                    )
+                    async for fb in stream_text_by_characters(
+                        fallback_text,
+                        stream_id,
+                        emit_start=True,
+                        emit_end=True,
+                        chunk_size=48,
+                        metrics=stream_metrics,
+                    ):
+                        yield fb
+                    text_started = True
+
+                if message_metadata:
+                    for event in _emit_followups_if_present(message_metadata, emit, agent_type, request, stream_id, preface_metadata):
+                        yield event
+
+                    for event in _emit_structured_if_present(message_metadata, emit, agent_type, request, stream_id, preface_metadata):
+                        yield event
+
+                    thinking_generator = _emit_thinking_trace_if_present(
+                        message_metadata,
+                        emit,
+                        agent_type,
+                        request,
+                        stream_id,
+                        preface_metadata,
+                    )
+                    for event in thinking_generator:
+                        yield event
+                    thinking_flag = getattr(thinking_generator, "reasoning_started_flag", None)
+
+                    for event in _emit_tool_results_if_present(message_metadata, emit, agent_type, request, stream_id, preface_metadata):
+                        yield event
+
+                    reserved_keys = {"followUpQuestions", "thinking_trace", "toolResults", "structured"}
+                    for event in _emit_leftover_metadata_if_present(
+                        message_metadata,
+                        emit,
+                        agent_type,
+                        request,
+                        stream_id,
+                        preface_metadata,
+                        reserved_keys,
+                    ):
+                        yield event
+
+                    if callable(thinking_flag) and thinking_flag():
+                        yield emit({
+                            "type": "reasoning-end",
+                            "agent_type": agent_type,
+                            "trace_id": request.trace_id,
+                            "stream_id": stream_id,
+                        })
 
                 if text_started:
                     async for closing in stream_text_by_characters("", stream_id, emit_end=True, metrics=stream_metrics):
