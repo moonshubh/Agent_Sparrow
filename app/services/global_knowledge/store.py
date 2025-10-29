@@ -19,7 +19,7 @@ except ModuleNotFoundError:  # pragma: no cover - optional dependency
     AsyncPostgresStore = None  # type: ignore
 
 from app.core.settings import settings
-from app.db import embedding_utils
+from app.db.embedding import utils as embedding_utils
 from app.db.embedding_config import EXPECTED_DIM, assert_dim
 
 from .models import EnhancedPayload

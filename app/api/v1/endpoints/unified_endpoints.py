@@ -160,9 +160,19 @@ def _emit_thinking_trace_if_present(
             "stream_id": stream_id,
         })
 
-    gen = _generator()
-    setattr(gen, "reasoning_started_flag", lambda: reasoning_started)
-    return gen
+    base_gen = _generator()
+
+    class _ReasoningWrapper:
+        def __iter__(self):
+            return self
+
+        def __next__(self):
+            return next(base_gen)
+
+        def reasoning_started_flag(self):
+            return reasoning_started
+
+    return _ReasoningWrapper()
 
 
 def _emit_tool_results_if_present(

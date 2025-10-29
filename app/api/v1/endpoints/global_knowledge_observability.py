@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field
 
 from app.core.transport.sse import format_sse_data
 from app.core.settings import settings
-from app.db import embedding_utils
+from app.db.embedding import utils as embedding_utils
 from app.db.embedding_config import assert_dim
 from app.db.supabase_client import SupabaseClient
 from app.services.global_knowledge.observability import (

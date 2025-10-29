@@ -6,7 +6,7 @@ This module implements subtask 8.4 of Task 8.
 - GET /tools/internal-search: Uses pgvector similarity search on the mailbird_knowledge DB.
 """
 import logging
-from typing import List, Optional, Dict, Any, Annotated
+from typing import List, Optional, Dict, Any, Annotated, TYPE_CHECKING
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
@@ -14,7 +14,12 @@ from pydantic import BaseModel, Field
 # Import security module as a whole so tests can patch its attributes after import.
 import app.core.security as security
 from app.tools.research_tools import get_research_tools # To get TavilySearchTool instance
-from app.db.embedding.utils import find_similar_documents, SearchResult as InternalSearchResult # For internal KB search
+from app.db.embedding import utils as embedding_utils  # For internal KB search
+
+if TYPE_CHECKING:
+    from app.db.embedding_utils import SearchResult as InternalSearchResult  # pragma: no cover
+else:
+    InternalSearchResult = Dict[str, Any]
 
 # Re-export TokenPayload for type hints (optional)
 TokenPayload = security.TokenPayload
@@ -159,7 +164,7 @@ async def internal_kb_search_endpoint(
     """
     logger.info(f"Performing internal KB search for: '{search_params.query}'")
     try:
-        similar_docs = find_similar_documents(query=search_params.query, top_k=search_params.top_k)
+        similar_docs = embedding_utils.find_similar_documents(query=search_params.query, top_k=search_params.top_k)
         return InternalSearchResults(query=search_params.query, results=similar_docs)
     except Exception as e:
         logger.exception(f"Error during internal KB search for query '{search_params.query}': {e}")

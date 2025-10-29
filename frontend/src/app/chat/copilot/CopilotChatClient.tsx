@@ -188,6 +188,20 @@ function ChatInner({
     } catch {}
   }, [provider, model, sessionId]);
 
+  useEffect(() => {
+    setRequestProps((prev) => {
+      const needsUpdate =
+        prev.provider !== provider || prev.model !== model || prev.agent_type !== agentType;
+      if (!needsUpdate) return prev;
+      return {
+        ...prev,
+        provider,
+        model,
+        agent_type: agentType,
+      };
+    });
+  }, [provider, model, agentType, setRequestProps]);
+
   const captureSelection = useCallback((): string => {
     try {
       const sel = typeof window !== "undefined" ? window.getSelection() : null;

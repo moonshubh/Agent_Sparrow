@@ -7,7 +7,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 from app.core.settings import settings
 from app.db.embedding_config import assert_dim
-from app.db import embedding_utils
+from app.db.embedding import utils as embedding_utils
 from app.db.supabase_client import SupabaseClient
 from app.memory.service import memory_service
 

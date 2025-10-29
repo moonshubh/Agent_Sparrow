@@ -128,6 +128,7 @@ try:
     from copilotkit.integrations.fastapi import add_fastapi_endpoint  # type: ignore
     from copilotkit import CopilotKitSDK, LangGraphAGUIAgent, LangGraphAgent  # type: ignore
     from app.agents.orchestration.orchestration.graph import app as compiled_graph  # type: ignore
+    from app.integrations.copilotkit import SparrowLangGraphAgent
 
     # Monkey-patch to ensure dict_repr exists (copilotkit 0.1.70 AGUI agent lacks it)
     if not hasattr(LangGraphAGUIAgent, "dict_repr"):
@@ -135,15 +136,21 @@ try:
             return {"name": getattr(self, "name", ""), "description": getattr(self, "description", "") or ""}
         setattr(LangGraphAGUIAgent, "dict_repr", _agui_dict_repr)
 
-    _sdk = CopilotKitSDK(
-        agents=lambda _ctx: [
-            LangGraphAgent(
+    def _copilot_agents(context):
+        try:
+            properties = dict((context or {}).get("properties") or {})
+        except (AttributeError, TypeError, KeyError):
+            properties = {}
+        return [
+            SparrowLangGraphAgent(
                 name="sparrow",
                 description="Primary Sparrow agent",
                 graph=compiled_graph,
+                context_properties=properties,
             )
         ]
-    )
+
+    _sdk = CopilotKitSDK(agents=_copilot_agents)
     add_fastapi_endpoint(app, _sdk, "/api/v1/copilotkit")
     logging.info("CopilotKit SDK GraphQL endpoint registered at /api/v1/copilotkit")
 except Exception as _sdk_exc:  # pragma: no cover - optional integration

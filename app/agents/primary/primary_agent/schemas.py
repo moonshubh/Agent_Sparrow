@@ -30,6 +30,10 @@ class PrimaryAgentState(BaseModel):
     force_websearch: Optional[bool] = Field(default=None, description="Force enable web search regardless of KB gating")
     websearch_max_results: Optional[int] = Field(default=None, description="Override Tavily max results")
     websearch_profile: Optional[str] = Field(default=None, description="Tavily profile hint (e.g., medium/advanced)")
+    attachments: Optional[List[Dict[str, Any]]] = Field(
+        default=None,
+        description="Optional attachment payloads (data URLs) supplied by CopilotKit or SSE pipelines."
+    )
 
     model_config = ConfigDict(
         arbitrary_types_allowed=True,

@@ -24,9 +24,9 @@ from pgvector.psycopg2 import register_vector
 from dotenv import load_dotenv
 from langchain_google_genai import embeddings as gen_embeddings
 from langchain_core.embeddings import Embeddings
-from langchain_core.embeddings.fake import FakeEmbeddings
 from typing import List, Optional, Dict, Any # Removed Tuple
 from pydantic import BaseModel, ConfigDict # Added Pydantic BaseModel
+import random
 
 from app.core.settings import settings
 from app.db.supabase.client import get_supabase_client
@@ -69,9 +69,29 @@ def _allow_embedding_fallback() -> bool:
     return bool(settings.skip_auth)
 
 
+class LightweightFakeEmbeddings(Embeddings):
+    """Deterministic, numpy-free embedding stub for test environments."""
+
+    def __init__(self, size: int) -> None:
+        self._size = size
+
+    def _embed(self, text: str) -> List[float]:
+        rng = random.Random(hash(text))
+        return [rng.random() for _ in range(self._size)]
+
+    def embed_query(self, text: str) -> List[float]:
+        return self._embed(text)
+
+    def embed_documents(self, texts: List[str]) -> List[List[float]]:
+        return [self._embed(t) for t in texts]
+
+    async def aembed_documents(self, texts: List[str]) -> List[List[float]]:
+        return self.embed_documents(texts)
+
+
 @lru_cache(maxsize=1)
 def _fake_embeddings() -> Embeddings:
-    return FakeEmbeddings(size=EXPECTED_EMBEDDING_DIM)
+    return LightweightFakeEmbeddings(size=EXPECTED_EMBEDDING_DIM)
 
 
 class ResilientEmbeddings(Embeddings):

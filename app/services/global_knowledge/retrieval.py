@@ -12,7 +12,7 @@ from opentelemetry.trace import Status, StatusCode
 
 from app.core.logging_config import get_logger
 from app.core.settings import settings
-from app.db import embedding_utils
+from app.db.embedding import utils as embedding_utils
 from app.db.embedding_config import assert_dim
 from app.services.global_knowledge.store import get_async_store
 

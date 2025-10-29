@@ -9,7 +9,7 @@ from dotenv import load_dotenv
 from typing import Dict, Optional, Any, List
 from functools import lru_cache
 
-from langchain_core.messages import AIMessage
+from langchain_core.messages import AIMessage, HumanMessage
 from langchain_google_genai import ChatGoogleGenerativeAI, HarmCategory, HarmBlockThreshold
 from opentelemetry import trace
 from opentelemetry.trace import Status, StatusCode
@@ -65,6 +65,56 @@ _model_cache: Dict[str, ChatGoogleGenerativeAI] = {}
 PROJECT_ROOT = Path(__file__).resolve().parents[4]
 DEFAULT_MAILBIRD_SETTINGS_PATH = PROJECT_ROOT / "MailbirdSettings.yml"
 
+
+def _extract_text_from_message_content(content: Any) -> str:
+    """Best-effort extraction of textual content from a HumanMessage payload."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        for part in content:
+            if isinstance(part, dict):
+                if part.get("type") == "text" and isinstance(part.get("text"), str):
+                    return str(part.get("text"))
+                if "content" in part and isinstance(part["content"], str):
+                    return part["content"]
+        return ""
+    return str(content or "")
+
+
+def _augment_with_image_attachments(content: Any, attachments: List[Dict[str, Any]]) -> Optional[List[Dict[str, Any]]]:
+    """Return an updated multimodal payload when image attachments are present."""
+    if not attachments:
+        return None
+
+    MAX_ATTACHMENTS = 4
+    MAX_DATA_URL_SIZE = 5 * 1024 * 1024  # 5MB per image
+    ALLOWED_PREFIXES = ("image/",)
+    image_parts: List[Dict[str, Any]] = []
+    for attachment in attachments[:MAX_ATTACHMENTS]:
+        if not isinstance(attachment, dict):
+            continue
+        media_type = str(attachment.get("media_type") or "").lower()
+        if not media_type.startswith(ALLOWED_PREFIXES):
+            continue
+        data_url = str(attachment.get("data_url") or "")
+        if not data_url.startswith("data:"):
+            continue
+        if len(data_url) > MAX_DATA_URL_SIZE:
+            logger.warning(f"Skipping oversized image attachment: {len(data_url)} bytes")
+            continue
+        image_parts.append({"type": "image_url", "image_url": {"url": data_url}})
+
+    if not image_parts:
+        return None
+
+    # Avoid duplicating images if they are already present in the payload.
+    if isinstance(content, list):
+        if any(isinstance(part, dict) and part.get("type") == "image_url" for part in content):
+            return None
+        return [*content, *image_parts]
+
+    base_text = _extract_text_from_message_content(content)
+    return [{"type": "text", "text": base_text}, *image_parts]
 
 @lru_cache(maxsize=1)
 def _load_default_mailbird_settings_cached() -> Optional[Dict[str, Any]]:
@@ -295,7 +345,33 @@ async def run_primary_agent(state: PrimaryAgentState) -> Dict[str, Any]:
     with tracer.start_as_current_span("primary_agent.run") as parent_span:
         try:
             logger.debug("Running primary agent")
-            user_query = state.messages[-1].content if state.messages else ""
+            attachments = getattr(state, "attachments", None)
+            last_message = state.messages[-1] if state.messages else None
+            user_query = ""
+            if isinstance(last_message, HumanMessage):
+                if attachments:
+                    try:
+                        augmented = _augment_with_image_attachments(last_message.content, attachments)
+                        if augmented is not None:
+                            state.messages[-1] = HumanMessage(
+                                content=augmented,
+                                additional_kwargs=getattr(last_message, "additional_kwargs", {}),
+                                response_metadata=getattr(last_message, "response_metadata", {}),
+                                name=getattr(last_message, "name", None),
+                                id=getattr(last_message, "id", None),
+                                example=getattr(last_message, "example", False),
+                            )
+                        setattr(state, "attachments", None)
+                    except Exception as attachment_exc:  # pragma: no cover - defensive logging
+                        logger.warning("attachment_processing_failed", exc_info=attachment_exc)
+                user_query = _extract_text_from_message_content(state.messages[-1].content)
+            elif last_message is not None:
+                try:
+                    user_query = _extract_text_from_message_content(getattr(last_message, "content", ""))
+                except Exception:
+                    user_query = str(getattr(last_message, "content", ""))
+            else:
+                user_query = ""
 
             # Input Validation: Query length
             MAX_QUERY_LENGTH = 4000
