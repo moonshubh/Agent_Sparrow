@@ -62,6 +62,7 @@ class SparrowLangGraphAgent(LangGraphAgent):
         force_websearch = _get_first("force_websearch")
         websearch_max_results = _get_first("websearch_max_results")
         websearch_profile = _get_first("websearch_profile")
+        formatting_mode = _get_first("formatting", "formatting_mode")
 
         if not provider or not model:
             settings = get_settings()
@@ -87,6 +88,8 @@ class SparrowLangGraphAgent(LangGraphAgent):
             merged_forwarded["websearch_max_results"] = websearch_max_results
         if websearch_profile:
             merged_forwarded["websearch_profile"] = str(websearch_profile)
+        if formatting_mode:
+            merged_forwarded["formatting"] = str(formatting_mode).lower()
         if attachments:
             merged_forwarded["attachments"] = attachments
         else:
@@ -109,6 +112,8 @@ class SparrowLangGraphAgent(LangGraphAgent):
             state_payload["websearch_max_results"] = websearch_max_results
         if websearch_profile and "websearch_profile" not in state_payload:
             state_payload["websearch_profile"] = str(websearch_profile)
+        if formatting_mode and "formatting" not in state_payload:
+            state_payload["formatting"] = str(formatting_mode).lower()
         if attachments:
             state_payload["attachments"] = attachments
 

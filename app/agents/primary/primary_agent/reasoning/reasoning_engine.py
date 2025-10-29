@@ -121,11 +121,14 @@ class ReasoningEngine:
 
         # Select agent prompt version via settings (default v10)
         prompt_version = getattr(settings, "primary_agent_prompt_version", "v10").lower()
+        formatting_mode = getattr(self.config, "formatting_mode", "strict")
+        normalized_formatting = str(formatting_mode or "strict").strip().lower()
+        v10_config = V10Config(formatting_mode=normalized_formatting)
         if prompt_version == "v10":
-            agent_prompt = AgentSparrowV10.build_system_prompt(config=V10Config()).strip()
+            agent_prompt = AgentSparrowV10.build_system_prompt(config=v10_config).strip()
         else:
             # Fallback behavior: use v10 if legacy selection encountered
-            agent_prompt = AgentSparrowV10.build_system_prompt(config=V10Config()).strip()
+            agent_prompt = AgentSparrowV10.build_system_prompt(config=v10_config).strip()
 
         if provider_prompt and agent_prompt:
             return f"{provider_prompt}\n\n{agent_prompt}"

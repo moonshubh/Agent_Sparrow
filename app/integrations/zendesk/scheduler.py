@@ -309,12 +309,19 @@ async def _generate_reply(ticket_id: int | str, subject: str | None, description
         except Exception:
             kb_ok = True  # don’t force web search if preflight fails
 
+        resolved_temperature = getattr(settings, "primary_agent_temperature", 0.2)
+        resolved_thinking_budget = getattr(settings, "primary_agent_thinking_budget", None)
+        resolved_formatting = getattr(settings, "primary_agent_formatting", "natural")
+
         state = PrimaryAgentState(
             messages=[HumanMessage(content=user_query)],
             session_id=session_id,
             provider=getattr(settings, "primary_agent_provider", "google"),
             model=getattr(settings, "primary_agent_model", "gemini-2.5-flash"),
             force_websearch=not kb_ok,
+            temperature=resolved_temperature,
+            thinking_budget=resolved_thinking_budget,
+            formatting=resolved_formatting,
         )
 
         result = await run_primary_agent(state)

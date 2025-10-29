@@ -25,6 +25,7 @@ from app.api.v1.middleware.log_analysis_middleware import (
     log_analysis_rate_limiter,
     log_analysis_session_manager,
 )
+from app.core.settings import settings
 from app.core.transport.sse import (
     DEFAULT_SSE_HEARTBEAT_COMMENT,
     build_sse_prelude,
@@ -53,6 +54,12 @@ class UnifiedAgentRequest(BaseModel):
     session_id: str | None = None
     provider: str | None = None
     model: str | None = None
+    temperature: float | None = None
+    top_p: float | None = None
+    top_k: int | None = None
+    max_output_tokens: int | None = None
+    thinking_budget: int | None = None
+    formatting: str | None = None
     # Optional image/file attachments (data URLs) to support multimodal
     attachments: list[Dict[str, Any]] | None = None
     # Manual web search flags (from frontend pill)
@@ -552,6 +559,27 @@ async def unified_agent_stream_generator(request: UnifiedAgentRequest, user_id: 
                     messages.append(HumanMessage(content=[{"type": "text", "text": request.message}, *image_parts]))
                 else:
                     messages.append(HumanMessage(content=request.message))
+                resolved_temperature = (
+                    request.temperature
+                    if request.temperature is not None
+                    else getattr(settings, "primary_agent_temperature", 0.2)
+                )
+                resolved_thinking_budget = (
+                    request.thinking_budget
+                    if request.thinking_budget is not None
+                    else getattr(settings, "primary_agent_thinking_budget", None)
+                )
+                ALLOWED_FORMATTING = {"natural", "strict", "lean"}
+                resolved_formatting = (
+                    request.formatting
+                    if request.formatting is not None
+                    else getattr(settings, "primary_agent_formatting", "natural")
+                )
+                # Normalize and validate
+                if isinstance(resolved_formatting, str):
+                    resolved_formatting = resolved_formatting.strip().lower()
+                if resolved_formatting not in ALLOWED_FORMATTING:
+                    resolved_formatting = "natural"  # Safe default
                 initial_state = PrimaryAgentState(
                     messages=messages,
                     session_id=request.session_id,
@@ -560,6 +588,12 @@ async def unified_agent_stream_generator(request: UnifiedAgentRequest, user_id: 
                     force_websearch=request.force_websearch,
                     websearch_max_results=request.websearch_max_results,
                     websearch_profile=request.websearch_profile,
+                    temperature=resolved_temperature,
+                    top_p=request.top_p,
+                    top_k=request.top_k,
+                    max_output_tokens=request.max_output_tokens,
+                    thinking_budget=resolved_thinking_budget,
+                    formatting=resolved_formatting,
                 )
                 stream_id = f"assistant-{uuid.uuid4().hex}"
                 text_started = False

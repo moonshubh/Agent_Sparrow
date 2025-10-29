@@ -248,7 +248,16 @@ def _get_model_config() -> str:
     from app.core.settings import settings
     return settings.primary_agent_model
 
-def create_user_specific_model(api_key: str, thinking_budget: Optional[int] = None, bind_tools: bool = True) -> ChatGoogleGenerativeAI:
+def create_user_specific_model(
+    api_key: str,
+    *,
+    thinking_budget: Optional[int] = None,
+    bind_tools: bool = True,
+    temperature: Optional[float] = None,
+    top_p: Optional[float] = None,
+    top_k: Optional[int] = None,
+    max_output_tokens: Optional[int] = None,
+) -> ChatGoogleGenerativeAI:
     """Create a user-specific Gemini model with their API key and thinking budget.
     
     Features:
@@ -266,15 +275,27 @@ def create_user_specific_model(api_key: str, thinking_budget: Optional[int] = No
     if not _validate_api_key(api_key):
         raise ValueError("Invalid API key format. Please verify your Google Generative AI key.")
     
-    # Check cache first (using a hash of the API key for security)
-    cache_key = f"{hash(api_key)}_{_get_model_config()}_{thinking_budget}_{bind_tools}"
+    # Check cache first (using a deterministic hash of the API key for security)
+    api_key_hash = hashlib.sha256(api_key.encode()).hexdigest()[:16]
+    cache_key = (
+        f"{api_key_hash}_{_get_model_config()}_{thinking_budget}_{bind_tools}_"
+        f"{temperature}_{top_p}_{top_k}_{max_output_tokens}"
+    )
     if cache_key in _model_cache:
         logger.debug(f"Returning cached model for user with thinking_budget: {thinking_budget}, bind_tools: {bind_tools}")
         return _model_cache[cache_key]
     
     try:
         model_name = _get_model_config()
-        logger.info(f"Creating new user-specific model with {model_name}, thinking_budget: {thinking_budget}")
+        logger.info(
+            "Creating new user-specific model with %s, thinking_budget=%s, temperature=%s, top_p=%s, top_k=%s, max_output_tokens=%s",
+            model_name,
+            thinking_budget,
+            temperature if temperature is not None else getattr(settings, "primary_agent_temperature", 0.2),
+            top_p,
+            top_k,
+            max_output_tokens,
+        )
         
         safety_settings = {
             HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
@@ -284,13 +305,22 @@ def create_user_specific_model(api_key: str, thinking_budget: Optional[int] = No
         }
         
         # Create model configuration
+        resolved_temperature = (
+            temperature if temperature is not None else getattr(settings, "primary_agent_temperature", 0.2)
+        )
         model_kwargs = {
             "model": model_name,
-            "temperature": 0,
+            "temperature": resolved_temperature,
             "google_api_key": api_key,
             "safety_settings": safety_settings,
             "convert_system_message_to_human": True
         }
+        if top_p is not None:
+            model_kwargs["top_p"] = top_p
+        if top_k is not None:
+            model_kwargs["top_k"] = top_k
+        if max_output_tokens is not None:
+            model_kwargs["max_output_tokens"] = max_output_tokens
         
         # Add thinking budget for Gemini 2.5 Flash models
         if "2.5-flash" in model_name.lower() and thinking_budget is not None:
@@ -520,6 +550,52 @@ async def run_primary_agent(state: PrimaryAgentState) -> Dict[str, Any]:
             provider = (state_provider or os.getenv("PRIMARY_AGENT_PROVIDER") or getattr(settings, "primary_agent_provider", "google")).lower()
             model_name = (state_model or getattr(settings, "primary_agent_model", "gemini-2.5-flash"))
             logger.info(f"[primary_agent] selected provider={provider}, model={model_name}")
+            parent_span.set_attribute("llm.provider", provider)
+            parent_span.set_attribute("llm.model", model_name)
+
+            state_temperature = getattr(state, "temperature", None)
+            resolved_temperature = (
+                state_temperature if state_temperature is not None else getattr(settings, "primary_agent_temperature", 0.2)
+            )
+            resolved_top_p = getattr(state, "top_p", None)
+            resolved_top_k = getattr(state, "top_k", None)
+            resolved_max_output_tokens = getattr(state, "max_output_tokens", None)
+            state_thinking_budget = getattr(state, "thinking_budget", None)
+            resolved_thinking_budget = (
+                state_thinking_budget
+                if state_thinking_budget is not None
+                else getattr(settings, "primary_agent_thinking_budget", None)
+            )
+            default_formatting = getattr(settings, "primary_agent_formatting", "strict")
+            formatting_candidate_obj = getattr(state, "formatting", None) or default_formatting
+            if isinstance(formatting_candidate_obj, str):
+                formatting_candidate = formatting_candidate_obj.strip().lower() or default_formatting
+            else:
+                formatting_candidate = default_formatting
+            if formatting_candidate not in {"strict", "natural", "lean"}:
+                resolved_formatting = default_formatting
+            else:
+                resolved_formatting = formatting_candidate
+
+            logger.info(
+                "[primary_agent] generation_settings temperature=%s top_p=%s top_k=%s max_output_tokens=%s thinking_budget=%s formatting=%s",
+                resolved_temperature,
+                resolved_top_p,
+                resolved_top_k,
+                resolved_max_output_tokens,
+                resolved_thinking_budget,
+                resolved_formatting,
+            )
+            parent_span.set_attribute("llm.temperature", resolved_temperature)
+            if resolved_top_p is not None:
+                parent_span.set_attribute("llm.top_p", resolved_top_p)
+            if resolved_top_k is not None:
+                parent_span.set_attribute("llm.top_k", resolved_top_k)
+            if resolved_max_output_tokens is not None:
+                parent_span.set_attribute("llm.max_output_tokens", resolved_max_output_tokens)
+            if resolved_thinking_budget is not None:
+                parent_span.set_attribute("llm.thinking_budget", resolved_thinking_budget)
+            parent_span.set_attribute("llm.formatting_mode", resolved_formatting)
 
             # Branch per provider
             if provider == "google":
@@ -580,11 +656,27 @@ async def run_primary_agent(state: PrimaryAgentState) -> Dict[str, Any]:
                 used_key = selected_key
                 try:
                     logger.debug("Creating Gemini model with tools and rate limiting")
-                    model_with_tools = create_user_specific_model(selected_key)
+                    model_with_tools = create_user_specific_model(
+                        selected_key,
+                        thinking_budget=resolved_thinking_budget,
+                        bind_tools=True,
+                        temperature=resolved_temperature,
+                        top_p=resolved_top_p,
+                        top_k=resolved_top_k,
+                        max_output_tokens=resolved_max_output_tokens,
+                    )
                 except Exception as e:
                     if _is_auth_error(e) and env_key and selected_key != env_key:
                         logger.warning(f"[primary_agent] Gemini auth error with user key, retrying with env key: {e}")
-                        model_with_tools = create_user_specific_model(env_key)
+                        model_with_tools = create_user_specific_model(
+                            env_key,
+                            thinking_budget=resolved_thinking_budget,
+                            bind_tools=True,
+                            temperature=resolved_temperature,
+                            top_p=resolved_top_p,
+                            top_k=resolved_top_k,
+                            max_output_tokens=resolved_max_output_tokens,
+                        )
                         used_key = env_key
                         parent_span.set_attribute("api_key_source_retry", "fallback_env_after_auth_error")
                     else:
@@ -620,7 +712,15 @@ async def run_primary_agent(state: PrimaryAgentState) -> Dict[str, Any]:
 
                 # Load model via providers registry (tools binding is optional here)
                 logger.debug(f"Loading OpenAI model via providers registry: {model_name}")
-                model_with_tools = await get_primary_agent_model(api_key=openai_key, provider="openai", model=model_name)
+                model_with_tools = await get_primary_agent_model(
+                    api_key=openai_key,
+                    provider="openai",
+                    model=model_name,
+                    temperature=resolved_temperature,
+                    top_p=resolved_top_p,
+                    top_k=resolved_top_k,
+                    max_output_tokens=resolved_max_output_tokens,
+                )
 
             try:
                 query_hash = hashlib.sha256(user_query.encode("utf-8")).hexdigest()
@@ -638,7 +738,9 @@ async def run_primary_agent(state: PrimaryAgentState) -> Dict[str, Any]:
                 enable_quality_assessment=settings.reasoning_enable_quality_assessment,
                 enable_reasoning_transparency=settings.reasoning_enable_reasoning_transparency,
                 debug_mode=settings.reasoning_debug_mode,
-                quality_level=getattr(settings, "primary_agent_quality_level", "balanced")
+                quality_level=getattr(settings, "primary_agent_quality_level", "balanced"),
+                thinking_budget_override=resolved_thinking_budget,
+                formatting_mode=resolved_formatting,
             )
             reasoning_engine = ReasoningEngine(
                 model=model_with_tools,

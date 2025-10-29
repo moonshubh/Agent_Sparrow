@@ -34,6 +34,30 @@ class PrimaryAgentState(BaseModel):
         default=None,
         description="Optional attachment payloads (data URLs) supplied by CopilotKit or SSE pipelines."
     )
+    temperature: Optional[float] = Field(
+        default=None,
+        description="Temperature override for the primary agent model."
+    )
+    top_p: Optional[float] = Field(
+        default=None,
+        description="top_p sampling value forwarded to the provider adapter."
+    )
+    top_k: Optional[int] = Field(
+        default=None,
+        description="top_k sampling value forwarded to the provider adapter."
+    )
+    max_output_tokens: Optional[int] = Field(
+        default=None,
+        description="Max output tokens limit applied to generations."
+    )
+    thinking_budget: Optional[int] = Field(
+        default=None,
+        description="Optional thinking_budget override for Gemini reasoning calls."
+    )
+    formatting: Optional[str] = Field(
+        default=None,
+        description="Preferred response formatting mode (e.g., 'strict', 'natural')."
+    )
 
     model_config = ConfigDict(
         arbitrary_types_allowed=True,

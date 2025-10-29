@@ -43,6 +43,12 @@ class ChatRequest(BaseModel):
     session_id: str | None = None
     provider: str | None = None
     model: str | None = None
+    temperature: float | None = None
+    top_p: float | None = None
+    top_k: int | None = None
+    max_output_tokens: int | None = None
+    thinking_budget: int | None = None
+    formatting: str | None = None
     # Optional image/file attachments from frontend (data URLs)
     attachments: list[dict] | None = None
     # Manual web search flags
@@ -150,6 +156,12 @@ async def primary_agent_stream_generator(
     force_websearch: bool | None = None,
     websearch_max_results: int | None = None,
     websearch_profile: str | None = None,
+    temperature: float | None = None,
+    top_p: float | None = None,
+    top_k: int | None = None,
+    max_output_tokens: int | None = None,
+    thinking_budget: int | None = None,
+    formatting: str | None = None,
 ) -> AsyncIterable[str]:
     stream_closed = False
     generated_trace_id = f"trace-{uuid.uuid4().hex[:12]}"
@@ -292,6 +304,17 @@ async def primary_agent_stream_generator(
             else:
                 messages.append(HumanMessage(content=query))
 
+            resolved_temperature = (
+                temperature if temperature is not None else getattr(settings, "primary_agent_temperature", 0.2)
+            )
+            resolved_thinking_budget = (
+                thinking_budget if thinking_budget is not None else getattr(settings, "primary_agent_thinking_budget", None)
+            )
+            resolved_formatting_raw = (formatting or "strict").strip().lower()
+            resolved_formatting = resolved_formatting_raw or "strict"
+            if resolved_formatting not in {"natural", "strict", "lean"}:
+                resolved_formatting = "strict"
+
             initial_state = PrimaryAgentState(
                 messages=messages,
                 session_id=session_id,
@@ -301,6 +324,12 @@ async def primary_agent_stream_generator(
                 force_websearch=force_websearch,
                 websearch_max_results=websearch_max_results,
                 websearch_profile=websearch_profile,
+                temperature=resolved_temperature,
+                top_p=top_p,
+                top_k=top_k,
+                max_output_tokens=max_output_tokens,
+                thinking_budget=resolved_thinking_budget,
+                formatting=resolved_formatting,
             )
             logger.info(
                 "chat_stream_state_initialized",
@@ -725,6 +754,12 @@ async def chat_stream_v2_authenticated(request: ChatRequest, user_id: str = Depe
             force_websearch=request.force_websearch,
             websearch_max_results=request.websearch_max_results,
             websearch_profile=request.websearch_profile,
+            temperature=request.temperature,
+            top_p=request.top_p,
+            top_k=request.top_k,
+            max_output_tokens=request.max_output_tokens,
+            thinking_budget=request.thinking_budget,
+            formatting=request.formatting,
         ),
         media_type="text/event-stream; charset=utf-8",
         headers={

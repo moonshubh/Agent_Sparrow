@@ -367,7 +367,8 @@ async def analyze_with_reasoning(
                 enable_quality_assessment=request.enable_quality_assessment,
                 enable_reasoning_transparency=True,
                 thinking_budget_override=request.thinking_budget,
-                quality_level=request.quality_level
+                quality_level=request.quality_level,
+                formatting_mode=getattr(settings, "primary_agent_formatting", "strict"),
             )
 
             # Load model via provider registry

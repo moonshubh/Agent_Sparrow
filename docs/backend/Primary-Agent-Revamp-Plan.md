@@ -1,6 +1,6 @@
 # Primary Agent Revamp Plan (CopilotKit + LangGraph + Gemini 2.5 Flash)
 
-Status: Phase 2 complete (validation pending import fix)
+Status: Phase 3 complete (lean prompt & config tuning live)
 Owners: Primary Agent, Orchestration, Frontend CopilotKit
 Scope: Backend FastAPI + LangGraph, Frontend CopilotKit, Provider adapters
 
@@ -124,6 +124,13 @@ Config toggles
 - `PRIMARY_AGENT_TEMPERATURE` (float)
 - `PRIMARY_AGENT_MODEL`, `PRIMARY_AGENT_PROVIDER`
 - `THINKING_BUDGET` (optional int)
+
+### Phase 3 implementation (completed 2025-10-29)
+- New settings cover `PRIMARY_AGENT_TEMPERATURE`, `THINKING_BUDGET`, and `PRIMARY_AGENT_FORMATTING`; SSE and unified endpoints now forward temperature/top_p/top_k/max_output_tokens/formatting into `PrimaryAgentState`.
+- `run_primary_agent` and `create_user_specific_model` honour generation overrides (temperature, thinking_budget, sampling caps) and emit span logs for provider/model/formatting plus budgets.
+- Added V10 lean system prompt plus formatting plumbing (`ReasoningConfig.formatting_mode`) so CopilotKit defaults to the natural/lean layout while SSE stays on the strict skeleton.
+- CopilotKit runtime forwards formatting hints into LangGraph state to keep prompt selection consistent across resumptions.
+- Tests: `pytest tests/api/test_unified_endpoint_metadata_helpers.py`.
 
 ---
 

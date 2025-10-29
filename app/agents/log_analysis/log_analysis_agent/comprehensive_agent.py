@@ -115,6 +115,7 @@ class LogAnalysisAgent:
             enable_reasoning_transparency=True,
             quality_score_threshold=0.7,
             escalation_threshold=0.4,
+            formatting_mode="strict",
         )
 
         # Initialize components

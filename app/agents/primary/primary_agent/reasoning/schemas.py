@@ -5,7 +5,7 @@ This module defines the data structures used throughout the advanced reasoning
 framework for chain-of-thought processing and problem-solving workflows.
 """
 
-from typing import Dict, List, Optional, Any, Union
+from typing import Dict, List, Optional, Any, Union, Literal
 from dataclasses import dataclass, field
 from enum import Enum
 from datetime import datetime
@@ -14,6 +14,10 @@ import uuid
 from langchain_core.messages import BaseMessage
 
 from app.agents.primary.primary_agent.prompts.emotion_templates import EmotionalState
+
+
+FormattingModeType = Literal["strict", "natural", "lean"]
+QualityLevelType = Literal["fast", "balanced", "thorough"]
 
 
 class ReasoningPhase(Enum):
@@ -411,4 +415,5 @@ class ReasoningConfig:
     
     # Thinking budget controls
     thinking_budget_override: Optional[int] = None
-    quality_level: str = "balanced"
+    quality_level: QualityLevelType = "balanced"
+    formatting_mode: FormattingModeType = "strict"

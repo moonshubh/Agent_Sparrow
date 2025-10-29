@@ -57,6 +57,9 @@ class Settings(BaseSettings):
     # Provider/model selection for primary agent
     primary_agent_provider: str = Field(default="google", alias="PRIMARY_AGENT_PROVIDER")
     primary_agent_model: str = Field(default="gemini-2.5-flash", alias="PRIMARY_AGENT_MODEL")
+    primary_agent_temperature: float = Field(default=0.2, alias="PRIMARY_AGENT_TEMPERATURE")
+    primary_agent_thinking_budget: Optional[int] = Field(default=None, alias="THINKING_BUDGET")
+    primary_agent_formatting: str = Field(default="natural", alias="PRIMARY_AGENT_FORMATTING")
     primary_agent_quality_level: str = Field(default="balanced", alias="PRIMARY_AGENT_QUALITY_LEVEL")
     primary_agent_prompt_version: str = Field(default="v10", alias="PRIMARY_AGENT_PROMPT_VERSION")
     enable_websearch: bool = Field(default=True, alias="ENABLE_WEBSEARCH")
@@ -337,6 +340,30 @@ class Settings(BaseSettings):
         if v < 0:
             raise ValueError("primary_agent_min_kb_results must be zero or greater")
         return v
+
+    @field_validator("primary_agent_temperature")
+    @classmethod
+    def validate_primary_agent_temperature(cls, value: float) -> float:
+        if value < 0.0 or value > 2.0:
+            raise ValueError("primary_agent_temperature must be between 0.0 and 2.0")
+        return value
+
+    @field_validator("primary_agent_thinking_budget")
+    @classmethod
+    def validate_primary_agent_thinking_budget(cls, value: Optional[int]) -> Optional[int]:
+        if value is None:
+            return None
+        if value < -1:
+            raise ValueError("primary_agent_thinking_budget must be -1 (dynamic) or non-negative")
+        return value
+
+    @field_validator("primary_agent_formatting")
+    @classmethod
+    def validate_primary_agent_formatting(cls, value: str) -> str:
+        normalized = (value or "").strip().lower()
+        if normalized not in {"natural", "strict", "lean"}:
+            raise ValueError("primary_agent_formatting must be one of: natural, strict, lean")
+        return normalized
 
     @field_validator("retrieval_primary", mode="before")
     @classmethod
