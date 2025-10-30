@@ -32,6 +32,12 @@
 **/test-results/
 **/coverage/
 
+# Allow curated frontend performance test scripts to be tracked
+!tests/
+tests/*
+!tests/frontend/
+!tests/frontend/**
+
 # Python byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
