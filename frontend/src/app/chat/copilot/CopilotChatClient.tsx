@@ -96,7 +96,19 @@ function SimpleChatUI({
   const resolvedApiPath = useMemo(() => {
     if (apiPath && apiPath.trim().length > 0) return apiPath;
     const base = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
-    // CopilotKit React expects a Copilot Runtime (GraphQL) endpoint
+
+    // Phase 2: Feature-flagged endpoint switching
+    // NEXT_PUBLIC_USE_COPILOT_STREAM controls which endpoint to use:
+    // - false (default): GraphQL endpoint /api/v1/copilotkit (legacy, current)
+    // - true: Stream endpoint /api/v1/copilot/stream (Phase 1 enhanced)
+    const useStreamEndpoint = process.env.NEXT_PUBLIC_USE_COPILOT_STREAM === "true";
+
+    if (useStreamEndpoint) {
+      // Stream endpoint with Phase 1 context merge
+      return `${base.replace(/\/$/, "")}/api/v1/copilot/stream`;
+    }
+
+    // GraphQL endpoint (current default)
     return `${base.replace(/\/$/, "")}/api/v1/copilotkit`;
   }, [apiPath]);
 
