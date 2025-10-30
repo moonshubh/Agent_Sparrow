@@ -1,12 +1,28 @@
 "use client";
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
+import dynamic from "next/dynamic";
 import CopilotChatClient from "./copilot/CopilotChatClient";
 import { SidebarProvider, SidebarInset } from "@/shared/ui/sidebar";
 import AppSidebarLeft, { type LeftTab } from "@/app/chat/components/AppSidebarLeft";
 import RightContextSidebar from "@/app/chat/components/RightContextSidebar";
 import { sessionsAPI } from "@/services/api/endpoints/sessions";
 
+// Phase 3: Dynamic import for CopilotSidebarClient
+const CopilotSidebarClient = dynamic(
+  () => import("./copilot/CopilotSidebarClient"),
+  { ssr: false }
+);
+
+/**
+ * Phase 3: Feature Flag Toggle
+ *
+ * NEXT_PUBLIC_USE_COPILOT_UI_COMPONENTS controls which UI to render:
+ * - false (default): Custom chat UI with manual rendering (CopilotChatClient)
+ * - true: CopilotKit polished UI with CopilotSidebar
+ *
+ * Rollback: Set flag to false and restart frontend
+ */
 export default function AIChatPage() {
   const [activeTab, setActiveTab] = useState<LeftTab>('primary');
   const [sessionId, setSessionId] = useState<string>('');
@@ -14,6 +30,10 @@ export default function AIChatPage() {
   const [rightPanelTop, setRightPanelTop] = useState<number>(96);
   const [rightPanelLeft, setRightPanelLeft] = useState<number | undefined>(undefined);
   const rightAutoCloseTimerRef = useRef<number | null>(null);
+
+  // Phase 3: Check feature flag
+  const useCopilotUI =
+    process.env.NEXT_PUBLIC_USE_COPILOT_UI_COMPONENTS === "true";
 
   const openRightSidebar = useCallback((top?: number, left?: number) => {
     if (typeof top === 'number' && !Number.isNaN(top)) {
@@ -86,7 +106,19 @@ export default function AIChatPage() {
   }, [activeTab]);
 
   const activeSessionId = sessionId || undefined;
+  const agentType = activeTab === 'log' ? 'log_analysis' : 'primary';
 
+  // Phase 3: Conditional rendering based on feature flag
+  if (useCopilotUI) {
+    return (
+      <CopilotSidebarClient
+        initialSessionId={activeSessionId}
+        agentType={agentType}
+      />
+    );
+  }
+
+  // Legacy custom UI (default)
   return (
     <SidebarProvider defaultOpen={true}>
       <AppSidebarLeft
@@ -106,7 +138,7 @@ export default function AIChatPage() {
       <SidebarInset>
         <CopilotChatClient
           initialSessionId={activeSessionId}
-          agentType={activeTab === 'log' ? 'log_analysis' : 'primary'}
+          agentType={agentType}
         />
       </SidebarInset>
     </SidebarProvider>
