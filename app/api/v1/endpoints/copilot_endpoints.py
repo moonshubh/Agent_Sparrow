@@ -6,6 +6,12 @@ CopilotKit Remote Endpoint (AG-UI LangGraph)
 Exposes `/api/v1/copilot/stream` as an auth-protected POST streaming endpoint
 compatible with CopilotKit's runtime client. Uses the official `ag_ui_langgraph`
 adapter to wrap our compiled LangGraph graph.
+
+Phase 1 Enhancement:
+- Context merge: Extracts properties (session_id, trace_id, provider, model, agent_type)
+  and merges them into both state dict and config.configurable for LangGraph execution
+- Attachment validation: Validates attachments using Attachment model with size/MIME checks
+- Comprehensive logging: Logs normalized properties, attachment processing, trace propagation
 """
 
 import json
@@ -40,6 +46,198 @@ except Exception:  # pragma: no cover
     EventEncoder = object  # type: ignore
     compiled_graph = None  # type: ignore
     _SDK_AVAILABLE = False
+
+# Import for context merge and attachment validation
+from app.agents.orchestration.orchestration.state import Attachment
+from app.core.settings import get_settings
+
+
+def _sanitize_attachments(payload: Any) -> List[Dict[str, Any]]:
+    """
+    Validate and normalize attachment payloads into a predictable list of dicts.
+
+    Phase 1 Enhancement: Validates attachments using the Attachment pydantic model
+    to ensure size limits (10MB), allowed MIME types, and proper data URL format.
+
+    Choice: Extract, validate, and pass attachments in state (not in forwardedProps)
+    Why:
+    - Ensures validation before agent execution
+    - Provides parity with GraphQL endpoint (SparrowLangGraphAgent)
+    - Clean separation: validated attachments in state, other properties in forwardedProps
+    - Agents can trust state["attachments"] is validated
+
+    Args:
+        payload: Raw attachments list from client properties
+
+    Returns:
+        List of validated attachment dicts ready for GraphState
+
+    Raises:
+        HTTPException: If attachment validation fails (size, MIME type, format)
+    """
+    attachments: List[Dict[str, Any]] = []
+    if not isinstance(payload, list):
+        return attachments
+
+    for idx, item in enumerate(payload):
+        if not isinstance(item, dict):
+            logging.warning(f"Skipping non-dict attachment at index {idx}")
+            continue
+
+        try:
+            # Backward-compatibility mapping: accept legacy GraphQL keys
+            # - filename -> name
+            # - media_type -> mime_type
+            normalized = dict(item)
+            if "mime_type" not in normalized and "media_type" in normalized:
+                normalized["mime_type"] = normalized.get("media_type")
+            if "name" not in normalized and "filename" in normalized:
+                normalized["name"] = normalized.get("filename")
+
+            # Validate using Attachment model (enforces size, MIME type, data URL format)
+            validated = Attachment.model_validate(normalized)
+            attachments.append({
+                "name": validated.name,
+                "mime_type": validated.mime_type,
+                "data_url": validated.data_url,
+                "size": validated.size,
+            })
+            logging.debug(
+                f"Validated attachment: name={validated.name}, mime_type={validated.mime_type}, "
+                f"size={validated.size}"
+            )
+        except Exception as e:
+            # Required: fail loudly on validation errors
+            error_detail = f"Attachment validation failed at index {idx}: {str(e)}"
+            logging.error(error_detail)
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "attachment_validation_failed",
+                    "message": error_detail,
+                    "attachment_index": idx,
+                }
+            )
+
+    return attachments
+
+
+def _merge_copilot_context(
+    properties: Dict[str, Any],
+    state: Dict[str, Any],
+    config: Dict[str, Any],
+) -> None:
+    """
+    Inject per-request CopilotKit context (provider, session, attachments) into state and config.
+
+    Phase 1 Enhancement: Ports context merge logic from SparrowLangGraphAgent._merge_context
+    to ensure feature parity between GraphQL and stream endpoints.
+
+    This function:
+    1. Extracts properties: session_id, trace_id, provider, model, agent_type, etc.
+    2. Validates and sanitizes attachments
+    3. Merges into state dict (for GraphState)
+    4. Merges into config.configurable (for LangGraph execution)
+    5. Applies defaults from settings if provider/model not specified
+
+    Required: Fails loudly if critical properties are malformed (per requirement 3b).
+
+    Args:
+        properties: Forwarded properties from CopilotKit client
+        state: State dict to be passed to LangGraph (modified in-place)
+        config: Config dict with configurable field (modified in-place)
+    """
+    def _get_first(*keys: str) -> Optional[Any]:
+        """Helper to extract first non-empty value from properties."""
+        for key in keys:
+            if key in properties and properties[key] not in (None, ""):
+                return properties[key]
+        return None
+
+    # Extract core properties
+    session_id = _get_first("session_id")
+    trace_id = _get_first("trace_id")
+    provider = _get_first("provider")
+    model = _get_first("model")
+    agent_type = _get_first("agent_type")
+    force_websearch = _get_first("force_websearch")
+    websearch_max_results = _get_first("websearch_max_results")
+    websearch_profile = _get_first("websearch_profile")
+    formatting_mode = _get_first("formatting", "formatting_mode")
+    use_server_memory = _get_first("use_server_memory")
+
+    # Apply defaults if provider/model not specified
+    if not provider or not model:
+        settings = get_settings()
+        provider = provider or getattr(settings, "primary_agent_provider", "google")
+        model = model or getattr(settings, "primary_agent_model", "gemini-2.5-flash")
+
+    # Validate and sanitize attachments (fails loudly on error)
+    attachments = _sanitize_attachments(properties.get("attachments") or [])
+
+    # Merge into config.configurable (LangGraph execution context)
+    configurable = config.setdefault("configurable", {})
+    if session_id:
+        configurable["session_id"] = str(session_id)
+    if trace_id:
+        configurable["trace_id"] = str(trace_id)
+    if provider:
+        configurable["provider"] = str(provider)
+    if model:
+        configurable["model"] = str(model)
+    if agent_type:
+        configurable["agent_type"] = str(agent_type)
+    if force_websearch is not None:
+        configurable["force_websearch"] = force_websearch
+    if websearch_max_results is not None:
+        configurable["websearch_max_results"] = websearch_max_results
+    if websearch_profile:
+        configurable["websearch_profile"] = str(websearch_profile)
+    if formatting_mode:
+        configurable["formatting"] = str(formatting_mode).lower()
+    if use_server_memory is not None:
+        configurable["use_server_memory"] = use_server_memory
+    if attachments:
+        configurable["attachments"] = attachments
+
+    # Merge into state (GraphState fields)
+    if session_id:
+        state.setdefault("session_id", str(session_id))
+    if trace_id:
+        state.setdefault("trace_id", str(trace_id))
+    if provider:
+        state.setdefault("provider", str(provider))
+    if model:
+        state.setdefault("model", str(model))
+    if agent_type:
+        state.setdefault("agent_type", str(agent_type))
+    if force_websearch is not None:
+        state.setdefault("force_websearch", force_websearch)
+    if websearch_max_results is not None:
+        state.setdefault("websearch_max_results", websearch_max_results)
+    if websearch_profile:
+        state.setdefault("websearch_profile", str(websearch_profile))
+    if formatting_mode:
+        state.setdefault("formatting", str(formatting_mode).lower())
+    if use_server_memory is not None:
+        state.setdefault("use_server_memory", use_server_memory)
+    if attachments:
+        state.setdefault("attachments", attachments)
+
+    # Comprehensive logging (Phase 1 requirement)
+    logging.info(
+        "copilot_context_merge_complete",
+        extra={
+            "session_id": session_id,
+            "trace_id": trace_id,
+            "provider": provider,
+            "model": model,
+            "agent_type": agent_type,
+            "attachments_count": len(attachments),
+            "use_server_memory": use_server_memory,
+            "force_websearch": force_websearch,
+        },
+    )
 
 
 @router.post("/copilot/stream")
@@ -85,6 +283,19 @@ async def copilot_stream(request: Request, user_id: str = Depends(get_current_us
         or raw.get("forwardedProperties")
         or raw.get("properties")
         or {}
+    )
+
+    # Comprehensive logging: Log incoming properties (Phase 1 requirement)
+    logging.info(
+        "copilot_stream_request_received",
+        extra={
+            "has_forwarded_props": bool(forwarded),
+            "forwarded_keys": list(forwarded.keys()) if isinstance(forwarded, dict) else [],
+            "session_id_present": "session_id" in forwarded,
+            "trace_id_present": "trace_id" in forwarded,
+            "attachments_present": "attachments" in forwarded,
+            "attachments_count": len(forwarded.get("attachments", [])) if isinstance(forwarded.get("attachments"), list) else 0,
+        },
     )
 
     thread_id: Optional[str] = raw.get("threadId") or forwarded.get("session_id")
@@ -153,19 +364,56 @@ async def copilot_stream(request: Request, user_id: str = Depends(get_current_us
     base.setdefault("tools", [])
     base.setdefault("context", [])
 
+    # Phase 1: Merge CopilotKit context into state and config
+    # This ensures feature parity with GraphQL endpoint (SparrowLangGraphAgent)
+    state_dict: Dict[str, Any] = base["state"]
+    config_dict: Dict[str, Any] = {"configurable": {}}
+
+    # Extract attachments from forwarded props and remove to avoid duplication
+    # (attachments will be in state after merge, not in forwardedProps)
+    forwarded_without_attachments = {k: v for k, v in forwarded.items() if k != "attachments"}
+
+    try:
+        _merge_copilot_context(forwarded, state_dict, config_dict)
+        logging.info(
+            "copilot_context_merge_applied",
+            extra={
+                "state_keys": list(state_dict.keys()),
+                "config_keys": list(config_dict.get("configurable", {}).keys()),
+            },
+        )
+    except HTTPException:
+        # Attachment validation errors are already HTTPException, re-raise
+        raise
+    except Exception as e:
+        # Required: Fail loudly on context merge errors (requirement 3b)
+        logging.error(f"Context merge failed: {str(e)}", exc_info=True)
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "context_merge_failed",
+                "message": f"Failed to merge CopilotKit context: {str(e)}",
+            }
+        )
+
+    # Update base with merged state and add config
+    base["state"] = state_dict
+    base["config"] = config_dict
+
+    # Phase 1: Use forwarded props WITHOUT attachments (attachments are in state now)
     variants: List[Dict[str, Any]] = []
-    # 1) forwardedProps as dict
-    variants.append({**base, "forwardedProps": forwarded})
+    # 1) forwardedProps as dict (without attachments - already in state)
+    variants.append({**base, "forwardedProps": forwarded_without_attachments})
     # 2) forwardedProps as JSON string
     try:
-        variants.append({**base, "forwardedProps": json.dumps(forwarded)})
+        variants.append({**base, "forwardedProps": json.dumps(forwarded_without_attachments)})
     except Exception:
         variants.append({**base, "forwardedProps": json.dumps({})})
     # 3) forwardedProperties as dict
-    variants.append({**base, "forwardedProperties": forwarded})
+    variants.append({**base, "forwardedProperties": forwarded_without_attachments})
     # 4) forwardedProperties as JSON string
     try:
-        variants.append({**base, "forwardedProperties": json.dumps(forwarded)})
+        variants.append({**base, "forwardedProperties": json.dumps(forwarded_without_attachments)})
     except Exception:
         variants.append({**base, "forwardedProperties": json.dumps({})})
 
