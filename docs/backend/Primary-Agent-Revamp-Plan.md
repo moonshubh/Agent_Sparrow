@@ -159,6 +159,12 @@ Cleanup (delete)
 - `app/agents/primary/primary_agent/prompts/response_formatter.py`
 - Any references in `agent.py` / `reasoning_engine.py`
 
+### Phase 4 implementation (completed 2025-10-30)
+- Removed the legacy response formatter (`app/agents/primary/primary_agent/prompts/response_formatter.py`) and pruned its exports so the primary agent prompt dictates response structure end-to-end.
+- Simplified `app/agents/primary/primary_agent/agent.py` metadata handling; follow-up suggestions now rely on prompt/model output rather than backend template generation while preserving structured payload shape.
+- Updated `app/integrations/zendesk/scheduler.py` to forward agent responses without formatter rewrites, maintaining only the plain-text/HTML normalization needed for ticket ingestion.
+- Verification: `pytest tests/api/test_unified_endpoint_metadata_helpers.py`.
+
 ---
 
 ## Phase 5 — Reflection JSON‑mode (Gemini)
@@ -178,6 +184,12 @@ Verify
 
 Cleanup
 - None (keep cache + routing).
+
+### Phase 5 implementation (completed 2025-10-30)
+- Reflection node now forces Gemini JSON mode by forwarding `response_mime_type="application/json"` when loading the reasoning model, with graceful fallbacks for non-Google adapters.
+- Added focused unit coverage in `tests/backend/test_reflection_node.py` to confirm JSON-mode handshakes and parsed `ReflectionFeedback` payloads.
+- Maintained structured validation via `ReflectionFeedback.model_validate_json` so downstream routing continues to receive typed results.
+- Verification: `pytest tests/backend/test_reflection_node.py`.
 
 ---
 
@@ -200,6 +212,12 @@ Verify
 Cleanup
 - Remove redundant direct calls if ToolNode path is stable; keep safe fallback only.
 
+### Phase 6 implementation (completed 2025-10-30)
+- `run_primary_agent` now inspects LangGraph `tool_reasoning` output to emit LangChain `AIMessage` tool calls for KB/web fetches, then rehydrates returned `ToolMessage` payloads into the existing grounding metadata (follow-ups, safe-fallback gating, structured telemetry) without duplicating searches.
+- The legacy `mailbird_kb_search` tool now returns a structured JSON payload so ToolNode outputs deserialize cleanly into `SearchResultSummary` data, enabling deterministic reasoning post-tools.
+- Added regression coverage in `tests/backend/test_primary_agent_tool_bridging.py` for tool-call generation, tool-result hydration, and safe metadata wiring; helper tests also verify standalone parsing logic.
+- Verification: `PYTHONDONTWRITEBYTECODE=1 python -m pytest tests/backend/test_reflection_node.py tests/backend/test_primary_agent_tool_bridging.py tests/api/test_unified_endpoint_metadata_helpers.py`.
+
 ---
 
 ## Phase 7 — Frontend UX polish
@@ -216,6 +234,18 @@ Verify
 
 Cleanup
 - None.
+
+### Phase 7 implementation (completed 2025-10-30)
+- Added a collapsible reasoning panel (`frontend/src/features/chat/components/ReasoningPanel.tsx`) that mirrors CopilotKit’s reference expand/collapse UX, surfaces the latest thought preview, and renders the full structured trace via the existing `ReasoningTrace` component on demand.
+- Updated the Copilot chat client (`frontend/src/app/chat/copilot/CopilotChatClient.tsx`) to hydrate reasoning traces from `messageMetadata.thinking_trace`, track per-turn streaming state, and tuck the new panel beneath assistant responses without disturbing suggestion chips or legacy styling.
+- Adjusted the CopilotKit runtime URL to the canonical `/api/v1/copilotkit` path so browsers avoid the 307 redirect that stripped CORS headers, resolving the console’s `Access-Control-Allow-Origin` failures when initiating agent runs.
+- Rebased our CopilotKit wrapper on `copilotkit.langgraph_agent.LangGraphAgent` (with tailored metadata/forwarding helpers) so `execute` streams align with the React GraphQL client, fixing the hidden `204 No Content`/`CombinedError` warnings and restoring live token deltas on the frontend.
+- Implemented a lightweight GraphQL shim at `/api/v1/copilotkit` that maps `availableAgents`, `loadAgentState`, and `generateCopilotResponse` onto the LangGraph runtime—returning success payloads when the run completes so the CopilotKit urql client receives data instead of empty 204 responses.
+- Normalized backend `thinking_trace` payloads into the frontend’s `ReasoningData` schema (confidence gauges, tool decisions, critique signals) so CopilotKit users see consistent badges and progress indicators once reasoning completes, while showing a “Thinking” badge during active generation.
+- Manual validation pending: needs a live CopilotKit session once backend services are reachable to confirm delta previews, collapse defaults, and full-trace rendering.
+- Patched `_convert_graphql_messages` to accept both raw GraphQL `MessageInput` objects and the normalized `TextMessage`/`ResultMessage` structures emitted by `@copilotkit/runtime-client-gql`, restoring the missing user prompt that had triggered `routing_error_no_user_query` and client-side “An unknown error occurred” banners; added `tests/api/test_copilotkit_message_conversion.py` to lock in both shapes.
+- Updated the GraphQL shim’s failure payload to populate `status.details.description` (not just `message`) so CopilotKit’s React client surfaces the backend’s actual validation text instead of defaulting to “An unknown error occurred,” and added granular logging around state-sync payloads/status codes for easier observability.
+- Converted `/api/v1/copilotkit` into a true multipart GraphQL stream so LangGraph events flush through `multipart/mixed` boundaries; the frontend now receives incremental `generateCopilotResponse` updates instead of a single buffered JSON blob.
 
 ---
 

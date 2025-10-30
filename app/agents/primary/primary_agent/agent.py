@@ -1,15 +1,18 @@
 import hashlib
+import json
 import logging
 import os
 import anyio
 import re
 from datetime import datetime
 from pathlib import Path
+from uuid import uuid4
 from dotenv import load_dotenv
 from typing import Dict, Optional, Any, List
 from functools import lru_cache
 
-from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+from langchain_core.messages.tool import ToolCall
 from langchain_google_genai import ChatGoogleGenerativeAI, HarmCategory, HarmBlockThreshold
 from opentelemetry import trace
 from opentelemetry.trace import Status, StatusCode
@@ -23,6 +26,7 @@ from app.agents.primary.primary_agent.schemas import (
 )
 from app.agents.primary.primary_agent.tools import mailbird_kb_search, tavily_web_search
 from app.agents.primary.primary_agent.reasoning import ReasoningEngine, ReasoningConfig
+from app.agents.primary.primary_agent.reasoning.schemas import ToolDecisionType
 # v10 prompt is selected inside ReasoningEngine; no direct prompt import needed here
 from app.agents.primary.primary_agent.adapter_bridge import get_primary_agent_model
 from app.core.settings import settings
@@ -115,6 +119,308 @@ def _augment_with_image_attachments(content: Any, attachments: List[Dict[str, An
 
     base_text = _extract_text_from_message_content(content)
     return [{"type": "text", "text": base_text}, *image_parts]
+
+
+def _find_last_human_message_index(messages: List[Any]) -> tuple[Optional[int], Optional[HumanMessage]]:
+    """Return the index and value of the last HumanMessage in the list."""
+    for idx in range(len(messages) - 1, -1, -1):
+        message = messages[idx]
+        if isinstance(message, HumanMessage):
+            return idx, message
+    return None, None
+
+
+def _extract_trailing_tool_messages(messages: List[Any]) -> tuple[Optional[AIMessage], List[ToolMessage]]:
+    """Collect trailing ToolMessage objects and their originating AIMessage if present."""
+    tool_messages: List[ToolMessage] = []
+    tool_invocation: Optional[AIMessage] = None
+    for message in reversed(messages):
+        if isinstance(message, ToolMessage):
+            tool_messages.insert(0, message)
+            continue
+        if isinstance(message, AIMessage) and message.tool_calls:
+            if tool_messages:
+                tool_invocation = message
+                continue
+        break
+    return tool_invocation, tool_messages
+
+
+def _parse_tool_message_content(content: Any) -> Optional[Dict[str, Any]]:
+    """Convert tool message content to a dictionary when possible."""
+    if isinstance(content, dict):
+        return content
+    if isinstance(content, str):
+        try:
+            return json.loads(content)
+        except json.JSONDecodeError:
+            logger.debug("Unable to decode tool message content as JSON")
+            return None
+    return None
+
+
+def _grounding_from_tool_results(
+    tool_messages: List[ToolMessage],
+    *,
+    query: str,
+    min_results: int,
+    min_relevance: float,
+    force_websearch: bool,
+) -> Optional[Dict[str, Any]]:
+    """Translate ToolNode outputs into the grounding structure expected downstream."""
+    if not tool_messages:
+        return None
+
+    kb_payload_raw: Optional[Dict[str, Any]] = None
+    tavily_payload: Optional[Dict[str, Any]] = None
+
+    for message in tool_messages:
+        name = (message.name or "").strip()
+        if name == "mailbird-kb-search":
+            kb_payload_raw = _parse_tool_message_content(message.content)
+        elif name == "tavily_web_search":
+            tavily_payload = _parse_tool_message_content(message.content)
+
+    if kb_payload_raw is None and tavily_payload is None:
+        return None
+
+    summary_obj: Optional[SearchResultSummary] = None
+    kb_results: List[Dict[str, Any]] = []
+    if kb_payload_raw:
+        summary_raw = kb_payload_raw.get("summary")
+        if isinstance(summary_raw, SearchResultSummary):
+            summary_obj = summary_raw
+        elif isinstance(summary_raw, dict):
+            try:
+                summary_obj = SearchResultSummary.model_validate(summary_raw)
+            except Exception as exc:
+                logger.debug("Failed to parse KB summary from tool output: %s", exc)
+                summary_obj = None
+        kb_results = list(kb_payload_raw.get("results") or [])
+
+    kb_items = summarize_kb_results(kb_results) if kb_results else []
+    kb_satisfied = False
+    if summary_obj:
+        try:
+            kb_satisfied = kb_retrieval_satisfied(
+                summary_obj,
+                min_results=min_results,
+                min_relevance=min_relevance,
+            )
+        except Exception as exc:
+            logger.debug("kb_retrieval_satisfied failed for tool output: %s", exc)
+
+    tavily_results = (tavily_payload or {}).get("results") or []
+    tavily_items = summarize_tavily_results(tavily_results) if tavily_results else []
+    digest = build_grounding_digest(kb_items, tavily_items)
+
+    kb_payload_structured: Dict[str, Any] = {"results": []}
+    if kb_payload_raw:
+        kb_payload_structured = dict(kb_payload_raw)
+    if summary_obj:
+        kb_payload_structured["summary"] = summary_obj
+    elif "summary" not in kb_payload_structured:
+        kb_payload_structured["summary"] = None
+
+    kb_payload_structured.setdefault("query", query)
+
+    return {
+        "kb": {
+            "payload": kb_payload_structured,
+            "items": kb_items,
+            "summary": summary_obj,
+            "satisfied": kb_satisfied,
+        },
+        "tavily": tavily_payload,
+        "tavily_items": tavily_items,
+        "used_tavily": bool(tavily_payload),
+        "forced_websearch": bool(force_websearch),
+        "digest": digest,
+    }
+
+
+def _build_tool_calls_for_decision(
+    decision: ToolDecisionType,
+    *,
+    user_query: str,
+    force_websearch: bool,
+    context: Dict[str, Any],
+    websearch_max_results: Optional[int],
+    enable_websearch: bool,
+) -> List[ToolCall]:
+    """Create ToolCall payloads for the requested decision."""
+    if not user_query or not user_query.strip():
+        return []
+
+    tool_calls: List[ToolCall] = []
+    kb_required = decision in {
+        ToolDecisionType.INTERNAL_KB_ONLY,
+        ToolDecisionType.BOTH_SOURCES_NEEDED,
+    }
+    web_required = decision in {
+        ToolDecisionType.WEB_SEARCH_REQUIRED,
+        ToolDecisionType.BOTH_SOURCES_NEEDED,
+    }
+
+    if kb_required:
+        kb_args = {
+            "query": user_query,
+            "context": context,
+            "max_results": 6,
+            "search_sources": ["knowledge_base", "feedme"],
+        }
+        tool_calls.append(
+            ToolCall(
+                name="mailbird-kb-search",
+                args=kb_args,
+                id=f"kb_{uuid4().hex}",
+            )
+        )
+
+    if force_websearch:
+        web_required = True
+
+    if web_required and (enable_websearch or force_websearch):
+        try:
+            max_results = int(websearch_max_results) if websearch_max_results is not None else 5
+        except Exception:
+            max_results = 5
+        if max_results <= 0:
+            max_results = 5
+        web_args = {
+            "search_input": {
+                "query": user_query,
+                "max_results": max_results,
+            }
+        }
+        tool_calls.append(
+            ToolCall(
+                name="tavily_web_search",
+                args=web_args,
+                id=f"web_{uuid4().hex}",
+            )
+        )
+
+    return tool_calls
+
+
+def _prepare_grounding_metadata(
+    grounding_data: Dict[str, Any],
+    *,
+    state: PrimaryAgentState,
+    user_query: str,
+    parent_span,
+) -> tuple[Optional[SearchResultSummary], Dict[str, Any], bool, Optional[str]]:
+    """Enrich grounding metadata with global context, settings, and fallback detection."""
+    if not grounding_data:
+        return None, {}, False, None
+
+    kb_section = grounding_data.get("kb") or {}
+    summary_obj: Optional[SearchResultSummary] = None
+    summary_raw = kb_section.get("summary")
+    if isinstance(summary_raw, SearchResultSummary):
+        summary_obj = summary_raw
+    elif isinstance(summary_raw, dict):
+        try:
+            summary_obj = SearchResultSummary.model_validate(summary_raw)
+            kb_section["summary"] = summary_obj
+        except Exception as exc:
+            logger.debug("Unable to coerce KB summary from grounding data: %s", exc)
+            summary_obj = None
+    if summary_obj is not None:
+        kb_summary = summary_obj.model_dump()
+    else:
+        kb_summary = {}
+
+    global_ctx = getattr(state, "global_knowledge_context", None) or {}
+    retrieval_ctx = global_ctx.get("retrieval") if isinstance(global_ctx, dict) else None
+    global_snippet = None
+    if isinstance(global_ctx, dict):
+        global_snippet = global_ctx.get("memory_snippet") or (
+            retrieval_ctx.get("memory_snippet") if isinstance(retrieval_ctx, dict) else None
+        )
+    if global_snippet:
+        existing_digest = grounding_data.get("digest") or ""
+        snippet_header = "Global knowledge highlights:\n" + global_snippet
+        combined_digest = "\n\n".join(filter(None, [existing_digest.strip(), snippet_header.strip()]))
+        grounding_data["digest"] = combined_digest.strip()
+        grounding_data["global_knowledge"] = {
+            "hits": len((retrieval_ctx or {}).get("items") or []),
+            "source": (retrieval_ctx or {}).get("source"),
+            "fallback_used": bool((retrieval_ctx or {}).get("fallback_used")),
+            "latency_ms": (retrieval_ctx or {}).get("latency_ms"),
+            "errors": (retrieval_ctx or {}).get("errors"),
+        }
+        try:
+            parent_span.set_attribute("global_knowledge.hits", grounding_data["global_knowledge"]["hits"])
+            if grounding_data["global_knowledge"]["source"]:
+                parent_span.set_attribute("global_knowledge.source", grounding_data["global_knowledge"]["source"])
+            parent_span.set_attribute("global_knowledge.fallback", grounding_data["global_knowledge"]["fallback_used"])
+        except Exception:
+            pass
+
+    mailbird_settings = _load_default_mailbird_settings_cached()
+    if mailbird_settings:
+        grounding_data["mailbird_settings"] = mailbird_settings
+        keys_preview = ", ".join(list(mailbird_settings.keys())[:5]) if isinstance(mailbird_settings, dict) else ""
+        addition = "- Mailbird Windows settings available"
+        if keys_preview:
+            addition += f" (keys: {keys_preview})"
+        digest_prefix = grounding_data.get("digest", "")
+        grounding_data["digest"] = f"{digest_prefix}\n{addition}".strip()
+        grounding_data["mailbird_settings_loaded"] = True
+    else:
+        grounding_data["mailbird_settings_loaded"] = grounding_data.get("mailbird_settings_loaded", False)
+
+    if summary_obj is None:
+        # Ensure consistent structure to avoid KeyError downstream
+        kb_section["summary"] = summary_obj
+    grounding_data.setdefault("kb", kb_section)
+    grounding_data.setdefault("used_tavily", bool(grounding_data.get("tavily")))
+
+    try:
+        parent_span.set_attribute("grounding.kb_results", kb_summary.get("total_results", 0))
+        parent_span.set_attribute("grounding.avg_relevance", kb_summary.get("avg_relevance", 0.0))
+        parent_span.set_attribute("grounding.used_tavily", grounding_data.get("used_tavily", False))
+        parent_span.set_attribute("grounding.mailbird_settings", grounding_data.get("mailbird_settings_loaded", False))
+    except Exception:
+        pass
+
+    logger.info(
+        "Grounding summary: kb_results=%s avg_relevance=%.2f used_tavily=%s satisfied=%s",
+        kb_summary.get("total_results", 0),
+        kb_summary.get("avg_relevance", 0.0),
+        grounding_data.get("used_tavily", False),
+        kb_section.get("satisfied", False),
+    )
+
+    try:
+        kb_ok = bool(kb_section.get("satisfied", False))
+        tavily_count = len(grounding_data.get("tavily_items") or [])
+        no_evidence = (not kb_ok) and tavily_count == 0
+        ql = (user_query or "").lower()
+        billing_terms = [
+            "billing",
+            "refund",
+            "renew",
+            "subscription",
+            "charge",
+            "invoice",
+            "license",
+            "payment",
+        ]
+        billing_intent = any(term in ql for term in billing_terms)
+        need_safe_fallback = no_evidence or (billing_intent and not kb_ok)
+        if need_safe_fallback:
+            fallback_reason = "billing_no_evidence" if billing_intent and not kb_ok else "no_evidence"
+        else:
+            fallback_reason = None
+    except Exception:
+        need_safe_fallback = False
+        fallback_reason = None
+
+    return summary_obj, kb_summary, need_safe_fallback, fallback_reason
+
 
 @lru_cache(maxsize=1)
 def _load_default_mailbird_settings_cached() -> Optional[Dict[str, Any]]:
@@ -376,38 +682,45 @@ async def run_primary_agent(state: PrimaryAgentState) -> Dict[str, Any]:
         try:
             logger.debug("Running primary agent")
             attachments = getattr(state, "attachments", None)
-            last_message = state.messages[-1] if state.messages else None
+            tool_invocation, tool_messages = _extract_trailing_tool_messages(state.messages)
+            has_tool_outputs = bool(tool_messages)
+
+            last_human_index, last_human_message = _find_last_human_message_index(state.messages)
             user_query = ""
-            if isinstance(last_message, HumanMessage):
-                if attachments:
+            if last_human_message is not None:
+                if attachments and last_human_index is not None and last_human_index == len(state.messages) - 1:
                     try:
-                        augmented = _augment_with_image_attachments(last_message.content, attachments)
+                        augmented = _augment_with_image_attachments(last_human_message.content, attachments)
                         if augmented is not None:
-                            state.messages[-1] = HumanMessage(
+                            state.messages[last_human_index] = HumanMessage(
                                 content=augmented,
-                                additional_kwargs=getattr(last_message, "additional_kwargs", {}),
-                                response_metadata=getattr(last_message, "response_metadata", {}),
-                                name=getattr(last_message, "name", None),
-                                id=getattr(last_message, "id", None),
-                                example=getattr(last_message, "example", False),
+                                additional_kwargs=getattr(last_human_message, "additional_kwargs", {}),
+                                response_metadata=getattr(last_human_message, "response_metadata", {}),
+                                name=getattr(last_human_message, "name", None),
+                                id=getattr(last_human_message, "id", None),
+                                example=getattr(last_human_message, "example", False),
                             )
                         setattr(state, "attachments", None)
                     except Exception as attachment_exc:  # pragma: no cover - defensive logging
                         logger.warning("attachment_processing_failed", exc_info=attachment_exc)
-                user_query = _extract_text_from_message_content(state.messages[-1].content)
-            elif last_message is not None:
+                user_query = _extract_text_from_message_content(last_human_message.content)
+            elif state.messages:
                 try:
-                    user_query = _extract_text_from_message_content(getattr(last_message, "content", ""))
+                    user_query = _extract_text_from_message_content(state.messages[-1].content)
                 except Exception:
-                    user_query = str(getattr(last_message, "content", ""))
-            else:
-                user_query = ""
+                    user_query = str(getattr(state.messages[-1], "content", ""))
 
             # Input Validation: Query length
             MAX_QUERY_LENGTH = 4000
             if len(user_query) > MAX_QUERY_LENGTH:
                 parent_span.set_attribute("input.query.error", "Query too long")
                 parent_span.set_status(Status(StatusCode.ERROR, "Query too long"))
+                logger.warning(
+                    "primary_agent_query_too_long session=%s trace=%s length=%s",
+                    getattr(state, "session_id", None),
+                    getattr(state, "trace_id", None),
+                    len(user_query),
+                )
                 error_payload = {
                     "type": "validation_error",
                     "code": "query_too_long",
@@ -431,111 +744,23 @@ async def run_primary_agent(state: PrimaryAgentState) -> Dict[str, Any]:
             grounding_data: Dict[str, Any] = {}
             kb_summary_obj: Optional[SearchResultSummary] = None
             kb_summary: Dict[str, Any] = {}
+            force_websearch_flag = bool(getattr(state, "force_websearch", False))
+            websearch_max_results = getattr(state, "websearch_max_results", None)
+            grounding_context_input: Dict[str, Any] = {
+                "session_id": getattr(state, "session_id", "default"),
+                "message_count": len(state.messages),
+            }
 
-            if settings.enable_grounded_responses:
-                grounding_context_input: Dict[str, Any] = {
-                    "session_id": getattr(state, "session_id", "default"),
-                    "message_count": len(state.messages),
-                }
-
-                grounding_data = await _gather_grounding_evidence(
-                    user_query,
-                    context=grounding_context_input,
+            if has_tool_outputs and tool_messages:
+                tool_grounding = _grounding_from_tool_results(
+                    tool_messages,
+                    query=user_query,
                     min_results=settings.primary_agent_min_kb_results,
                     min_relevance=settings.primary_agent_min_kb_relevance,
-                    force_websearch=bool(getattr(state, 'force_websearch', False)),
-                    websearch_max_results=getattr(state, 'websearch_max_results', None),
+                    force_websearch=force_websearch_flag,
                 )
-
-                global_ctx = getattr(state, "global_knowledge_context", None) or {}
-                retrieval_ctx = global_ctx.get("retrieval") if isinstance(global_ctx, dict) else None
-                global_snippet = None
-                if isinstance(global_ctx, dict):
-                    global_snippet = global_ctx.get("memory_snippet") or (
-                        retrieval_ctx.get("memory_snippet") if isinstance(retrieval_ctx, dict) else None
-                    )
-                if global_snippet:
-                    existing_digest = grounding_data.get("digest") or ""
-                    snippet_header = "Global knowledge highlights:\n" + global_snippet
-                    combined_digest = "\n\n".join(filter(None, [existing_digest.strip(), snippet_header.strip()]))
-                    grounding_data["digest"] = combined_digest.strip()
-                    grounding_data["global_knowledge"] = {
-                        "hits": len((retrieval_ctx or {}).get("items") or []),
-                        "source": (retrieval_ctx or {}).get("source"),
-                        "fallback_used": bool((retrieval_ctx or {}).get("fallback_used")),
-                        "latency_ms": (retrieval_ctx or {}).get("latency_ms"),
-                        "errors": (retrieval_ctx or {}).get("errors"),
-                    }
-                    parent_span.set_attribute("global_knowledge.hits", grounding_data["global_knowledge"]["hits"])
-                    if grounding_data["global_knowledge"]["source"]:
-                        parent_span.set_attribute("global_knowledge.source", grounding_data["global_knowledge"]["source"])
-                    parent_span.set_attribute("global_knowledge.fallback", grounding_data["global_knowledge"]["fallback_used"])
-
-                mailbird_settings = _load_default_mailbird_settings_cached()
-                if mailbird_settings:
-                    grounding_data["mailbird_settings"] = mailbird_settings
-                    keys_preview = ", ".join(list(mailbird_settings.keys())[:5]) if isinstance(mailbird_settings, dict) else ""
-                    addition = "- Mailbird Windows settings available"
-                    if keys_preview:
-                        addition += f" (keys: {keys_preview})"
-                    digest_prefix = grounding_data.get("digest", "")
-                    grounding_data["digest"] = f"{digest_prefix}\n{addition}".strip()
-                    grounding_data["mailbird_settings_loaded"] = True
-                else:
-                    grounding_data["mailbird_settings_loaded"] = False
-
-                kb_summary_obj = grounding_data.get("kb", {}).get("summary")
-                kb_summary = kb_summary_obj.model_dump() if kb_summary_obj else {}
-
-                parent_span.set_attribute("grounding.kb_results", kb_summary.get("total_results", 0))
-                parent_span.set_attribute("grounding.avg_relevance", kb_summary.get("avg_relevance", 0.0))
-                parent_span.set_attribute("grounding.used_tavily", grounding_data.get("used_tavily", False))
-                parent_span.set_attribute("grounding.mailbird_settings", grounding_data.get("mailbird_settings_loaded", False))
-
-                logger.info(
-                    "Grounding summary: kb_results=%s avg_relevance=%.2f used_tavily=%s satisfied=%s",
-                    kb_summary.get("total_results", 0),
-                    kb_summary.get("avg_relevance", 0.0),
-                    grounding_data.get("used_tavily", False),
-                    grounding_data.get("kb", {}).get("satisfied", False),
-                )
-
-                # Safe Fallback gating: if evidence insufficient and no Tavily results, or billing intent with no solid KB
-                try:
-                    kb_ok = bool(grounding_data.get("kb", {}).get("satisfied", False))
-                    tavily_count = len(grounding_data.get("tavily_items") or [])
-                    no_evidence = (not kb_ok) and tavily_count == 0
-                    ql = (user_query or "").lower()
-                    billing_terms = ["billing", "refund", "renew", "subscription", "charge", "invoice", "license", "payment"]
-                    billing_intent = any(t in ql for t in billing_terms)
-                    need_safe_fallback = no_evidence or (billing_intent and not kb_ok)
-                except Exception:
-                    need_safe_fallback = False
-
-                if need_safe_fallback:
-                    parent_span.set_attribute("grounding.safe_fallback", True)
-                    parent_span.set_attribute("grounding.safe_fallback_reason", "billing_no_evidence" if billing_intent and not kb_ok else "no_evidence")
-                    safe_text = (
-                        "Thanks for reaching out — I want to make sure we handle this correctly. "
-                        "I don’t have enough verified evidence to confirm account or billing details here. "
-                        "For secure help from our Billing team, please share:\n"
-                        "• Your order ID (from your purchase receipt)\n"
-                        "• The email address used to buy the license\n\n"
-                        "Please don’t post any full payment details. Once I have those, I’ll route this to Billing or guide you to the right next step."
-                    )
-                    # Return safe fallback as final assistant message with metadata
-                    metadata_snapshot = {
-                        "grounding": {
-                            "kbResults": kb_summary.get("total_results", 0),
-                            "avgRelevance": kb_summary.get("avg_relevance", 0.0),
-                            "usedTavily": grounding_data.get("used_tavily", False),
-                            "fallbackUsed": bool(kb_summary.get("fallback_used", False)),
-                            "mailbirdSettingsLoaded": grounding_data.get("mailbird_settings_loaded", False),
-                        },
-                        "safeFallback": True,
-                    }
-                    msg = AIMessage(content=safe_text, additional_kwargs={"messageMetadata": metadata_snapshot})
-                    return {"messages": state.messages + [msg]}
+                if tool_grounding:
+                    grounding_data = tool_grounding.copy()
             else:
                 parent_span.set_attribute("grounding.kb_results", 0)
                 parent_span.set_attribute("grounding.avg_relevance", 0.0)
@@ -763,7 +988,84 @@ async def run_primary_agent(state: PrimaryAgentState) -> Dict[str, Any]:
                 },
                 session_id=getattr(state, 'session_id', 'default')
             )
-            
+
+            tool_decision = ToolDecisionType.NO_TOOLS_NEEDED
+            if reasoning_state and reasoning_state.tool_reasoning:
+                tool_decision = reasoning_state.tool_reasoning.decision_type
+
+            tool_calls: List[ToolCall] = []
+            if not has_tool_outputs:
+                tool_calls = _build_tool_calls_for_decision(
+                    tool_decision,
+                    user_query=user_query,
+                    force_websearch=force_websearch_flag,
+                    context=grounding_context_input,
+                    websearch_max_results=websearch_max_results,
+                    enable_websearch=getattr(settings, "enable_websearch", False),
+                )
+
+            if tool_calls:
+                metadata_snapshot = {
+                    "reasoning": {
+                        "decision": tool_decision.value,
+                        "forcedWebsearch": force_websearch_flag,
+                    }
+                }
+                tool_message = AIMessage(
+                    content="Retrieving relevant knowledge…",
+                    tool_calls=tool_calls,
+                    additional_kwargs={
+                        "messageMetadata": metadata_snapshot,
+                        "metadata_stage": "tool_invocation",
+                    },
+                )
+                return {"messages": state.messages + [tool_message]}
+
+            if not grounding_data and settings.enable_grounded_responses:
+                grounding_data = await _gather_grounding_evidence(
+                    user_query,
+                    context=grounding_context_input,
+                    min_results=settings.primary_agent_min_kb_results,
+                    min_relevance=settings.primary_agent_min_kb_relevance,
+                    force_websearch=force_websearch_flag,
+                    websearch_max_results=websearch_max_results,
+                )
+
+            if grounding_data:
+                kb_summary_obj, kb_summary, need_safe_fallback, fallback_reason = _prepare_grounding_metadata(
+                    grounding_data,
+                    state=state,
+                    user_query=user_query,
+                    parent_span=parent_span,
+                )
+                if need_safe_fallback:
+                    parent_span.set_attribute("grounding.safe_fallback", True)
+                    if fallback_reason:
+                        parent_span.set_attribute("grounding.safe_fallback_reason", fallback_reason)
+                    safe_text = (
+                        "Thanks for reaching out — I want to make sure we handle this correctly. "
+                        "I don’t have enough verified evidence to confirm account or billing details here. "
+                        "For secure help from our Billing team, please share:\n"
+                        "• Your order ID (from your purchase receipt)\n"
+                        "• The email address used to buy the license\n\n"
+                        "Please don’t post any full payment details. Once I have those, I’ll route this to Billing or guide you to the right next step."
+                    )
+                    metadata_snapshot = {
+                        "grounding": {
+                            "kbResults": kb_summary.get("total_results", 0),
+                            "avgRelevance": kb_summary.get("avg_relevance", 0.0),
+                            "usedTavily": grounding_data.get("used_tavily", False),
+                            "fallbackUsed": bool(kb_summary.get("fallback_used", False)),
+                            "mailbirdSettingsLoaded": grounding_data.get("mailbird_settings_loaded", False),
+                        },
+                        "safeFallback": True,
+                    }
+                    msg = AIMessage(content=safe_text, additional_kwargs={"messageMetadata": metadata_snapshot})
+                    return {"messages": state.messages + [msg]}
+            else:
+                kb_summary_obj = None
+                kb_summary = {}
+
             final_response: Optional[str] = None
             if reasoning_state and reasoning_state.query_analysis:
                 try:
@@ -829,20 +1131,11 @@ async def run_primary_agent(state: PrimaryAgentState) -> Dict[str, Any]:
             if sanitized_response:
                 final_response = sanitized_response
 
-            # Generate follow-up questions based on the response
-            follow_up_questions = []
-            if reasoning_state and reasoning_state.query_analysis:
-                from .prompts.response_formatter import ResponseFormatter
-                follow_up_questions = ResponseFormatter.generate_follow_up_questions(
-                    issue=user_query,
-                    emotion=reasoning_state.query_analysis.emotional_state,
-                    solution_provided=final_response
-                )
             # Prepare metadata (thinking trace, follow-ups, tool decisions) for message
             metadata_to_send = {}
 
             if grounding_data:
-                summary_dict = kb_summary if 'kb_summary' in locals() else {}
+                summary_dict = kb_summary
                 metadata_to_send["grounding"] = {
                     "kbResults": summary_dict.get("total_results", 0),
                     "avgRelevance": summary_dict.get("avg_relevance", 0.0),
@@ -865,25 +1158,23 @@ async def run_primary_agent(state: PrimaryAgentState) -> Dict[str, Any]:
 
             final_text = final_response.strip()
             followup_confidence = getattr(reasoning_state, "overall_confidence", 0.0) if reasoning_state else 0.0
-            if (
-                follow_up_questions
-                and len(final_text) >= 200
-                and followup_confidence >= 0.6
-                and not final_text.endswith("?")
-            ):
-                metadata_to_send["followUpQuestions"] = follow_up_questions[:5]
-                metadata_to_send["followUpQuestionsUsed"] = 0
 
             if reasoning_state and reasoning_state.tool_reasoning:
                 tool_reasoning = reasoning_state.tool_reasoning
-                metadata_to_send["toolResults"] = {
-                    "decision": tool_reasoning.decision_type.value,
-                    "reasoning": tool_reasoning.reasoning,
-                    "confidence": tool_reasoning.confidence,
-                    "required_information": tool_reasoning.required_information,
-                    "knowledge_gaps": tool_reasoning.knowledge_gaps,
-                    "expected_sources": tool_reasoning.expected_sources,
-                }
+                tool_metadata = metadata_to_send.get("toolResults", {})
+                tool_metadata.update(
+                    {
+                        "decision": tool_reasoning.decision_type.value,
+                        "reasoning": tool_reasoning.reasoning,
+                        "confidence": tool_reasoning.confidence,
+                        "required_information": tool_reasoning.required_information,
+                        "knowledge_gaps": tool_reasoning.knowledge_gaps,
+                        "expected_sources": tool_reasoning.expected_sources,
+                    }
+                )
+                if tool_invocation:
+                    tool_metadata.setdefault("invocationId", tool_invocation.id)
+                metadata_to_send["toolResults"] = tool_metadata
 
             if settings.should_enable_thinking_trace() and reasoning_state:
                 logger.debug(

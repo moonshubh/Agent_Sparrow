@@ -111,17 +111,23 @@ async def _load_reflection_model(
             return cached
 
     adapter = get_adapter(provider, model_name)
+    generation_kwargs: Dict[str, Any] = {}
+    if provider.lower() == "google":
+        generation_kwargs["response_mime_type"] = "application/json"
 
     try:
-        model = await adapter.load_reasoning_model(api_key=api_key)
+        model = await adapter.load_reasoning_model(api_key=api_key, **generation_kwargs)
     except TypeError:
         # Some adapters may not accept api_key in this method yet
-        model = await adapter.load_reasoning_model()
+        model = await adapter.load_reasoning_model(**generation_kwargs)
     except Exception as exc:
         logger.warning(
             "Reflection adapter load failed for %s/%s: %s", provider, model_name, exc
         )
-        model = await adapter.load_model(api_key=api_key)
+        try:
+            model = await adapter.load_model(api_key=api_key, **generation_kwargs)
+        except TypeError:
+            model = await adapter.load_model(**generation_kwargs)
 
     async with _CACHE_LOCK:
         _REFLECTION_MODEL_CACHE[cache_key] = model

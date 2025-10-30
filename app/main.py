@@ -1,10 +1,12 @@
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
+from uuid import uuid4
+import json
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from typing import Any, List
+from typing import Any, Dict, List, Optional
 import os
 import asyncio
 from langchain_core.messages import HumanMessage
@@ -120,9 +122,23 @@ app = FastAPI(
     description="API server for the MB-Sparrow multi-agent system."
 )
 
+@app.middleware("http")
+async def _debug_log_copilotkit_requests(request: Request, call_next):
+    if request.url.path.startswith("/api/v1/copilotkit"):
+        body_bytes = await request.body()
+        try:
+            body_preview = body_bytes.decode("utf-8")
+        except Exception:
+            body_preview = repr(body_bytes)
+        logging.info("copilotkit_request path=%s method=%s body=%s", request.url.path, request.method, body_preview)
+    response = await call_next(request)
+    return response
+
 # CopilotKit endpoints
 # 1) AG-UI LangGraph stream endpoint via router: /api/v1/copilot/stream
 # 2) CopilotKit SDK GraphQL runtime endpoint: /api/v1/copilotkit (if SDK available)
+_sdk: Optional[Any] = None
+
 try:
     # Lazy import to avoid hard dependency during cold starts
     from copilotkit.integrations.fastapi import add_fastapi_endpoint  # type: ignore
@@ -151,10 +167,515 @@ try:
         ]
 
     _sdk = CopilotKitSDK(agents=_copilot_agents)
-    add_fastapi_endpoint(app, _sdk, "/api/v1/copilotkit")
-    logging.info("CopilotKit SDK GraphQL endpoint registered at /api/v1/copilotkit")
+    add_fastapi_endpoint(app, _sdk, "/api/v1/copilotkit-sdk")
+    logging.info("CopilotKit SDK REST endpoint registered at /api/v1/copilotkit-sdk")
 except Exception as _sdk_exc:  # pragma: no cover - optional integration
     logging.warning(f"CopilotKit SDK endpoint not registered: {_sdk_exc}")
+
+def _build_copilot_context(body: dict, request: Request) -> dict:
+    """Construct CopilotKit context (properties + headers) from a GraphQL request body."""
+    properties: Dict[str, Any] = {}
+    if isinstance(body.get("properties"), dict):
+        properties.update(body["properties"])
+    variables = body.get("variables")
+    if isinstance(variables, dict) and isinstance(variables.get("properties"), dict):
+        properties.update(variables["properties"])
+    return {
+        "properties": properties,
+        "frontend_url": body.get("frontendUrl"),
+        "headers": request.headers,
+    }
+
+
+def _convert_graphql_messages(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Convert GraphQL MessageInput objects into CopilotKit SDK message dicts."""
+    converted: List[Dict[str, Any]] = []
+    for message in messages or []:
+        if not isinstance(message, dict):
+            continue
+        base_id = message.get("id") or str(uuid4())
+        created_at = message.get("createdAt") or datetime.utcnow().isoformat()
+
+        message_type = message.get("type")
+        normalized_type = message_type.strip() if isinstance(message_type, str) else None
+
+        if normalized_type == "TextMessage":
+            content = message.get("content", "")
+            if isinstance(content, list):
+                content = "".join(str(part) for part in content)
+            converted.append(
+                {
+                    "type": "TextMessage",
+                    "id": base_id,
+                    "createdAt": created_at,
+                    "content": content,
+                    "role": message.get("role", "user"),
+                    "parentMessageId": message.get("parentMessageId"),
+                }
+            )
+            continue
+
+        if normalized_type == "ActionExecutionMessage":
+            converted.append(
+                {
+                    "type": "ActionExecutionMessage",
+                    "id": base_id,
+                    "createdAt": created_at,
+                    "name": message.get("name", ""),
+                    "arguments": message.get("arguments", ""),
+                    "parentMessageId": message.get("parentMessageId"),
+                }
+            )
+            continue
+
+        if normalized_type == "ResultMessage":
+            converted.append(
+                {
+                    "type": "ResultMessage",
+                    "id": base_id,
+                    "createdAt": created_at,
+                    "result": message.get("result", ""),
+                    "actionExecutionId": message.get("actionExecutionId"),
+                    "actionName": message.get("actionName"),
+                }
+            )
+            continue
+
+        if normalized_type == "AgentStateMessage":
+            converted.append(
+                {
+                    "type": "AgentStateMessage",
+                    "id": base_id,
+                    "createdAt": created_at,
+                    "threadId": message.get("threadId"),
+                    "agentName": message.get("agentName"),
+                    "role": message.get("role", "assistant"),
+                    "state": message.get("state"),
+                    "running": message.get("running"),
+                    "nodeName": message.get("nodeName"),
+                    "runId": message.get("runId"),
+                    "active": message.get("active"),
+                }
+            )
+            continue
+
+        if normalized_type == "ImageMessage":
+            converted.append(
+                {
+                    "type": "ImageMessage",
+                    "id": base_id,
+                    "createdAt": created_at,
+                    "format": message.get("format", ""),
+                    "bytes": message.get("bytes", ""),
+                    "role": message.get("role", "user"),
+                    "parentMessageId": message.get("parentMessageId"),
+                }
+            )
+            continue
+
+        if message.get("textMessage"):
+            payload = message["textMessage"] or {}
+            converted.append(
+                {
+                    "type": "TextMessage",
+                    "id": base_id,
+                    "createdAt": created_at,
+                    "content": payload.get("content", ""),
+                    "role": payload.get("role", "user"),
+                    "parentMessageId": payload.get("parentMessageId"),
+                }
+            )
+        elif message.get("actionExecutionMessage"):
+            payload = message["actionExecutionMessage"] or {}
+            converted.append(
+                {
+                    "type": "ActionExecutionMessage",
+                    "id": base_id,
+                    "createdAt": created_at,
+                    "name": payload.get("name", ""),
+                    "arguments": payload.get("arguments", ""),
+                    "parentMessageId": payload.get("parentMessageId"),
+                }
+            )
+        elif message.get("resultMessage"):
+            payload = message["resultMessage"] or {}
+            converted.append(
+                {
+                    "type": "ResultMessage",
+                    "id": base_id,
+                    "createdAt": created_at,
+                    "result": payload.get("result", ""),
+                    "actionExecutionId": payload.get("actionExecutionId"),
+                    "actionName": payload.get("actionName"),
+                    "parentMessageId": payload.get("parentMessageId"),
+                }
+            )
+        elif message.get("agentStateMessage"):
+            payload = message["agentStateMessage"] or {}
+            converted.append(
+                {
+                    "type": "AgentStateMessage",
+                    "id": base_id,
+                    "createdAt": created_at,
+                    "threadId": payload.get("threadId"),
+                    "agentName": payload.get("agentName"),
+                    "role": payload.get("role", "assistant"),
+                    "state": payload.get("state"),
+                    "running": payload.get("running"),
+                    "nodeName": payload.get("nodeName"),
+                    "runId": payload.get("runId"),
+                    "active": payload.get("active"),
+                }
+            )
+        elif message.get("imageMessage"):
+            payload = message["imageMessage"] or {}
+            converted.append(
+                {
+                    "type": "ImageMessage",
+                    "id": base_id,
+                    "createdAt": created_at,
+                    "format": payload.get("format", ""),
+                    "bytes": payload.get("bytes", ""),
+                    "role": payload.get("role", "user"),
+                    "parentMessageId": payload.get("parentMessageId"),
+                }
+            )
+    return converted
+
+
+def _graphql_message_status(status_code: str) -> Dict[str, Any]:
+    if status_code == "success":
+        return {"__typename": "SuccessMessageStatus", "code": "success"}
+    return {
+        "__typename": "FailedMessageStatus",
+        "code": "failed",
+        "reason": "UNKNOWN_ERROR",
+    }
+
+
+def _graphql_response_status(
+    status_code: str,
+    error_details: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    if status_code == "success":
+        return {"__typename": "SuccessResponseStatus", "code": "success"}
+    return {
+        "__typename": "FailedResponseStatus",
+        "code": "failed",
+        "reason": "UNKNOWN_ERROR",
+        "details": error_details or {},
+    }
+
+
+def _serialize_assistant_messages(
+    raw_messages: Optional[List[Dict[str, Any]]],
+    *,
+    status_code: str,
+    fallback_id: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    serialized: List[Dict[str, Any]] = []
+    if not isinstance(raw_messages, list):
+        return serialized
+
+    for raw in raw_messages:
+        if not isinstance(raw, dict):
+            continue
+        role = str(raw.get("role", "assistant")).lower()
+        if role != "assistant":
+            continue
+        content = raw.get("content")
+        if isinstance(content, list):
+            content = "".join(str(part) for part in content if isinstance(part, str))
+        if not isinstance(content, str):
+            continue
+        message_id = raw.get("id") or fallback_id or str(uuid4())
+        serialized.append(
+            {
+                "__typename": "TextMessageOutput",
+                "id": message_id,
+                "createdAt": datetime.utcnow().replace(tzinfo=timezone.utc).isoformat(),
+                "status": _graphql_message_status(status_code),
+                "role": "assistant",
+                "content": [content],
+                "parentMessageId": raw.get("parentMessageId"),
+            }
+        )
+    return serialized
+
+
+async def _graphql_generate_response(
+    body: Dict[str, Any],
+    request: Request,
+) -> StreamingResponse:
+    """Handle generateCopilotResponse GraphQL mutation and return a JSONResponse."""
+    if _sdk is None:
+        raise HTTPException(status_code=503, detail="CopilotKit runtime unavailable")
+
+    variables = body.get("variables") or {}
+    data = variables.get("data") or {}
+    properties = variables.get("properties") or {}
+
+    context = _build_copilot_context(body, request)
+    context_properties = context.get("properties") or {}
+    if isinstance(properties, dict):
+        context_properties.update(properties)
+    context["properties"] = context_properties
+
+    agents = _copilot_agents(context)
+    if not agents:
+        raise HTTPException(status_code=500, detail="No Copilot agents configured")
+    agent = agents[0]
+
+    thread_id = data.get("threadId") or str(uuid4())
+    run_id = data.get("runId") or str(uuid4())
+    node_name = None
+    agent_session = data.get("agentSession") or {}
+    if isinstance(agent_session, dict):
+        node_name = agent_session.get("nodeName")
+    messages = _convert_graphql_messages(data.get("messages") or [])
+    actions = (data.get("frontend") or {}).get("actions") or []
+    state = {}
+    agent_state_payload = data.get("agentState")
+    if isinstance(agent_state_payload, dict):
+        # Agent state payload is JSON encoded in GraphQL runtime; preserve as dict where possible.
+        state = agent_state_payload.get("state", {}) or {}
+        if isinstance(state, str):
+            try:
+                state = json.loads(state)
+            except Exception:
+                state = {}
+
+    meta_events = data.get("metaEvents")
+    config = {"configurable": {}}
+
+    assistant_text: Optional[str] = None
+    status_code = "success"
+    streamed_run_id = run_id
+    error_details: Optional[Dict[str, Any]] = None
+    latest_messages: List[Dict[str, Any]] = []
+    boundary = "graphql"
+
+    event_stream = agent.execute(
+        state=state,
+        config=config,
+        messages=messages,
+        thread_id=thread_id,
+        actions=actions,
+        meta_events=meta_events,
+        node_name=node_name,
+    )
+
+    def build_payload(messages: List[Dict[str, Any]]) -> Dict[str, Any]:
+        return {
+            "data": {
+                "generateCopilotResponse": {
+                    "__typename": "CopilotResponse",
+                    "threadId": thread_id,
+                    "runId": streamed_run_id,
+                    "status": _graphql_response_status(status_code, error_details),
+                    "extensions": None,
+                    "messages": messages,
+                    "metaEvents": [],
+                }
+            },
+        }
+
+    async def stream_graphql():
+        nonlocal assistant_text, status_code, streamed_run_id, error_details, latest_messages
+        final_sent = False
+
+        async def emit(messages: List[Dict[str, Any]], has_next: bool):
+            payload = build_payload(messages)
+            payload["hasNext"] = has_next
+            chunk = json.dumps(payload, ensure_ascii=False)
+            yield f"--{boundary}\r\nContent-Type: application/json\r\n\r\n{chunk}\r\n"
+
+        try:
+            async for raw in event_stream:
+                try:
+                    event = json.loads(raw)
+                except Exception:
+                    continue
+
+                streamed_run_id = event.get("run_id") or streamed_run_id
+                event_type = event.get("event")
+
+                if event_type == "error":
+                    status_code = "failed"
+                    assistant_text = event.get("data", {}).get("message")
+                    error_details = {
+                        "description": assistant_text or "Agent execution failed",
+                        "message": assistant_text or "Agent execution failed",
+                    }
+                    latest_messages = _serialize_assistant_messages(
+                        [{"content": assistant_text or ""}],
+                        status_code=status_code,
+                    )
+                    async for chunk in emit(latest_messages, has_next=False):
+                        yield chunk
+                    final_sent = True
+                    break
+
+                if event_type == "on_chain_end":
+                    output = event.get("data", {}).get("output")
+                    if isinstance(output, dict):
+                        if not assistant_text and output.get("cached_response"):
+                            assistant_text = output.get("cached_response")
+                        ai_messages = []
+                        for msg in output.get("messages", []) or []:
+                            kwargs = msg.get("kwargs", {})
+                            if kwargs.get("type") == "ai":
+                                content = kwargs.get("content")
+                                if isinstance(content, str):
+                                    ai_messages.append({"content": content})
+                        if ai_messages:
+                            latest_messages = _serialize_assistant_messages(
+                                ai_messages,
+                                status_code=status_code,
+                            )
+                            if latest_messages:
+                                assistant_text = latest_messages[-1]["content"][0]
+                                async for chunk in emit(latest_messages, has_next=True):
+                                    yield chunk
+                    continue
+
+                if event_type == "on_copilotkit_state_sync":
+                    state_payload = event.get("state")
+                    if isinstance(state_payload, dict):
+                        if not assistant_text and state_payload.get("cached_response"):
+                            assistant_text = state_payload.get("cached_response")
+                        messages_payload = _serialize_assistant_messages(
+                            state_payload.get("messages"),
+                            status_code=status_code,
+                        )
+                        if messages_payload:
+                            latest_messages = messages_payload
+                            assistant_text = messages_payload[-1]["content"][0]
+                            async for chunk in emit(latest_messages, has_next=True):
+                                yield chunk
+        except Exception as exc:
+            logging.exception("CopilotKit agent execution failed")
+            status_code = "failed"
+            assistant_text = str(exc)
+            error_details = {
+                "description": assistant_text,
+                "message": assistant_text,
+            }
+            latest_messages = _serialize_assistant_messages(
+                [{"content": assistant_text}],
+                status_code=status_code,
+            )
+        finally:
+            if not assistant_text:
+                assistant_text = (
+                    "I'm sorry, I wasn't able to produce a response. Please try again or check runtime logs."
+                )
+                status_code = "failed"
+                if error_details is None:
+                    error_details = {
+                        "description": assistant_text,
+                        "message": assistant_text,
+                    }
+
+            if not latest_messages:
+                latest_messages = _serialize_assistant_messages(
+                    [{"content": assistant_text}],
+                    status_code=status_code,
+                )
+
+            if not final_sent:
+                async for chunk in emit(latest_messages, has_next=False):
+                    yield chunk
+            yield f"--{boundary}--\r\n"
+            logging.info(
+                "copilotkit_graphql_response thread=%s run=%s status=%s reason=%s preview=%s",
+                thread_id,
+                streamed_run_id,
+                status_code,
+                (error_details or {}).get("description"),
+                (assistant_text or "")[:120],
+            )
+
+    response = StreamingResponse(
+        stream_graphql(),
+        media_type=f"multipart/mixed; boundary={boundary}",
+    )
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["X-Accel-Buffering"] = "no"
+    return response
+
+
+@app.post("/api/v1/copilotkit")
+async def copilotkit_graphql(request: Request):
+    if _sdk is None:
+        raise HTTPException(status_code=503, detail="CopilotKit runtime unavailable")
+
+    try:
+        body = await request.json()
+    except Exception as exc:  # pragma: no cover
+        raise HTTPException(status_code=400, detail="Invalid JSON body") from exc
+
+    operation = body.get("operationName")
+    if not operation and isinstance(body.get("query"), str):
+        # Fallback: best-effort detection
+        query_lower = body["query"].lower()
+        if "availableagents" in query_lower:
+            operation = "availableAgents"
+        elif "loadagentstate" in query_lower:
+            operation = "loadAgentState"
+        elif "generatecopilotresponse" in query_lower:
+            operation = "generateCopilotResponse"
+
+    context = _build_copilot_context(body, request)
+
+    if operation == "availableAgents":
+        info = _sdk.info(context=context)
+        agents_payload = []
+        for agent in info.get("agents", []):
+            agents_payload.append(
+                {
+                    "__typename": "Agent",
+                    "id": agent.get("name", ""),
+                    "name": agent.get("name", ""),
+                    "description": agent.get("description", "") or "",
+                }
+            )
+        return JSONResponse({"data": {"availableAgents": {"agents": agents_payload}}})
+
+    if operation == "loadAgentState":
+        variables = body.get("variables") or {}
+        data = variables.get("data") or {}
+        agent_name = data.get("agentName") or (variables.get("agentName"))
+        thread_id = data.get("threadId") or variables.get("threadId") or ""
+        if not agent_name:
+            raise HTTPException(status_code=400, detail="agentName is required")
+        state_response = await _sdk.get_agent_state(
+            context=context,
+            thread_id=str(thread_id),
+            name=str(agent_name),
+        )
+        serialized_state = json.dumps(state_response.get("state") or {})
+        serialized_messages = json.dumps(state_response.get("messages") or [])
+        return JSONResponse(
+            {
+                "data": {
+                    "loadAgentState": {
+                        "threadId": state_response.get("threadId") or str(thread_id),
+                        "threadExists": bool(state_response.get("threadExists")),
+                        "state": serialized_state,
+                        "messages": serialized_messages,
+                    }
+                }
+            }
+        )
+
+    if operation == "generateCopilotResponse":
+        return await _graphql_generate_response(body, request)
+
+    if operation == "hello":
+        return JSONResponse({"data": {"hello": "Hello World"}})
+
+    raise HTTPException(status_code=400, detail=f"Unsupported CopilotKit operation: {operation}")
 
 # Add SlowAPI middleware for rate limiting
 app.state.limiter = limiter

@@ -13,8 +13,6 @@ from app.db.supabase.client import get_supabase_client
 from app.agents.primary import run_primary_agent, PrimaryAgentState
 from .client import ZendeskClient
 from app.core.user_context import UserContext, user_context_scope
-from app.agents.primary.primary_agent.prompts.response_formatter import ResponseFormatter, ResponseSection
-from app.agents.primary.primary_agent.prompts.emotion_templates import EmotionalState
 from app.agents.primary.primary_agent.agent import _gather_grounding_evidence
 import re
 
@@ -350,51 +348,6 @@ async def _generate_reply(ticket_id: int | str, subject: str | None, description
         text = ""
         if final_msg and getattr(final_msg, "content", None):
             text = str(final_msg.content).strip()
-
-        # Light quality check; avoid re-running to keep daily usage accounting aligned
-        if text:
-            try:
-                score = ResponseFormatter.validate_response_quality(text)
-                missing = set(getattr(score, "missing_sections", []) or [])
-
-                # If extremely short or clearly unstructured, keep but mark for structure enforcement
-                too_short = len(text.split()) < 40
-
-                # Ensure Pro Tips section exists
-                needs_pro_tips = False
-                try:
-                    # Detect any existing 'Pro Tips' heading regardless of markdown level or emoji
-                    needs_pro_tips = not re.search(r"(?im)^\s*(#{1,6}\s*)?pro\s*tips\b", text)
-                except Exception:
-                    needs_pro_tips = (ResponseSection.PRO_TIPS in missing)
-                if needs_pro_tips:
-                    tips = ResponseFormatter._generate_contextual_pro_tips(user_query, EmotionalState.NEUTRAL)  # type: ignore[attr-defined]
-                    if tips:
-                        text += f"\n\n## Pro Tips\n{tips}"
-
-                # Ensure supportive closing + up to 2 clarifying questions
-                needs_closing = (ResponseSection.SUPPORTIVE_CLOSING in missing)
-                if needs_closing:
-                    try:
-                        qs = ResponseFormatter.generate_follow_up_questions(issue=user_query, emotion=EmotionalState.NEUTRAL, solution_provided=text)
-                    except Exception:
-                        qs = []
-                    closing = (
-                        "I'm here to help—if anything is unclear, just reply and I’ll guide you. "
-                        "If this solved it, great—otherwise I can suggest the next best step."
-                    )
-                    if qs:
-                        text += "\n\n" + closing + "\n" + "\n".join(f"- {q}" for q in qs[:2])
-                    else:
-                        text += "\n\n" + closing
-
-                # Normalize spacing/markdown
-                text = ResponseFormatter.apply_mandatory_formatting(text)
-
-                if too_short and len(text.split()) < 40:
-                    text = ""
-            except Exception:
-                pass
 
         # Plain‑text normalization for Zendesk display (consistent headings and spacing)
         def _to_plaintext_for_zendesk(s: str) -> str:

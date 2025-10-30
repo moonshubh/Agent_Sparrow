@@ -17,10 +17,35 @@ import { FeedbackDialog } from "@/features/global-knowledge/components/FeedbackD
 import { CorrectionDialog } from "@/features/global-knowledge/components/CorrectionDialog";
 import { ModelSelector } from "@/app/chat/components/ModelSelector";
 import { modelsAPI } from "@/services/api/endpoints/models";
+import { ReasoningPanel } from "@/features/chat/components/ReasoningPanel";
 
 type Props = {
   initialSessionId?: string;
   agentType?: "primary" | "log_analysis";
+};
+
+const extractMessageMetadata = (meta: any) => {
+  if (meta && typeof meta === "object" && meta.messageMetadata && typeof meta.messageMetadata === "object") {
+    return meta.messageMetadata;
+  }
+  return {};
+};
+
+const extractThinkingTrace = (meta: any, messageMetadata: any) => {
+  return (
+    meta?.thinking_trace ??
+    meta?.thinkingTrace ??
+    messageMetadata?.thinking_trace ??
+    messageMetadata?.thinkingTrace ??
+    meta?.preface?.structured?.thinking_trace
+  );
+};
+
+const extractLatestThought = (meta: any, messageMetadata: any): string | undefined => {
+  if (typeof meta?.latest_thought === "string") return meta.latest_thought;
+  if (typeof messageMetadata?.latest_thought === "string") return messageMetadata.latest_thought;
+  if (typeof meta?.preface?.latest_thought === "string") return meta.preface.latest_thought;
+  return undefined;
 };
 
 function useBearerHeader() {
@@ -449,6 +474,13 @@ function ChatInner({
               const role = (m as any).role as string | undefined;
               const content = (m as any).content as string | undefined;
               const meta = (m as any).metadata || (m as any).messageMetadata || {};
+              const messageMetadata = extractMessageMetadata(meta);
+              const thinkingTrace = extractThinkingTrace(meta, messageMetadata);
+              const latestThought = extractLatestThought(meta, messageMetadata);
+              const isStreamingReasoning =
+                Boolean(chat?.isLoading) &&
+                role === "assistant" &&
+                i === ((chat?.visibleMessages?.length || 1) - 1);
               const suggestions: string[] | undefined = Array.isArray(meta?.messageMetadata?.suggestions)
                 ? (meta.messageMetadata.suggestions as string[])
                 : Array.isArray(meta?.suggestions)
@@ -474,6 +506,13 @@ function ChatInner({
                         </button>
                       ))}
                     </div>
+                  )}
+                  {role === "assistant" && (thinkingTrace || latestThought) && (
+                    <ReasoningPanel
+                      trace={thinkingTrace}
+                      latestThought={latestThought}
+                      isStreaming={isStreamingReasoning}
+                    />
                   )}
                 </div>
               );

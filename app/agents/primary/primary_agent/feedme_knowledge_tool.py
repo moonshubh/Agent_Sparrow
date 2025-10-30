@@ -5,6 +5,7 @@ Replaces the placeholder mailbird_kb_search tool with comprehensive knowledge re
 from both traditional knowledge base and FeedMe customer support examples.
 """
 
+import json
 import logging
 import asyncio
 from typing import Dict, Any, List, Optional
@@ -491,7 +492,16 @@ def mailbird_kb_search(query: str, **kwargs) -> str:
     This maintains backward compatibility with existing Primary Agent code
     while providing enhanced functionality through FeedMe integration.
     """
-    return enhanced_mailbird_kb_search(query=query, **kwargs)
+    payload = _enhanced_mailbird_kb_search_payload(query=query, **kwargs)
+    serializable_payload: Dict[str, Any] = payload
+    summary = serializable_payload.get("summary")
+    if isinstance(summary, BaseModel):
+        serializable_payload["summary"] = summary.model_dump()
+    try:
+        return json.dumps(serializable_payload)
+    except TypeError as e:
+        logger.warning(f"mailbird_kb_search serialization failed: {e}; returning formatted text fallback")
+        return serializable_payload.get("formatted", "")
 
 
 def enhanced_mailbird_kb_search_call(
