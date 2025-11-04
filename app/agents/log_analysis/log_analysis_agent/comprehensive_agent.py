@@ -43,8 +43,6 @@ from .extractors.pattern_analyzer import PatternAnalyzer
 from .reasoning.log_reasoning_engine import LogReasoningEngine
 from .reasoning.root_cause_classifier import RootCauseClassifier
 from .context.context_ingestor import ContextIngestor
-from .formatters.response_formatter import LogResponseFormatter, FormattingConfig
-from .formatters.v10_formatter import LogV10Composer
 from app.agents.primary.primary_agent.prompts.emotion_templates import EmotionalState
 
 # Import security components
@@ -177,14 +175,6 @@ class LogAnalysisAgent:
             self.compliance_manager = None
             self.attachment_sanitizer = None
             logger.warning("Security features disabled - NOT RECOMMENDED for production")
-
-        # Initialize response formatter with config
-        formatter_config = FormattingConfig(
-            enable_quality_check=True,
-            min_quality_score=self.config.quality_score_threshold
-        )
-        self.response_formatter = LogResponseFormatter(formatter_config)
-        self.v10_composer = LogV10Composer(self.sanitizer if self.enable_security else None)
 
         # Model and reasoning engine will be initialized on first use
         self._model = None
@@ -1121,89 +1111,27 @@ class LogAnalysisAgent:
             analysis_result, user_query, user_context
         )
 
-        # Collect auxiliary signals
-        emotional_state = self._detect_emotional_state(user_context, user_context_input, user_query)
-        tool_results = None
-        if hasattr(self._reasoning_engine, '_tool_results_cache'):
-            tool_results = self._reasoning_engine._tool_results_cache.get(analysis_result.analysis_id)
+        # Use Gemini-generated conversational markdown directly
+        # The reasoning engine already generates natural, conversational responses
+        # No need for rigid formatting templates - let the LLM be creative!
+        markdown = analysis_result.conversational_markdown or analysis_result.executive_summary
 
-        # Compose conversational markdown + envelope (preferred path)
-        try:
-            markdown, envelope, envelope_dict = self.v10_composer.compose(
-                analysis_result,
-                user_query=user_query,
-                redactions_applied=response_context.get("redactions_applied"),
-                analysis_duration_ms=response_context.get("analysis_duration_ms"),
-            )
-            analysis_result.conversational_markdown = markdown
-            analysis_result.structured_output = envelope
-            analysis_result.structured_output_dict = envelope_dict
-            try:
-                logger.info(
-                    "v10 composer succeeded: markdown_len=%d findings=%d actions=%d steps=%d",
-                    len(markdown or ""),
-                    len(envelope_dict.get("findings", [])),
-                    len(envelope_dict.get("quick_actions", [])),
-                    len(envelope_dict.get("full_fix_steps", [])),
-                )
-            except Exception:
-                pass
-            return reasoning_state, markdown
-        except Exception as composer_error:
-            logger.exception(
-                "v10 conversational composer failed; falling back to legacy formatter",
-                exc_info=True,
-            )
+        if not markdown:
+            # Fallback to generate_user_summary() if no markdown available
+            markdown = analysis_result.generate_user_summary()
 
-        # Legacy formatter fallback to guarantee a response
-        if hasattr(self, "response_formatter"):
-            try:
-                user_name = getattr(user_context, "user_name", None) if user_context else None
-                formatted_response, validation_result = await self.response_formatter.format_response(
-                    analysis=analysis_result,
-                    emotional_state=emotional_state,
-                    user_context=user_context,
-                    tool_results=tool_results,
-                    attachment_data=None,
-                    user_name=user_name,
-                )
-                analysis_result.conversational_markdown = formatted_response
-                analysis_result.structured_output = None
-                analysis_result.structured_output_dict = None
-
-                if validation_result.score.overall_score < self.config.quality_score_threshold:
-                    logger.warning(
-                        "Legacy formatter quality below threshold: %.2f for %s",
-                        validation_result.score.overall_score,
-                        analysis_result.analysis_id,
-                    )
-                try:
-                    logger.info(
-                        "Legacy formatter used: markdown_len=%d analysis_id=%s",
-                        len(formatted_response or ""),
-                        analysis_result.analysis_id,
-                    )
-                except Exception:
-                    pass
-
-                return reasoning_state, formatted_response
-            except Exception as legacy_error:
-                logger.exception("Legacy formatter failed", exc_info=True)
-
-        # Absolute fallback when all formatting paths fail
-        fallback = analysis_result.generate_user_summary()
-        analysis_result.conversational_markdown = fallback
+        analysis_result.conversational_markdown = markdown
+        # No structured output needed - CopilotKit handles UI rendering
         analysis_result.structured_output = None
         analysis_result.structured_output_dict = None
-        try:
-            logger.warning(
-                "All formatting paths failed; using basic summary. markdown_len=%d analysis_id=%s",
-                len(fallback or ""),
-                analysis_result.analysis_id,
-            )
-        except Exception:
-            pass
-        return reasoning_state, fallback
+
+        logger.info(
+            "Using Gemini-generated markdown: len=%d analysis_id=%s",
+            len(markdown or ""),
+            analysis_result.analysis_id,
+        )
+
+        return reasoning_state, markdown
 
     def _detect_emotional_state(
         self,

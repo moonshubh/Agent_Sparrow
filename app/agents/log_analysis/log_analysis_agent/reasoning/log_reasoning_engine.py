@@ -35,7 +35,6 @@ from ..schemas.log_schemas import (
 )
 from .root_cause_classifier import RootCauseClassifier
 from ..tools import LogToolOrchestrator, ToolResults
-from ..formatters.response_formatter import LogResponseFormatter, FormattingConfig
 
 logger = logging.getLogger(__name__)
 
@@ -85,13 +84,6 @@ class LogReasoningEngine(ReasoningEngine):
         super().__init__(model, config, provider, model_name)
         self.root_cause_classifier = RootCauseClassifier()
         self.tool_orchestrator = LogToolOrchestrator()
-
-        # Initialize response formatter
-        formatter_config = FormattingConfig(
-            enable_quality_check=True,
-            min_quality_score=config.quality_score_threshold if config else 0.7
-        )
-        self.response_formatter = LogResponseFormatter(formatter_config)
 
         self._analysis_cache: Dict[str, LogAnalysisResult] = {}
         # Manual override: force live web search regardless of gating
@@ -352,55 +344,8 @@ class LogReasoningEngine(ReasoningEngine):
         # Determine emotional tone
         emotional_state = self._determine_emotional_tone(log_analysis, user_context)
 
-        # Try to use the new response formatter if available
-        if hasattr(self, 'response_formatter'):
-            try:
-                # Get tool results from cache
-                tool_results = self._tool_results_cache.get(log_analysis.analysis_id)
-
-                # Extract user name if possible
-                user_name = getattr(user_context, "user_name", None) if user_context else None
-                if not user_name and user_context and user_context.reported_issue:
-                    tokens = user_context.reported_issue.split()
-                    stoplist = {"My", "The", "Email", "I", "A"}
-                    if tokens:
-                        candidate = tokens[0]
-                        if (
-                            candidate
-                            and candidate not in stoplist
-                            and candidate[0].isupper()
-                            and candidate[1:].islower()
-                            and candidate.isalpha()
-                            and len(candidate) > 1
-                        ):
-                            user_name = candidate
-
-                # Use the new formatter for high-quality responses
-                formatted_response, validation_result = await self.response_formatter.format_response(
-                    analysis=log_analysis,
-                    emotional_state=emotional_state,
-                    user_context=user_context,
-                    tool_results=tool_results,
-                    attachment_data=None,
-                    user_name=user_name
-                )
-
-                # Log quality metrics
-                logger.info(
-                    f"Response quality score: {validation_result.score.overall_score:.2f} "
-                    f"for analysis {log_analysis.analysis_id}"
-                )
-
-                return formatted_response
-
-            except (ValueError, TypeError) as exc:
-                logger.warning("Response formatter rejected input: %s", exc, exc_info=True)
-                # Fall through to basic formatting
-            except Exception as exc:
-                logger.exception("Unexpected formatter failure", exc_info=True)
-                raise
-
-        # Fallback to basic formatting if formatter not available or failed
+        # Build conversational response using Gemini-generated content
+        # Let the LLM be creative - no rigid formatting templates!
         # Get empathy template
         issue_summary = (
             log_analysis.top_priority_cause.title

@@ -17,6 +17,12 @@
 
 Agent Sparrow is a sophisticated multi-agent AI system built on FastAPI with a Next.js frontend. The backend implements an orchestrated agent graph using LangGraph, with specialized agents for different tasks (primary agent, log analysis, research, reflection). The system integrates with Supabase for data persistence, supports multiple AI providers, and now includes a CopilotKit-compatible streaming runtime at `/api/v1/copilot/stream`.
 
+**Recent Changes (2025-11-04)**:
+- ✅ Removed legacy formatters (~118 KB, 7 files) - Gemini 2.5 Pro now generates natural markdown directly
+- ✅ CopilotKit handles all UI rendering - no structured envelope needed
+- ✅ Cleaned up dead code: unused test files, empty directories
+- ✅ Simplified response generation by 70% (120 lines → 20 lines)
+
 Re-organization note: canonical imports are `app.agents.*` and legacy `app.agents_v2.*` paths have been removed; all endpoints now import from `app.agents.*`.
 
 ## Architecture Diagram
@@ -208,12 +214,17 @@ graph TB
 
 ### 4. Log Analysis Agent (`app/agents/log_analysis/log_analysis_agent/`)
 - **Purpose**: Specialized agent for analyzing logs and debugging
+- **Response Generation**: Gemini 2.5 Pro generates natural, conversational markdown directly (no formatters)
 - **Components**:
+  - `comprehensive_agent.py`: Quality-first pipeline (defaults to Google Gemini 2.5 Pro)
   - `agent.py`: Main agent logic
   - `simplified_agent.py`: Simplified version for basic analysis
-  - `extractors/`: Log pattern extractors
-  - `tools/`: Log-specific tools
-  - `comprehensive_agent.py`: Quality-first pipeline (defaults to Google Gemini 2.5 Pro)
+  - `extractors/`: Log pattern extractors (metadata, patterns)
+  - `reasoning/`: Reasoning engine and root cause classifier
+  - `tools/`: Log-specific tools (KB search, web search, FeedMe)
+  - `privacy/`: Sanitization and cleanup managers
+  - `security/`: Security validation and compliance
+  - `context/`: Context ingestion and settings loaders
 
 ### 5. Research Agent (`app/agents/research/research_agent/research_agent.py`)
 - **Purpose**: Handles research queries and information gathering
@@ -253,10 +264,17 @@ app/
 │   │       └── tools.py
 │   ├── log_analysis/
 │   │   └── log_analysis_agent/  # Log analysis specialist
+│   │       ├── comprehensive_agent.py  # Main quality-first pipeline
 │   │       ├── agent.py
 │   │       ├── simplified_agent.py
-│   │       ├── comprehensive_agent.py
-│   │       └── ...
+│   │       ├── extractors/      # Pattern analysis & metadata
+│   │       ├── reasoning/       # Reasoning engine & root cause
+│   │       ├── tools/          # KB search, web search, orchestrator
+│   │       ├── privacy/        # Sanitization & cleanup
+│   │       ├── security/       # Validation & compliance
+│   │       ├── context/        # Context ingestion
+│   │       ├── schemas/        # Data models
+│   │       └── templates/      # Response templates
 │   ├── research/
 │   │   └── research_agent/
 │   │       └── research_agent.py
