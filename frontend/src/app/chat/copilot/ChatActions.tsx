@@ -25,7 +25,8 @@ export function ChatActions({
   sessionId?: string;
   agentType: "primary" | "log_analysis";
 }) {
-  const chat = useCopilotChat({})
+  // CopilotKit hook: loosen type to allow optional helpers like setInput
+  const chat = useCopilotChat({}) as any
   // Feedback dialog state
   const [feedbackOpen, setFeedbackOpen] = useState(false);
   const [feedbackText, setFeedbackText] = useState("");

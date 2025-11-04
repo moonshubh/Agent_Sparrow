@@ -210,7 +210,8 @@ function prioritizeSuggestions(
 
 export function useCopilotSuggestions(options: SuggestionsOptions) {
   const { agentType, availableDocuments, conversationContext } = options
-  const chat = useCopilotChat()
+  // Loosen type to support optional helpers like setInput/submitMessage across versions
+  const chat = useCopilotChat() as any
 
   const [suggestions, setSuggestions] = useState<Suggestion[]>([])
   const [isGenerating, setIsGenerating] = useState(false)
@@ -327,4 +328,4 @@ export function useCopilotSuggestions(options: SuggestionsOptions) {
 }
 
 // Export types
-export type { SuggestionsOptions }
+// Note: SuggestionsOptions interface is already exported above

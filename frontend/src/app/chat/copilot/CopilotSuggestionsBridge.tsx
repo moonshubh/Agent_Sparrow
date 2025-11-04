@@ -46,23 +46,9 @@ export function CopilotSuggestionsBridge({
    * Handle keyboard events for power-user send
    */
   const handleChipClick = useCallback(
-    (suggestion: Suggestion, event?: MouseEvent | KeyboardEvent) => {
+    (suggestion: Suggestion, options?: { sendImmediately?: boolean }) => {
       if (!enabled) return
-
-      const metaKey = event && 'metaKey' in event ? event.metaKey || event.ctrlKey || false : false
-      const isKeyboardEvent = !!event && 'key' in event
-      const key = isKeyboardEvent ? (event as KeyboardEvent).key : undefined
-
-      const sendImmediately = isKeyboardEvent
-        ? metaKey && key === 'Enter'
-        : metaKey
-
-      if (event) {
-        event.preventDefault()
-        event.stopPropagation()
-      }
-
-      handleSuggestionClick(suggestion, sendImmediately)
+      handleSuggestionClick(suggestion, !!options?.sendImmediately)
     },
     [enabled, handleSuggestionClick]
   )

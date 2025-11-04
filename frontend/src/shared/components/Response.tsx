@@ -79,7 +79,7 @@ export const Response = React.memo(function Response({
     }
   }, [components])
 
-  const streamdownProps: StreamdownProps = {
+  const streamdownProps: any = {
     ...rest,
     isAnimating,
     dripDelayMs: dripDelay,
@@ -95,7 +95,8 @@ export const Response = React.memo(function Response({
     ;(streamdownProps as any).rehypePlugins = rehypePlugins
   }
 
-  return <Streamdown {...streamdownProps}>{children}</Streamdown>
+  const renderedChildren = typeof children === 'string' ? children : (children == null ? '' : String(children))
+  return <Streamdown {...streamdownProps}>{renderedChildren}</Streamdown>
 })
 
 Response.displayName = "Response"

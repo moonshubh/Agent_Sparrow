@@ -37,7 +37,8 @@ export function CopilotKnowledgeBridge({
   onDocumentsRegistered,
 }: Props) {
   const { registerForTurn, getCurrentDocuments, invalidateCache, realtimeChannel } = useCopilotDocuments()
-  const chat = useCopilotChat()
+  // Loosen type to access messages safely across CopilotKit versions
+  const chat = useCopilotChat() as any
 
   type CopilotMessage = {
     id?: string
@@ -236,12 +237,13 @@ export function CopilotKnowledgeBridge({
  */
 function DocumentReadable({ document }: { document: DocumentPointer }) {
   useMakeCopilotDocumentReadable({
-    documentId: document.documentId,
+    // Align with CopilotKit document readable API; provide id alias and cast to relax version drift
+    id: (document as any).documentId ?? document.documentId,
     title: document.title,
     content: document.content,
     description: document.description,
     categories: document.categories,
-  })
+  } as any)
 
   return null
 }

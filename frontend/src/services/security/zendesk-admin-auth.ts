@@ -28,7 +28,7 @@ export async function verifyZendeskAdminAccess(): Promise<AuthResult> {
     return { ok: false, user: null, reason: 'unsupported' }
   }
 
-  const cookieStore = cookies()
+  const cookieStore = await cookies()
   const supabase = createServerClient(supabaseUrl, supabaseAnonKey, {
     cookies: {
       get(name: string) {
@@ -72,8 +72,8 @@ export async function verifyZendeskAdminAccess(): Promise<AuthResult> {
   return { ok: true, user }
 }
 
-export function buildAuthCookieHeader(): string {
-  const cookieStore = cookies()
+export async function buildAuthCookieHeader(): Promise<string> {
+  const cookieStore = await cookies()
   return cookieStore
     .getAll()
     .map(({ name, value }) => `${name}=${value}`)

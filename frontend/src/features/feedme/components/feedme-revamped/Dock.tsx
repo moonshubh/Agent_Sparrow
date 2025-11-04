@@ -27,7 +27,7 @@ type Orientation = 'horizontal' | 'vertical'
 type DockContextValue = {
   mouseX: MotionValue<number>
   hoveredId: string | null
-  setHoveredId: (id: string | null) => void
+  setHoveredId: React.Dispatch<React.SetStateAction<string | null>>
   baseSize: number
   magnification: number
   distance: number

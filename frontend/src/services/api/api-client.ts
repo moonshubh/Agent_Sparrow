@@ -128,22 +128,23 @@ const serializeBody = (data: unknown): BodyInit | undefined => {
   return JSON.stringify(data)
 }
 
-const toTextStream = (stream: ReadableStream<Uint8Array<ArrayBufferLike>>) => {
-  if (typeof TextDecoderStream !== 'undefined') {
-    return stream.pipeThrough(new TextDecoderStream())
+const toTextStream = (stream: ReadableStream<Uint8Array>): ReadableStream<string> => {
+  const g: any = globalThis as any
+  if (typeof g.TextDecoderStream !== 'undefined') {
+    // Casts are intentional to avoid TS ReadableWritablePair type mismatch across lib versions
+    return (stream as any).pipeThrough(new g.TextDecoderStream()) as ReadableStream<string>
   }
 
   const decoder = new TextDecoder()
-  return stream.pipeThrough(
-    new TransformStream<Uint8Array, string>({
-      transform(chunk, controller) {
-        controller.enqueue(decoder.decode(chunk, { stream: true }))
-      },
-      flush(controller) {
-        controller.enqueue(decoder.decode())
-      },
-    }),
-  )
+  const transform = new TransformStream<Uint8Array, string>({
+    transform(chunk, controller) {
+      controller.enqueue(decoder.decode(chunk, { stream: true }))
+    },
+    flush(controller) {
+      controller.enqueue(decoder.decode())
+    },
+  })
+  return (stream as any).pipeThrough(transform as any) as ReadableStream<string>
 }
 
 export class APIRequestError extends Error {
@@ -337,6 +338,81 @@ class APIClient {
         console.debug('Failed to get stream token, using session auth fallback:', error)
       }
       return null
+    }
+  }
+
+  /**
+   * Generic SSE/stream helper with auth support.
+   * Uses fetch + ReadableStream to support headers across environments.
+   */
+  async stream<T = unknown>(
+    endpoint: string,
+    payload?: unknown,
+    onMessage?: (data: T) => void,
+    options: StreamOptions = {}
+  ): Promise<EnhancedEventSource> {
+    const controller = new AbortController()
+    try {
+      const headers = await this.getAuthHeaders('application/json')
+      const response = await fetch(`${API_BASE_URL}${endpoint}`, {
+        method: payload ? 'POST' : 'GET',
+        headers,
+        body: payload ? JSON.stringify(payload) : undefined,
+        signal: controller.signal,
+      })
+
+      if (!response.ok) {
+        const text = await response.text().catch(() => '')
+        throw new APIRequestError({ status: response.status, statusText: response.statusText, body: text })
+      }
+
+      const body = response.body
+      if (!body) {
+        throw new Error('Stream response has no body')
+      }
+
+      const reader = toTextStream(body).getReader()
+      const pump = async () => {
+        try {
+          let buffer = ''
+          while (true) {
+            const { done, value } = await reader.read()
+            if (done) break
+            buffer += value || ''
+            let idx: number
+            while ((idx = buffer.indexOf('\n')) >= 0) {
+              const line = buffer.slice(0, idx).trim()
+              buffer = buffer.slice(idx + 1)
+              if (!line) continue
+              const dataStr = line.startsWith('data:') ? line.slice(5).trim() : line
+              try {
+                onMessage?.(JSON.parse(dataStr))
+              } catch {
+                onMessage?.(dataStr as unknown as T)
+              }
+            }
+          }
+          options.onClose?.()
+        } catch (err) {
+          options.onError?.(err as Error)
+        }
+      }
+      // Start pumping asynchronously
+      void pump()
+
+      return {
+        close: () => {
+          try { controller.abort() } catch {}
+        },
+        readyState: 1,
+      }
+    } catch (err) {
+      options.onError?.(err as Error)
+      // Return a closed stub
+      return {
+        close: () => { try { controller.abort() } catch {} },
+        readyState: 2,
+      }
     }
   }
 }
