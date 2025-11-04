@@ -18,10 +18,15 @@
 Agent Sparrow is a sophisticated multi-agent AI system built on FastAPI with a Next.js frontend. The backend implements an orchestrated agent graph using LangGraph, with specialized agents for different tasks (primary agent, log analysis, research, reflection). The system integrates with Supabase for data persistence, supports multiple AI providers, and now includes a CopilotKit-compatible streaming runtime at `/api/v1/copilot/stream`.
 
 **Recent Changes (2025-11-04)**:
-- ✅ Removed legacy formatters (~118 KB, 7 files) - Gemini 2.5 Pro now generates natural markdown directly
-- ✅ CopilotKit handles all UI rendering - no structured envelope needed
-- ✅ Cleaned up dead code: unused test files, empty directories
+- ✅ **Phase 7 Migration Complete**: Removed legacy CopilotKit GraphQL shim and UI components
+- ✅ **Dead Code Cleanup**: Removed 9 files (~1,350 lines total):
+  - `app/api/middleware/security_middleware.py` (unused, never registered)
+  - `app/config/error_patterns.yaml` (unused YAML config)
+  - `app/integrations/copilotkit/` (GraphQL shim superseded by stream endpoint)
+  - Legacy frontend UI components (CopilotChatClient, AppSidebarLeft, etc.)
+- ✅ Removed legacy formatters (~118 KB, 7 files) - Gemini 2.5 Pro generates natural markdown
 - ✅ Simplified response generation by 70% (120 lines → 20 lines)
+- ✅ All endpoints now use `/api/v1/copilot/stream` (CopilotKit AG-UI adapter)
 
 Re-organization note: canonical imports are `app.agents.*` and legacy `app.agents_v2.*` paths have been removed; all endpoints now import from `app.agents.*`.
 
@@ -733,31 +738,39 @@ state = GraphState(
 ## CopilotKit Runtime Integration
 
 ### Overview
-The backend provides two CopilotKit-compatible runtimes:
+The backend provides a CopilotKit-compatible streaming runtime at `/api/v1/copilot/stream` using the AG-UI LangGraph adapter. The legacy GraphQL endpoint has been **deprecated** as of Phase 7 (2025-11-04).
 
-- `/api/v1/copilotkit` – CopilotKit SDK GraphQL runtime (preferred for React provider).
-- `/api/v1/copilot/stream` – AG-UI LangGraph streaming adapter (SSE).
+### Current Endpoint
+- **POST** `/api/v1/copilot/stream` – Auth-protected AG-UI streaming endpoint (SSE)
+  - **Status**: ✅ Production (Phases 1-7 complete)
+  - **Implementation**: `app/api/v1/endpoints/copilot_endpoints.py`
+  - **Features**: Context merge, attachment validation, OpenTelemetry tracing
 
-Both connect to the existing LangGraph orchestration layer.
+- **GET** `/api/v1/copilot/stream/health` – Health check endpoint
+  - Returns: `{ "status": "ok"|"503", "sdk_available": bool, "graph_compiled": bool, "agents": [...], "models": {...} }`
 
-### Endpoint Details
-- **POST** `/api/v1/copilotkit` – GraphQL runtime used by the `<CopilotKit>` provider.
-- **POST** `/api/v1/copilot/stream` – Auth-protected streaming endpoint (SSE adapter).
-- **GET** `/api/v1/copilot/stream/health` – Health check returns `{ "status": "ok", "agent": "sparrow" }` when adapter available.
+### Deprecated Endpoint (Removed in Phase 7)
+- **POST** `/api/v1/copilotkit` – ❌ **DEPRECATED** (Returns 410 Gone)
+  - **Removed**: GraphQL shim (`app/integrations/copilotkit/`)
+  - **Migration Path**: Use `/api/v1/copilot/stream` instead
+  - **Frontend**: All clients migrated to stream endpoint
 
 Companion utility:
 - **GET** `/api/v1/models?agent_type=primary|log_analysis` – Returns provider model lists used by the frontend `ModelSelector`.
 
 ### Dependencies
-- CopilotKit SDK runtime: `pip install copilotkit`
-- AG-UI adapter (optional SSE path): `pip install "ag-ui-langgraph[fastapi]"`
+- AG-UI adapter: `pip install "ag-ui-langgraph[fastapi]"`
 - Requires FastAPI >=0.115.x
+- Optional: OpenTelemetry (`ENABLE_OTEL=true`)
 
 ### Implementation
-- GraphQL runtime: Registered in `app/main.py` (lazy import) via `copilotkit.integrations.fastapi.add_fastapi_endpoint` using `CopilotKitSDK` + `LangGraphAgent` with our compiled graph.
-- SSE adapter: `app/api/v1/endpoints/copilot_endpoints.py` wraps the compiled LangGraph graph and streams via `EventEncoder`.
-- Auth: Existing `get_current_user_id` dependency (Supabase JWT) applies.
-- Streaming: `EventEncoder` produces SSE or HTTP events based on `Accept` header for the SSE path.
+- Stream endpoint: `app/api/v1/endpoints/copilot_endpoints.py`
+  - Context merge for session_id, trace_id, provider, model, agent_type, attachments
+  - Attachment validation (size, MIME type, data URL format)
+  - OpenTelemetry spans with non-PII attributes
+  - Comprehensive logging for debugging
+- Auth: Supabase JWT via `get_current_user_id` dependency
+- Streaming: Server-Sent Events (SSE) with `EventEncoder`
 
 ### Expected Request Schema (SSE adapter)
 The SSE adapter expects a Pydantic `RunAgentInput` with:
@@ -800,23 +813,37 @@ The SSE adapter expects a Pydantic `RunAgentInput` with:
 ```
 
 ### Runtime Behavior
-- GraphQL runtime handles discovery and streaming via the CopilotKit SDK; used by the React provider.
-- SSE adapter path validates the request via `RunAgentInput`, instantiates `LangGraphAgent(name="sparrow", graph=compiled_graph)`, and streams events from `agent.run(input_data)` via `EventEncoder`.
-- Both paths support LangGraph interrupts where applicable and include user context from JWT in downstream calls.
+- Stream endpoint validates requests via `RunAgentInput` (Pydantic)
+- Instantiates `LangGraphAgent(name="sparrow", graph=compiled_graph)`
+- Streams events from `agent.run(input_data)` via `EventEncoder`
+- Supports LangGraph interrupts (HITL) with `useLangGraphInterrupt`
+- Includes user context from Supabase JWT in agent state
 
-### Compatibility Fixes
-- Normalizes inbound payloads at `/api/v1/copilot/stream` to avoid 422 errors:
-  - Accepts `{ data: {...} }` wrappers and GraphQL `{ query, variables: { input|data } }` shapes.
-  - Accepts `forwardedProps | forwardedProperties | properties` and serializes when necessary.
-  - Normalizes `messages` from GraphQL-like inputs and preserves `id`.
-  - Provides multiple validation variants (dict/string) for forwarded props.
-  - Returns structured validation errors for quick debugging.
+### Phase 1 Enhancements (Context Merge & Validation)
+The stream endpoint includes comprehensive context merge logic:
+- **Properties**: session_id, trace_id, provider, model, agent_type, use_server_memory
+- **Attachments**: Validated for size (10MB limit), MIME type allowlist, data URL format
+- **Configuration**: Merged into both `state` dict and `config.configurable`
+- **Error Handling**: Fails loudly with actionable HTTPException messages
+- **Logging**: Comprehensive logs at request, merge, and execution points
+
+See Phase 1 completion doc for full context merge implementation details.
 
 ### Integration Notes
-- Reuses existing provider/model selection logic
-- Forwards attachments to tools as before
-- Respects session memory and preferences
-- Emits CopilotKit runtime events compatible with CopilotKit client
+- ✅ **Phase 0**: Feature flags and baseline metrics
+- ✅ **Phase 1**: Backend context merge and attachment validation
+- ✅ **Phase 2**: Frontend transport switch (feature-flagged)
+- ✅ **Phase 3**: CopilotKit UI components (CopilotSidebar)
+- ✅ **Phase 4**: Document integration (KB + FeedMe) and suggestions
+- ✅ **Phase 5**: Multi-agent selection and exposure
+- ✅ **Phase 6**: OpenTelemetry observability and health diagnostics
+- ✅ **Phase 7**: Legacy GraphQL cleanup (410 Gone)
+
+### Frontend Integration
+- Uses `CopilotKit` provider with `runtimeUrl="/api/v1/copilot/stream"`
+- Properties forwarded: session_id, use_server_memory, provider, model, agent_type, trace_id, attachments
+- UI components: CopilotSidebar, CustomAssistantMessage, ChatActions, ChatInterrupts
+- Feature flags: Documents, Suggestions, Multi-Agent Selection, Observability
 
 ## Conclusion
 
