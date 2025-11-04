@@ -706,9 +706,12 @@ dev-debug.log
 !frontend/lib/types/logAnalysis.ts
 frontend/tsconfig.tsbuildinfo
 *.md
-!docs/backend/*.md
-!docs/phase-notes/*.md
-!Backend.md
+docs/backend/*.md
+docs/phase-notes/*.md
+docs/frontend/*.md
+tests/frontend/*.md
+reviews/*.md
+Backend.md
 *.xml
 *.bak
 

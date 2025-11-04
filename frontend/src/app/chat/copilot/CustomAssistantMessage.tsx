@@ -3,12 +3,18 @@
 import React from "react";
 import { AssistantMessageProps, Markdown } from "@copilotkit/react-ui";
 import { ReasoningPanel } from "@/features/chat/components/ReasoningPanel";
+import { useCopilotSuggestionsContext } from "./CopilotSuggestionsContext";
+import type { Suggestion } from "@/features/chat/hooks/useCopilotSuggestions";
 
 /**
- * Custom Assistant Message Component for Phase 3 CopilotKit Integration
+ * Custom Assistant Message Component for Phase 3 + Phase 4 CopilotKit Integration
  *
  * Integrates ReasoningPanel to display thinking traces and reasoning metadata
  * from the multi-agent system (Primary, Log Analysis, Research agents).
+ *
+ * Phase 4: Re-enabled suggestion chips with smart click handling:
+ * - Standard click: Inserts text into input (no send)
+ * - Cmd/Ctrl+Enter: Inserts and sends immediately
  *
  * Props provided by CopilotKit:
  * - message: The message object with content
@@ -19,6 +25,10 @@ import { ReasoningPanel } from "@/features/chat/components/ReasoningPanel";
  */
 export function CustomAssistantMessage(props: AssistantMessageProps) {
   const { message, isLoading, isGenerating, rawData, subComponent } = props;
+  const {
+    suggestions: contextSuggestions,
+    onSuggestionSelected,
+  } = useCopilotSuggestionsContext();
 
   // Extract metadata for reasoning traces
   const metadata = rawData?.metadata || (rawData as any)?.messageMetadata || {};
@@ -35,11 +45,21 @@ export function CustomAssistantMessage(props: AssistantMessageProps) {
     metadata.preface?.latest_thought;
 
   // Extract suggestions for follow-up questions
-  const suggestions = Array.isArray(metadata.suggestions)
-    ? metadata.suggestions
+  const fallbackMetadataSuggestions = Array.isArray(metadata.suggestions)
+    ? (metadata.suggestions as string[])
     : Array.isArray(metadata.messageMetadata?.suggestions)
-    ? metadata.messageMetadata.suggestions
-    : undefined;
+    ? (metadata.messageMetadata.suggestions as string[])
+    : [];
+
+  const displaySuggestions: Suggestion[] =
+    contextSuggestions.length > 0
+      ? contextSuggestions
+      : fallbackMetadataSuggestions.map((suggestion, idx) => ({
+          id: `metadata-${idx}`,
+          text: suggestion,
+          source: "backend" as const,
+          priority: 3,
+        }));
 
   // If subComponent provided (for generative UI), render it directly
   if (subComponent) {
@@ -66,18 +86,30 @@ export function CustomAssistantMessage(props: AssistantMessageProps) {
         </div>
       )}
 
-      {/* Suggestions chips (disabled until wired to CopilotKit input API) */}
-      {!isLoading && suggestions && suggestions.length > 0 && (
+      {/* Phase 4: Suggestion chips (re-enabled with smart click handling) */}
+      {!isLoading && displaySuggestions.length > 0 && (
         <div className="flex flex-wrap gap-2 mt-2">
-          {suggestions.slice(0, 3).map((suggestion: string, idx: number) => (
+          {displaySuggestions.slice(0, 3).map((suggestion) => (
             <button
-              key={idx}
+              key={suggestion.id}
               type="button"
-              className="text-xs rounded-full px-3 py-1 border bg-muted/30 hover:bg-muted/50 transition-colors"
-              title="Insert follow-up"
-              disabled
+              className="text-xs rounded-full px-3 py-1 border bg-muted/30 hover:bg-muted/50 transition-colors cursor-pointer"
+              title="Click to insert; Cmd/Ctrl+Click to send immediately"
+              onClick={(event) => {
+                onSuggestionSelected?.(suggestion, {
+                  sendImmediately: event.metaKey || event.ctrlKey,
+                });
+              }}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  onSuggestionSelected?.(suggestion, {
+                    sendImmediately: event.metaKey || event.ctrlKey,
+                  });
+                }
+              }}
+              disabled={!onSuggestionSelected}
             >
-              {suggestion}
+              {suggestion.text}
             </button>
           ))}
         </div>

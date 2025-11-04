@@ -88,6 +88,31 @@ async def query_router(state: 'GraphState' | dict) -> Union[dict, str]:
 
     bound_logger.debug("routing_query_start")
 
+    # --------------------------------------------------------------
+    # Phase 5: Respect explicit agent selection via state.agent_type
+    # If a valid agent_type is provided, short-circuit LLM routing.
+    # Accepted values map to router destinations as below.
+    # --------------------------------------------------------------
+    try:
+        AGENT_TYPE_TO_DEST = {
+            "primary": "primary_agent",
+            "primary_agent": "primary_agent",
+            "log_analysis": "log_analyst",
+            "log_analyst": "log_analyst",
+            "research": "researcher",
+            "researcher": "researcher",
+        }
+        agent_type = _get_state_attr(state, "agent_type")
+        if isinstance(agent_type, str):
+            norm = agent_type.strip().lower()
+            if norm in AGENT_TYPE_TO_DEST:
+                dest = AGENT_TYPE_TO_DEST[norm]
+                bound_logger.info("router_explicit_selection", agent_type=norm, destination=dest)
+                return {"destination": dest}
+    except Exception:
+        # Defensive: ignore mapping errors and continue with normal routing
+        pass
+
     # Support both GraphState objects and simple dicts for easier unit testing
     if isinstance(state, dict):
         messages = state.get("messages", [])

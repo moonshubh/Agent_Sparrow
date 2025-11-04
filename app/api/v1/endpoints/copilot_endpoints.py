@@ -22,6 +22,8 @@ from uuid import uuid4
 from fastapi import APIRouter, Depends, HTTPException, Request, Query
 from fastapi.responses import StreamingResponse, JSONResponse
 from types import SimpleNamespace
+from opentelemetry import trace
+from opentelemetry.trace import Status, StatusCode
 
 router = APIRouter()
 
@@ -50,6 +52,9 @@ except Exception:  # pragma: no cover
 # Import for context merge and attachment validation
 from app.agents.orchestration.orchestration.state import Attachment
 from app.core.settings import get_settings
+
+# OpenTelemetry tracer for this module
+tracer = trace.get_tracer(__name__)
 
 
 def _sanitize_attachments(payload: Any) -> List[Dict[str, Any]]:
@@ -247,205 +252,225 @@ async def copilot_stream(request: Request, user_id: str = Depends(get_current_us
     Accepts raw JSON from CopilotKit runtime client and normalizes it into RunAgentInput.
     This avoids 422 errors due to minor schema drift (e.g., forwardedProps vs forwardedProperties).
     """
-    if not _SDK_AVAILABLE or compiled_graph is None:
-        return JSONResponse(
-            status_code=501,
-            content={
-                "error": "CopilotKit backend SDK not available",
-                "detail": "Install 'copilotkit' (ag_ui_langgraph) and ensure the primary graph compiles.",
-            },
-        )
+    with tracer.start_as_current_span("copilot.stream") as span:
+        if not _SDK_AVAILABLE or compiled_graph is None:
+            span.set_status(Status(StatusCode.ERROR, "sdk_or_graph_unavailable"))
+            return JSONResponse(
+                status_code=501,
+                content={
+                    "error": "CopilotKit backend SDK not available",
+                    "detail": "Install 'copilotkit' (ag_ui_langgraph) and ensure the primary graph compiles.",
+                },
+            )
 
-    try:
-        raw: Dict[str, Any] = await request.json()
-    except Exception as e:  # pragma: no cover
-        logging.exception("Failed to parse JSON body for /copilot/stream")
-        return JSONResponse(status_code=400, content={"error": "invalid_json", "detail": str(e)})
-
-    # Unwrap common wrappers
-    # - GraphQL-style { query, variables: { input|data } }
-    # - Runtime client style { data: { ...RunAgentInput } }
-    try:
-        if isinstance(raw, dict):
-            if "query" in raw and isinstance(raw.get("variables"), dict):
-                gql_vars = raw.get("variables") or {}
-                gql_input = gql_vars.get("input") or gql_vars.get("data") or {}
-                if isinstance(gql_input, dict) and gql_input:
-                    raw = gql_input
-            elif "data" in raw and isinstance(raw.get("data"), dict):
-                raw = raw.get("data")
-    except Exception:
-        pass
-
-    # Normalize common field variants from different CopilotKit clients
-    forwarded: Dict[str, Any] = (
-        raw.get("forwardedProps")
-        or raw.get("forwardedProperties")
-        or raw.get("properties")
-        or {}
-    )
-
-    # Comprehensive logging: Log incoming properties (Phase 1 requirement)
-    logging.info(
-        "copilot_stream_request_received",
-        extra={
-            "has_forwarded_props": bool(forwarded),
-            "forwarded_keys": list(forwarded.keys()) if isinstance(forwarded, dict) else [],
-            "session_id_present": "session_id" in forwarded,
-            "trace_id_present": "trace_id" in forwarded,
-            "attachments_present": "attachments" in forwarded,
-            "attachments_count": len(forwarded.get("attachments", [])) if isinstance(forwarded.get("attachments"), list) else 0,
-        },
-    )
-
-    thread_id: Optional[str] = raw.get("threadId") or forwarded.get("session_id")
-    run_id: str = (
-        raw.get("runId")
-        or forwarded.get("trace_id")
-        or str(uuid4())
-    )
-
-    messages_in = raw.get("messages") or []
-    messages: List[Dict[str, Any]] = []
-    try:
-        for m in messages_in:
-            if not isinstance(m, dict):
-                continue
-            mid = str(m.get("id") or uuid4())
-            # GraphQL-like input: { textMessage: { content, role, ... } }
-            if "textMessage" in m and isinstance(m["textMessage"], dict):
-                tm = m["textMessage"]
-                role = str(tm.get("role", "user")).lower()
-                content = tm.get("content", "")
-                messages.append({"id": mid, "role": role, "content": content})
-                continue
-            # AG-UI style already: { role, content }
-            if "role" in m and "content" in m:
-                role = str(m.get("role", "user")).lower()
-                content = m.get("content", "")
-                messages.append({"id": mid, "role": role, "content": content})
-                continue
-            # Image message (best-effort)
-            if "imageMessage" in m and isinstance(m["imageMessage"], dict):
-                im = m["imageMessage"]
-                role = str(im.get("role", "user")).lower()
-                messages.append({
-                    "id": mid,
-                    "role": role,
-                    "content": "",
-                    "image": {
-                        "format": im.get("format", "png"),
-                        "bytes": im.get("bytes", ""),
-                    }
-                })
-                continue
-            # Fallback: ignore unknown shapes
-    except Exception:
-        # keep messages empty, agent may still handle state-only inputs
-        pass
-
-    # Build candidate payload variants to satisfy different SDK expectations
-    # Choose best messages representation
-    effective_messages = messages if messages else messages_in
-
-    base: Dict[str, Any] = {
-        **raw,
-        "messages": effective_messages,
-        "threadId": thread_id or str(uuid4()),
-        "runId": run_id,
-    }
-    # Remove alternates to control variants explicitly
-    base.pop("forwardedProps", None)
-    base.pop("forwardedProperties", None)
-    base.pop("properties", None)
-
-    # Ensure optional fields exist
-    base.setdefault("state", {})
-    base.setdefault("tools", [])
-    base.setdefault("context", [])
-
-    # Phase 1: Merge CopilotKit context into state and config
-    # This ensures feature parity with GraphQL endpoint (SparrowLangGraphAgent)
-    state_dict: Dict[str, Any] = base["state"]
-    config_dict: Dict[str, Any] = {"configurable": {}}
-
-    # Extract attachments from forwarded props and remove to avoid duplication
-    # (attachments will be in state after merge, not in forwardedProps)
-    forwarded_without_attachments = {k: v for k, v in forwarded.items() if k != "attachments"}
-
-    try:
-        _merge_copilot_context(forwarded, state_dict, config_dict)
-        logging.info(
-            "copilot_context_merge_applied",
-            extra={
-                "state_keys": list(state_dict.keys()),
-                "config_keys": list(config_dict.get("configurable", {}).keys()),
-            },
-        )
-    except HTTPException:
-        # Attachment validation errors are already HTTPException, re-raise
-        raise
-    except Exception as e:
-        # Required: Fail loudly on context merge errors (requirement 3b)
-        logging.error(f"Context merge failed: {str(e)}", exc_info=True)
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "error": "context_merge_failed",
-                "message": f"Failed to merge CopilotKit context: {str(e)}",
-            }
-        )
-
-    # Update base with merged state and add config
-    base["state"] = state_dict
-    base["config"] = config_dict
-
-    # Phase 1: Use forwarded props WITHOUT attachments (attachments are in state now)
-    variants: List[Dict[str, Any]] = []
-    # 1) forwardedProps as dict (without attachments - already in state)
-    variants.append({**base, "forwardedProps": forwarded_without_attachments})
-    # 2) forwardedProps as JSON string
-    try:
-        variants.append({**base, "forwardedProps": json.dumps(forwarded_without_attachments)})
-    except Exception:
-        variants.append({**base, "forwardedProps": json.dumps({})})
-    # 3) forwardedProperties as dict
-    variants.append({**base, "forwardedProperties": forwarded_without_attachments})
-    # 4) forwardedProperties as JSON string
-    try:
-        variants.append({**base, "forwardedProperties": json.dumps(forwarded_without_attachments)})
-    except Exception:
-        variants.append({**base, "forwardedProperties": json.dumps({})})
-
-    logging.info(
-        "copilot_stream_normalized_attempts",
-        extra={
-            "attempts": len(variants),
-            "has_messages": isinstance(messages, list),
-            "messages_len": len(messages) if isinstance(messages, list) else None,
-            "thread_present": bool(thread_id),
-            "run_present": bool(run_id),
-        },
-    )
-
-    input_data = None
-    errors: List[str] = []
-    for idx, candidate in enumerate(variants):
         try:
-            if hasattr(RunAgentInput, "model_validate"):
-                input_data = RunAgentInput.model_validate(candidate)  # type: ignore[attr-defined]
-            elif hasattr(RunAgentInput, "parse_obj"):
-                input_data = RunAgentInput.parse_obj(candidate)  # type: ignore[attr-defined]
-            else:
-                input_data = RunAgentInput(**candidate)  # type: ignore[call-arg]
-            break
-        except Exception as e:  # collect and try next variant
+            raw: Dict[str, Any] = await request.json()
+        except Exception as e:  # pragma: no cover
+            logging.exception("Failed to parse JSON body for /copilot/stream")
+            span.set_status(Status(StatusCode.ERROR, "invalid_json"))
+            return JSONResponse(status_code=400, content={"error": "invalid_json", "detail": str(e)})
+
+        # Unwrap common wrappers
+        # - GraphQL-style { query, variables: { input|data } }
+        # - Runtime client style { data: { ...RunAgentInput } }
+        try:
+            if isinstance(raw, dict):
+                if "query" in raw and isinstance(raw.get("variables"), dict):
+                    gql_vars = raw.get("variables") or {}
+                    gql_input = gql_vars.get("input") or gql_vars.get("data") or {}
+                    if isinstance(gql_input, dict) and gql_input:
+                        raw = gql_input
+                elif "data" in raw and isinstance(raw.get("data"), dict):
+                    raw = raw.get("data")
+        except Exception:
+            pass
+
+        # Normalize common field variants from different CopilotKit clients
+        forwarded: Dict[str, Any] = (
+            raw.get("forwardedProps")
+            or raw.get("forwardedProperties")
+            or raw.get("properties")
+            or {}
+        )
+
+        # Comprehensive logging: Log incoming properties (Phase 1 requirement)
+        logging.info(
+            "copilot_stream_request_received",
+            extra={
+                "has_forwarded_props": bool(forwarded),
+                "forwarded_keys": list(forwarded.keys()) if isinstance(forwarded, dict) else [],
+                "session_id_present": "session_id" in forwarded,
+                "trace_id_present": "trace_id" in forwarded,
+                "attachments_present": "attachments" in forwarded,
+                "attachments_count": len(forwarded.get("attachments", [])) if isinstance(forwarded.get("attachments"), list) else 0,
+            },
+        )
+
+        thread_id: Optional[str] = raw.get("threadId") or forwarded.get("session_id")
+        run_id: str = (
+            raw.get("runId")
+            or forwarded.get("trace_id")
+            or str(uuid4())
+        )
+
+        # Populate span attributes with non-PII diagnostics
+        try:
+            span.set_attribute("copilot.thread_id_present", bool(thread_id))
+            span.set_attribute("copilot.run_id_present", bool(run_id))
+            if isinstance(forwarded, dict):
+                span.set_attribute("copilot.session_id", str(forwarded.get("session_id") or ""))
+                span.set_attribute("copilot.trace_id", str(forwarded.get("trace_id") or ""))
+                span.set_attribute("copilot.provider", str(forwarded.get("provider") or ""))
+                span.set_attribute("copilot.model", str(forwarded.get("model") or ""))
+                span.set_attribute("copilot.agent_type", str(forwarded.get("agent_type") or ""))
+                att_count = len(forwarded.get("attachments", []) if isinstance(forwarded.get("attachments"), list) else [])
+                span.set_attribute("copilot.attachments_count", att_count)
+        except Exception:
+            # Defensive: never break request flow due to telemetry
+            pass
+
+        messages_in = raw.get("messages") or []
+        messages: List[Dict[str, Any]] = []
+        try:
+            for m in messages_in:
+                if not isinstance(m, dict):
+                    continue
+                mid = str(m.get("id") or uuid4())
+                # GraphQL-like input: { textMessage: { content, role, ... } }
+                if "textMessage" in m and isinstance(m["textMessage"], dict):
+                    tm = m["textMessage"]
+                    role = str(tm.get("role", "user")).lower()
+                    content = tm.get("content", "")
+                    messages.append({"id": mid, "role": role, "content": content})
+                    continue
+                # AG-UI style already: { role, content }
+                if "role" in m and "content" in m:
+                    role = str(m.get("role", "user")).lower()
+                    content = m.get("content", "")
+                    messages.append({"id": mid, "role": role, "content": content})
+                    continue
+                # Image message (best-effort)
+                if "imageMessage" in m and isinstance(m["imageMessage"], dict):
+                    im = m["imageMessage"]
+                    role = str(im.get("role", "user")).lower()
+                    messages.append({
+                        "id": mid,
+                        "role": role,
+                        "content": "",
+                        "image": {
+                            "format": im.get("format", "png"),
+                            "bytes": im.get("bytes", ""),
+                        }
+                    })
+                    continue
+                # Fallback: ignore unknown shapes
+        except Exception:
+            # keep messages empty, agent may still handle state-only inputs
+            pass
+
+        # Build candidate payload variants to satisfy different SDK expectations
+        # Choose best messages representation
+        effective_messages = messages if messages else messages_in
+
+        base: Dict[str, Any] = {
+            **raw,
+            "messages": effective_messages,
+            "threadId": thread_id or str(uuid4()),
+            "runId": run_id,
+        }
+        # Remove alternates to control variants explicitly
+        base.pop("forwardedProps", None)
+        base.pop("forwardedProperties", None)
+        base.pop("properties", None)
+
+        # Ensure optional fields exist
+        base.setdefault("state", {})
+        base.setdefault("tools", [])
+        base.setdefault("context", [])
+
+        # Phase 1: Merge CopilotKit context into state and config
+        # This ensures feature parity with GraphQL endpoint (SparrowLangGraphAgent)
+        state_dict: Dict[str, Any] = base["state"]
+        config_dict: Dict[str, Any] = {"configurable": {}}
+
+        # Extract attachments from forwarded props and remove to avoid duplication
+        # (attachments will be in state after merge, not in forwardedProps)
+        forwarded_without_attachments = {k: v for k, v in forwarded.items() if k != "attachments"}
+
+        try:
+            _merge_copilot_context(forwarded, state_dict, config_dict)
+            logging.info(
+                "copilot_context_merge_applied",
+                extra={
+                    "state_keys": list(state_dict.keys()),
+                    "config_keys": list(config_dict.get("configurable", {}).keys()),
+                },
+            )
+        except HTTPException:
+            # Attachment validation errors are already HTTPException, re-raise
+            raise
+        except Exception as e:
+            # Required: Fail loudly on context merge errors (requirement 3b)
+            logging.error(f"Context merge failed: {str(e)}", exc_info=True)
+            span.set_status(Status(StatusCode.ERROR, "context_merge_failed"))
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "context_merge_failed",
+                    "message": f"Failed to merge CopilotKit context: {str(e)}",
+                }
+            )
+
+        # Update base with merged state and add config
+        base["state"] = state_dict
+        base["config"] = config_dict
+
+        # Phase 1: Use forwarded props WITHOUT attachments (attachments are in state now)
+        variants: List[Dict[str, Any]] = []
+        # 1) forwardedProps as dict (without attachments - already in state)
+        variants.append({**base, "forwardedProps": forwarded_without_attachments})
+        # 2) forwardedProps as JSON string
+        try:
+            variants.append({**base, "forwardedProps": json.dumps(forwarded_without_attachments)})
+        except Exception:
+            variants.append({**base, "forwardedProps": json.dumps({})})
+        # 3) forwardedProperties as dict
+        variants.append({**base, "forwardedProperties": forwarded_without_attachments})
+        # 4) forwardedProperties as JSON string
+        try:
+            variants.append({**base, "forwardedProperties": json.dumps(forwarded_without_attachments)})
+        except Exception:
+            variants.append({**base, "forwardedProperties": json.dumps({})})
+
+        logging.info(
+            "copilot_stream_normalized_attempts",
+            extra={
+                "attempts": len(variants),
+                "has_messages": isinstance(messages, list),
+                "messages_len": len(messages) if isinstance(messages, list) else None,
+                "thread_present": bool(thread_id),
+                "run_present": bool(run_id),
+            },
+        )
+
+        input_data = None
+        errors: List[str] = []
+        for idx, candidate in enumerate(variants):
             try:
-                # pydantic v2 ValidationError has .errors()
-                errs = getattr(e, "errors", lambda: [])()
-                errors.append(f"variant_{idx}: {str(errs) or str(e)}")
-            except Exception:
-                errors.append(f"variant_{idx}: {str(e)}")
+                if hasattr(RunAgentInput, "model_validate"):
+                    input_data = RunAgentInput.model_validate(candidate)  # type: ignore[attr-defined]
+                elif hasattr(RunAgentInput, "parse_obj"):
+                    input_data = RunAgentInput.parse_obj(candidate)  # type: ignore[attr-defined]
+                else:
+                    input_data = RunAgentInput(**candidate)  # type: ignore[call-arg]
+                break
+            except Exception as e:  # collect and try next variant
+                try:
+                    # pydantic v2 ValidationError has .errors()
+                    errs = getattr(e, "errors", lambda: [])()
+                    errors.append(f"variant_{idx}: {str(errs) or str(e)}")
+                except Exception:
+                    errors.append(f"variant_{idx}: {str(e)}")
 
     if input_data is None:
         # As a last resort, try duck-typing with SimpleNamespace or plain dict
@@ -456,37 +481,80 @@ async def copilot_stream(request: Request, user_id: str = Depends(get_current_us
             except Exception as e:
                 errors.append(f"namespace_variant_{idx}: {str(e)}")
 
-    if input_data is None:
-        logging.error(
-            "RunAgentInput validation failed for all variants",
-            extra={
-                "errors": errors[:3],
-                "raw_keys": list(raw.keys()) if isinstance(raw, dict) else None,
-            },
-        )
-        return JSONResponse(
-            status_code=422,
-            content={
-                "error": "validation_failed",
-                "detail": "All normalization variants failed",
-                "variants_tried": len(variants),
-                "errors": errors,
-            },
-        )
+        if input_data is None:
+            logging.error(
+                "RunAgentInput validation failed for all variants",
+                extra={
+                    "errors": errors[:3],
+                    "raw_keys": list(raw.keys()) if isinstance(raw, dict) else None,
+                },
+            )
+            span.set_status(Status(StatusCode.ERROR, "validation_failed"))
+            return JSONResponse(
+                status_code=422,
+                content={
+                    "error": "validation_failed",
+                    "detail": "All normalization variants failed",
+                    "variants_tried": len(variants),
+                    "errors": errors,
+                },
+            )
 
-    agent = LangGraphAgent(name="sparrow", graph=compiled_graph)  # type: ignore
-    accept_header = request.headers.get("accept")
-    encoder = EventEncoder(accept=accept_header)  # type: ignore
+        agent = LangGraphAgent(name="sparrow", graph=compiled_graph)  # type: ignore
+        accept_header = request.headers.get("accept")
+        encoder = EventEncoder(accept=accept_header)  # type: ignore
 
-    async def event_generator():
-        async for event in agent.run(input_data):  # type: ignore
-            yield encoder.encode(event)
+        async def event_generator():
+            # Nested span around the actual agent run (streaming)
+            with tracer.start_as_current_span("copilot.stream.run") as run_span:
+                try:
+                    # Repeat key attributes for easier correlation at run-level
+                    cfg = base.get("config", {}).get("configurable", {}) if isinstance(base, dict) else {}
+                    run_span.set_attribute("copilot.session_id", str(cfg.get("session_id") or ""))
+                    run_span.set_attribute("copilot.trace_id", str(cfg.get("trace_id") or ""))
+                    run_span.set_attribute("copilot.provider", str(cfg.get("provider") or ""))
+                    run_span.set_attribute("copilot.model", str(cfg.get("model") or ""))
+                    run_span.set_attribute("copilot.agent_type", str(cfg.get("agent_type") or ""))
+                except Exception:
+                    pass
 
-    return StreamingResponse(event_generator(), media_type=encoder.get_content_type())  # type: ignore
+                try:
+                    async for event in agent.run(input_data):  # type: ignore
+                        yield encoder.encode(event)
+                    run_span.set_status(Status(StatusCode.OK))
+                except Exception as exc:  # pragma: no cover - defensive capture
+                    run_span.record_exception(exc)
+                    run_span.set_status(Status(StatusCode.ERROR, "agent_run_failed"))
+                    raise
+
+        span.set_status(Status(StatusCode.OK))
+        return StreamingResponse(event_generator(), media_type=encoder.get_content_type())  # type: ignore
 
 
 @router.get("/copilot/stream/health")
 async def copilot_stream_health():
-    if not _SDK_AVAILABLE or compiled_graph is None:
-        return JSONResponse(status_code=503, content={"status": "unavailable"})
-    return {"status": "ok", "agent": "sparrow"}
+    """Return availability and configuration snapshot for the Copilot stream path."""
+    sdk = bool(_SDK_AVAILABLE)
+    graph_ok = compiled_graph is not None
+    from app.core.settings import settings as _settings
+    if not sdk or not graph_ok:
+        return JSONResponse(
+            status_code=503,
+            content={
+                "status": "unavailable",
+                "sdk_available": sdk,
+                "graph_compiled": graph_ok,
+            },
+        )
+    return {
+        "status": "ok",
+        "sdk_available": True,
+        "graph_compiled": True,
+        "agent": "sparrow",
+        "agents": [{"name": "sparrow", "status": "ready"}],
+        "models": {
+            "router": getattr(_settings, "router_model", None),
+            "primary": getattr(_settings, "primary_agent_model", None),
+            "log_analysis": getattr(_settings, "enhanced_log_model", None),
+        },
+    }

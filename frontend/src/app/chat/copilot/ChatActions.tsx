@@ -1,6 +1,6 @@
 "use client";
 
-import { useCopilotAction } from "@copilotkit/react-core";
+import { useCopilotAction, useCopilotChat } from "@copilotkit/react-core";
 import { FeedbackDialog } from "@/features/global-knowledge/components/FeedbackDialog";
 import { CorrectionDialog } from "@/features/global-knowledge/components/CorrectionDialog";
 import { useState } from "react";
@@ -25,6 +25,7 @@ export function ChatActions({
   sessionId?: string;
   agentType: "primary" | "log_analysis";
 }) {
+  const chat = useCopilotChat({})
   // Feedback dialog state
   const [feedbackOpen, setFeedbackOpen] = useState(false);
   const [feedbackText, setFeedbackText] = useState("");
@@ -95,6 +96,46 @@ export function ChatActions({
       };
     },
   });
+
+  // Phase 5: Minimal visibility actions for key tools/flows
+  useCopilotAction({
+    name: "knowledge_search",
+    description: "Search Mailbird knowledge base",
+    parameters: [
+      { name: "query", type: "string", description: "What to search for", required: false },
+    ],
+    handler: async ({ query }: { query?: string }) => {
+      const text = query && String(query).trim().length ? String(query) : "Search knowledge base for …"
+      try { chat?.setInput?.(text) } catch {}
+      return { ok: true }
+    },
+  })
+
+  useCopilotAction({
+    name: "web_search",
+    description: "Perform a quick web search",
+    parameters: [
+      { name: "query", type: "string", description: "Topic to research", required: false },
+    ],
+    handler: async ({ query }: { query?: string }) => {
+      const text = query && String(query).trim().length ? String(query) : "Research on the web: …"
+      try { chat?.setInput?.(text) } catch {}
+      return { ok: true }
+    },
+  })
+
+  useCopilotAction({
+    name: "analyze_logs",
+    description: "Analyze attached logs for issues and patterns",
+    parameters: [
+      { name: "hint", type: "string", description: "Optional hint or focus area", required: false },
+    ],
+    handler: async ({ hint }: { hint?: string }) => {
+      const text = hint && String(hint).trim().length ? String(hint) : "Analyze the attached logs and summarize issues."
+      try { chat?.setInput?.(text) } catch {}
+      return { ok: true }
+    },
+  })
 
   return (
     <>

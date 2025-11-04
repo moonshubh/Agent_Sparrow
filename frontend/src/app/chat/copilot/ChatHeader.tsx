@@ -4,13 +4,16 @@ import React from "react";
 import Link from "next/link";
 import { Button } from "@/shared/ui/button";
 import { ModelSelector } from "@/app/chat/components/ModelSelector";
+import { AgentSelector } from "./AgentSelector";
+import type { AgentChoice } from "@/features/chat/hooks/useAgentSelection";
 
 /**
- * Chat Header for Phase 3 CopilotKit Integration
+ * Chat Header for Phase 3 + Phase 4 CopilotKit Integration
  *
  * Contains controls positioned outside the CopilotSidebar:
  * - Agent type indicator
  * - Memory toggle
+ * - Knowledge source toggles (KB, FeedMe) - Phase 4
  * - Model/provider selector
  * - Navigation links (Settings, FeedMe)
  * - Optional MCP URL input
@@ -21,6 +24,10 @@ export function ChatHeader({
   agentType,
   memoryEnabled,
   onMemoryToggle,
+  kbEnabled,
+  onKbToggle,
+  feedmeEnabled,
+  onFeedmeToggle,
   provider,
   model,
   onProviderChange,
@@ -28,10 +35,18 @@ export function ChatHeader({
   modelsByProvider,
   mcpUrl,
   onMcpUrlChange,
+  // Phase 5: Multi-agent selection (optional)
+  selectedAgent,
+  onAgentChange,
 }: {
   agentType: "primary" | "log_analysis";
   memoryEnabled: boolean;
   onMemoryToggle: (enabled: boolean) => void;
+  // Phase 4: Knowledge source toggles
+  kbEnabled?: boolean;
+  onKbToggle?: (enabled: boolean) => void;
+  feedmeEnabled?: boolean;
+  onFeedmeToggle?: (enabled: boolean) => void;
   provider: "google" | "openai";
   model: string;
   onProviderChange: (provider: "google" | "openai") => void;
@@ -39,7 +54,12 @@ export function ChatHeader({
   modelsByProvider: Record<"google" | "openai", string[]>;
   mcpUrl?: string;
   onMcpUrlChange?: (url: string) => void;
+  // Phase 5 (optional)
+  selectedAgent?: AgentChoice;
+  onAgentChange?: (v: AgentChoice) => void;
 }) {
+  // Show knowledge toggles if handlers are provided
+  const showKnowledgeToggles = onKbToggle !== undefined || onFeedmeToggle !== undefined;
   return (
     <div className="border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
       <div className="max-w-7xl mx-auto px-4 py-3 space-y-3">
@@ -80,9 +100,48 @@ export function ChatHeader({
               />
               <span>Server Memory</span>
             </label>
+
+            {/* Phase 4: Knowledge Source Toggles */}
+            {showKnowledgeToggles && (
+              <div className="flex items-center gap-3 pl-4 border-l">
+                <span className="text-xs font-medium text-muted-foreground">
+                  Knowledge Sources:
+                </span>
+
+                {onKbToggle && (
+                  <label className="inline-flex items-center gap-2 text-sm cursor-pointer">
+                    <input
+                      type="checkbox"
+                      aria-label="Enable Knowledge Base documents"
+                      className="accent-primary cursor-pointer"
+                      checked={kbEnabled ?? true}
+                      onChange={(e) => onKbToggle(e.target.checked)}
+                    />
+                    <span>KB</span>
+                  </label>
+                )}
+
+                {onFeedmeToggle && (
+                  <label className="inline-flex items-center gap-2 text-sm cursor-pointer">
+                    <input
+                      type="checkbox"
+                      aria-label="Enable FeedMe conversations"
+                      className="accent-primary cursor-pointer"
+                      checked={feedmeEnabled ?? true}
+                      onChange={(e) => onFeedmeToggle(e.target.checked)}
+                    />
+                    <span>FeedMe</span>
+                  </label>
+                )}
+              </div>
+            )}
           </div>
 
           <div className="flex items-center gap-4">
+            {/* Phase 5: Agent Selector (feature-flagged externally) */}
+            {onAgentChange && selectedAgent && (
+              <AgentSelector value={selectedAgent} onChange={onAgentChange} />
+            )}
             {/* Model selector */}
             <ModelSelector
               provider={provider}

@@ -35,6 +35,7 @@ from app.api.v1.endpoints import (
     copilot_endpoints,  # CopilotKit runtime endpoint
     models_endpoints,  # Models listing for frontend selector
 )
+from app.api.v1.endpoints import agents_endpoints  # Agent metadata discovery
 from app.api.v1.endpoints import tavily_selftest  # Dev-only Tavily diagnostics
 from app.api.v1.endpoints import feedme_endpoints  # FeedMe transcript ingestion
 from app.api.v1.endpoints import text_approval_endpoints  # Text approval workflow for FeedMe
@@ -81,6 +82,7 @@ from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 from opentelemetry.sdk.resources import Resource
+from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 import hashlib
 
 # Configure the resource for your application
@@ -122,6 +124,13 @@ app = FastAPI(
     description="API server for the MB-Sparrow multi-agent system."
 )
 
+# Enable FastAPI auto-instrumentation for OpenTelemetry when enabled
+if ENABLE_OTEL:
+    try:  # pragma: no cover - best-effort, do not fail app startup on instrumentation issues
+        FastAPIInstrumentor().instrument_app(app)
+    except Exception as _otel_exc:
+        print(f"[OTel] Warning: failed to instrument FastAPI -> {_otel_exc}. Continuing without instrumentation.")
+
 @app.middleware("http")
 async def _debug_log_copilotkit_requests(request: Request, call_next):
     if request.url.path.startswith("/api/v1/copilotkit"):
@@ -138,39 +147,7 @@ async def _debug_log_copilotkit_requests(request: Request, call_next):
 # 1) AG-UI LangGraph stream endpoint via router: /api/v1/copilot/stream
 # 2) CopilotKit SDK GraphQL runtime endpoint: /api/v1/copilotkit (if SDK available)
 _sdk: Optional[Any] = None
-
-try:
-    # Lazy import to avoid hard dependency during cold starts
-    from copilotkit.integrations.fastapi import add_fastapi_endpoint  # type: ignore
-    from copilotkit import CopilotKitSDK, LangGraphAGUIAgent, LangGraphAgent  # type: ignore
-    from app.agents.orchestration.orchestration.graph import app as compiled_graph  # type: ignore
-    from app.integrations.copilotkit import SparrowLangGraphAgent
-
-    # Monkey-patch to ensure dict_repr exists (copilotkit 0.1.70 AGUI agent lacks it)
-    if not hasattr(LangGraphAGUIAgent, "dict_repr"):
-        def _agui_dict_repr(self):
-            return {"name": getattr(self, "name", ""), "description": getattr(self, "description", "") or ""}
-        setattr(LangGraphAGUIAgent, "dict_repr", _agui_dict_repr)
-
-    def _copilot_agents(context):
-        try:
-            properties = dict((context or {}).get("properties") or {})
-        except (AttributeError, TypeError, KeyError):
-            properties = {}
-        return [
-            SparrowLangGraphAgent(
-                name="sparrow",
-                description="Primary Sparrow agent",
-                graph=compiled_graph,
-                context_properties=properties,
-            )
-        ]
-
-    _sdk = CopilotKitSDK(agents=_copilot_agents)
-    add_fastapi_endpoint(app, _sdk, "/api/v1/copilotkit-sdk")
-    logging.info("CopilotKit SDK REST endpoint registered at /api/v1/copilotkit-sdk")
-except Exception as _sdk_exc:  # pragma: no cover - optional integration
-    logging.warning(f"CopilotKit SDK endpoint not registered: {_sdk_exc}")
+_sdk = None
 
 def _build_copilot_context(body: dict, request: Request) -> dict:
     """Construct CopilotKit context (properties + headers) from a GraphQL request body."""
@@ -607,8 +584,7 @@ async def _graphql_generate_response(
 
 @app.post("/api/v1/copilotkit")
 async def copilotkit_graphql(request: Request):
-    if _sdk is None:
-        raise HTTPException(status_code=503, detail="CopilotKit runtime unavailable")
+    raise HTTPException(status_code=410, detail="Endpoint deprecated. Use /api/v1/copilot/stream")
 
     try:
         body = await request.json()
@@ -727,6 +703,7 @@ app.include_router(logs_endpoints.router, prefix="/api/v1", tags=["Agent Interac
 app.include_router(research_endpoints.router, prefix="/api/v1", tags=["Agent Interaction"]) 
 app.include_router(copilot_endpoints.router, prefix="/api/v1", tags=["Copilot"])  # /api/v1/copilot/stream
 app.include_router(models_endpoints.router, prefix="/api/v1", tags=["Models"])  # /api/v1/models
+app.include_router(agents_endpoints.router, prefix="/api/v1", tags=["Agents"])  # /api/v1/agents
 app.include_router(global_knowledge_observability.router, prefix="/api/v1", tags=["Global Knowledge"])
 app.include_router(global_knowledge_feedback.router, prefix="/api/v1", tags=["Global Knowledge"])
 # Register FeedMe routes
