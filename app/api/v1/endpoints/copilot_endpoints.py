@@ -15,13 +15,13 @@ Phase 1 Enhancement:
 """
 
 import json
-from typing import Any, Dict, List, Optional
 import logging
+from copy import deepcopy
+from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Query
-from fastapi.responses import StreamingResponse, JSONResponse
-from types import SimpleNamespace
+from fastapi.responses import JSONResponse, StreamingResponse
 from opentelemetry import trace
 from opentelemetry.trace import Status, StatusCode
 
@@ -38,7 +38,18 @@ except Exception:  # pragma: no cover
 
 try:  # pragma: no cover - import-time guard
     from ag_ui_langgraph.agent import LangGraphAgent  # type: ignore
-    from ag_ui.core.types import RunAgentInput  # type: ignore
+    from ag_ui.core.types import (
+        RunAgentInput,  # type: ignore
+        DeveloperMessage,  # type: ignore
+        SystemMessage,  # type: ignore
+        AssistantMessage,  # type: ignore
+        UserMessage,  # type: ignore
+        ToolMessage,  # type: ignore
+        Tool as AgentTool,  # type: ignore
+        Context as AgentContext,  # type: ignore
+        ToolCall as AgentToolCall,  # type: ignore
+        FunctionCall as AgentFunctionCall,  # type: ignore
+    )
     from ag_ui.encoder import EventEncoder  # type: ignore
     from app.agents.orchestration.orchestration.graph import app as compiled_graph
     _SDK_AVAILABLE = True
@@ -46,6 +57,15 @@ except Exception:  # pragma: no cover
     LangGraphAgent = object  # type: ignore
     RunAgentInput = object  # type: ignore
     EventEncoder = object  # type: ignore
+    DeveloperMessage = object  # type: ignore
+    SystemMessage = object  # type: ignore
+    AssistantMessage = object  # type: ignore
+    UserMessage = object  # type: ignore
+    ToolMessage = object  # type: ignore
+    AgentTool = object  # type: ignore
+    AgentContext = object  # type: ignore
+    AgentToolCall = object  # type: ignore
+    AgentFunctionCall = object  # type: ignore
     compiled_graph = None  # type: ignore
     _SDK_AVAILABLE = False
 
@@ -55,6 +75,255 @@ from app.core.settings import get_settings
 
 # OpenTelemetry tracer for this module
 tracer = trace.get_tracer(__name__)
+
+
+class FallbackRunAgentInput:
+    """Lightweight stand-in for RunAgentInput when SDK validation fails."""
+
+    __slots__ = (
+        "thread_id",
+        "run_id",
+        "state",
+        "messages",
+        "tools",
+        "context",
+        "forwarded_props",
+        "config",
+    )
+
+    def __init__(
+        self,
+        *,
+        thread_id: str,
+        run_id: str,
+        state: Any,
+        messages: List[Any],
+        tools: List[Any],
+        context: List[Any],
+        forwarded_props: Dict[str, Any],
+        config: Dict[str, Any] | None = None,
+    ) -> None:
+        self.thread_id = thread_id
+        self.run_id = run_id
+        self.state = state
+        self.messages = messages
+        self.tools = tools
+        self.context = context
+        self.forwarded_props = forwarded_props
+        self.config = config or {}
+
+    @staticmethod
+    def _build_tool_call(raw_call: Dict[str, Any]) -> Optional[AgentToolCall]:
+        if not isinstance(raw_call, dict):
+            return None
+
+        function = raw_call.get("function") or {}
+        if not isinstance(function, dict):
+            function = {}
+
+        name = function.get("name") or raw_call.get("name")
+        if not name:
+            return None
+
+        arguments = function.get("arguments") or raw_call.get("arguments") or "{}"
+        if not isinstance(arguments, str):
+            try:
+                arguments = json.dumps(arguments)
+            except Exception:
+                arguments = "{}"
+
+        try:
+            return AgentToolCall(
+                id=str(raw_call.get("id") or uuid4()),
+                function=AgentFunctionCall(name=str(name), arguments=arguments),
+            )
+        except Exception:
+            return None
+
+    @staticmethod
+    def _build_message(raw_message: Any) -> Optional[Any]:
+        if not isinstance(raw_message, dict):
+            return None
+
+        role = str(raw_message.get("role") or "").lower()
+        mid = str(raw_message.get("id") or uuid4())
+        name = raw_message.get("name")
+
+        if role == "user":
+            content = raw_message.get("content", "")
+            try:
+                return UserMessage(id=mid, content=str(content or ""), name=name)
+            except Exception:
+                return None
+
+        if role == "assistant":
+            content = raw_message.get("content") or ""
+            tool_calls_raw = raw_message.get("tool_calls") or raw_message.get("toolCalls") or []
+            tool_calls: List[AgentToolCall] = []
+            if isinstance(tool_calls_raw, list):
+                for call in tool_calls_raw:
+                    tc = FallbackRunAgentInput._build_tool_call(call)
+                    if tc:
+                        tool_calls.append(tc)
+            try:
+                return AssistantMessage(
+                    id=mid,
+                    content=str(content),
+                    name=name,
+                    tool_calls=tool_calls or None,
+                )
+            except Exception:
+                return None
+
+        if role == "developer":
+            content = raw_message.get("content", "")
+            try:
+                return DeveloperMessage(id=mid, content=str(content or ""), name=name)
+            except Exception:
+                return None
+
+        if role == "system":
+            content = raw_message.get("content", "")
+            try:
+                return SystemMessage(id=mid, content=str(content or ""), name=name)
+            except Exception:
+                return None
+
+        if role == "tool":
+            tool_call_id = raw_message.get("tool_call_id") or raw_message.get("toolCallId")
+            content = raw_message.get("content", "")
+            if not tool_call_id:
+                return None
+            try:
+                return ToolMessage(
+                    id=mid,
+                    tool_call_id=str(tool_call_id),
+                    content=str(content or ""),
+                    error=raw_message.get("error"),
+                )
+            except Exception:
+                return None
+
+        return None
+
+    @staticmethod
+    def _build_context(raw: Any) -> Optional[AgentContext]:
+        if not isinstance(raw, dict):
+            return None
+        description = raw.get("description")
+        value = raw.get("value")
+        if description is None or value is None:
+            return None
+        try:
+            return AgentContext(description=str(description), value=str(value))
+        except Exception:
+            return None
+
+    @staticmethod
+    def _build_tool(raw: Any) -> Optional[AgentTool]:
+        if not isinstance(raw, dict):
+            return None
+        name = raw.get("name")
+        description = raw.get("description", "")
+        parameters = raw.get("parameters", {})
+        if not name:
+            return None
+        try:
+            return AgentTool(name=str(name), description=str(description or ""), parameters=parameters)
+        except Exception:
+            return None
+
+    @classmethod
+    def from_candidate(cls, candidate: Dict[str, Any]) -> "FallbackRunAgentInput":
+        forwarded_candidate = candidate.get("forwarded_props")
+        if forwarded_candidate is None:
+            forwarded_candidate = candidate.get("forwardedProps") or candidate.get("forwardedProperties") or {}
+        forwarded_props = forwarded_candidate if isinstance(forwarded_candidate, dict) else {}
+
+        thread_id = str(
+            candidate.get("thread_id")
+            or candidate.get("threadId")
+            or candidate.get("threadID")
+            or uuid4()
+        )
+        run_id = str(
+            candidate.get("run_id")
+            or candidate.get("runId")
+            or candidate.get("runID")
+            or uuid4()
+        )
+
+        state = candidate.get("state") if isinstance(candidate.get("state"), dict) else {}
+
+        messages: List[Any] = []
+        for raw_message in candidate.get("messages") or []:
+            built = cls._build_message(raw_message)
+            if built is not None:
+                messages.append(built)
+
+        tools: List[Any] = []
+        for raw_tool in candidate.get("tools") or []:
+            built_tool = cls._build_tool(raw_tool)
+            if built_tool is not None:
+                tools.append(built_tool)
+
+        context_items: List[Any] = []
+        for raw_context in candidate.get("context") or []:
+            built_context = cls._build_context(raw_context)
+            if built_context is not None:
+                context_items.append(built_context)
+
+        config = candidate.get("config")
+        config_dict = config if isinstance(config, dict) else {}
+
+        return cls(
+            thread_id=thread_id,
+            run_id=run_id,
+            state=state,
+            messages=messages,
+            tools=tools,
+            context=context_items,
+            forwarded_props=forwarded_props,
+            config=config_dict,
+        )
+
+    def copy(self, update: Optional[Dict[str, Any]] = None) -> "FallbackRunAgentInput":
+        data: Dict[str, Any] = {
+            "thread_id": self.thread_id,
+            "run_id": self.run_id,
+            "state": deepcopy(self.state),
+            "messages": [m.model_copy(deep=True) if hasattr(m, "model_copy") else deepcopy(m) for m in self.messages],
+            "tools": [t.model_copy(deep=True) if hasattr(t, "model_copy") else deepcopy(t) for t in self.tools],
+            "context": [c.model_copy(deep=True) if hasattr(c, "model_copy") else deepcopy(c) for c in self.context],
+            "forwarded_props": deepcopy(self.forwarded_props),
+            "config": deepcopy(self.config),
+        }
+        if update:
+            data.update(update)
+        return FallbackRunAgentInput(**data)
+
+    def dict(self) -> Dict[str, Any]:
+        return {
+            "thread_id": self.thread_id,
+            "run_id": self.run_id,
+            "state": deepcopy(self.state),
+            "messages": [
+                m.model_dump() if hasattr(m, "model_dump") else deepcopy(m)
+                for m in self.messages
+            ],
+            "tools": [
+                t.model_dump() if hasattr(t, "model_dump") else deepcopy(t)
+                for t in self.tools
+            ],
+            "context": [
+                c.model_dump() if hasattr(c, "model_dump") else deepcopy(c)
+                for c in self.context
+            ],
+            "forwarded_props": deepcopy(self.forwarded_props),
+            "config": deepcopy(self.config),
+        }
+
+    model_dump = dict
 
 
 def _sanitize_attachments(payload: Any) -> List[Dict[str, Any]]:
@@ -457,12 +726,14 @@ async def copilot_stream(request: Request, user_id: str = Depends(get_current_us
         errors: List[str] = []
         for idx, candidate in enumerate(variants):
             try:
+                candidate_payload = dict(candidate)
+                candidate_payload.pop("config", None)
                 if hasattr(RunAgentInput, "model_validate"):
-                    input_data = RunAgentInput.model_validate(candidate)  # type: ignore[attr-defined]
+                    input_data = RunAgentInput.model_validate(candidate_payload)  # type: ignore[attr-defined]
                 elif hasattr(RunAgentInput, "parse_obj"):
-                    input_data = RunAgentInput.parse_obj(candidate)  # type: ignore[attr-defined]
+                    input_data = RunAgentInput.parse_obj(candidate_payload)  # type: ignore[attr-defined]
                 else:
-                    input_data = RunAgentInput(**candidate)  # type: ignore[call-arg]
+                    input_data = RunAgentInput(**candidate_payload)  # type: ignore[call-arg]
                 break
             except Exception as e:  # collect and try next variant
                 try:
@@ -473,13 +744,35 @@ async def copilot_stream(request: Request, user_id: str = Depends(get_current_us
                     errors.append(f"variant_{idx}: {str(e)}")
 
     if input_data is None:
+        logging.warning(
+            "RunAgentInput validation failed. Falling back to permissive namespace.",
+            extra={"errors_sample": errors[:3]},
+        )
         # As a last resort, try duck-typing with SimpleNamespace or plain dict
         for idx, candidate in enumerate(variants):
             try:
-                input_data = SimpleNamespace(**candidate)  # attribute-style access
+                fallback_candidate = FallbackRunAgentInput.from_candidate(candidate)
+            except Exception as e:
+                errors.append(f"namespace_variant_{idx}: {str(e)}")
+                continue
+
+            try:
+                if hasattr(RunAgentInput, "model_validate") and callable(getattr(RunAgentInput, "model_validate")):
+                    fallback_payload = fallback_candidate.dict()
+                    fallback_payload.pop("config", None)
+                    input_data = RunAgentInput.model_validate(fallback_payload)  # type: ignore[attr-defined]
+                elif hasattr(RunAgentInput, "parse_obj"):
+                    fallback_payload = fallback_candidate.dict()
+                    fallback_payload.pop("config", None)
+                    input_data = RunAgentInput.parse_obj(fallback_payload)  # type: ignore[attr-defined]
+                else:
+                    input_data = fallback_candidate  # Final fallback when SDK model not available
                 break
             except Exception as e:
                 errors.append(f"namespace_variant_{idx}: {str(e)}")
+                # Accept permissive fallback even if strict validation failed
+                input_data = fallback_candidate
+                break
 
         if input_data is None:
             logging.error(
@@ -500,35 +793,38 @@ async def copilot_stream(request: Request, user_id: str = Depends(get_current_us
                 },
             )
 
-        agent = LangGraphAgent(name="sparrow", graph=compiled_graph)  # type: ignore
-        accept_header = request.headers.get("accept")
-        encoder = EventEncoder(accept=accept_header)  # type: ignore
+    agent = LangGraphAgent(name="sparrow", graph=compiled_graph, config=config_dict)  # type: ignore
+    accept_header = request.headers.get("accept")
+    encoder = EventEncoder(accept=accept_header)  # type: ignore
 
-        async def event_generator():
-            # Nested span around the actual agent run (streaming)
-            with tracer.start_as_current_span("copilot.stream.run") as run_span:
-                try:
-                    # Repeat key attributes for easier correlation at run-level
-                    cfg = base.get("config", {}).get("configurable", {}) if isinstance(base, dict) else {}
-                    run_span.set_attribute("copilot.session_id", str(cfg.get("session_id") or ""))
-                    run_span.set_attribute("copilot.trace_id", str(cfg.get("trace_id") or ""))
-                    run_span.set_attribute("copilot.provider", str(cfg.get("provider") or ""))
-                    run_span.set_attribute("copilot.model", str(cfg.get("model") or ""))
-                    run_span.set_attribute("copilot.agent_type", str(cfg.get("agent_type") or ""))
-                except Exception:
-                    pass
+    async def event_generator():
+        # Nested span around the actual agent run (streaming)
+        with tracer.start_as_current_span("copilot.stream.run") as run_span:
+            try:
+                # Repeat key attributes for easier correlation at run-level
+                cfg = config_dict.get("configurable", {})
+                run_span.set_attribute("copilot.session_id", str(cfg.get("session_id") or ""))
+                run_span.set_attribute("copilot.trace_id", str(cfg.get("trace_id") or ""))
+                run_span.set_attribute("copilot.provider", str(cfg.get("provider") or ""))
+                run_span.set_attribute("copilot.model", str(cfg.get("model") or ""))
+                run_span.set_attribute("copilot.agent_type", str(cfg.get("agent_type") or ""))
+            except Exception:
+                pass
 
-                try:
-                    async for event in agent.run(input_data):  # type: ignore
-                        yield encoder.encode(event)
-                    run_span.set_status(Status(StatusCode.OK))
-                except Exception as exc:  # pragma: no cover - defensive capture
-                    run_span.record_exception(exc)
-                    run_span.set_status(Status(StatusCode.ERROR, "agent_run_failed"))
-                    raise
+            try:
+                async for event in agent.run(input_data):  # type: ignore
+                    yield encoder.encode(event)
+                run_span.set_status(Status(StatusCode.OK))
+            except Exception as exc:  # pragma: no cover - defensive capture
+                run_span.record_exception(exc)
+                run_span.set_status(Status(StatusCode.ERROR, "agent_run_failed"))
+                raise
 
-        span.set_status(Status(StatusCode.OK))
-        return StreamingResponse(event_generator(), media_type=encoder.get_content_type())  # type: ignore
+    span.set_status(Status(StatusCode.OK))
+    # Explicitly set 200 to avoid ambiguous 204 responses in some clients
+    return StreamingResponse(
+        event_generator(), status_code=200, media_type=encoder.get_content_type()
+    )  # type: ignore
 
 
 @router.get("/copilot/stream/health")

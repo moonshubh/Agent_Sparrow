@@ -114,15 +114,39 @@ kill_process_on_port 8000
 
 echo "Starting Uvicorn server in the background (venv python)..."
 cd "$ROOT_DIR"
-"$VENV_PY" -m uvicorn app.main:app --reload --port 8000 > "$BACKEND_LOG_DIR/backend.log" 2>&1 &
+UVICORN_ARGS=(app.main:app --port 8000)
+if [ "${ENABLE_UVICORN_RELOAD:-true}" = "true" ]; then
+    UVICORN_ARGS+=(--reload)
+fi
+"$VENV_PY" -m uvicorn "${UVICORN_ARGS[@]}" > "$BACKEND_LOG_DIR/backend.log" 2>&1 &
 BACKEND_PID=$!
 echo "Backend server started with PID: $BACKEND_PID"
 
+verify_backend_pid() {
+    sleep 5 # Give it a moment to start
+    if ! kill -0 $BACKEND_PID 2>/dev/null; then
+        return 1
+    fi
+    return 0
+}
+
 echo "Verifying backend server startup..."
-sleep 5 # Give it a moment to start
-if ! ps -p $BACKEND_PID > /dev/null; then
-    echo "Backend server failed to start. Check logs at $BACKEND_LOG_DIR/backend.log"
-    exit 1
+if ! verify_backend_pid; then
+    if [ "${ENABLE_UVICORN_RELOAD:-true}" = "true" ]; then
+        echo "Reload mode failed. Retrying without --reload (watch permissions may be restricted)..."
+        ENABLE_UVICORN_RELOAD=false
+        UVICORN_ARGS=(app.main:app --port 8000)
+        "$VENV_PY" -m uvicorn "${UVICORN_ARGS[@]}" > "$BACKEND_LOG_DIR/backend.log" 2>&1 &
+        BACKEND_PID=$!
+        echo "Backend server restarted with PID: $BACKEND_PID"
+        if ! verify_backend_pid; then
+            echo "Backend server failed to start. Check logs at $BACKEND_LOG_DIR/backend.log"
+            exit 1
+        fi
+    else
+        echo "Backend server failed to start. Check logs at $BACKEND_LOG_DIR/backend.log"
+        exit 1
+    fi
 fi
 if ! lsof -i :8000 -t >/dev/null; then
     echo "Backend server started but is not listening on port 8000. Check logs."
@@ -169,7 +193,7 @@ else
     # Verify Celery worker startup
     echo "Verifying Celery worker startup..."
     sleep 3
-    if ! ps -p $CELERY_PID > /dev/null; then
+    if ! kill -0 $CELERY_PID 2>/dev/null; then
         echo "Warning: Celery worker failed to start. Check logs at $CELERY_LOG_DIR/celery_worker.log"
         echo "FeedMe background processing will not be available."
         CELERY_PID=""
@@ -196,7 +220,7 @@ echo "Frontend server started with PID: $FRONTEND_PID"
 
 echo "Verifying frontend server startup..."
 sleep 10 # Give it more time as Next.js can be slow
-if ! ps -p $FRONTEND_PID > /dev/null; then
+if ! kill -0 $FRONTEND_PID 2>/dev/null; then
     echo "Frontend server failed to start. Check logs at $FRONTEND_LOG_DIR/frontend.log"
     exit 1
 fi

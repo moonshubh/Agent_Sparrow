@@ -55,17 +55,22 @@ type Props = {
 // Custom hook for bearer token header
 function useBearerHeader() {
   const [headers, setHeaders] = useState<Record<string, string>>({});
+  const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
         const token = await getAuthToken();
-        if (!cancelled && token) {
-          setHeaders({ Authorization: `Bearer ${token}` });
+        if (!cancelled) {
+          setHeaders(token ? { Authorization: `Bearer ${token}` } : {});
         }
-      } catch {
-        // Silent fail - auth is optional
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        if (process.env.NODE_ENV !== "production") console.warn("Failed to load auth token:", err);
+        if (!cancelled) setHeaders({});
+      } finally {
+        if (!cancelled) setIsLoading(false);
       }
     })();
     return () => {
@@ -73,7 +78,7 @@ function useBearerHeader() {
     };
   }, []);
 
-  return headers;
+  return { headers, isLoading } as const;
 }
 
 // Custom hook for session state management
@@ -113,7 +118,7 @@ export default function CopilotSidebarClient({
   initialSessionId,
   agentType = "primary",
 }: Props) {
-  const headers = useBearerHeader();
+  const { headers, isLoading: authLoading } = useBearerHeader();
 
   // Endpoint resolution with feature flag
   const runtimeUrl = useMemo(() => {
@@ -328,6 +333,51 @@ export default function CopilotSidebarClient({
     };
   }, [sessionId, memoryEnabled, provider, model, agentType, mcpUrl, enableMultiAgent, selectedAgent]);
 
+  // Debug: capture minimal init info in development for troubleshooting
+  useEffect(() => {
+    if (process.env.NODE_ENV !== 'development') return;
+    try {
+      if (typeof window !== 'undefined') {
+        (window as any).__COPILOT_CONFIG__ = {
+          runtimeUrl,
+          sessionId,
+          authHeadersPresent: headers && Object.keys(headers).length > 0,
+        };
+      }
+    } catch {}
+  }, [runtimeUrl, sessionId, headers]);
+
+  // Block CopilotKit mount until auth header is resolved to avoid race conditions
+  if (authLoading) {
+    return (
+      <div className="flex flex-col h-screen bg-background">
+        <ChatHeader
+          agentType={agentType}
+          memoryEnabled={memoryEnabled}
+          onMemoryToggle={setMemoryEnabled}
+          kbEnabled={enableDocuments ? kbEnabled : undefined}
+          onKbToggle={enableDocuments ? setKbEnabled : undefined}
+          feedmeEnabled={enableDocuments ? feedmeEnabled : undefined}
+          onFeedmeToggle={enableDocuments ? setFeedmeEnabled : undefined}
+          provider={provider}
+          model={model}
+          onProviderChange={setProvider}
+          onModelChange={setModel}
+          modelsByProvider={modelsByProvider}
+          mcpUrl={mcpUrl}
+          onMcpUrlChange={setMcpUrl}
+          selectedAgent={enableMultiAgent ? selectedAgent : undefined}
+          onAgentChange={enableMultiAgent ? choose : undefined}
+        />
+        <div className="flex-1 overflow-hidden flex items-center justify-center">
+          <div className="text-center text-muted-foreground">
+            <p className="text-sm">Initializing chat…</p>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="flex flex-col h-screen">
       {/* Header with controls outside sidebar */}
@@ -361,24 +411,28 @@ export default function CopilotSidebarClient({
           showDevConsole={false}
           publicLicenseKey={publicLicenseKey}
           onError={(event) => {
-            if (!enableObservability) return
             try {
-              // Minimal error tracking – avoid PII, log types only
               const payload = {
                 type: event?.type,
                 source: event?.context?.source,
                 operation: event?.context?.request?.operation,
                 latency: event?.context?.response?.latency,
+                status: event?.context?.response?.status,
                 timestamp: event?.timestamp,
-              }
+              };
               if (typeof window !== 'undefined') {
-                ;(window as any).__COPILOT_DEBUG__ = {
+                const errors = (window as any).__COPILOT_ERRORS__ || [];
+                errors.push({ ...payload, config: (window as any).__COPILOT_CONFIG__ });
+                (window as any).__COPILOT_ERRORS__ = errors.slice(-10);
+                (window as any).__COPILOT_DEBUG__ = {
                   ...(window as any).__COPILOT_DEBUG__,
                   lastErrorEvent: payload,
-                }
+                };
               }
-              // eslint-disable-next-line no-console
-              if (process.env.NODE_ENV !== 'production') console.debug('[CopilotKit Error]', payload)
+              if (process.env.NODE_ENV !== 'production') {
+                // eslint-disable-next-line no-console
+                console.error('[CopilotKit Error]', payload);
+              }
             } catch {}
           }}
           threadId={sessionId}
