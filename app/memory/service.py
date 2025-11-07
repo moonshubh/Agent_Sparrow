@@ -18,6 +18,7 @@ from app.memory.observability import memory_metrics
 
 try:  # pragma: no cover - import guard for optional dependency during boot
     from mem0.configs.base import MemoryConfig
+    from mem0.configs.vector_stores.supabase import IndexMethod
     from mem0.embeddings.configs import EmbedderConfig
     from mem0.llms.configs import LlmConfig
     from mem0.memory.main import AsyncMemory
@@ -480,6 +481,8 @@ class MemoryService:
                 "connection_string": connection,
                 "collection_name": collection_name,
                 "embedding_model_dims": settings.memory_embed_dims,
+                "index_method": IndexMethod.IVFFLAT,  # Use IVFFlat to support 3072 dimensions
+                # IVFFlat has no dimension limit, unlike HNSW (max 2000)
             },
         )
         embedder_config = EmbedderConfig(

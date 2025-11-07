@@ -31,7 +31,7 @@ try:
 except Exception:  # pragma: no cover
     pass
 
-# Orchestration
+# Orchestration - replaced by unified agent system
 try:
     from app.agents.orchestration.orchestration.graph import app as agent_graph  # noqa: F401
     from app.agents.orchestration.orchestration.state import GraphState as GraphState  # noqa: F401

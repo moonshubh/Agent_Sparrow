@@ -385,8 +385,184 @@ async def _graphql_generate_response(
     request: Request,
 ) -> StreamingResponse:
     """Handle generateCopilotResponse GraphQL mutation and return a JSONResponse."""
+    # If the CopilotKit Python SDK is unavailable, fall back to the local LangGraph graph
+    # and emit a GraphQL-shaped response (multipart/mixed with a single final chunk).
     if _sdk is None:
-        raise HTTPException(status_code=503, detail="CopilotKit runtime unavailable")
+        variables = body.get("variables") or {}
+        data = variables.get("data") or {}
+        props = variables.get("properties") or {}
+
+        thread_id = data.get("threadId") or str(uuid4())
+        run_id = data.get("runId") or str(uuid4())
+
+        # Extract user text from GraphQL input messages (best-effort)
+        user_text = ""
+        try:
+            gql_messages = data.get("messages") or []
+            for m in reversed(gql_messages):
+                if not isinstance(m, dict):
+                    continue
+                # Prefer nested textMessage format used by CopilotKit GraphQL runtime
+                inner = m.get("textMessage") if isinstance(m.get("textMessage"), dict) else None
+                if inner is not None:
+                    role = (inner.get("role") or "").lower()
+                    content_val = inner.get("content")
+                else:
+                    role = (m.get("role") or "").lower()
+                    content_val = m.get("content")
+
+                content_str = ""
+                if isinstance(content_val, list):
+                    parts = [p for p in content_val if isinstance(p, str)]
+                    content_str = "".join(parts)
+                elif isinstance(content_val, str):
+                    content_str = content_val
+                elif content_val is not None:
+                    # Last-resort stringify for unexpected shapes
+                    try:
+                        content_str = str(content_val)
+                    except Exception:
+                        content_str = ""
+
+                if role == "user" and content_str:
+                    user_text = content_str
+                    break
+        except Exception:
+            user_text = ""
+
+        logging.info(
+            "copilotkit_graphql_fallback_invoke thread=%s run=%s text_preview=%s",
+            thread_id,
+            run_id,
+            (user_text or "")[:120],
+        )
+
+        # Invoke the local LangGraph graph to produce a response (non-streaming)
+        try:
+            initial_input = {
+                "messages": [HumanMessage(content=user_text or "")],
+                "raw_log_content": None,
+            }
+            # Preserve session affinity if provided by the frontend
+            try:
+                sid = props.get("session_id") if isinstance(props, dict) else None
+                if sid:
+                    initial_input["session_id"] = str(sid)
+            except Exception:
+                pass
+            final_state = await agent_graph.ainvoke(
+                initial_input,
+                config={"configurable": {"thread_id": thread_id}},
+            )
+        except Exception as exc:
+            # Return a single failed GraphQL chunk with structured details
+            boundary = "graphql"
+            status = _graphql_response_status("failed", {
+                "description": str(exc) or "Agent execution failed",
+                "reason": "local_langgraph_invoke_failed",
+            })
+
+            payload = {
+                "data": {
+                    "generateCopilotResponse": {
+                        "__typename": "CopilotResponse",
+                        "threadId": thread_id,
+                        "runId": run_id,
+                        "status": status,
+                        "extensions": None,
+                        "messages": [],
+                        "metaEvents": [],
+                    }
+                },
+                "hasNext": False,
+            }
+            chunk = json.dumps(payload, ensure_ascii=False)
+            async def err_stream():
+                yield f"--{boundary}\r\nContent-Type: application/json\r\n\r\n{chunk}\r\n--{boundary}--\r\n"
+            response = StreamingResponse(err_stream(), media_type=f"multipart/mixed; boundary={boundary}")
+            response.headers["Cache-Control"] = "no-store"
+            response.headers["X-Accel-Buffering"] = "no"
+            return response
+
+        # Build a single successful GraphQL chunk using the best available text
+        assistant_text = None
+        try:
+            # Support both dict-like and BaseModel (GraphState) results
+            state_obj = final_state
+            if isinstance(state_obj, dict):
+                assistant_text = state_obj.get("cached_response")
+                if not assistant_text and state_obj.get("final_report") is not None:
+                    try:
+                        assistant_text = json.dumps(state_obj.get("final_report"))
+                    except Exception:
+                        assistant_text = str(state_obj.get("final_report"))
+                if not assistant_text and isinstance(state_obj.get("messages"), list):
+                    for msg in reversed(state_obj.get("messages")):
+                        try:
+                            role = getattr(msg, "type", None) or getattr(msg, "role", None)
+                            role = (str(role).lower() if role else "")
+                            content = getattr(msg, "content", None)
+                            if role in ("ai", "assistant") and isinstance(content, str) and content.strip():
+                                assistant_text = content
+                                break
+                        except Exception:
+                            continue
+            else:
+                # Treat as Pydantic model with attributes
+                assistant_text = getattr(state_obj, "cached_response", None)
+                if not assistant_text:
+                    fr = getattr(state_obj, "final_report", None)
+                    if fr is not None:
+                        try:
+                            assistant_text = json.dumps(fr, default=str)
+                        except Exception:
+                            assistant_text = str(fr)
+                if not assistant_text:
+                    msgs = getattr(state_obj, "messages", None)
+                    if isinstance(msgs, list):
+                        for msg in reversed(msgs):
+                            try:
+                                role = getattr(msg, "type", None) or getattr(msg, "role", None)
+                                role = (str(role).lower() if role else "")
+                                content = getattr(msg, "content", None)
+                                if role in ("ai", "assistant") and isinstance(content, str) and content.strip():
+                                    assistant_text = content
+                                    break
+                            except Exception:
+                                continue
+        except Exception:
+            assistant_text = None
+
+        if not isinstance(assistant_text, str) or not assistant_text:
+            assistant_text = "I'm sorry, I wasn't able to produce a response. Please try again."
+
+        boundary = "graphql"
+        messages_payload = _serialize_assistant_messages([
+            {"content": assistant_text, "role": "assistant"}
+        ], status_code="success", fallback_id=str(uuid4()))
+        status = _graphql_response_status("success")
+        payload = {
+            "data": {
+                "generateCopilotResponse": {
+                    "__typename": "CopilotResponse",
+                    "threadId": thread_id,
+                    "runId": run_id,
+                    "status": status,
+                    "extensions": None,
+                    "messages": messages_payload,
+                    "metaEvents": [],
+                }
+            },
+            "hasNext": False,
+        }
+
+        chunk = json.dumps(payload, ensure_ascii=False)
+        async def one_stream():
+            yield f"--{boundary}\r\nContent-Type: application/json\r\n\r\n{chunk}\r\n--{boundary}--\r\n"
+        response = StreamingResponse(one_stream(), media_type=f"multipart/mixed; boundary={boundary}")
+        response.headers["Cache-Control"] = "no-store"
+        response.headers["X-Accel-Buffering"] = "no"
+        return response
 
     variables = body.get("variables") or {}
     data = variables.get("data") or {}
@@ -584,8 +760,8 @@ async def _graphql_generate_response(
 
 @app.post("/api/v1/copilotkit")
 async def copilotkit_graphql(request: Request):
-    raise HTTPException(status_code=410, detail="Endpoint deprecated. Use /api/v1/copilot/stream")
-
+    # Lightweight compatibility shim for CopilotKit GraphQL client calls.
+    # Returns stable JSON payloads to satisfy SDK handshakes and avoid noisy client errors.
     try:
         body = await request.json()
     except Exception as exc:  # pragma: no cover
@@ -605,6 +781,18 @@ async def copilotkit_graphql(request: Request):
     context = _build_copilot_context(body, request)
 
     if operation == "availableAgents":
+        # If runtime SDK unavailable, return a minimal static agent list
+        if _sdk is None:
+            agents_payload = [
+                {
+                    "__typename": "Agent",
+                    "id": "sparrow",
+                    "name": "sparrow",
+                    "description": "Primary conversational agent",
+                }
+            ]
+            return JSONResponse({"data": {"availableAgents": {"agents": agents_payload}}})
+        # Otherwise, forward to SDK
         info = _sdk.info(context=context)
         agents_payload = []
         for agent in info.get("agents", []):
@@ -625,6 +813,20 @@ async def copilotkit_graphql(request: Request):
         thread_id = data.get("threadId") or variables.get("threadId") or ""
         if not agent_name:
             raise HTTPException(status_code=400, detail="agentName is required")
+        # If SDK unavailable, return an empty baseline state
+        if _sdk is None:
+            return JSONResponse(
+                {
+                    "data": {
+                        "loadAgentState": {
+                            "threadId": str(thread_id),
+                            "threadExists": False,
+                            "state": json.dumps({}),
+                            "messages": json.dumps([]),
+                        }
+                    }
+                }
+            )
         state_response = await _sdk.get_agent_state(
             context=context,
             thread_id=str(thread_id),

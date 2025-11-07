@@ -410,7 +410,9 @@ def _prepare_grounding_metadata(
             "payment",
         ]
         billing_intent = any(term in ql for term in billing_terms)
-        need_safe_fallback = no_evidence or (billing_intent and not kb_ok)
+        # Only trigger the safe fallback when the query appears billing-related AND KB evidence is insufficient.
+        # Generic queries without evidence should proceed to normal generation instead of returning a billing template.
+        need_safe_fallback = (billing_intent and not kb_ok)
         if need_safe_fallback:
             fallback_reason = "billing_no_evidence" if billing_intent and not kb_ok else "no_evidence"
         else:

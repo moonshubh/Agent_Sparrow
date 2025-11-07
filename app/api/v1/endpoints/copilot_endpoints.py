@@ -36,294 +36,107 @@ except Exception:  # pragma: no cover
         return getattr(settings, 'development_user_id', 'dev-user-12345')
 
 
-try:  # pragma: no cover - import-time guard
-    from ag_ui_langgraph.agent import LangGraphAgent  # type: ignore
-    from ag_ui.core.types import (
-        RunAgentInput,  # type: ignore
-        DeveloperMessage,  # type: ignore
-        SystemMessage,  # type: ignore
-        AssistantMessage,  # type: ignore
-        UserMessage,  # type: ignore
-        ToolMessage,  # type: ignore
-        Tool as AgentTool,  # type: ignore
-        Context as AgentContext,  # type: ignore
-        ToolCall as AgentToolCall,  # type: ignore
-        FunctionCall as AgentFunctionCall,  # type: ignore
-    )
-    from ag_ui.encoder import EventEncoder  # type: ignore
-    from app.agents.orchestration.orchestration.graph import app as compiled_graph
-    _SDK_AVAILABLE = True
-except Exception:  # pragma: no cover
-    LangGraphAgent = object  # type: ignore
-    RunAgentInput = object  # type: ignore
-    EventEncoder = object  # type: ignore
-    DeveloperMessage = object  # type: ignore
-    SystemMessage = object  # type: ignore
-    AssistantMessage = object  # type: ignore
-    UserMessage = object  # type: ignore
-    ToolMessage = object  # type: ignore
-    AgentTool = object  # type: ignore
-    AgentContext = object  # type: ignore
-    AgentToolCall = object  # type: ignore
-    AgentFunctionCall = object  # type: ignore
-    compiled_graph = None  # type: ignore
-    _SDK_AVAILABLE = False
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
 
-# Import for context merge and attachment validation
-from app.agents.orchestration.orchestration.state import Attachment
+from app.agents.orchestration.orchestration.graph import app as compiled_graph
+
+# Import for context merge and attachment validation  
+from app.agents.orchestration.orchestration.state import GraphState, Attachment
 from app.core.settings import get_settings
 
 # OpenTelemetry tracer for this module
 tracer = trace.get_tracer(__name__)
 
 
-class FallbackRunAgentInput:
-    """Lightweight stand-in for RunAgentInput when SDK validation fails."""
+def _coerce_text(content: Any) -> str:
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        pieces = []
+        for part in content:
+            if isinstance(part, dict) and part.get("type") == "text":
+                pieces.append(str(part.get("text") or ""))
+            else:
+                pieces.append(str(part))
+        return "".join(pieces)
+    return str(content)
 
-    __slots__ = (
-        "thread_id",
-        "run_id",
-        "state",
-        "messages",
-        "tools",
-        "context",
-        "forwarded_props",
-        "config",
-    )
 
-    def __init__(
-        self,
-        *,
-        thread_id: str,
-        run_id: str,
-        state: Any,
-        messages: List[Any],
-        tools: List[Any],
-        context: List[Any],
-        forwarded_props: Dict[str, Any],
-        config: Dict[str, Any] | None = None,
-    ) -> None:
-        self.thread_id = thread_id
-        self.run_id = run_id
-        self.state = state
-        self.messages = messages
-        self.tools = tools
-        self.context = context
-        self.forwarded_props = forwarded_props
-        self.config = config or {}
-
-    @staticmethod
-    def _build_tool_call(raw_call: Dict[str, Any]) -> Optional[AgentToolCall]:
-        if not isinstance(raw_call, dict):
-            return None
-
-        function = raw_call.get("function") or {}
-        if not isinstance(function, dict):
-            function = {}
-
-        name = function.get("name") or raw_call.get("name")
-        if not name:
-            return None
-
-        arguments = function.get("arguments") or raw_call.get("arguments") or "{}"
-        if not isinstance(arguments, str):
-            try:
-                arguments = json.dumps(arguments)
-            except Exception:
-                arguments = "{}"
-
-        try:
-            return AgentToolCall(
-                id=str(raw_call.get("id") or uuid4()),
-                function=AgentFunctionCall(name=str(name), arguments=arguments),
-            )
-        except Exception:
-            return None
-
-    @staticmethod
-    def _build_message(raw_message: Any) -> Optional[Any]:
-        if not isinstance(raw_message, dict):
-            return None
-
-        role = str(raw_message.get("role") or "").lower()
-        mid = str(raw_message.get("id") or uuid4())
-        name = raw_message.get("name")
-
-        if role == "user":
-            content = raw_message.get("content", "")
-            try:
-                return UserMessage(id=mid, content=str(content or ""), name=name)
-            except Exception:
-                return None
-
-        if role == "assistant":
-            content = raw_message.get("content") or ""
-            tool_calls_raw = raw_message.get("tool_calls") or raw_message.get("toolCalls") or []
-            tool_calls: List[AgentToolCall] = []
-            if isinstance(tool_calls_raw, list):
-                for call in tool_calls_raw:
-                    tc = FallbackRunAgentInput._build_tool_call(call)
-                    if tc:
-                        tool_calls.append(tc)
-            try:
-                return AssistantMessage(
-                    id=mid,
-                    content=str(content),
-                    name=name,
-                    tool_calls=tool_calls or None,
-                )
-            except Exception:
-                return None
-
-        if role == "developer":
-            content = raw_message.get("content", "")
-            try:
-                return DeveloperMessage(id=mid, content=str(content or ""), name=name)
-            except Exception:
-                return None
-
-        if role == "system":
-            content = raw_message.get("content", "")
-            try:
-                return SystemMessage(id=mid, content=str(content or ""), name=name)
-            except Exception:
-                return None
-
-        if role == "tool":
-            tool_call_id = raw_message.get("tool_call_id") or raw_message.get("toolCallId")
-            content = raw_message.get("content", "")
-            if not tool_call_id:
-                return None
-            try:
-                return ToolMessage(
-                    id=mid,
-                    tool_call_id=str(tool_call_id),
-                    content=str(content or ""),
-                    error=raw_message.get("error"),
-                )
-            except Exception:
-                return None
-
+def _coerce_message(raw: Any) -> Optional[BaseMessage]:
+    data = raw.model_dump() if hasattr(raw, "model_dump") else raw
+    if not isinstance(data, dict):
         return None
 
-    @staticmethod
-    def _build_context(raw: Any) -> Optional[AgentContext]:
-        if not isinstance(raw, dict):
-            return None
-        description = raw.get("description")
-        value = raw.get("value")
-        if description is None or value is None:
-            return None
-        try:
-            return AgentContext(description=str(description), value=str(value))
-        except Exception:
-            return None
+    role = str(data.get("role") or data.get("type") or "").lower()
+    name = data.get("name")
+    additional_kwargs = data.get("additional_kwargs") or {}
+    response_metadata = data.get("response_metadata") or {}
 
-    @staticmethod
-    def _build_tool(raw: Any) -> Optional[AgentTool]:
-        if not isinstance(raw, dict):
-            return None
-        name = raw.get("name")
-        description = raw.get("description", "")
-        parameters = raw.get("parameters", {})
-        if not name:
-            return None
-        try:
-            return AgentTool(name=str(name), description=str(description or ""), parameters=parameters)
-        except Exception:
-            return None
+    if role == "user":
+        return HumanMessage(content=_coerce_text(data.get("content")), name=name, additional_kwargs=additional_kwargs)
 
-    @classmethod
-    def from_candidate(cls, candidate: Dict[str, Any]) -> "FallbackRunAgentInput":
-        forwarded_candidate = candidate.get("forwarded_props")
-        if forwarded_candidate is None:
-            forwarded_candidate = candidate.get("forwardedProps") or candidate.get("forwardedProperties") or {}
-        forwarded_props = forwarded_candidate if isinstance(forwarded_candidate, dict) else {}
-
-        thread_id = str(
-            candidate.get("thread_id")
-            or candidate.get("threadId")
-            or candidate.get("threadID")
-            or uuid4()
-        )
-        run_id = str(
-            candidate.get("run_id")
-            or candidate.get("runId")
-            or candidate.get("runID")
-            or uuid4()
+    if role == "assistant":
+        tool_calls = data.get("tool_calls") or data.get("toolCalls")
+        if tool_calls and not isinstance(tool_calls, list):
+            tool_calls = [tool_calls]
+        return AIMessage(
+            content=_coerce_text(data.get("content")),
+            name=name,
+            additional_kwargs=additional_kwargs,
+            response_metadata=response_metadata,
+            tool_calls=tool_calls,
         )
 
-        state = candidate.get("state") if isinstance(candidate.get("state"), dict) else {}
+    if role == "system":
+        return SystemMessage(content=_coerce_text(data.get("content")), name=name, additional_kwargs=additional_kwargs)
 
-        messages: List[Any] = []
-        for raw_message in candidate.get("messages") or []:
-            built = cls._build_message(raw_message)
-            if built is not None:
-                messages.append(built)
-
-        tools: List[Any] = []
-        for raw_tool in candidate.get("tools") or []:
-            built_tool = cls._build_tool(raw_tool)
-            if built_tool is not None:
-                tools.append(built_tool)
-
-        context_items: List[Any] = []
-        for raw_context in candidate.get("context") or []:
-            built_context = cls._build_context(raw_context)
-            if built_context is not None:
-                context_items.append(built_context)
-
-        config = candidate.get("config")
-        config_dict = config if isinstance(config, dict) else {}
-
-        return cls(
-            thread_id=thread_id,
-            run_id=run_id,
-            state=state,
-            messages=messages,
-            tools=tools,
-            context=context_items,
-            forwarded_props=forwarded_props,
-            config=config_dict,
+    if role == "tool":
+        tool_call_id = data.get("tool_call_id") or data.get("toolCallId")
+        if not tool_call_id:
+            return None
+        return ToolMessage(
+            tool_call_id=str(tool_call_id),
+            content=_coerce_text(data.get("content")),
+            additional_kwargs=additional_kwargs,
         )
 
-    def copy(self, update: Optional[Dict[str, Any]] = None) -> "FallbackRunAgentInput":
-        data: Dict[str, Any] = {
-            "thread_id": self.thread_id,
-            "run_id": self.run_id,
-            "state": deepcopy(self.state),
-            "messages": [m.model_copy(deep=True) if hasattr(m, "model_copy") else deepcopy(m) for m in self.messages],
-            "tools": [t.model_copy(deep=True) if hasattr(t, "model_copy") else deepcopy(t) for t in self.tools],
-            "context": [c.model_copy(deep=True) if hasattr(c, "model_copy") else deepcopy(c) for c in self.context],
-            "forwarded_props": deepcopy(self.forwarded_props),
-            "config": deepcopy(self.config),
-        }
-        if update:
-            data.update(update)
-        return FallbackRunAgentInput(**data)
+    return None
 
-    def dict(self) -> Dict[str, Any]:
-        return {
-            "thread_id": self.thread_id,
-            "run_id": self.run_id,
-            "state": deepcopy(self.state),
-            "messages": [
-                m.model_dump() if hasattr(m, "model_dump") else deepcopy(m)
-                for m in self.messages
-            ],
-            "tools": [
-                t.model_dump() if hasattr(t, "model_dump") else deepcopy(t)
-                for t in self.tools
-            ],
-            "context": [
-                c.model_dump() if hasattr(c, "model_dump") else deepcopy(c)
-                for c in self.context
-            ],
-            "forwarded_props": deepcopy(self.forwarded_props),
-            "config": deepcopy(self.config),
-        }
 
-    model_dump = dict
+def _normalize_messages(raw_messages: Any) -> List[BaseMessage]:
+    normalized: List[BaseMessage] = []
+    if not isinstance(raw_messages, list):
+        return normalized
+    for item in raw_messages:
+        msg = _coerce_message(item)
+        if msg is not None:
+            normalized.append(msg)
+    return normalized
+
+
+def _extract_chunk_text(chunk: Any) -> str:
+    if chunk is None:
+        return ""
+    if hasattr(chunk, "message"):
+        message = getattr(chunk, "message")
+        content = getattr(message, "content", None)
+    else:
+        content = getattr(chunk, "content", None)
+    if content is None and isinstance(chunk, dict):
+        content = chunk.get("content")
+    return _coerce_text(content)
+
+
+def _message_to_text(message: BaseMessage) -> str:
+    if isinstance(message, (AIMessage, HumanMessage, SystemMessage, ToolMessage)):
+        return _coerce_text(message.content)
+    return _coerce_text(getattr(message, "content", ""))
+
+
+def _encode_sse(payload: Dict[str, Any]) -> str:
+    return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
 
 
 def _sanitize_attachments(payload: Any) -> List[Dict[str, Any]]:
@@ -421,6 +234,8 @@ def _merge_copilot_context(
         state: State dict to be passed to LangGraph (modified in-place)
         config: Config dict with configurable field (modified in-place)
     """
+    settings = get_settings()
+
     def _get_first(*keys: str) -> Optional[Any]:
         """Helper to extract first non-empty value from properties."""
         for key in keys:
@@ -442,7 +257,6 @@ def _merge_copilot_context(
 
     # Apply defaults if provider/model not specified
     if not provider or not model:
-        settings = get_settings()
         provider = provider or getattr(settings, "primary_agent_provider", "google")
         model = model or getattr(settings, "primary_agent_model", "gemini-2.5-flash")
 
@@ -473,6 +287,26 @@ def _merge_copilot_context(
         configurable["use_server_memory"] = use_server_memory
     if attachments:
         configurable["attachments"] = attachments
+
+    metadata = dict(configurable.get("metadata") or {})
+    if session_id and "session_id" not in metadata:
+        metadata["session_id"] = str(session_id)
+    if trace_id and "trace_id" not in metadata:
+        metadata["trace_id"] = str(trace_id)
+    configurable["metadata"] = metadata
+
+    tags = list(configurable.get("tags") or [])
+    for tag in ("copilot-stream", agent_type, provider):
+        if tag and tag not in tags:
+            tags.append(tag)
+    configurable["tags"] = tags
+
+    if settings.langsmith_tracing_enabled:
+        configurable.setdefault("name", "copilot-stream-run")
+        if settings.langsmith_project:
+            configurable.setdefault("project", settings.langsmith_project)
+        if settings.langsmith_endpoint:
+            configurable.setdefault("endpoint", settings.langsmith_endpoint)
 
     # Merge into state (GraphState fields)
     if session_id:
@@ -516,19 +350,19 @@ def _merge_copilot_context(
 
 @router.post("/copilot/stream")
 async def copilot_stream(request: Request, user_id: str = Depends(get_current_user_id)):
-    """Auth-protected CopilotKit streaming endpoint using AG-UI LangGraph adapter.
+    """Auth-protected CopilotKit streaming endpoint.
 
-    Accepts raw JSON from CopilotKit runtime client and normalizes it into RunAgentInput.
-    This avoids 422 errors due to minor schema drift (e.g., forwardedProps vs forwardedProperties).
+    Accepts raw JSON from CopilotKit runtime clients, normalizes it into the unified
+    graph state, and streams LangGraph output as simple SSE events.
     """
     with tracer.start_as_current_span("copilot.stream") as span:
-        if not _SDK_AVAILABLE or compiled_graph is None:
-            span.set_status(Status(StatusCode.ERROR, "sdk_or_graph_unavailable"))
+        if compiled_graph is None:
+            span.set_status(Status(StatusCode.ERROR, "graph_unavailable"))
             return JSONResponse(
                 status_code=501,
                 content={
-                    "error": "CopilotKit backend SDK not available",
-                    "detail": "Install 'copilotkit' (ag_ui_langgraph) and ensure the primary graph compiles.",
+                    "error": "graph_unavailable",
+                    "detail": "Unified LangGraph application is not compiled.",
                 },
             )
 
@@ -541,7 +375,7 @@ async def copilot_stream(request: Request, user_id: str = Depends(get_current_us
 
         # Unwrap common wrappers
         # - GraphQL-style { query, variables: { input|data } }
-        # - Runtime client style { data: { ...RunAgentInput } }
+        # - Runtime client style { data: { ...payload } }
         try:
             if isinstance(raw, dict):
                 if "query" in raw and isinstance(raw.get("variables"), dict):
@@ -690,155 +524,133 @@ async def copilot_stream(request: Request, user_id: str = Depends(get_current_us
                 }
             )
 
-        # Update base with merged state and add config
-        base["state"] = state_dict
-        base["config"] = config_dict
+        configurable = config_dict.setdefault("configurable", {})
+        configurable.setdefault("thread_id", base["threadId"])
+        configurable.setdefault("run_id", run_id)
 
-        # Phase 1: Use forwarded props WITHOUT attachments (attachments are in state now)
-        variants: List[Dict[str, Any]] = []
-        # 1) forwardedProps as dict (without attachments - already in state)
-        variants.append({**base, "forwardedProps": forwarded_without_attachments})
-        # 2) forwardedProps as JSON string
-        try:
-            variants.append({**base, "forwardedProps": json.dumps(forwarded_without_attachments)})
-        except Exception:
-            variants.append({**base, "forwardedProps": json.dumps({})})
-        # 3) forwardedProperties as dict
-        variants.append({**base, "forwardedProperties": forwarded_without_attachments})
-        # 4) forwardedProperties as JSON string
-        try:
-            variants.append({**base, "forwardedProperties": json.dumps(forwarded_without_attachments)})
-        except Exception:
-            variants.append({**base, "forwardedProperties": json.dumps({})})
+        messages_payload = base.get("messages") or state_dict.get("messages") or []
+        normalized_messages = _normalize_messages(messages_payload)
+
+        graph_state = {
+            **state_dict,
+            "messages": normalized_messages,
+            "forwarded_props": forwarded_without_attachments,
+            "scratchpad": state_dict.get("scratchpad") or {},
+        }
+
+        graph_state.setdefault("session_id", str(configurable.get("session_id") or base["threadId"]))
+        graph_state.setdefault("trace_id", str(configurable.get("trace_id") or run_id))
+        graph_state.setdefault("attachments", state_dict.get("attachments") or [])
+        graph_state.setdefault("use_server_memory", configurable.get("use_server_memory", False))
 
         logging.info(
-            "copilot_stream_normalized_attempts",
+            "copilot_stream_normalized",
             extra={
-                "attempts": len(variants),
-                "has_messages": isinstance(messages, list),
-                "messages_len": len(messages) if isinstance(messages, list) else None,
-                "thread_present": bool(thread_id),
-                "run_present": bool(run_id),
+                "message_count": len(normalized_messages),
+                "thread_id": graph_state.get("session_id"),
+                "trace_id": graph_state.get("trace_id"),
             },
         )
 
-        input_data = None
-        errors: List[str] = []
-        for idx, candidate in enumerate(variants):
-            try:
-                candidate_payload = dict(candidate)
-                candidate_payload.pop("config", None)
-                if hasattr(RunAgentInput, "model_validate"):
-                    input_data = RunAgentInput.model_validate(candidate_payload)  # type: ignore[attr-defined]
-                elif hasattr(RunAgentInput, "parse_obj"):
-                    input_data = RunAgentInput.parse_obj(candidate_payload)  # type: ignore[attr-defined]
-                else:
-                    input_data = RunAgentInput(**candidate_payload)  # type: ignore[call-arg]
-                break
-            except Exception as e:  # collect and try next variant
-                try:
-                    # pydantic v2 ValidationError has .errors()
-                    errs = getattr(e, "errors", lambda: [])()
-                    errors.append(f"variant_{idx}: {str(errs) or str(e)}")
-                except Exception:
-                    errors.append(f"variant_{idx}: {str(e)}")
-
-    if input_data is None:
-        logging.warning(
-            "RunAgentInput validation failed. Falling back to permissive namespace.",
-            extra={"errors_sample": errors[:3]},
-        )
-        # As a last resort, try duck-typing with SimpleNamespace or plain dict
-        for idx, candidate in enumerate(variants):
-            try:
-                fallback_candidate = FallbackRunAgentInput.from_candidate(candidate)
-            except Exception as e:
-                errors.append(f"namespace_variant_{idx}: {str(e)}")
-                continue
-
-            try:
-                if hasattr(RunAgentInput, "model_validate") and callable(getattr(RunAgentInput, "model_validate")):
-                    fallback_payload = fallback_candidate.dict()
-                    fallback_payload.pop("config", None)
-                    input_data = RunAgentInput.model_validate(fallback_payload)  # type: ignore[attr-defined]
-                elif hasattr(RunAgentInput, "parse_obj"):
-                    fallback_payload = fallback_candidate.dict()
-                    fallback_payload.pop("config", None)
-                    input_data = RunAgentInput.parse_obj(fallback_payload)  # type: ignore[attr-defined]
-                else:
-                    input_data = fallback_candidate  # Final fallback when SDK model not available
-                break
-            except Exception as e:
-                errors.append(f"namespace_variant_{idx}: {str(e)}")
-                # Accept permissive fallback even if strict validation failed
-                input_data = fallback_candidate
-                break
-
-        if input_data is None:
-            logging.error(
-                "RunAgentInput validation failed for all variants",
-                extra={
-                    "errors": errors[:3],
-                    "raw_keys": list(raw.keys()) if isinstance(raw, dict) else None,
-                },
-            )
-            span.set_status(Status(StatusCode.ERROR, "validation_failed"))
+        if compiled_graph is None:
+            span.set_status(Status(StatusCode.ERROR, "graph_not_available"))
             return JSONResponse(
-                status_code=422,
+                status_code=503,
                 content={
-                    "error": "validation_failed",
-                    "detail": "All normalization variants failed",
-                    "variants_tried": len(variants),
-                    "errors": errors,
+                    "error": "graph_unavailable",
+                    "detail": "Unified graph is not compiled",
                 },
             )
 
-    agent = LangGraphAgent(name="sparrow", graph=compiled_graph, config=config_dict)  # type: ignore
-    accept_header = request.headers.get("accept")
-    encoder = EventEncoder(accept=accept_header)  # type: ignore
-
-    async def event_generator():
-        # Nested span around the actual agent run (streaming)
-        with tracer.start_as_current_span("copilot.stream.run") as run_span:
-            try:
-                # Repeat key attributes for easier correlation at run-level
+        async def event_generator():
+            final_state: Optional[Dict[str, Any]] = None
+            with tracer.start_as_current_span("copilot.stream.run") as run_span:
                 cfg = config_dict.get("configurable", {})
                 run_span.set_attribute("copilot.session_id", str(cfg.get("session_id") or ""))
                 run_span.set_attribute("copilot.trace_id", str(cfg.get("trace_id") or ""))
                 run_span.set_attribute("copilot.provider", str(cfg.get("provider") or ""))
                 run_span.set_attribute("copilot.model", str(cfg.get("model") or ""))
-                run_span.set_attribute("copilot.agent_type", str(cfg.get("agent_type") or ""))
-            except Exception:
-                pass
 
-            try:
-                async for event in agent.run(input_data):  # type: ignore
-                    yield encoder.encode(event)
-                run_span.set_status(Status(StatusCode.OK))
-            except Exception as exc:  # pragma: no cover - defensive capture
-                run_span.record_exception(exc)
-                run_span.set_status(Status(StatusCode.ERROR, "agent_run_failed"))
-                raise
+                try:
+                    async for event in compiled_graph.astream_events(graph_state, config=config_dict):
+                        event_name = event.get("event")
+                        data = event.get("data", {})
+                        if event_name == "on_chat_model_stream":
+                            delta = _extract_chunk_text(data.get("chunk"))
+                            if delta:
+                                yield _encode_sse(
+                                    {
+                                        "type": "assistant-delta",
+                                        "threadId": graph_state.get("session_id"),
+                                        "runId": run_id,
+                                        "delta": delta,
+                                    }
+                                )
+                        elif event_name in {"on_chain_end", "on_graph_end"}:
+                            output = data.get("output")
+                            if isinstance(output, dict):
+                                final_state = output
+                    run_span.set_status(Status(StatusCode.OK))
+                except Exception as exc:  # pragma: no cover
+                    run_span.record_exception(exc)
+                    run_span.set_status(Status(StatusCode.ERROR, "agent_run_failed"))
+                    raise
 
-    span.set_status(Status(StatusCode.OK))
-    # Explicitly set 200 to avoid ambiguous 204 responses in some clients
-    return StreamingResponse(
-        event_generator(), status_code=200, media_type=encoder.get_content_type()
-    )  # type: ignore
+            if final_state is None:
+                final_state = await compiled_graph.ainvoke(graph_state, config=config_dict)
+
+            messages_out = final_state.get("messages") or []
+            if messages_out and not isinstance(messages_out[0], BaseMessage):
+                messages_out = _normalize_messages(messages_out)
+
+            if messages_out:
+                assistant_msg = messages_out[-1]
+                message_payload: Dict[str, Any] = {
+                    "type": "assistant-message",
+                    "threadId": graph_state.get("session_id"),
+                    "runId": run_id,
+                    "message": {
+                        "role": "assistant",
+                        "content": _message_to_text(assistant_msg),
+                    },
+                }
+
+                metadata: Dict[str, Any] = {}
+                additional = getattr(assistant_msg, "additional_kwargs", None)
+                if additional:
+                    metadata.update(additional)
+                response_meta = getattr(assistant_msg, "response_metadata", None)
+                if response_meta:
+                    metadata["response_metadata"] = response_meta
+                if metadata:
+                    message_payload["message"]["messageMetadata"] = metadata
+
+                yield _encode_sse(message_payload)
+
+            yield _encode_sse(
+                {
+                    "type": "finish",
+                    "threadId": graph_state.get("session_id"),
+                    "runId": run_id,
+                    "reason": "stop",
+                }
+            )
+
+        span.set_status(Status(StatusCode.OK))
+        return StreamingResponse(event_generator(), status_code=200, media_type="text/event-stream")
 
 
 @router.get("/copilot/stream/health")
 async def copilot_stream_health():
     """Return availability and configuration snapshot for the Copilot stream path."""
-    sdk = bool(_SDK_AVAILABLE)
     graph_ok = compiled_graph is not None
     from app.core.settings import settings as _settings
-    if not sdk or not graph_ok:
+    if not graph_ok:
         return JSONResponse(
             status_code=503,
             content={
                 "status": "unavailable",
-                "sdk_available": sdk,
+                "sdk_available": True,
                 "graph_compiled": graph_ok,
             },
         )

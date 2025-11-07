@@ -45,9 +45,9 @@ get_python_version() {
 # Create venv if missing or if RECREATE_VENV=true
 if [ ! -x "$VENV_PY" ] || [ "${RECREATE_VENV:-false}" = "true" ]; then
     echo "(Re)creating Python virtual environment..."
-    # Prefer python3.10 if available to match runtime.txt
-    if command -v python3.10 >/dev/null 2>&1; then
-        python3.10 -m venv "$VENV_DIR"
+    # Prefer python3.11 if available to match runtime.txt
+    if command -v python3.11 >/dev/null 2>&1; then
+        python3.11 -m venv "$VENV_DIR"
     else
         # Fallback to python3
         python3 -m venv "$VENV_DIR"

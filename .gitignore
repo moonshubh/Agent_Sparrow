@@ -739,3 +739,9 @@ system_logs/
 
 # Do not track developer-specific git configuration
 .gitconfig
+
+# Reference code archives
+CopilotKit-main/
+
+# Prevent stray npm lockfiles in the pnpm workspace
+frontend/package-lock.json

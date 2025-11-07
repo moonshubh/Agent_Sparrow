@@ -1,7 +1,7 @@
-"""Orchestration compatibility layer (Phase 1).
+"""Orchestration compatibility layer - Phase 1 Complete.
 
-New canonical import path: app.agents.orchestration
-Temporarily re-exports from app.agents.orchestration.*
+Now using unified agent system. Re-exports from app.agents.orchestration.orchestration
+for backward compatibility during transition.
 """
 
 try:

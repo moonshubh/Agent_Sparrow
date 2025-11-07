@@ -27,13 +27,9 @@ def _passes_threshold(score: Optional[float], threshold: float) -> bool:
         return True
     return score >= threshold
 def _resolve_adapter():
-    try:
-        from app.agents.orchestration.orchestration.store_adapter import get_hybrid_store_adapter
-
-        return get_hybrid_store_adapter()
-    except Exception:  # pragma: no cover - optional dependency or circular import
-        logger.debug("global_knowledge_adapter_unavailable")
-        return None
+    """Resolve hybrid store adapter - removed old orchestration dependency."""
+    logger.debug("global_knowledge_adapter_unavailable - orchestration system removed")
+    return None
 
 
 

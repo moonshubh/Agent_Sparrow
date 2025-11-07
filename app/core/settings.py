@@ -40,6 +40,12 @@ class Settings(BaseSettings):
     )
 
     gemini_api_key: Optional[str] = Field(default=None, alias="GEMINI_API_KEY")
+
+    # LangSmith tracing configuration
+    langsmith_tracing_enabled: bool = Field(default=False, alias="LANGSMITH_TRACING_ENABLED")
+    langsmith_api_key: Optional[str] = Field(default=None, alias="LANGSMITH_API_KEY")
+    langsmith_endpoint: Optional[str] = Field(default=None, alias="LANGSMITH_ENDPOINT")
+    langsmith_project: Optional[str] = Field(default=None, alias="LANGSMITH_PROJECT")
     
     # In-Memory Session Store Configuration (replaces Redis for small deployments)
     session_store_max_sessions: int = Field(default=100, alias="SESSION_STORE_MAX_SESSIONS")

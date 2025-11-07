@@ -1,10 +1,7 @@
-from typing import List, Literal, Optional, Any, Dict, ClassVar, Set
-from langchain_core.documents import Document
-from langchain_core.messages import BaseMessage
-from pydantic import BaseModel, Field, model_serializer, ConfigDict, field_validator
+from typing import Any, ClassVar, Dict, List, Optional, Set
 
-from app.agents.log_analysis.log_analysis_agent.simplified_schemas import SimplifiedLogAnalysisOutput as StructuredLogAnalysisOutput
-from app.agents.reflection.reflection.schema import ReflectionFeedback  # noqa: E402, isort:skip
+from langchain_core.messages import BaseMessage
+from pydantic import BaseModel, Field, ConfigDict, field_validator, model_serializer
 
 class Attachment(BaseModel):
     """Represents an attachment provided via CopilotKit or SSE frontends."""
@@ -61,34 +58,34 @@ class Attachment(BaseModel):
 
 
 class GraphState(BaseModel):
-    """
-    Represents the overall state of the agentic system.
-    """
-    session_id: str = "default"
-    trace_id: Optional[str] = None
-    messages: List[BaseMessage] = Field(default_factory=list)
-    destination: Optional[Literal["primary_agent", "log_analyst", "researcher", "__end__"]] = None
-    raw_log_content: Optional[str] = None
-    final_report: Optional[StructuredLogAnalysisOutput] = None
-    # Pre-processing cache hit response stored here.
-    cached_response: Optional[Any] = None
-    # Context retrieval now handled directly by agents using Supabase
-    # context field removed - was originally for Qdrant integration
-    # Arbitrary tool output (LangGraph ToolNode)
-    tool_invocation_output: Optional[Any] = Field(default=None, description="Output from the last tool invocation if any.")
-    # --- QA / Reflection Loop Fields ---
-    # Stores the structured feedback from the reflection node
-    reflection_feedback: Optional[ReflectionFeedback] = None
-    # Count of refinement attempts already performed in current session
-    qa_retry_count: int = 0
-    # Global knowledge adapter context
-    global_knowledge_context: Optional[Dict[str, Any]] = None
-    # Supervisor decisions captured during human escalations
-    escalation_review: Optional[Dict[str, Any]] = None
-    # Attachments forwarded from CopilotKit or SSE frontends (data URLs, etc.)
-    attachments: Optional[List[Attachment]] = Field(
-        default=None,
+    """Typed state shared across the unified LangGraph execution."""
+
+    session_id: str = Field(default="default", description="Logical conversation / thread identifier.")
+    trace_id: Optional[str] = Field(default=None, description="Trace or run identifier propagated to LangSmith.")
+    messages: List[BaseMessage] = Field(default_factory=list, description="Ordered conversation history.")
+    attachments: List[Attachment] = Field(
+        default_factory=list,
         description="Validated attachments forwarded from the client, if any.",
+    )
+    provider: Optional[str] = Field(
+        default=None,
+        description="Model provider override (e.g., 'google', 'openai').",
+    )
+    model: Optional[str] = Field(
+        default=None,
+        description="Model identifier override (e.g., 'gemini-2.5-flash').",
+    )
+    use_server_memory: bool = Field(
+        default=False,
+        description="Whether to persist conversation summaries in server-side memory.",
+    )
+    forwarded_props: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="Arbitrary forwarded properties from the client for tool or agent use.",
+    )
+    scratchpad: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="Ephemeral state used by tools/subagents during execution.",
     )
 
     # ------------------------------------------------------------------
@@ -119,7 +116,7 @@ class GraphState(BaseModel):
             for key in self.model_fields
             if hasattr(self, key)
         }
-        serialized_data['messages'] = self.messages
+        serialized_data["messages"] = self.messages
         return serialized_data
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
