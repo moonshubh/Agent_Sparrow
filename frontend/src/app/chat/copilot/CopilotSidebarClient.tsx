@@ -488,6 +488,7 @@ export default function CopilotSidebarClient() {
       agent="sparrow"
       showDevConsole={false}
       properties={copilotProperties}
+      credentials="include"
     >
       <CopilotSidebarContent sessionId={sessionId} />
     </CopilotKit>
