@@ -3,560 +3,493 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { CopilotKit } from "@copilotkit/react-core";
 import { CopilotSidebar } from "@copilotkit/react-ui";
+import { useCopilotChat, useCopilotReadable } from "@copilotkit/react-core";
 import "@copilotkit/react-ui/styles.css";
-import { v4 as uuidv4 } from "uuid";
-
-import { getAuthToken } from "@/services/auth/local-auth";
 import { sessionsAPI } from "@/services/api/endpoints/sessions";
-import { modelsAPI } from "@/services/api/endpoints/models";
+import { useCopilotDocuments, DocumentPointer } from "@/features/global-knowledge/hooks/useCopilotDocuments";
+import { useCopilotSuggestions, Suggestion } from "@/features/chat/hooks/useCopilotSuggestions";
+import { CopilotSuggestionsContext } from "./CopilotSuggestionsContext";
 import { ChatHeader } from "./ChatHeader";
 import { ChatActions } from "./ChatActions";
 import { ChatInterrupts } from "./ChatInterrupts";
-import { CustomAssistantMessage } from "./CustomAssistantMessage";
-import { CustomUserMessage } from "./CustomUserMessage";
-import { CopilotKnowledgeBridge } from "./CopilotKnowledgeBridge";
-import { CopilotSuggestionsBridge } from "./CopilotSuggestionsBridge";
-import { CopilotSuggestionsContext } from "./CopilotSuggestionsContext";
-import type { DocumentPointer } from "@/features/global-knowledge/hooks/useCopilotDocuments";
-import type { Suggestion } from "@/features/chat/hooks/useCopilotSuggestions";
-import { useAgentSelection, type AgentChoice } from "@/features/chat/hooks/useAgentSelection";
+import { useAgentSelection } from "@/features/chat/hooks/useAgentSelection";
 
 /**
- * Phase 3 + Phase 4: Full CopilotKit Integration with Document & Suggestion Features
+ * FINAL REFACTOR - NO BRIDGES
  *
- * Main component that replaces CopilotChatClient.tsx with polished CopilotKit UI.
- *
- * Architecture:
- * - CopilotKit provider with stream/GraphQL endpoint
- * - CopilotSidebar for polished chat UI
- * - Custom message components (AssistantMessage with ReasoningPanel)
- * - Actions for /feedback and /correct
- * - useLangGraphInterrupt for human-in-the-loop
- * - ChatHeader outside sidebar for model selector and memory toggle
- *
- * Phase 4 Additions:
- * - CopilotKnowledgeBridge for KB + FeedMe document integration
- * - CopilotSuggestionsBridge for smart suggestion generation
- * - Knowledge source toggles in ChatHeader
- *
- * Removes:
- * - Manual message rendering loops
- * - Custom file upload UI (uses built-in)
- * - Manual interrupt queue
- * - Custom input handling
- * - Manual slash command detection
+ * All logic consolidated into single component:
+ * - No CopilotKnowledgeBridge
+ * - No CopilotSuggestionsBridge
+ * - Direct hook usage
+ * - Single source of truth
+ * - No circular dependencies possible
  */
 
-type Props = {
-  initialSessionId?: string;
-  agentType?: "primary" | "log_analysis";
-};
+const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+const SESSION_BOOTSTRAP_TIMEOUT_MS = 10000;
 
-// Custom hook for bearer token header
-function useBearerHeader() {
-  const [headers, setHeaders] = useState<Record<string, string>>({});
-  const [isLoading, setIsLoading] = useState(true);
+/**
+ * Inner component that USES CopilotKit hooks
+ * Must be rendered inside CopilotKit provider
+ */
+function CopilotSidebarContent({ sessionId }: { sessionId: string }) {
+  // ========================================================================
+  // User Preferences
+  // ========================================================================
+  const [provider, setProvider] = useState<string>("google");
+  const [model, setModel] = useState<string>("gemini-2.5-flash");
+  const [memoryEnabled, setMemoryEnabled] = useState<boolean>(true);
+  const hasReadPrefsRef = useRef(false);
 
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const token = await getAuthToken();
-        if (!cancelled) {
-          setHeaders(token ? { Authorization: `Bearer ${token}` } : {});
-        }
-      } catch (err) {
-        // eslint-disable-next-line no-console
-        if (process.env.NODE_ENV !== "production") console.warn("Failed to load auth token:", err);
-        if (!cancelled) setHeaders({});
-      } finally {
-        if (!cancelled) setIsLoading(false);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+  // ========================================================================
+  // Agent Selection
+  // ========================================================================
+  const { selected: agentType, choose: setAgentType } = useAgentSelection();
 
-  return { headers, isLoading } as const;
-}
+  // ========================================================================
+  // CopilotKit Hooks
+  // ========================================================================
+  const chat = useCopilotChat() as any;
+  const { registerForTurn, invalidateCache } = useCopilotDocuments();
 
-// Custom hook for session state management
-function useSessionState(
-  initial?: string,
-  defaultAgent: "primary" | "log_analysis" = "primary"
-) {
-  const [sessionId, setSessionId] = useState<string | undefined>(initial);
+  // ========================================================================
+  // Document State (formerly in CopilotKnowledgeBridge)
+  // ========================================================================
+  const [documents, setDocuments] = useState<DocumentPointer[]>([]);
+  const lastQueryRef = useRef<string>('');
+  const processedMessageIdsRef = useRef<Set<string>>(new Set());
 
-  const ensureSession = useCallback(async () => {
-    if (sessionId) return sessionId;
-
-    const session = await sessionsAPI.create(defaultAgent);
-    const createdId = String(session.id);
-    setSessionId(createdId);
-
-    try {
-      if (typeof window !== "undefined") {
-        window.dispatchEvent(
-          new CustomEvent("chat-session-updated", {
-            detail: { sessionId: createdId, agentType: defaultAgent },
-          })
-        );
-        window.dispatchEvent(new Event("chat-sessions:refresh"));
-      }
-    } catch {
-      // Silent fail
-    }
-
-    return createdId;
-  }, [sessionId, defaultAgent]);
-
-  return { sessionId, setSessionId, ensureSession } as const;
-}
-
-export default function CopilotSidebarClient({
-  initialSessionId,
-  agentType = "primary",
-}: Props) {
-  const { headers, isLoading: authLoading } = useBearerHeader();
-
-  // Endpoint resolution with feature flag
-  const runtimeUrl = useMemo(() => {
-    const base = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
-    return `${base.replace(/\/$/, "")}/api/v1/copilot/stream`;
-  }, []);
-
-  // Session management
-  const { sessionId, setSessionId, ensureSession } = useSessionState(
-    initialSessionId,
-    agentType
-  );
-
-  useEffect(() => {
-    if (initialSessionId) setSessionId(initialSessionId);
-  }, [initialSessionId, setSessionId]);
-
-  // Memory toggle
-  const [memoryEnabled, setMemoryEnabled] = useState<boolean>(
-    process.env.NEXT_PUBLIC_ENABLE_MEMORY !== "false"
-  );
-
-  // Model/provider state
-  const [provider, setProvider] = useState<"google" | "openai">("google");
-  const [model, setModel] = useState<string>(
-    "gemini-2.5-flash-preview-09-2025"
-  );
-  const [modelsByProvider, setModelsByProvider] = useState<
-    Record<"google" | "openai", string[]>
-  >({
-    google: [],
-    openai: [],
+  // ========================================================================
+  // Suggestions Hook (formerly bridged via CopilotSuggestionsBridge)
+  // ========================================================================
+  const { suggestions, isGenerating, handleSuggestionClick, clearSuggestions } = useCopilotSuggestions({
+    agentType: agentType === "auto" ? "primary" : agentType,
+    availableDocuments: documents,
   });
 
-  // MCP configuration
-  const [mcpUrl, setMcpUrl] = useState<string>(
-    process.env.NEXT_PUBLIC_MCP_SSE_URL || ""
+  // ========================================================================
+  // Extract message content utility
+  // ========================================================================
+  const extractContent = useCallback((content: unknown): string => {
+    if (typeof content === 'string') return content;
+
+    if (Array.isArray(content)) {
+      return content
+        .map((part) => {
+          if (typeof part === 'string') return part;
+          if (typeof part === 'object' && part !== null) {
+            const maybeText = (part as { text?: string; value?: string }).text;
+            const maybeValue = (part as { text?: string; value?: string }).value;
+            return maybeText || maybeValue || '';
+          }
+          return '';
+        })
+        .join(' ');
+    }
+
+    if (typeof content === 'object' && content !== null) {
+      const candidate = content as { text?: string };
+      if (typeof candidate.text === 'string') return candidate.text;
+    }
+
+    return '';
+  }, []);
+
+
+
+  // ========================================================================
+  // Read preferences
+  // ========================================================================
+  useEffect(() => {
+    if (!sessionId || hasReadPrefsRef.current) return;
+    hasReadPrefsRef.current = true;
+
+    try {
+      const sessionKey = `chat:prefs:${sessionId}`;
+      const raw = localStorage.getItem(sessionKey);
+
+      if (raw) {
+        const prefs = JSON.parse(raw);
+        if (prefs.provider) setProvider(prefs.provider);
+        if (prefs.model) setModel(prefs.model);
+      } else {
+        const globalKey = `copilot:last-model:${agentType}`;
+        const lastModel = localStorage.getItem(globalKey);
+        if (lastModel) setModel(lastModel);
+      }
+    } catch (error) {
+      console.warn("Failed to read preferences:", error);
+    }
+  }, [sessionId, agentType]);
+
+  // ========================================================================
+  // Write preferences
+  // ========================================================================
+  useEffect(() => {
+    if (!sessionId || !hasReadPrefsRef.current) return;
+
+    try {
+      const sessionKey = `chat:prefs:${sessionId}`;
+      localStorage.setItem(sessionKey, JSON.stringify({ provider, model }));
+
+      const globalKey = `copilot:last-model:${agentType}`;
+      localStorage.setItem(globalKey, model);
+    } catch (error) {
+      console.warn("Failed to write preferences:", error);
+    }
+  }, [provider, model, sessionId, agentType]);
+
+  // ========================================================================
+  // Watch messages and register documents
+  // CONSOLIDATED: formerly in CopilotKnowledgeBridge
+  // ========================================================================
+  useEffect(() => {
+    if (!sessionId || !chat?.messages) return;
+
+    const messages = chat.messages as Array<{
+      id?: string;
+      messageId?: string;
+      role: string;
+      content: unknown;
+      createdAt?: string;
+    }>;
+
+    const lastUserMessage = [...messages].reverse().find((m) => m.role === 'user');
+
+    if (!lastUserMessage) return;
+
+    const messageKey =
+      lastUserMessage.id ||
+      lastUserMessage.messageId ||
+      `${lastUserMessage.role}:${lastUserMessage.createdAt ?? ''}:${lastUserMessage.content ?? ''}`;
+
+    if (processedMessageIdsRef.current.has(messageKey)) return;
+
+    const content = extractContent(lastUserMessage.content).trim();
+
+    if (!content) {
+      processedMessageIdsRef.current.add(messageKey);
+      return;
+    }
+
+    // Check if this is a new query
+    if (content === lastQueryRef.current) {
+      processedMessageIdsRef.current.add(messageKey);
+      return;
+    }
+
+    lastQueryRef.current = content;
+    processedMessageIdsRef.current.add(messageKey);
+
+    // Register documents directly (no callback)
+    registerForTurn({
+      query: content,
+      agentType: agentType === "auto" ? "primary" : agentType,
+      sessionId,
+      kbEnabled: true,
+      feedmeEnabled: true,
+    })
+      .then((newDocuments) => {
+        setDocuments(newDocuments);
+        console.log(`[CopilotSidebarClient] Registered ${newDocuments.length} documents`);
+      })
+      .catch((error) => {
+        console.error('[CopilotSidebarClient] Error registering documents:', error);
+      });
+  }, [sessionId, chat?.messages, extractContent, registerForTurn, agentType]);
+
+  // ========================================================================
+  // Reset on session change
+  // ========================================================================
+  useEffect(() => {
+    processedMessageIdsRef.current.clear();
+    lastQueryRef.current = '';
+    setDocuments([]);
+  }, [sessionId]);
+
+  // ========================================================================
+  // Invalidate cache on unmount
+  // ========================================================================
+  useEffect(() => {
+    return () => {
+      if (sessionId) {
+        invalidateCache(sessionId);
+      }
+    };
+  }, [sessionId, invalidateCache]);
+
+  // ========================================================================
+  // Format documents for CopilotKit
+  // ========================================================================
+  const formattedDocuments = useMemo(() => {
+    if (documents.length === 0) return [];
+
+    return documents.map((doc) => ({
+      id: doc.documentId,
+      title: doc.title,
+      content: doc.content,
+      description: doc.description || '',
+      categories: doc.categories || [],
+      source: doc.source,
+    }));
+  }, [documents]);
+
+  // ========================================================================
+  // Register documents with CopilotKit
+  // ========================================================================
+  useCopilotReadable({
+    description: 'Available knowledge base and support documents',
+    value: formattedDocuments,
+    categories: ['knowledge'],
+  });
+
+  // ========================================================================
+  // CopilotKit properties
+  // ========================================================================
+  const copilotProperties = useMemo(() => {
+    const props: Record<string, any> = {
+      session_id: sessionId,
+      provider: provider,
+      model: model,
+    };
+
+    if (agentType !== "auto") {
+      props.agent_type = agentType;
+    }
+
+    return props;
+  }, [sessionId, provider, model, agentType]);
+
+  // ========================================================================
+  // Observability hooks
+  // ========================================================================
+  const observabilityHooks = useMemo(
+    () => ({
+      onMessageSent: () => console.log("Message sent"),
+      onChatStarted: () => console.log("Chat started"),
+      onChatStopped: () => console.log("Chat stopped"),
+      onFeedbackGiven: () => console.log("Feedback given"),
+    }),
+    []
   );
 
-  // Phase 4: Knowledge source toggles (default: enabled, persisted to localStorage)
-  // Fix: Added try-catch for localStorage access (can fail in private browsing)
-  const [kbEnabled, setKbEnabled] = useState<boolean>(() => {
-    try {
-      if (typeof window !== 'undefined') {
-        const saved = localStorage.getItem('copilot:kb-enabled')
-        return saved !== null ? saved === 'true' : true
-      }
-    } catch (error) {
-      console.warn('Failed to read KB enabled state from localStorage:', error)
-    }
-    return true
-  })
+  // ========================================================================
+  // Suggestions context value
+  // ========================================================================
+  const suggestionsContextValue = useMemo(
+    () => ({
+      suggestions,
+      isGenerating,
+      onSuggestionSelected: handleSuggestionClick,
+      clearSuggestions,
+    }),
+    [suggestions, isGenerating, handleSuggestionClick, clearSuggestions]
+  );
 
-  const [feedmeEnabled, setFeedmeEnabled] = useState<boolean>(() => {
-    try {
-      if (typeof window !== 'undefined') {
-        const saved = localStorage.getItem('copilot:feedme-enabled')
-        return saved !== null ? saved === 'true' : true
-      }
-    } catch (error) {
-      console.warn('Failed to read FeedMe enabled state from localStorage:', error)
-    }
-    return true
-  })
+  // ========================================================================
+  // Main render - NO BRIDGES
+  // ========================================================================
+  // Simple transcript that mirrors the conversation in the main (left) area
+  const messages = (chat?.messages || []) as Array<{ id?: string; role?: string; content?: unknown; createdAt?: string }>;
 
-  // Phase 4: Feature flags
-  const enableDocuments = process.env.NEXT_PUBLIC_ENABLE_COPILOT_DOCUMENTS === 'true'
-  const enableSuggestions = process.env.NEXT_PUBLIC_ENABLE_COPILOT_SUGGESTIONS === 'true'
-  const enableMultiAgent = process.env.NEXT_PUBLIC_ENABLE_MULTI_AGENT_SELECTION === 'true'
-  const enableObservability = process.env.NEXT_PUBLIC_ENABLE_COPILOT_OBSERVABILITY === 'true'
-  const publicLicenseKey = process.env.NEXT_PUBLIC_COPILOTKIT_LICENSE_KEY
+  return (
+    <>
+      <ChatActions />
+      <ChatInterrupts />
 
-  // Phase 5: Multi-agent selection
-  const { selected, choose } = useAgentSelection()
-  const selectedAgent: AgentChoice = enableMultiAgent ? selected : 'auto'
-  const prevSelectedRef = useRef<AgentChoice>(selectedAgent)
+      <CopilotSuggestionsContext.Provider value={suggestionsContextValue}>
+        <main className="h-screen w-screen flex flex-col">
+          <ChatHeader
+            agentType={agentType === "auto" ? "primary" : agentType}
+            memoryEnabled={memoryEnabled}
+            onMemoryToggle={setMemoryEnabled}
+            selectedAgent={agentType}
+            onAgentChange={setAgentType}
+            provider={provider}
+            model={model}
+            onProviderChange={setProvider}
+            onModelChange={setModel}
+            modelsByProvider={{
+              google: ["gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-2.5-pro"],
+              openai: ["gpt-4o", "gpt-4o-mini"],
+            }}
+          />
 
-  // When agent selection changes, create a new session to keep per-session invariants
-  useEffect(() => {
-    if (!enableMultiAgent) return
-    if (prevSelectedRef.current === selectedAgent) return
-    prevSelectedRef.current = selectedAgent
-    const nextAgentForSession = selectedAgent === 'auto' ? 'router' : selectedAgent
-    ;(async () => {
-      try {
-        const session = await sessionsAPI.create(nextAgentForSession as any)
-        setSessionId(String(session.id))
-      } catch {
-        // Silent fail; user can still chat in current session
-      }
-    })()
-  }, [enableMultiAgent, selectedAgent, setSessionId])
-
-  const [documentPointers, setDocumentPointers] = useState<DocumentPointer[]>([])
-  const [suggestionState, setSuggestionState] = useState<{
-    suggestions: Suggestion[]
-    isGenerating: boolean
-  }>({ suggestions: [], isGenerating: false })
-  const [suggestionHandlers, setSuggestionHandlers] = useState<{
-    handleClick?: (suggestion: Suggestion, options?: { sendImmediately?: boolean }) => void
-    clear?: () => void
-  }>({})
-
-  // Load available models
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const catalog = await modelsAPI.list(agentType);
-        if (cancelled) return;
-
-        setModelsByProvider({
-          google: Array.isArray((catalog as any).google)
-            ? (catalog as any).google
-            : [],
-          openai: Array.isArray((catalog as any).openai)
-            ? (catalog as any).openai
-            : [],
-        });
-
-        const list =
-          ((catalog as any)[provider] as string[] | undefined) || [];
-        if (list.length > 0 && !list.includes(model)) {
-          setModel(list[0]);
-        }
-      } catch {
-        // Silent fail
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [agentType, provider, model]);
-
-  // Persist preferences to localStorage
-  useEffect(() => {
-    if (!sessionId) return;
-    try {
-      const raw = localStorage.getItem(`chat:prefs:${sessionId}`);
-      if (raw) {
-        const parsed = JSON.parse(raw) as {
-          provider?: "google" | "openai";
-          model?: string;
-        };
-        if (parsed.provider) setProvider(parsed.provider);
-        if (parsed.model) setModel(parsed.model);
-      }
-    } catch {
-      // Silent fail
-    }
-  }, [sessionId]);
-
-  useEffect(() => {
-    if (!sessionId) return;
-    try {
-      localStorage.setItem(
-        `chat:prefs:${sessionId}`,
-        JSON.stringify({ provider, model })
-      );
-    } catch {
-      // Silent fail
-    }
-  }, [provider, model, sessionId]);
-
-  // Phase 4: Persist knowledge source toggles
-  // Fix: Added try-catch for localStorage write (can fail in private browsing)
-  useEffect(() => {
-    try {
-      if (typeof window !== 'undefined') {
-        localStorage.setItem('copilot:kb-enabled', String(kbEnabled));
-      }
-    } catch (error) {
-      console.warn('Failed to persist KB enabled state:', error)
-    }
-  }, [kbEnabled]);
-
-  useEffect(() => {
-    try {
-      if (typeof window !== 'undefined') {
-        localStorage.setItem('copilot:feedme-enabled', String(feedmeEnabled));
-      }
-    } catch (error) {
-      console.warn('Failed to persist FeedMe enabled state:', error)
-    }
-  }, [feedmeEnabled]);
-
-  // Ensure session exists when component mounts
-  useEffect(() => {
-    ensureSession();
-  }, [ensureSession]);
-
-  // Stable trace id: rotate only when the session changes
-  const traceIdRef = useRef<string>(uuidv4());
-  useEffect(() => {
-    traceIdRef.current = uuidv4();
-  }, [sessionId]);
-
-  // Build properties for CopilotKit
-  const properties = useMemo(() => {
-    return {
-      session_id: sessionId,
-      use_server_memory: memoryEnabled,
-      provider,
-      model,
-      // Phase 5: Only pass agent_type when explicitly selected (not Auto)
-      ...(enableMultiAgent
-        ? (selectedAgent !== 'auto' ? { agent_type: selectedAgent } : {})
-        : { agent_type: agentType }
-      ),
-      trace_id: traceIdRef.current,
-      ...(mcpUrl ? { mcpServers: [{ endpoint: mcpUrl }] } : {}),
-    };
-  }, [sessionId, memoryEnabled, provider, model, agentType, mcpUrl, enableMultiAgent, selectedAgent]);
-
-  // Debug: capture minimal init info in development for troubleshooting
-  useEffect(() => {
-    if (process.env.NODE_ENV !== 'development') return;
-    try {
-      if (typeof window !== 'undefined') {
-        (window as any).__COPILOT_CONFIG__ = {
-          runtimeUrl,
-          sessionId,
-          authHeadersPresent: headers && Object.keys(headers).length > 0,
-        };
-      }
-    } catch {}
-  }, [runtimeUrl, sessionId, headers]);
-
-  // Block CopilotKit mount until auth header is resolved to avoid race conditions
-  if (authLoading) {
-    return (
-      <div className="flex flex-col h-screen bg-background">
-        <ChatHeader
-          agentType={agentType}
-          memoryEnabled={memoryEnabled}
-          onMemoryToggle={setMemoryEnabled}
-          kbEnabled={enableDocuments ? kbEnabled : undefined}
-          onKbToggle={enableDocuments ? setKbEnabled : undefined}
-          feedmeEnabled={enableDocuments ? feedmeEnabled : undefined}
-          onFeedmeToggle={enableDocuments ? setFeedmeEnabled : undefined}
-          provider={provider}
-          model={model}
-          onProviderChange={setProvider}
-          onModelChange={setModel}
-          modelsByProvider={modelsByProvider}
-          mcpUrl={mcpUrl}
-          onMcpUrlChange={setMcpUrl}
-          selectedAgent={enableMultiAgent ? selectedAgent : undefined}
-          onAgentChange={enableMultiAgent ? choose : undefined}
-        />
-        <div className="flex-1 overflow-hidden flex items-center justify-center">
-          <div className="text-center text-muted-foreground">
-            <p className="text-sm">Initializing chat…</p>
+          <div className="flex-1 overflow-hidden">
+            <CopilotSidebar
+              defaultOpen={true}
+              clickOutsideToClose={false}
+              threadId={sessionId}
+              labels={{
+                title: "Agent Sparrow",
+                initial: "Hi! How can I help you today?",
+              }}
+              observabilityHooks={observabilityHooks}
+            >
+              {/* Main transcript on the left side */}
+              <div className="h-full w-full flex flex-col bg-gradient-to-br from-slate-50 to-slate-100">
+                <div className="flex-1 overflow-auto p-6 space-y-4">
+                  {messages
+                    .filter((m) => (m.role || "").toLowerCase() !== "system")
+                    .map((m, idx) => {
+                      const role = (m.role || "assistant").toLowerCase();
+                      const text = extractContent(m.content);
+                      return (
+                        <div key={m.id || idx} className={`max-w-3xl ${role === "user" ? "ml-auto text-right" : "mr-auto text-left"}`}>
+                          <div className={`inline-block rounded-lg px-4 py-3 shadow-sm ${role === "user" ? "bg-slate-800 text-white" : "bg-white text-slate-800"}`}>
+                            <div className="whitespace-pre-wrap break-words">{text}</div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                </div>
+                <div className="px-6 pb-6 text-xs text-slate-400">
+                  <span className="mr-3">Session: {sessionId}</span>
+                  <span className="mr-3">Agent: {agentType}</span>
+                  <span className="mr-3">Model: {provider}/{model}</span>
+                  <span className="mr-3">Documents: {documents.length}</span>
+                  <span>Suggestions: {suggestions.length}</span>
+                </div>
+              </div>
+            </CopilotSidebar>
           </div>
+        </main>
+      </CopilotSuggestionsContext.Provider>
+    </>
+  );
+}
+
+/**
+ * Outer component that PROVIDES CopilotKit context
+ * Handles session creation before rendering inner content
+ */
+export default function CopilotSidebarClient() {
+  // ========================================================================
+  // Session Management
+  // ========================================================================
+  const [sessionId, setSessionId] = useState<string | null>(null);
+  const [isCreatingSession, setIsCreatingSession] = useState(false);
+  const [sessionError, setSessionError] = useState<Error | null>(null);
+  const mountedRef = useRef(true);
+  const bootstrapTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  // ========================================================================
+  // User Preferences (for CopilotKit properties)
+  // ========================================================================
+  const [provider] = useState<string>("google");
+  const [model] = useState<string>("gemini-2.5-flash");
+  const { selected: agentType } = useAgentSelection();
+
+  // ========================================================================
+  // Create session on mount
+  // ========================================================================
+  useEffect(() => {
+    mountedRef.current = true;
+    setIsCreatingSession(true);
+
+    bootstrapTimeoutRef.current = setTimeout(() => {
+      if (mountedRef.current && !sessionId) {
+        const err = new Error("Session bootstrap timed out");
+        console.error(err);
+        setSessionError(err);
+        setIsCreatingSession(false);
+      }
+    }, SESSION_BOOTSTRAP_TIMEOUT_MS);
+
+    sessionsAPI
+      .create("primary", "New Chat")
+      .then((session) => {
+        if (mountedRef.current) {
+          setSessionId(String(session.id));
+          setIsCreatingSession(false);
+          if (bootstrapTimeoutRef.current) {
+            clearTimeout(bootstrapTimeoutRef.current);
+          }
+        }
+      })
+      .catch((error) => {
+        if (mountedRef.current) {
+          console.error("Failed to create session:", error);
+          setSessionError(error);
+          setIsCreatingSession(false);
+          if (bootstrapTimeoutRef.current) {
+            clearTimeout(bootstrapTimeoutRef.current);
+          }
+        }
+      });
+
+    return () => {
+      mountedRef.current = false;
+      if (bootstrapTimeoutRef.current) {
+        clearTimeout(bootstrapTimeoutRef.current);
+      }
+    };
+  }, []);
+
+  // ========================================================================
+  // CopilotKit properties
+  // ========================================================================
+  const copilotProperties = useMemo(() => {
+    const props: Record<string, any> = {
+      session_id: sessionId,
+      provider: provider,
+      model: model,
+    };
+
+    if (agentType !== "auto") {
+      props.agent_type = agentType;
+    }
+
+    return props;
+  }, [sessionId, provider, model, agentType]);
+
+  // ========================================================================
+  // Loading state
+  // ========================================================================
+  if (isCreatingSession) {
+    return (
+      <div className="h-screen w-screen flex items-center justify-center bg-gradient-to-br from-slate-50 to-slate-100">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-slate-800 mx-auto mb-4"></div>
+          <p className="text-slate-600">Initializing session...</p>
         </div>
       </div>
     );
   }
 
-  return (
-    <div className="flex flex-col h-screen">
-      {/* Header with controls outside sidebar */}
-      <ChatHeader
-        agentType={agentType}
-        memoryEnabled={memoryEnabled}
-        onMemoryToggle={setMemoryEnabled}
-        kbEnabled={enableDocuments ? kbEnabled : undefined}
-        onKbToggle={enableDocuments ? setKbEnabled : undefined}
-        feedmeEnabled={enableDocuments ? feedmeEnabled : undefined}
-        onFeedmeToggle={enableDocuments ? setFeedmeEnabled : undefined}
-        provider={provider}
-        model={model}
-        onProviderChange={setProvider}
-        onModelChange={setModel}
-        modelsByProvider={modelsByProvider}
-        mcpUrl={mcpUrl}
-        onMcpUrlChange={setMcpUrl}
-        // Phase 5: Show selector only when enabled
-        selectedAgent={enableMultiAgent ? selectedAgent : undefined}
-        onAgentChange={enableMultiAgent ? choose : undefined}
-      />
-
-      {/* CopilotKit + CopilotSidebar */}
-      <div className="flex-1 overflow-hidden">
-        <CopilotKit
-          runtimeUrl={runtimeUrl}
-          headers={headers}
-          credentials="include"
-          properties={properties}
-          showDevConsole={false}
-          publicLicenseKey={publicLicenseKey}
-          onError={(event) => {
-            try {
-              const payload = {
-                type: event?.type,
-                source: event?.context?.source,
-                operation: event?.context?.request?.operation,
-                latency: event?.context?.response?.latency,
-                status: event?.context?.response?.status,
-                timestamp: event?.timestamp,
-              };
-              if (typeof window !== 'undefined') {
-                const errors = (window as any).__COPILOT_ERRORS__ || [];
-                errors.push({ ...payload, config: (window as any).__COPILOT_CONFIG__ });
-                (window as any).__COPILOT_ERRORS__ = errors.slice(-10);
-                (window as any).__COPILOT_DEBUG__ = {
-                  ...(window as any).__COPILOT_DEBUG__,
-                  lastErrorEvent: payload,
-                };
-              }
-              if (process.env.NODE_ENV !== 'production') {
-                // eslint-disable-next-line no-console
-                console.error('[CopilotKit Error]', payload);
-              }
-            } catch {}
-          }}
-          threadId={sessionId}
-          agent="sparrow"
-        >
-          {/* Actions for feedback/correction */}
-          <ChatActions sessionId={sessionId} agentType={agentType} />
-
-          {/* Interrupt handling */}
-          <ChatInterrupts />
-
-          {/* Phase 4: Document Integration Bridge */}
-          {enableDocuments && (
-            <CopilotKnowledgeBridge
-              sessionId={sessionId}
-              agentType={agentType}
-              enabled={enableDocuments}
-              kbEnabled={kbEnabled}
-              feedmeEnabled={feedmeEnabled}
-              onDocumentsRegistered={setDocumentPointers}
-            />
-          )}
-
-          {/* Phase 4: Suggestion Generation Bridge */}
-          {enableSuggestions && (
-            <CopilotSuggestionsBridge
-              agentType={agentType}
-              enabled={enableSuggestions}
-              availableDocuments={documentPointers}
-              onSuggestionsChange={({ suggestions, isGenerating, handleClick, clear }) => {
-                setSuggestionState({ suggestions, isGenerating })
-                setSuggestionHandlers({ handleClick, clear })
-              }}
-            />
-          )}
-
-          {/* Main sidebar UI */}
-          <CopilotSuggestionsContext.Provider
-            value={{
-              suggestions: enableSuggestions ? suggestionState.suggestions : [],
-              isGenerating: enableSuggestions ? suggestionState.isGenerating : false,
-              onSuggestionSelected: enableSuggestions ? suggestionHandlers.handleClick : undefined,
-              clearSuggestions: enableSuggestions ? suggestionHandlers.clear : undefined,
-            }}
+  // ========================================================================
+  // Error state
+  // ========================================================================
+  if (sessionError || !sessionId) {
+    return (
+      <div className="h-screen w-screen flex items-center justify-center bg-gradient-to-br from-red-50 to-red-100">
+        <div className="text-center max-w-md p-6 bg-white rounded-lg shadow-lg">
+          <h2 className="text-2xl font-bold text-red-600 mb-2">Session Error</h2>
+          <p className="text-slate-600 mb-4">
+            {sessionError?.message || "Failed to create session"}
+          </p>
+          <button
+            onClick={() => window.location.reload()}
+            className="px-4 py-2 bg-slate-800 text-white rounded hover:bg-slate-700"
           >
-            <CopilotSidebar
-              defaultOpen={true}
-              clickOutsideToClose={false}
-              labels={{
-                title: "Agent Sparrow",
-                initial:
-                  agentType === "log_analysis"
-                    ? "Hi! I'm your log analysis specialist. I can help you analyze logs, identify patterns, troubleshoot issues, and provide insights."
-                    : "Hi! I'm your AI assistant. I can help with general queries, research tasks, and provide information.",
-              }}
-              observabilityHooks={enableObservability ? {
-                onChatStarted: () => {
-                  try {
-                    const now = Date.now()
-                    if (typeof window !== 'undefined') {
-                      const prev = ((window as any).__COPILOT_DEBUG__ || {})
-                      ;(window as any).__COPILOT_DEBUG__ = { ...prev, metrics: { ...(prev.metrics || {}), lastStart: now } }
-                    }
-                  } catch {}
-                },
-                onChatStopped: () => {
-                  try {
-                    if (typeof window !== 'undefined') {
-                      const dbg = (window as any).__COPILOT_DEBUG__ || {}
-                      const lastStart: number | undefined = dbg.metrics?.lastStart
-                      const duration = lastStart ? Math.max(0, Date.now() - lastStart) : undefined
-                      ;(window as any).__COPILOT_DEBUG__ = {
-                        ...dbg,
-                        metrics: { ...(dbg.metrics || {}), lastDurationMs: duration },
-                      }
-                    }
-                  } catch {}
-                },
-                onMessageSent: () => {
-                  try {
-                    if (typeof window !== 'undefined') {
-                      const dbg = (window as any).__COPILOT_DEBUG__ || {}
-                      const sent = (dbg.metrics?.sentCount || 0) + 1
-                      ;(window as any).__COPILOT_DEBUG__ = { ...dbg, metrics: { ...(dbg.metrics || {}), sentCount: sent } }
-                    }
-                  } catch {}
-                },
-                onFeedbackGiven: () => {
-                  try {
-                    if (typeof window !== 'undefined') {
-                      const dbg = (window as any).__COPILOT_DEBUG__ || {}
-                      const fb = (dbg.metrics?.feedbackCount || 0) + 1
-                      ;(window as any).__COPILOT_DEBUG__ = { ...dbg, metrics: { ...(dbg.metrics || {}), feedbackCount: fb } }
-                    }
-                  } catch {}
-                },
-                onError: (e) => {
-                  try {
-                    if (typeof window !== 'undefined') {
-                      const dbg = (window as any).__COPILOT_DEBUG__ || {}
-                      ;(window as any).__COPILOT_DEBUG__ = { ...dbg, lastHookError: { type: e?.type, ts: e?.timestamp } }
-                    }
-                  } catch {}
-                }
-              } : undefined}
-              // Custom message components
-              AssistantMessage={CustomAssistantMessage}
-              UserMessage={CustomUserMessage}
-            >
-              {/* Main application content goes here */}
-              <div className="flex items-center justify-center h-full p-8">
-                <div className="text-center text-muted-foreground">
-                  <p className="text-lg mb-2">
-                    Chat interface is in the sidebar →
-                  </p>
-                  <p className="text-sm">
-                    Open the sidebar to start a conversation with Agent Sparrow
-                  </p>
-                </div>
-              </div>
-            </CopilotSidebar>
-          </CopilotSuggestionsContext.Provider>
-        </CopilotKit>
+            Retry
+          </button>
+        </div>
       </div>
-    </div>
+    );
+  }
+
+  // ========================================================================
+  // Main render - CopilotKit provider wraps content
+  // ========================================================================
+  return (
+    <CopilotKit
+      runtimeUrl={`${API_URL}/api/v1/copilot/stream`}
+      agent="sparrow"
+      showDevConsole={false}
+      properties={copilotProperties}
+    >
+      <CopilotSidebarContent sessionId={sessionId} />
+    </CopilotKit>
   );
 }

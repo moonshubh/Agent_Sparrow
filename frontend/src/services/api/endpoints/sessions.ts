@@ -47,6 +47,10 @@ export const sessionsAPI = {
     const qs = new URLSearchParams({ limit: String(limit), offset: String(offset) })
     const res = await apiClient.get<ChatSessionListResponse | ChatSession[]>(`/api/v1/chat-sessions?${qs.toString()}`)
 
+    if (!res) {
+      return []
+    }
+
     if (Array.isArray(res)) {
       return res
     }
@@ -62,9 +66,17 @@ export const sessionsAPI = {
     return []
   },
 
-  async create(agent_type: AgentType = 'primary', title?: string): Promise<ChatSession> {
+  async create(
+    agent_type: AgentType = 'primary',
+    title?: string,
+    options?: RequestInit
+  ): Promise<ChatSession> {
     const normalizedTitle = title?.trim() || 'New Chat'
-    return apiClient.post<ChatSession>(`/api/v1/chat-sessions`, { agent_type, title: normalizedTitle })
+    return apiClient.post<ChatSession>(
+      `/api/v1/chat-sessions`,
+      { agent_type, title: normalizedTitle },
+      options
+    )
   },
 
   async rename(sessionId: string | number, title: string): Promise<ChatSession> {
@@ -81,6 +93,10 @@ export const sessionsAPI = {
     const res = await apiClient.get<ChatMessageListResponse | ChatMessageRecord[]>(
       `/api/v1/chat-sessions/${sessionId}/messages?${qs.toString()}`
     )
+
+    if (!res) {
+      return []
+    }
 
     if (Array.isArray(res)) {
       return res

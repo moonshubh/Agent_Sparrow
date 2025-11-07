@@ -3,7 +3,7 @@
 import React from "react";
 import dynamic from "next/dynamic";
 
-// Phase 3: Dynamic import for CopilotSidebarClient
+// Sprint 0: Clean rebuild with minimal working chat interface
 const CopilotSidebarClient = dynamic(
   () => import("./copilot/CopilotSidebarClient"),
   { ssr: false }

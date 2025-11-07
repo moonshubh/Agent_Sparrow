@@ -25,6 +25,9 @@ const nextConfig = {
       'https://*.supabase.co',
       'https://accounts.google.com',
       'https://api.github.com',
+      // Allow CopilotKit cloud endpoints (e.g., check-for-updates)
+      'https://*.copilotkit.ai',
+      'https://api.cloud.copilotkit.ai',
     ]
     const connectSrcProdExtra = [
       'https://agentsparrow-production.up.railway.app',

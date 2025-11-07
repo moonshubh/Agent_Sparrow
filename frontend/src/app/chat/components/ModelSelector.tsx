@@ -1,8 +1,6 @@
 'use client'
 
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/shared/ui/select'
 import { Label } from '@/shared/ui/label'
-import { useEffect, useMemo } from 'react'
 
 type Provider = 'google' | 'openai'
 
@@ -23,52 +21,38 @@ export function ModelSelector({
   align = 'right',
   modelsByProvider,
 }: ModelSelectorProps) {
-  const models = modelsByProvider?.[provider] || []
-  const defaultModel = useMemo(() => (models.length ? models[0] : model), [models, model])
+  const models = modelsByProvider?.[provider] ?? []
 
-  // Validate and reset model when provider changes
-  useEffect(() => {
-    if (!models.includes(model)) {
-      // Model is invalid for current provider, reset to default
-      onChangeModel(defaultModel)
-    }
-  }, [provider, model, models, onChangeModel, defaultModel])
-
-  const handleProviderChange = (newProvider: Provider) => {
-    onChangeProvider(newProvider)
-    // Also set the default model for the new provider
-    const next = (modelsByProvider?.[newProvider] || [])[0]
-    if (next) onChangeModel(next)
-  }
-
+  // TEMPORARILY SIMPLIFIED: Using regular select elements to avoid infinite loop issues
   return (
     <div className={`flex items-center gap-2 ${align === 'right' ? 'ml-auto' : ''}`}>
       <div className="flex flex-col gap-1">
         <Label className="text-xs text-muted-foreground">Provider</Label>
-        <Select value={provider} onValueChange={(v) => handleProviderChange(v as Provider)}>
-          <SelectTrigger className="w-32 h-8">
-            <SelectValue placeholder="Provider" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="google">Google</SelectItem>
-            <SelectItem value="openai">OpenAI</SelectItem>
-          </SelectContent>
-        </Select>
+        <select
+          value={provider}
+          onChange={(e) => onChangeProvider(e.target.value as Provider)}
+          className="w-32 h-8 px-2 rounded-md border border-input bg-background text-sm"
+        >
+          <option value="google">Google</option>
+          <option value="openai">OpenAI</option>
+        </select>
       </div>
       <div className="flex flex-col gap-1">
         <Label className="text-xs text-muted-foreground">Model</Label>
-        <Select value={model} onValueChange={(v) => onChangeModel(v)}>
-          <SelectTrigger className="w-40 h-8">
-            <SelectValue placeholder="Model" />
-          </SelectTrigger>
-          <SelectContent>
-            {models.map((m) => (
-              <SelectItem key={m} value={m}>
-                {m}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+        <select
+          value={model}
+          onChange={(e) => onChangeModel(e.target.value)}
+          disabled={models.length === 0}
+          className="w-40 h-8 px-2 rounded-md border border-input bg-background text-sm disabled:opacity-50"
+        >
+          {models.length === 0 ? (
+            <option>No models available</option>
+          ) : (
+            models.map((m) => (
+              <option key={m} value={m}>{m}</option>
+            ))
+          )}
+        </select>
       </div>
     </div>
   )

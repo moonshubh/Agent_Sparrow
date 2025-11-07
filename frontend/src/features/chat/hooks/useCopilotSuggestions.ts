@@ -21,7 +21,7 @@
  * - Latency budget: <250ms (configurable via NEXT_PUBLIC_SUGGESTIONS_LATENCY_BUDGET_MS)
  */
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useCopilotChat } from '@copilotkit/react-core'
 import type { DocumentPointer } from '@/features/global-knowledge/hooks/useCopilotDocuments'
 
@@ -215,6 +215,19 @@ export function useCopilotSuggestions(options: SuggestionsOptions) {
 
   const [suggestions, setSuggestions] = useState<Suggestion[]>([])
   const [isGenerating, setIsGenerating] = useState(false)
+  const lastProcessedKeyRef = useRef<string>('')
+
+  const shallowEqualSuggestions = useCallback((a: Suggestion[], b: Suggestion[]) => {
+    if (a === b) return true
+    if (!a || !b) return false
+    if (a.length !== b.length) return false
+    for (let i = 0; i < a.length; i++) {
+      const ai = a[i]
+      const bi = b[i]
+      if (ai.text !== bi.text || ai.source !== bi.source) return false
+    }
+    return true
+  }, [])
 
   /**
    * Generate suggestions for the last assistant message
@@ -241,7 +254,7 @@ export function useCopilotSuggestions(options: SuggestionsOptions) {
           docSuggestions
         )
 
-        setSuggestions(prioritized)
+        setSuggestions((prev) => (shallowEqualSuggestions(prev, prioritized) ? prev : prioritized))
 
         perf.mark('suggestions-end')
         const duration = perf.measure('suggestions-duration', 'suggestions-start', 'suggestions-end')
@@ -253,12 +266,12 @@ export function useCopilotSuggestions(options: SuggestionsOptions) {
         }
       } catch (error) {
         console.error('[useCopilotSuggestions] Error generating suggestions:', error)
-        setSuggestions([])
+        setSuggestions((prev) => (prev.length ? [] : prev))
       } finally {
         setIsGenerating(false)
       }
     },
-    [agentType, availableDocuments, conversationContext]
+    [agentType, availableDocuments, conversationContext, shallowEqualSuggestions]
   )
 
   /**
@@ -286,44 +299,56 @@ export function useCopilotSuggestions(options: SuggestionsOptions) {
   useEffect(() => {
     if (!chat) return
 
-    const messages = chat.messages
-    const isStreaming = chat.isLoading
+    const messages = chat.messages as any[] | undefined
+    const isStreaming = Boolean((chat as any).isLoading)
+
+    // Build a stable key that only changes when the last message id/role changes or stream state toggles
+    let lastMessage: any | undefined
+    let lastMessageKey = 'none'
+    if (messages && messages.length > 0) {
+      lastMessage = messages[messages.length - 1]
+      const stableId =
+        lastMessage?.id || lastMessage?.messageId || lastMessage?.createdAt || `len:${messages.length}`
+      lastMessageKey = `${lastMessage?.role || 'unknown'}:${stableId}`
+    }
+
+    const compositeKey = `${lastMessageKey}|stream:${isStreaming ? 1 : 0}`
+    if (lastProcessedKeyRef.current === compositeKey) return
+    lastProcessedKeyRef.current = compositeKey
 
     if (!messages || messages.length === 0) {
-      setSuggestions([])
+      setSuggestions((prev) => (prev.length ? [] : prev))
       return
     }
 
-    const lastMessage = messages[messages.length - 1]
-
-    // Only generate for assistant messages
-    if (lastMessage.role !== 'assistant') {
-      setSuggestions([])
+    // Only generate for assistant messages; otherwise clear once (idempotent)
+    if (!lastMessage || lastMessage.role !== 'assistant') {
+      setSuggestions((prev) => (prev.length ? [] : prev))
       return
     }
 
-    // Skip tool-result or status-only messages
+    // Skip tool-result or status-only assistant messages
     const content = lastMessage.content || ''
-    if (content.includes('[Tool Result]') || content.includes('[Status]')) {
-      setSuggestions([])
-      return
+    if (typeof content === 'string') {
+      if (content.includes('[Tool Result]') || content.includes('[Status]')) {
+        setSuggestions((prev) => (prev.length ? [] : prev))
+        return
+      }
     }
 
-    // Check if streaming is complete
+    // Generate only when streaming is complete; clear once during streaming
     if (!isStreaming) {
-      // Assistant finished streaming, generate suggestions
       generateSuggestions(lastMessage)
     } else {
-      // Still streaming, clear suggestions to avoid jitter
-      setSuggestions([])
+      setSuggestions((prev) => (prev.length ? [] : prev))
     }
-  }, [chat, chat?.messages, chat?.isLoading, generateSuggestions])
+  }, [chat, generateSuggestions])
 
   return {
     suggestions,
     isGenerating,
     handleSuggestionClick,
-    clearSuggestions: useCallback(() => setSuggestions([]), []),
+    clearSuggestions: useCallback(() => setSuggestions((prev) => (prev.length ? [] : prev)), []),
   }
 }
 
