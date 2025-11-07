@@ -6,6 +6,12 @@ from dataclasses import dataclass
 from typing import Any, Dict, Optional
 
 from deepagents import create_deep_agent
+from deepagents.middleware import (
+    SubAgentMiddleware,
+    SummarizationMiddleware,
+    TodoListMiddleware,
+    PatchToolCallsMiddleware,
+)
 from langchain.chat_models import init_chat_model
 from langchain_core.messages import AIMessage, BaseMessage
 from langgraph.config import RunnableConfig, get_stream_writer
@@ -55,13 +61,49 @@ def _build_deep_agent(state: GraphState):
     tools = get_registered_tools()
     subagents = get_subagent_specs()
 
+    # Build comprehensive middleware stack
+    middleware = [
+        # TodoListMiddleware for task tracking
+        TodoListMiddleware(),
+
+        # SubAgentMiddleware with its own middleware stack for subagents
+        SubAgentMiddleware(
+            default_model=chat_model,
+            default_tools=tools,
+            subagents=subagents,
+            default_middleware=[
+                TodoListMiddleware(),
+                SummarizationMiddleware(
+                    model=chat_model,
+                    max_tokens_before_summary=170000,
+                    messages_to_keep=6,
+                ),
+                PatchToolCallsMiddleware(),
+            ],
+            general_purpose_agent=False,  # We have specific subagents
+        ),
+
+        # SummarizationMiddleware for long conversations
+        SummarizationMiddleware(
+            model=chat_model,
+            max_tokens_before_summary=170000,  # ~170K tokens before summarizing
+            messages_to_keep=6,  # Keep last 6 messages for context
+        ),
+
+        # PatchToolCallsMiddleware to fix any tool call formatting issues
+        PatchToolCallsMiddleware(),
+    ]
+
     agent = create_deep_agent(
         model=chat_model,
         tools=tools,
         subagents=subagents,
         system_prompt=SYSTEM_PROMPT,
+        middleware=middleware,
     )
-    return agent
+
+    # Increase recursion limit for complex tasks
+    return agent.with_config({"recursion_limit": 1000})
 
 
 def _build_runnable_config(state: GraphState, config: Optional[RunnableConfig]) -> Dict[str, Any]:
