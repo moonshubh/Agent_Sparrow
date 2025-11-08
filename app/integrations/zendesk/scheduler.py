@@ -10,10 +10,12 @@ from langchain_core.messages import AIMessage, HumanMessage
 
 from app.core.settings import settings
 from app.db.supabase.client import get_supabase_client
-from app.agents.primary import run_primary_agent, PrimaryAgentState
 from .client import ZendeskClient
 from app.core.user_context import UserContext, user_context_scope
-from app.agents.primary.primary_agent.agent import _gather_grounding_evidence
+from app.agents.unified.agent_sparrow import run_unified_agent
+from app.agents.orchestration.orchestration.state import GraphState
+from app.agents.unified.tools import kb_search_tool
+from app.agents.primary.primary_agent.feedme_knowledge_tool import EnhancedKBSearchInput
 import re
 
 logger = logging.getLogger(__name__)
@@ -293,36 +295,39 @@ async def _generate_reply(ticket_id: int | str, subject: str | None, description
 
     # Run inside a service user context to reuse the same key resolution path as chat
     async with user_context_scope(UserContext(user_id="zendesk-bot")):
-        # Preflight grounding to decide if we should force web search
+        # Preflight KB search to decide if we should force web search
+        # Use unified agent's kb_search tool directly
+        kb_ok = True  # Default to not forcing web search
         try:
-            gd = await _gather_grounding_evidence(
-                user_query,
-                context={"session_id": session_id, "message_count": 1},
-                min_results=settings.primary_agent_min_kb_results,
-                min_relevance=settings.primary_agent_min_kb_relevance,
-                force_websearch=False,
-                websearch_max_results=None,
+            kb_input = EnhancedKBSearchInput(
+                query=user_query,
+                max_results=settings.primary_agent_min_kb_results,
+                min_confidence=settings.primary_agent_min_kb_relevance,
             )
-            kb_ok = bool((gd.get("kb") or {}).get("satisfied", False))
-        except Exception:
-            kb_ok = True  # don’t force web search if preflight fails
+            kb_result = await kb_search_tool.ainvoke(kb_input)
+            # If KB search returns meaningful results, we don't need to force web search
+            # Check if result is non-empty and contains useful information
+            if isinstance(kb_result, str) and len(kb_result.strip()) > 50:
+                kb_ok = True
+            else:
+                kb_ok = False
+        except Exception as e:
+            logger.debug(f"KB preflight check failed: {e}, defaulting to web search")
+            kb_ok = False  # Force web search if KB check fails
 
-        resolved_temperature = getattr(settings, "primary_agent_temperature", 0.2)
-        resolved_thinking_budget = getattr(settings, "primary_agent_thinking_budget", None)
-        resolved_formatting = getattr(settings, "primary_agent_formatting", "natural")
-
-        state = PrimaryAgentState(
+        # Use unified agent with GraphState
+        state = GraphState(
             messages=[HumanMessage(content=user_query)],
             session_id=session_id,
             provider=getattr(settings, "primary_agent_provider", "google"),
             model=getattr(settings, "primary_agent_model", "gemini-2.5-flash"),
-            force_websearch=not kb_ok,
-            temperature=resolved_temperature,
-            thinking_budget=resolved_thinking_budget,
-            formatting=resolved_formatting,
+            forwarded_props={
+                "force_websearch": not kb_ok,
+                "websearch_max_results": None,
+            },
         )
 
-        result = await run_primary_agent(state)
+        result = await run_unified_agent(state)
         result_messages = list((result or {}).get("messages") or [])
         final_msg = None
         for candidate in reversed(result_messages):
@@ -330,7 +335,7 @@ async def _generate_reply(ticket_id: int | str, subject: str | None, description
                 final_msg = candidate
                 break
         if final_msg is None:
-            trace_id = getattr(state, "trace_id", None)
+            trace_id = state.trace_id
             preview_payload = []
             for msg in result_messages[-3:]:
                 content = getattr(msg, "content", "")
@@ -339,7 +344,7 @@ async def _generate_reply(ticket_id: int | str, subject: str | None, description
                 else:
                     preview_payload.append(str(type(content)))
             logger.warning(
-                "zendesk_primary_agent_no_ai_message session_id=%s trace_id=%s message_types=%s previews=%s",
+                "zendesk_unified_agent_no_ai_message session_id=%s trace_id=%s message_types=%s previews=%s",
                 session_id,
                 trace_id,
                 [type(msg).__name__ for msg in result_messages],

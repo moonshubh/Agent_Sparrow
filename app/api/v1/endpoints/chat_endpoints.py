@@ -12,7 +12,8 @@ from fastapi.responses import StreamingResponse
 from langchain_core.messages import AIMessage, HumanMessage
 from pydantic import BaseModel
 
-from app.agents.primary import run_primary_agent, PrimaryAgentState
+from app.agents.unified.agent_sparrow import run_unified_agent
+from app.agents.orchestration.orchestration.state import GraphState
 from app.api.v1.endpoints.agent_common import (
     filter_system_text,
 )
@@ -323,26 +324,29 @@ async def primary_agent_stream_generator(
             if resolved_formatting not in {"natural", "strict", "lean"}:
                 resolved_formatting = "strict"
 
-            initial_state = PrimaryAgentState(
+            # Use unified agent with GraphState
+            state = GraphState(
                 messages=messages,
-                session_id=session_id,
+                session_id=session_id or generated_trace_id,
                 trace_id=generated_trace_id,
                 provider=req_provider,
                 model=req_model,
-                force_websearch=force_websearch,
-                websearch_max_results=websearch_max_results,
-                websearch_profile=websearch_profile,
-                temperature=resolved_temperature,
-                top_p=top_p,
-                top_k=top_k,
-                max_output_tokens=max_output_tokens,
-                thinking_budget=resolved_thinking_budget,
-                formatting=resolved_formatting,
+                forwarded_props={
+                    "force_websearch": force_websearch,
+                    "websearch_max_results": websearch_max_results,
+                    "websearch_profile": websearch_profile,
+                    "temperature": resolved_temperature,
+                    "top_p": top_p,
+                    "top_k": top_k,
+                    "max_output_tokens": max_output_tokens,
+                    "thinking_budget": resolved_thinking_budget,
+                    "formatting": resolved_formatting,
+                },
             )
             logger.info(
                 "chat_stream_state_initialized",
-                provider=initial_state.provider,
-                model=initial_state.model,
+                provider=state.provider,
+                model=state.model,
                 trace_id=generated_trace_id,
                 session_id=session_id,
             )
@@ -407,7 +411,7 @@ async def primary_agent_stream_generator(
             agent_task: asyncio.Task | None = None
             result: Optional[Dict[str, Any]] = None
             try:
-                agent_task = asyncio.create_task(run_primary_agent(initial_state))
+                agent_task = asyncio.create_task(run_unified_agent(state))
                 while True:
                     try:
                         result = await asyncio.wait_for(agent_task, timeout=heartbeat_interval)

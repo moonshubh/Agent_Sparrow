@@ -112,6 +112,7 @@ wheels/
 .taskmasterconfig
 .roomodes
 .roo/
+agentsparrow/
 
 # Testing
 .coverage

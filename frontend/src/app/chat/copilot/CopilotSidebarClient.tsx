@@ -378,7 +378,9 @@ export default function CopilotSidebarClient() {
   // ========================================================================
   const [provider] = useState<string>("google");
   const [model] = useState<string>("gemini-2.5-flash");
+  const [memoryEnabled] = useState<boolean>(true);
   const { selected: agentType } = useAgentSelection();
+  const [traceId] = useState<string>(() => `trace-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`);
 
   // ========================================================================
   // Create session on mount
@@ -427,13 +429,16 @@ export default function CopilotSidebarClient() {
   }, []);
 
   // ========================================================================
-  // CopilotKit properties
+  // CopilotKit properties (forwardedProps for AG-UI protocol)
+  // These are passed to the backend in RunAgentInput.forwardedProps
   // ========================================================================
   const copilotProperties = useMemo(() => {
     const props: Record<string, any> = {
       session_id: sessionId,
+      trace_id: traceId,
       provider: provider,
       model: model,
+      use_server_memory: memoryEnabled,
     };
 
     if (agentType !== "auto") {
@@ -441,7 +446,7 @@ export default function CopilotSidebarClient() {
     }
 
     return props;
-  }, [sessionId, provider, model, agentType]);
+  }, [sessionId, traceId, provider, model, memoryEnabled, agentType]);
 
   // ========================================================================
   // Loading state

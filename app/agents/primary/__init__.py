@@ -1,13 +1,13 @@
-"""Primary agent compatibility layer (Phase 1).
+"""Primary agent compatibility layer.
 
-New canonical import path: app.agents.primary
-Temporarily re-exports from app.agents.primary.primary_agent.*
+Legacy agent removed - use unified agent via app.agents.unified instead.
+This module now only provides access to shared components:
+- feedme_knowledge_tool: Knowledge base search
+- reasoning: Reasoning engine (used by log analysis)
+- prompts: Emotion templates (used by log analysis)
 """
 
-try:
-    from app.agents.primary.primary_agent.agent import run_primary_agent  # noqa: F401
-    from app.agents.primary.primary_agent.schemas import PrimaryAgentState  # noqa: F401
-except Exception:  # pragma: no cover
-    pass
+# All primary agent functionality has been migrated to unified agent
+# Only shared utilities remain
 
-__all__ = ["run_primary_agent", "PrimaryAgentState"]
+__all__ = []

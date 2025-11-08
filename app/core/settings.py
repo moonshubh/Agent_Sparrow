@@ -72,8 +72,6 @@ class Settings(BaseSettings):
     enable_grounded_responses: bool = Field(default=True, alias="ENABLE_GROUNDED_RESPONSES")
     primary_agent_min_kb_relevance: float = Field(default=0.65, alias="PRIMARY_AGENT_MIN_KB_RELEVANCE")
     primary_agent_min_kb_results: int = Field(default=1, alias="PRIMARY_AGENT_MIN_KB_RESULTS")
-    reflection_default_provider: Optional[str] = Field(default=None, alias="DEFAULT_REFLECTION_PROVIDER")
-    reflection_default_model: Optional[str] = Field(default=None, alias="DEFAULT_REFLECTION_MODEL")
     checkpointer_enabled: bool = Field(default=True, alias="ENABLE_CHECKPOINTER")
     checkpointer_db_url: Optional[str] = Field(default=None, alias="CHECKPOINTER_DB_URL")
     checkpointer_pool_size: int = Field(default=5, alias="CHECKPOINTER_POOL_SIZE")

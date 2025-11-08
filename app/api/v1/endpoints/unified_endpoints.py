@@ -10,9 +10,10 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from app.agents.primary import run_primary_agent, PrimaryAgentState
-from app.agents.research import get_research_graph
-from app.agents.log_analysis import run_log_analysis_agent, LogSanitizer
+from app.agents.unified.agent_sparrow import run_unified_agent
+from app.agents.orchestration.orchestration.state import GraphState
+from app.agents.unified.tools import log_diagnoser_tool, LogDiagnoserInput
+from app.agents.log_analysis.log_analysis_agent.privacy.sanitizer import LogSanitizer
 from app.api.v1.endpoints.agent_common import (
     filter_system_text,
     get_user_id_for_dev_mode,
@@ -351,18 +352,14 @@ async def unified_agent_stream_generator(request: UnifiedAgentRequest, user_id: 
                             yield emit({'type': 'step', 'data': {'type': 'Analyzing', 'description': 'Analyzing patterns and issues...', 'status': 'in_progress'}})
                         except Exception:
                             pass
-                        initial_state = {
-                            "raw_log_content": request.log_content,
-                            "question": request.message or None,
-                            "trace_id": request.trace_id,
-                            "session_id": session_id,
-                            # Pass through web search flags to agent
-                            "force_websearch": bool(request.force_websearch) if request.force_websearch is not None else None,
-                            "websearch_max_results": request.websearch_max_results,
-                            "websearch_profile": request.websearch_profile,
-                        }
+                        # Use unified agent's log_diagnoser tool
+                        log_input = LogDiagnoserInput(
+                            log_content=request.log_content,
+                            question=request.message or None,
+                            trace_id=request.trace_id or session_id,
+                        )
                         yield emit_comment(heartbeat_comment)
-                        result = await run_log_analysis_agent(initial_state)
+                        result = await log_diagnoser_tool.ainvoke(log_input)
                         yield emit_comment(heartbeat_comment)
                         try:
                             yield emit({'type': 'step', 'data': {'type': 'Parsing', 'description': 'Parsing log entries...', 'status': 'completed'}})
@@ -375,7 +372,13 @@ async def unified_agent_stream_generator(request: UnifiedAgentRequest, user_id: 
                     yield emit({"type": "error", "errorText": "Log analysis failed while processing the file. Please try again after a short break.", "agent_type": "log_analysis", "trace_id": request.trace_id})
                     return
 
-                final_report = result.get('final_report') if isinstance(result, dict) else None
+                # Handle unified agent tool response format
+                if isinstance(result, dict) and "error" in result:
+                    yield emit({"type": "error", "errorText": result.get("message", "Log analysis failed"), "agent_type": "log_analysis", "trace_id": request.trace_id})
+                    return
+                
+                # Unified agent tool returns the analysis output directly
+                final_report = result if isinstance(result, dict) else None
                 if final_report:
                     if hasattr(final_report, 'overall_summary'):
                         summary = final_report.overall_summary
@@ -496,11 +499,30 @@ async def unified_agent_stream_generator(request: UnifiedAgentRequest, user_id: 
                     await log_analysis_rate_limiter.release_concurrent_slot(resolved_user_id)
 
         elif agent_type == "researcher":
-            research_graph = get_research_graph()
-            initial_state = {"query": request.message, "urls": [], "documents": [], "answer": None, "citations": None}
-            result = await research_graph.ainvoke(initial_state)
-            answer = result.get("answer", "No answer provided.")
-            citations = result.get("citations", [])
+            # Use unified agent with research subagent
+            from langchain_core.messages import HumanMessage, AIMessage
+            state = GraphState(
+                messages=[HumanMessage(content=f"Research and provide a comprehensive answer with citations: {request.message}")],
+                session_id=request.session_id or request.trace_id or "research-default",
+                forwarded_props={
+                    "agent_type": "research",
+                    "force_websearch": True,
+                },
+            )
+            result = await run_unified_agent(state)
+            
+            # Extract answer and citations from unified agent response
+            result_messages = result.get("messages", [])
+            answer = "No answer provided."
+            citations = []
+            
+            for msg in reversed(result_messages):
+                if isinstance(msg, AIMessage):
+                    answer = str(msg.content) if msg.content else answer
+                    if hasattr(msg, "additional_kwargs") and isinstance(msg.additional_kwargs, dict):
+                        metadata = msg.additional_kwargs.get("messageMetadata", {})
+                        citations = metadata.get("citations", [])
+                    break
             if citations:
                 yield emit({
                     "type": "message-metadata",
@@ -588,25 +610,28 @@ async def unified_agent_stream_generator(request: UnifiedAgentRequest, user_id: 
                     resolved_formatting = resolved_formatting.strip().lower()
                 if resolved_formatting not in ALLOWED_FORMATTING:
                     resolved_formatting = "natural"  # Safe default
-                initial_state = PrimaryAgentState(
+                # Use unified agent with GraphState
+                state = GraphState(
                     messages=messages,
-                    session_id=request.session_id,
+                    session_id=request.session_id or request.trace_id or "default",
                     provider=request.provider,
                     model=request.model,
-                    force_websearch=request.force_websearch,
-                    websearch_max_results=request.websearch_max_results,
-                    websearch_profile=request.websearch_profile,
-                    temperature=resolved_temperature,
-                    top_p=request.top_p,
-                    top_k=request.top_k,
-                    max_output_tokens=request.max_output_tokens,
-                    thinking_budget=resolved_thinking_budget,
-                    formatting=resolved_formatting,
+                    forwarded_props={
+                        "force_websearch": request.force_websearch,
+                        "websearch_max_results": request.websearch_max_results,
+                        "websearch_profile": request.websearch_profile,
+                        "temperature": resolved_temperature,
+                        "top_p": request.top_p,
+                        "top_k": request.top_k,
+                        "max_output_tokens": request.max_output_tokens,
+                        "thinking_budget": resolved_thinking_budget,
+                        "formatting": resolved_formatting,
+                    },
                 )
                 stream_id = f"assistant-{uuid.uuid4().hex}"
                 text_started = False
                 try:
-                    agent_task = asyncio.create_task(run_primary_agent(initial_state))
+                    agent_task = asyncio.create_task(run_unified_agent(state))
                     result = None
                     while True:
                         try:

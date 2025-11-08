@@ -6,16 +6,25 @@ from dataclasses import dataclass
 from typing import Any, Dict, Optional
 
 from deepagents import create_deep_agent
-from deepagents.middleware import (
-    SubAgentMiddleware,
-    SummarizationMiddleware,
-    TodoListMiddleware,
-    PatchToolCallsMiddleware,
-)
 from langchain.chat_models import init_chat_model
 from langchain_core.messages import AIMessage, BaseMessage
 from langgraph.config import RunnableConfig, get_stream_writer
 from loguru import logger
+
+# Import middleware classes from correct sources
+try:
+    # LangChain provides TodoList and Summarization middleware
+    from langchain.agents.middleware import TodoListMiddleware
+    from langchain.agents.middleware.summarization import SummarizationMiddleware
+
+    # DeepAgents provides SubAgent and PatchToolCalls middleware
+    from deepagents.middleware.subagents import SubAgentMiddleware
+    from deepagents.middleware.patch_tool_calls import PatchToolCallsMiddleware
+
+    MIDDLEWARE_AVAILABLE = True
+except ImportError as e:
+    logger.warning(f"Middleware not available ({e}) - agent will run without middleware")
+    MIDDLEWARE_AVAILABLE = False
 
 from app.agents.orchestration.orchestration.state import GraphState
 from app.core.settings import settings
@@ -61,46 +70,51 @@ def _build_deep_agent(state: GraphState):
     tools = get_registered_tools()
     subagents = get_subagent_specs()
 
-    # Build comprehensive middleware stack
-    middleware = [
-        # TodoListMiddleware for task tracking
-        TodoListMiddleware(),
+    # Build comprehensive middleware stack only if available
+    agent_kwargs = {
+        "model": chat_model,
+        "tools": tools,
+        "subagents": subagents,
+        "system_prompt": SYSTEM_PROMPT,
+    }
 
-        # SubAgentMiddleware with its own middleware stack for subagents
-        SubAgentMiddleware(
-            default_model=chat_model,
-            default_tools=tools,
-            subagents=subagents,
-            default_middleware=[
-                TodoListMiddleware(),
-                SummarizationMiddleware(
-                    model=chat_model,
-                    max_tokens_before_summary=170000,
-                    messages_to_keep=6,
-                ),
-                PatchToolCallsMiddleware(),
-            ],
-            general_purpose_agent=False,  # We have specific subagents
-        ),
+    if MIDDLEWARE_AVAILABLE:
+        middleware = [
+            # TodoListMiddleware for task tracking
+            TodoListMiddleware(),
 
-        # SummarizationMiddleware for long conversations
-        SummarizationMiddleware(
-            model=chat_model,
-            max_tokens_before_summary=170000,  # ~170K tokens before summarizing
-            messages_to_keep=6,  # Keep last 6 messages for context
-        ),
+            # SubAgentMiddleware with its own middleware stack for subagents
+            SubAgentMiddleware(
+                default_model=chat_model,
+                default_tools=tools,
+                subagents=subagents,
+                default_middleware=[
+                    TodoListMiddleware(),
+                    SummarizationMiddleware(
+                        model=chat_model,
+                        max_tokens_before_summary=170000,
+                        messages_to_keep=6,
+                    ),
+                    PatchToolCallsMiddleware(),
+                ],
+                general_purpose_agent=False,  # We have specific subagents
+            ),
 
-        # PatchToolCallsMiddleware to fix any tool call formatting issues
-        PatchToolCallsMiddleware(),
-    ]
+            # SummarizationMiddleware for long conversations
+            SummarizationMiddleware(
+                model=chat_model,
+                max_tokens_before_summary=170000,  # ~170K tokens before summarizing
+                messages_to_keep=6,  # Keep last 6 messages for context
+            ),
 
-    agent = create_deep_agent(
-        model=chat_model,
-        tools=tools,
-        subagents=subagents,
-        system_prompt=SYSTEM_PROMPT,
-        middleware=middleware,
-    )
+            # PatchToolCallsMiddleware to fix any tool call formatting issues
+            PatchToolCallsMiddleware(),
+        ]
+        agent_kwargs["middleware"] = middleware
+    else:
+        logger.warning("Running unified agent without middleware - functionality may be limited")
+
+    agent = create_deep_agent(**agent_kwargs)
 
     # Increase recursion limit for complex tasks
     return agent.with_config({"recursion_limit": 1000})

@@ -42,9 +42,8 @@ from app.api.v1.endpoints import text_approval_endpoints  # Text approval workfl
 from app.api.v1.endpoints import chat_session_endpoints  # Chat session persistence
 from app.api.v1.endpoints import rate_limit_endpoints  # Rate limiting monitoring
 from app.api.v1.endpoints import feedme_intelligence  # FeedMe AI intelligence endpoints
-from app.api.v1.endpoints import advanced_agent_endpoints  # Advanced agent reasoning and troubleshooting
 from app.api.v1.endpoints import agent_interrupt_endpoints  # HITL interrupt controls
-from app.api.v1.endpoints import secure_log_analysis  # Secure Log Analysis endpoints
+# from app.api.v1.endpoints import secure_log_analysis  # Secure Log Analysis endpoints - Disabled due to reasoning engine removal
 from app.api.v1.endpoints import (
     global_knowledge_observability,  # Global knowledge observability APIs
     global_knowledge_feedback,  # Global knowledge submission APIs
@@ -210,12 +209,10 @@ app.include_router(feedme_intelligence.router, prefix="/api/v1", tags=["FeedMe I
 app.include_router(chat_session_endpoints.router, prefix="/api/v1", tags=["Chat Sessions"])
 # Register Rate Limiting routes
 app.include_router(rate_limit_endpoints.router, prefix="/api/v1", tags=["Rate Limiting"])
-# Register Advanced Agent routes (reasoning and troubleshooting)
-app.include_router(advanced_agent_endpoints.router, prefix="/api/v1", tags=["Advanced Agent"])
 # Register Agent Interrupt control routes
 app.include_router(agent_interrupt_endpoints.router, prefix="/api/v1", tags=["Agent Interrupts"])
 # Register Secure Log Analysis routes
-app.include_router(secure_log_analysis.router, prefix="/api/v1", tags=["Secure Log Analysis"])
+# app.include_router(secure_log_analysis.router, prefix="/api/v1", tags=["Secure Log Analysis"])  # Disabled due to reasoning engine removal
 # Register Zendesk integration routes
 app.include_router(zendesk_router, prefix="/api/v1", tags=["Zendesk"])
 app.include_router(zendesk_admin_router, prefix="/api/v1", tags=["Zendesk Admin"])

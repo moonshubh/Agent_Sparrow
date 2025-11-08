@@ -5,28 +5,12 @@ Phase 1 re-organization: expose stable imports while the codebase migrates
 from app.agents.* to app.agents.*. No behavior changes.
 """
 
-# Primary agent
+# Legacy agent exports removed - all endpoints now use unified agent
+# Keeping simplified schemas for backward compatibility with unified agent tools
 try:
-    from app.agents.primary.primary_agent.agent import run_primary_agent as run_primary_agent  # noqa: F401
-    from app.agents.primary.primary_agent.schemas import PrimaryAgentState as PrimaryAgentState  # noqa: F401
-except Exception:  # pragma: no cover
-    pass
-
-# Log analysis agent
-try:
-    from app.agents.log_analysis.log_analysis_agent.agent import run_log_analysis_agent as run_log_analysis_agent  # noqa: F401
     from app.agents.log_analysis.log_analysis_agent.simplified_schemas import (
         SimplifiedLogAnalysisOutput as SimplifiedLogAnalysisOutput,  # noqa: F401
         SimplifiedAgentState as SimplifiedAgentState,  # noqa: F401
-    )
-except Exception:  # pragma: no cover
-    pass
-
-# Research agent
-try:
-    from app.agents.research.research_agent.research_agent import (
-        get_research_graph as get_research_graph,  # noqa: F401
-        ResearchState as ResearchState,  # noqa: F401
     )
 except Exception:  # pragma: no cover
     pass
@@ -39,13 +23,9 @@ except Exception:  # pragma: no cover
     pass
 
 __all__ = [
-    "run_primary_agent",
-    "PrimaryAgentState",
-    "run_log_analysis_agent",
+    # Legacy exports removed - use unified agent via app/agents/unified/
     "SimplifiedLogAnalysisOutput",
     "SimplifiedAgentState",
-    "get_research_graph",
-    "ResearchState",
     "agent_graph",
     "GraphState",
 ]

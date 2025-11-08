@@ -1,30 +1,24 @@
 """
-Agent Sparrow - Advanced Reasoning Framework
+Agent Sparrow - Reasoning Schemas
 
-This module provides sophisticated reasoning capabilities for Agent Sparrow,
-implementing chain-of-thought processing, multi-step problem solving, and
-enhanced tool decision logic with reasoning transparency.
+This module provides data structures for reasoning capabilities.
+The implementation has been simplified to leverage LLM native reasoning.
 """
 
-from .reasoning_engine import ReasoningEngine, ReasoningConfig
 from .schemas import (
     ReasoningState,
     ReasoningStep,
     ProblemSolvingPhase,
     ToolDecisionReasoning,
-    QualityAssessment
+    QualityAssessment,
+    ReasoningConfig
 )
-from .problem_solver import ProblemSolvingFramework
-from .tool_intelligence import ToolIntelligence
 
 __all__ = [
-    "ReasoningEngine",
-    "ReasoningConfig", 
+    "ReasoningConfig",
     "ReasoningState",
     "ReasoningStep",
     "ProblemSolvingPhase",
     "ToolDecisionReasoning",
-    "QualityAssessment",
-    "ProblemSolvingFramework",
-    "ToolIntelligence"
+    "QualityAssessment"
 ]

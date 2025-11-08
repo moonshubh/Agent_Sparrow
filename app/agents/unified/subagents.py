@@ -17,14 +17,16 @@ from .tools import (
 
 # Import middleware classes for per-subagent configuration
 try:
-    from deepagents.middleware import (
-        SummarizationMiddleware,
-        TodoListMiddleware,
-        PatchToolCallsMiddleware,
-    )
+    # LangChain provides TodoList and Summarization middleware
+    from langchain.agents.middleware import TodoListMiddleware
+    from langchain.agents.middleware.summarization import SummarizationMiddleware
+
+    # DeepAgents provides PatchToolCalls middleware
+    from deepagents.middleware.patch_tool_calls import PatchToolCallsMiddleware
+
     MIDDLEWARE_AVAILABLE = True
 except ImportError:
-    # Fallback if deepagents middleware not available
+    # Fallback if middleware not available
     MIDDLEWARE_AVAILABLE = False
 
 

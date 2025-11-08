@@ -3,34 +3,44 @@ from __future__ import annotations
 from typing import Dict, List, Optional
 
 
-# Phase 5: Static agent metadata for discovery and simple UI consumption.
-# Keep lightweight and explicit; avoid dynamic registry complexity.
+# Unified Agent System Metadata
+# All agents are now part of the unified agent system with DeepAgents.
+# Legacy agent IDs are maintained for backward compatibility with frontend.
 
 AGENTS: List[Dict[str, object]] = [
     {
+        "id": "unified",
+        "destination": "unified_agent",
+        "name": "Agent Sparrow (Unified)",
+        "description": "Unified multi-agent system with research, log analysis, and conversational capabilities.",
+        "tools": ["kb_search", "web_search", "firecrawl_fetch", "log_diagnoser"],
+        "aliases": ["primary", "primary_agent", "sparrow"],
+        "icon": "🦅",
+    },
+    {
         "id": "primary",
-        "destination": "primary_agent",
+        "destination": "unified_agent",  # Routes to unified agent
         "name": "Primary Support",
-        "description": "General queries and Mailbird knowledge base assistance.",
-        "tools": ["mailbird_kb_search", "tavily_web_search"],
+        "description": "General queries and Mailbird knowledge base assistance (via unified agent).",
+        "tools": ["kb_search", "web_search"],
         "aliases": ["primary_agent"],
         "icon": "🎯",
     },
     {
         "id": "log_analysis",
-        "destination": "log_analyst",
+        "destination": "unified_agent",  # Routes to unified agent's log-diagnoser subagent
         "name": "Log Analysis",
-        "description": "Diagnose issues from logs, errors, and performance traces.",
-        "tools": [],
+        "description": "Diagnose issues from logs, errors, and performance traces (via unified agent).",
+        "tools": ["log_diagnoser"],
         "aliases": ["log_analyst"],
         "icon": "🧪",
     },
     {
         "id": "research",
-        "destination": "researcher",
+        "destination": "unified_agent",  # Routes to unified agent's research subagent
         "name": "Research",
-        "description": "Web research, sources gathering, and comparisons.",
-        "tools": ["tavily_search", "firecrawl_scraper"],
+        "description": "Web research, sources gathering, and comparisons (via unified agent).",
+        "tools": ["web_search", "firecrawl_fetch", "kb_search"],
         "aliases": ["researcher"],
         "icon": "🧭",
     },

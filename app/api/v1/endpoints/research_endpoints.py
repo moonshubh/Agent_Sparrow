@@ -8,7 +8,11 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from app.agents.research import get_research_graph, ResearchState
+from app.agents.unified.agent_sparrow import run_unified_agent
+from app.agents.orchestration.orchestration.state import GraphState
+from app.agents.unified.tools import web_search_tool, kb_search_tool, firecrawl_fetch_tool
+from app.agents.unified.tools import WebSearchInput
+from langchain_core.messages import HumanMessage, AIMessage
 from app.core.transport.sse import format_sse_data
 from app.core.user_context import create_user_context_from_user_id, user_context_scope
 
@@ -55,18 +59,32 @@ async def research_query(request: ResearchRequest, user_id: str = Depends(get_cu
         if not tavily_key:
             raise HTTPException(status_code=400, detail="Please configure your Tavily API key in Settings to use web research functionality.")
         async with user_context_scope(user_context):
-            research_graph = get_research_graph()
-            initial_graph_state: ResearchState = {
-                "query": request.query,
-                "urls": [],
-                "documents": [],
-                "answer": None,
-                "citations": None,
-            }
-            result_state = await research_graph.ainvoke(initial_graph_state)
-
-        answer = result_state.get("answer", "No answer provided.")
-        citations = result_state.get("citations", [])
+            # Use unified agent with research-focused query
+            # The unified agent will use its research subagent which has web_search, kb_search, and firecrawl tools
+            state = GraphState(
+                messages=[HumanMessage(content=f"Research and provide a comprehensive answer with citations: {request.query}")],
+                session_id=f"research-{request.trace_id or 'default'}",
+                forwarded_props={
+                    "agent_type": "research",
+                    "force_websearch": True,
+                },
+            )
+            result = await run_unified_agent(state)
+            
+            # Extract answer from unified agent response
+            result_messages = result.get("messages", [])
+            answer = "No answer provided."
+            citations = []
+            
+            # Find the final AI message
+            for msg in reversed(result_messages):
+                if isinstance(msg, AIMessage):
+                    answer = str(msg.content) if msg.content else answer
+                    # Extract citations from message metadata if available
+                    if hasattr(msg, "additional_kwargs") and isinstance(msg.additional_kwargs, dict):
+                        metadata = msg.additional_kwargs.get("messageMetadata", {})
+                        citations = metadata.get("citations", [])
+                    break
 
         transformed_results: List[ResearchItem] = []
         if citations:
@@ -94,12 +112,35 @@ async def research_query(request: ResearchRequest, user_id: str = Depends(get_cu
 
 async def research_agent_stream_generator(query: str, trace_id: str | None = None) -> AsyncIterable[str]:
     try:
-        research_graph = get_research_graph()
         yield format_sse_data({'type': 'step', 'data': {'type': 'Starting Research', 'description': 'Initializing research query...', 'status': 'in-progress'}})
-        initial_state: ResearchState = {"query": query, "urls": [], "documents": [], "answer": None, "citations": None}
-        result = await research_graph.ainvoke(initial_state)
+        
+        # Use unified agent with research-focused query
+        state = GraphState(
+            messages=[HumanMessage(content=f"Research and provide a comprehensive answer with citations: {query}")],
+            session_id=f"research-{trace_id or 'default'}",
+            forwarded_props={
+                "agent_type": "research",
+                "force_websearch": True,
+            },
+        )
+        result = await run_unified_agent(state)
+        
         yield format_sse_data({'type': 'step', 'data': {'type': 'Synthesize', 'description': 'Synthesizing answer from sources...', 'status': 'complete'}})
-        final_payload = {'type': 'result', 'data': {'answer': result.get('answer', 'No answer provided.'), 'citations': result.get('citations', []), 'trace_id': trace_id}}
+        
+        # Extract answer and citations from unified agent response
+        result_messages = result.get("messages", [])
+        answer = "No answer provided."
+        citations = []
+        
+        for msg in reversed(result_messages):
+            if isinstance(msg, AIMessage):
+                answer = str(msg.content) if msg.content else answer
+                if hasattr(msg, "additional_kwargs") and isinstance(msg.additional_kwargs, dict):
+                    metadata = msg.additional_kwargs.get("messageMetadata", {})
+                    citations = metadata.get("citations", [])
+                break
+        
+        final_payload = {'type': 'result', 'data': {'answer': answer, 'citations': citations, 'trace_id': trace_id}}
         yield format_sse_data(final_payload)
         yield format_sse_data({'type': 'done'})
     except Exception as e:
@@ -107,8 +148,6 @@ async def research_agent_stream_generator(query: str, trace_id: str | None = Non
         err_payload = {'type': 'error', 'data': {'message': f'Error running research: {str(e)}', 'trace_id': trace_id}}
         yield format_sse_data(err_payload)
         yield format_sse_data({'type': 'step', 'data': {'type': 'Research Complete', 'description': 'Research analysis finished', 'status': 'completed'}})
-        final_message = {"id": "research_result", "type": "agent", "content": result.get("answer", "No answer provided."), "timestamp": "now", "agentType": "research", "citations": result.get("citations", []), "feedback": None, "trace_id": trace_id}
-        yield format_sse_data({'type': 'message', 'data': final_message})
         yield format_sse_data({'type': 'step', 'data': {"type": "Error", "description": f"Research failed: {str(e)}", "status": "error"}})
 
 

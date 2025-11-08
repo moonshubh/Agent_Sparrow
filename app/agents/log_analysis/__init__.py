@@ -1,11 +1,15 @@
-"""Log analysis agent compatibility layer (Phase 1).
+"""Log analysis agent compatibility layer.
 
-New canonical import path: app.agents.log_analysis
-Temporarily re-exports from app.agents.log_analysis.log_analysis_agent.*
+Legacy agent router removed - use unified agent's log_diagnoser_tool instead.
+This module provides access to:
+- simplified_agent: Simplified log analysis (used by unified agent)
+- simplified_schemas: Schema definitions
+- privacy: Log sanitization utilities
+- security: Security validation
+- comprehensive_agent: Full-featured log analysis (used by secure endpoints)
 """
 
 try:
-    from app.agents.log_analysis.log_analysis_agent.agent import run_log_analysis_agent  # noqa: F401
     from app.agents.log_analysis.log_analysis_agent.simplified_schemas import (
         SimplifiedLogAnalysisOutput,  # noqa: F401
         SimplifiedAgentState,  # noqa: F401
@@ -18,7 +22,6 @@ except Exception:  # pragma: no cover
     pass
 
 __all__ = [
-    "run_log_analysis_agent",
     "SimplifiedLogAnalysisOutput",
     "SimplifiedAgentState",
     "LogSanitizer",

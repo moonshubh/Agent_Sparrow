@@ -7,11 +7,14 @@ Exposes `/api/v1/copilot/stream` as an auth-protected POST streaming endpoint
 compatible with CopilotKit's runtime client. Uses the official `ag_ui_langgraph`
 adapter to wrap our compiled LangGraph graph.
 
-Phase 1 Enhancement:
-- Context merge: Extracts properties (session_id, trace_id, provider, model, agent_type)
-  and merges them into both state dict and config.configurable for LangGraph execution
-- Attachment validation: Validates attachments using Attachment model with size/MIME checks
-- Comprehensive logging: Logs normalized properties, attachment processing, trace propagation
+Phase 4 Implementation (AG-UI Protocol):
+- Uses LangGraphAgent wrapper from ag_ui_langgraph for proper AG-UI protocol support
+- Integrates EventEncoder from ag_ui.encoder for proper SSE formatting
+- Preserves all Phase 1 enhancements:
+  - Context merge: Extracts properties (session_id, trace_id, provider, model, agent_type)
+    and merges them into both state dict and config.configurable for LangGraph execution
+  - Attachment validation: Validates attachments using Attachment model with size/MIME checks
+  - Comprehensive logging: Logs normalized properties, attachment processing, trace propagation
 """
 
 import json
@@ -24,6 +27,11 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Query
 from fastapi.responses import JSONResponse, StreamingResponse
 from opentelemetry import trace
 from opentelemetry.trace import Status, StatusCode
+
+# AG-UI Protocol imports
+from ag_ui_langgraph import LangGraphAgent
+from ag_ui.core.types import RunAgentInput
+from ag_ui.encoder import EventEncoder
 
 router = APIRouter()
 
@@ -40,12 +48,29 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, System
 
 from app.agents.orchestration.orchestration.graph import app as compiled_graph
 
-# Import for context merge and attachment validation  
+# Import for context merge and attachment validation
 from app.agents.orchestration.orchestration.state import GraphState, Attachment
 from app.core.settings import get_settings
 
 # OpenTelemetry tracer for this module
 tracer = trace.get_tracer(__name__)
+
+# Initialize AG-UI LangGraph agent wrapper
+# This wraps our compiled graph with AG-UI protocol support
+_langgraph_agent: Optional[LangGraphAgent] = None
+
+def get_langgraph_agent() -> LangGraphAgent:
+    """Get or create the AG-UI LangGraph agent wrapper."""
+    global _langgraph_agent
+    if _langgraph_agent is None:
+        if compiled_graph is None:
+            raise RuntimeError("Compiled graph not available")
+        _langgraph_agent = LangGraphAgent(
+            name="sparrow",
+            graph=compiled_graph,
+            description="Agent Sparrow - Multi-agent AI system with research, log analysis, and conversational capabilities",
+        )
+    return _langgraph_agent
 
 
 def _coerce_text(content: Any) -> str:
@@ -349,57 +374,56 @@ def _merge_copilot_context(
 
 
 @router.post("/copilot/stream")
-async def copilot_stream(request: Request, user_id: str = Depends(get_current_user_id)):
-    """Auth-protected CopilotKit streaming endpoint.
+async def copilot_stream(
+    input_data: RunAgentInput,
+    request: Request,
+    user_id: str = Depends(get_current_user_id)
+):
+    """Auth-protected CopilotKit streaming endpoint with AG-UI protocol.
 
-    Accepts raw JSON from CopilotKit runtime clients, normalizes it into the unified
-    graph state, and streams LangGraph output as simple SSE events.
+    Phase 4 Implementation:
+    - Accepts AG-UI RunAgentInput for proper protocol compliance
+    - Applies custom context merge and attachment validation (Phase 1)
+    - Uses LangGraphAgent.run() for AG-UI protocol streaming
+    - Uses EventEncoder for proper SSE event formatting
+    - Preserves authentication and telemetry
+
+    Args:
+        input_data: AG-UI protocol RunAgentInput with messages, state, tools, etc.
+        request: FastAPI request for headers and telemetry
+        user_id: Authenticated user ID from dependency
+
+    Returns:
+        StreamingResponse with AG-UI protocol formatted SSE events
     """
     with tracer.start_as_current_span("copilot.stream") as span:
-        if compiled_graph is None:
+        try:
+            agent = get_langgraph_agent()
+        except RuntimeError as e:
             span.set_status(Status(StatusCode.ERROR, "graph_unavailable"))
             return JSONResponse(
                 status_code=501,
                 content={
                     "error": "graph_unavailable",
-                    "detail": "Unified LangGraph application is not compiled.",
+                    "detail": str(e),
                 },
             )
 
-        try:
-            raw: Dict[str, Any] = await request.json()
-        except Exception as e:  # pragma: no cover
-            logging.exception("Failed to parse JSON body for /copilot/stream")
-            span.set_status(Status(StatusCode.ERROR, "invalid_json"))
-            return JSONResponse(status_code=400, content={"error": "invalid_json", "detail": str(e)})
+        # Extract forwardedProps from AG-UI RunAgentInput
+        # These contain custom properties like session_id, trace_id, provider, model, attachments
+        forwarded: Dict[str, Any] = input_data.forwarded_props if input_data.forwarded_props else {}
 
-        # Unwrap common wrappers
-        # - GraphQL-style { query, variables: { input|data } }
-        # - Runtime client style { data: { ...payload } }
-        try:
-            if isinstance(raw, dict):
-                if "query" in raw and isinstance(raw.get("variables"), dict):
-                    gql_vars = raw.get("variables") or {}
-                    gql_input = gql_vars.get("input") or gql_vars.get("data") or {}
-                    if isinstance(gql_input, dict) and gql_input:
-                        raw = gql_input
-                elif "data" in raw and isinstance(raw.get("data"), dict):
-                    raw = raw.get("data")
-        except Exception:
-            pass
-
-        # Normalize common field variants from different CopilotKit clients
-        forwarded: Dict[str, Any] = (
-            raw.get("forwardedProps")
-            or raw.get("forwardedProperties")
-            or raw.get("properties")
-            or {}
-        )
+        # Extract thread and run IDs from AG-UI input
+        thread_id = input_data.thread_id
+        run_id = input_data.run_id
 
         # Comprehensive logging: Log incoming properties (Phase 1 requirement)
         logging.info(
             "copilot_stream_request_received",
             extra={
+                "thread_id": thread_id,
+                "run_id": run_id,
+                "message_count": len(input_data.messages) if input_data.messages else 0,
                 "has_forwarded_props": bool(forwarded),
                 "forwarded_keys": list(forwarded.keys()) if isinstance(forwarded, dict) else [],
                 "session_id_present": "session_id" in forwarded,
@@ -409,17 +433,11 @@ async def copilot_stream(request: Request, user_id: str = Depends(get_current_us
             },
         )
 
-        thread_id: Optional[str] = raw.get("threadId") or forwarded.get("session_id")
-        run_id: str = (
-            raw.get("runId")
-            or forwarded.get("trace_id")
-            or str(uuid4())
-        )
-
         # Populate span attributes with non-PII diagnostics
         try:
-            span.set_attribute("copilot.thread_id_present", bool(thread_id))
-            span.set_attribute("copilot.run_id_present", bool(run_id))
+            span.set_attribute("copilot.thread_id", thread_id)
+            span.set_attribute("copilot.run_id", run_id)
+            span.set_attribute("copilot.message_count", len(input_data.messages) if input_data.messages else 0)
             if isinstance(forwarded, dict):
                 span.set_attribute("copilot.session_id", str(forwarded.get("session_id") or ""))
                 span.set_attribute("copilot.trace_id", str(forwarded.get("trace_id") or ""))
@@ -432,68 +450,18 @@ async def copilot_stream(request: Request, user_id: str = Depends(get_current_us
             # Defensive: never break request flow due to telemetry
             pass
 
-        messages_in = raw.get("messages") or []
-        messages: List[Dict[str, Any]] = []
-        try:
-            for m in messages_in:
-                if not isinstance(m, dict):
-                    continue
-                mid = str(m.get("id") or uuid4())
-                # GraphQL-like input: { textMessage: { content, role, ... } }
-                if "textMessage" in m and isinstance(m["textMessage"], dict):
-                    tm = m["textMessage"]
-                    role = str(tm.get("role", "user")).lower()
-                    content = tm.get("content", "")
-                    messages.append({"id": mid, "role": role, "content": content})
-                    continue
-                # AG-UI style already: { role, content }
-                if "role" in m and "content" in m:
-                    role = str(m.get("role", "user")).lower()
-                    content = m.get("content", "")
-                    messages.append({"id": mid, "role": role, "content": content})
-                    continue
-                # Image message (best-effort)
-                if "imageMessage" in m and isinstance(m["imageMessage"], dict):
-                    im = m["imageMessage"]
-                    role = str(im.get("role", "user")).lower()
-                    messages.append({
-                        "id": mid,
-                        "role": role,
-                        "content": "",
-                        "image": {
-                            "format": im.get("format", "png"),
-                            "bytes": im.get("bytes", ""),
-                        }
-                    })
-                    continue
-                # Fallback: ignore unknown shapes
-        except Exception:
-            # keep messages empty, agent may still handle state-only inputs
-            pass
-
-        # Build candidate payload variants to satisfy different SDK expectations
-        # Choose best messages representation
-        effective_messages = messages if messages else messages_in
-
-        base: Dict[str, Any] = {
-            **raw,
-            "messages": effective_messages,
-            "threadId": thread_id or str(uuid4()),
-            "runId": run_id,
-        }
-        # Remove alternates to control variants explicitly
-        base.pop("forwardedProps", None)
-        base.pop("forwardedProperties", None)
-        base.pop("properties", None)
-
-        # Ensure optional fields exist
-        base.setdefault("state", {})
-        base.setdefault("tools", [])
-        base.setdefault("context", [])
-
         # Phase 1: Merge CopilotKit context into state and config
         # This ensures feature parity with GraphQL endpoint (SparrowLangGraphAgent)
-        state_dict: Dict[str, Any] = base["state"]
+        # Start with state from input_data (may be dict or None)
+        state_dict: Dict[str, Any] = {}
+        if input_data.state:
+            if isinstance(input_data.state, dict):
+                state_dict = dict(input_data.state)
+            elif hasattr(input_data.state, 'model_dump'):
+                state_dict = input_data.state.model_dump()
+            elif hasattr(input_data.state, 'dict'):
+                state_dict = input_data.state.dict()
+
         config_dict: Dict[str, Any] = {"configurable": {}}
 
         # Extract attachments from forwarded props and remove to avoid duplication
@@ -525,12 +493,25 @@ async def copilot_stream(request: Request, user_id: str = Depends(get_current_us
             )
 
         configurable = config_dict.setdefault("configurable", {})
-        configurable.setdefault("thread_id", base["threadId"])
+        configurable.setdefault("thread_id", thread_id)
         configurable.setdefault("run_id", run_id)
 
-        messages_payload = base.get("messages") or state_dict.get("messages") or []
+        # Convert AG-UI messages to LangChain messages
+        # AG-UI RunAgentInput already has properly typed messages, convert them to LangChain format
+        messages_payload = []
+        if input_data.messages:
+            for msg in input_data.messages:
+                # Convert AG-UI message model to dict for _normalize_messages
+                if hasattr(msg, 'model_dump'):
+                    messages_payload.append(msg.model_dump())
+                elif hasattr(msg, 'dict'):
+                    messages_payload.append(msg.dict())
+                elif isinstance(msg, dict):
+                    messages_payload.append(msg)
+
         normalized_messages = _normalize_messages(messages_payload)
 
+        # Create enriched graph state with merged context
         graph_state = {
             **state_dict,
             "messages": normalized_messages,
@@ -538,7 +519,7 @@ async def copilot_stream(request: Request, user_id: str = Depends(get_current_us
             "scratchpad": state_dict.get("scratchpad") or {},
         }
 
-        graph_state.setdefault("session_id", str(configurable.get("session_id") or base["threadId"]))
+        graph_state.setdefault("session_id", str(configurable.get("session_id") or thread_id))
         graph_state.setdefault("trace_id", str(configurable.get("trace_id") or run_id))
         graph_state.setdefault("attachments", state_dict.get("attachments") or [])
         graph_state.setdefault("use_server_memory", configurable.get("use_server_memory", False))
@@ -552,18 +533,24 @@ async def copilot_stream(request: Request, user_id: str = Depends(get_current_us
             },
         )
 
-        if compiled_graph is None:
-            span.set_status(Status(StatusCode.ERROR, "graph_not_available"))
-            return JSONResponse(
-                status_code=503,
-                content={
-                    "error": "graph_unavailable",
-                    "detail": "Unified graph is not compiled",
-                },
-            )
+        # Create enriched RunAgentInput with merged context
+        # This preserves all AG-UI protocol fields while adding our custom state
+        enriched_input = RunAgentInput(
+            thread_id=thread_id,
+            run_id=run_id,
+            state=graph_state,  # Enriched state with context merge
+            messages=input_data.messages,
+            tools=input_data.tools if input_data.tools else [],
+            context=input_data.context if input_data.context else [],
+            forwarded_props=forwarded_without_attachments,  # Pass forwardedProps without attachments
+        )
+
+        # Get Accept header for proper event encoding
+        accept_header = request.headers.get("accept")
+        encoder = EventEncoder(accept=accept_header)
 
         async def event_generator():
-            final_state: Optional[Dict[str, Any]] = None
+            """Stream AG-UI protocol events from LangGraphAgent."""
             with tracer.start_as_current_span("copilot.stream.run") as run_span:
                 cfg = config_dict.get("configurable", {})
                 run_span.set_attribute("copilot.session_id", str(cfg.get("session_id") or ""))
@@ -572,92 +559,58 @@ async def copilot_stream(request: Request, user_id: str = Depends(get_current_us
                 run_span.set_attribute("copilot.model", str(cfg.get("model") or ""))
 
                 try:
-                    async for event in compiled_graph.astream_events(graph_state, config=config_dict):
-                        event_name = event.get("event")
-                        data = event.get("data", {})
-                        if event_name == "on_chat_model_stream":
-                            delta = _extract_chunk_text(data.get("chunk"))
-                            if delta:
-                                yield _encode_sse(
-                                    {
-                                        "type": "assistant-delta",
-                                        "threadId": graph_state.get("session_id"),
-                                        "runId": run_id,
-                                        "delta": delta,
-                                    }
-                                )
-                        elif event_name in {"on_chain_end", "on_graph_end"}:
-                            output = data.get("output")
-                            if isinstance(output, dict):
-                                final_state = output
+                    # Stream events from AG-UI LangGraphAgent
+                    # The agent.run() method returns properly formatted AG-UI protocol events
+                    async for event in agent.run(enriched_input):
+                        # Encode event using AG-UI EventEncoder for proper SSE formatting
+                        yield encoder.encode(event)
+
                     run_span.set_status(Status(StatusCode.OK))
                 except Exception as exc:  # pragma: no cover
                     run_span.record_exception(exc)
                     run_span.set_status(Status(StatusCode.ERROR, "agent_run_failed"))
+                    logging.error(f"Agent run failed: {str(exc)}", exc_info=True)
                     raise
 
-            if final_state is None:
-                final_state = await compiled_graph.ainvoke(graph_state, config=config_dict)
-
-            messages_out = final_state.get("messages") or []
-            if messages_out and not isinstance(messages_out[0], BaseMessage):
-                messages_out = _normalize_messages(messages_out)
-
-            if messages_out:
-                assistant_msg = messages_out[-1]
-                message_payload: Dict[str, Any] = {
-                    "type": "assistant-message",
-                    "threadId": graph_state.get("session_id"),
-                    "runId": run_id,
-                    "message": {
-                        "role": "assistant",
-                        "content": _message_to_text(assistant_msg),
-                    },
-                }
-
-                metadata: Dict[str, Any] = {}
-                additional = getattr(assistant_msg, "additional_kwargs", None)
-                if additional:
-                    metadata.update(additional)
-                response_meta = getattr(assistant_msg, "response_metadata", None)
-                if response_meta:
-                    metadata["response_metadata"] = response_meta
-                if metadata:
-                    message_payload["message"]["messageMetadata"] = metadata
-
-                yield _encode_sse(message_payload)
-
-            yield _encode_sse(
-                {
-                    "type": "finish",
-                    "threadId": graph_state.get("session_id"),
-                    "runId": run_id,
-                    "reason": "stop",
-                }
-            )
-
         span.set_status(Status(StatusCode.OK))
-        return StreamingResponse(event_generator(), status_code=200, media_type="text/event-stream")
+        return StreamingResponse(
+            event_generator(),
+            status_code=200,
+            media_type=encoder.get_content_type()
+        )
 
 
 @router.get("/copilot/stream/health")
 async def copilot_stream_health():
-    """Return availability and configuration snapshot for the Copilot stream path."""
+    """Return availability and configuration snapshot for the Copilot stream path.
+
+    Phase 4: Updated to reflect AG-UI protocol integration.
+    """
     graph_ok = compiled_graph is not None
+    agent_ok = False
+    try:
+        agent = get_langgraph_agent()
+        agent_ok = agent is not None
+    except Exception:
+        pass
+
     from app.core.settings import settings as _settings
-    if not graph_ok:
+    if not graph_ok or not agent_ok:
         return JSONResponse(
             status_code=503,
             content={
                 "status": "unavailable",
-                "sdk_available": True,
+                "ag_ui_available": True,
                 "graph_compiled": graph_ok,
+                "agent_initialized": agent_ok,
             },
         )
     return {
         "status": "ok",
-        "sdk_available": True,
+        "protocol": "ag-ui",
+        "ag_ui_available": True,
         "graph_compiled": True,
+        "agent_initialized": True,
         "agent": "sparrow",
         "agents": [{"name": "sparrow", "status": "ready"}],
         "models": {

@@ -17,8 +17,11 @@ langchain-core>=1.0.0,<1.1.0
 langchain-google-genai==2.1.12  # Compatible with langchain-core 1.x
 # langchain-openai>=1.0.0,<1.1.0  # Removed - conflicts with openai 1.58.1, not used by unified agent
 langgraph>=1.0.0,<1.1.0
+langgraph-sdk>=0.2.0,<0.3.0  # Required for AG-UI protocol
 langsmith>=0.3.45,<0.4.0
 copilotkit>=0.1.70
+ag-ui-langgraph>=0.0.18  # AG-UI protocol adapter for LangGraph
+ag-ui-protocol>=0.1.9  # AG-UI protocol definitions
 
 # Google AI SDK (explicitly required for FeedMe modules only)
 # NOTE: Removed for unified agent compatibility - FeedMe modules will need separate handling

@@ -10,7 +10,9 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from app.agents.log_analysis import run_log_analysis_agent, SimplifiedLogAnalysisOutput
+from app.agents.log_analysis.log_analysis_agent.simplified_schemas import SimplifiedLogAnalysisOutput
+from app.agents.unified.tools import log_diagnoser_tool
+from app.agents.unified.tools import LogDiagnoserInput
 from app.api.v1.endpoints.agent_common import serialize_analysis_results
 from app.api.v1.middleware.log_analysis_middleware import (
     LOG_ANALYSIS_RATE_LIMITS,
@@ -72,15 +74,25 @@ async def analyze_logs(request: LogAnalysisRequest, user_id: str = Depends(get_c
             raise HTTPException(status_code=400, detail="API Key Required: Please add your Google Gemini API key in Settings")
 
         async with user_context_scope(user_context):
-            initial_state = {"raw_log_content": log_body, "question": request.question, "trace_id": request.trace_id, "session_id": session_id}
-            result = await run_log_analysis_agent(initial_state)
+            # Use unified agent's log_diagnoser tool
+            log_input = LogDiagnoserInput(
+                log_content=log_body,
+                question=request.question,
+                trace_id=request.trace_id or session_id,
+            )
+            result = await log_diagnoser_tool.ainvoke(log_input)
 
-        final_report = result.get('final_report') if isinstance(result, dict) else None
-        if not final_report:
-            raise HTTPException(status_code=500, detail="Log analysis agent did not return a final report.")
-
-        response_dict = serialize_analysis_results(final_report)
-        response_dict["trace_id"] = result.get('trace_id') or request.trace_id
+        # Handle unified agent tool response format
+        if isinstance(result, dict) and "error" in result:
+            raise HTTPException(status_code=500, detail=result.get("message", "Log analysis failed"))
+        
+        # Unified agent tool returns SimplifiedLogAnalysisOutput format
+        if isinstance(result, dict):
+            final_report = result  # The tool already returns the analysis output
+            response_dict = serialize_analysis_results(final_report)
+            response_dict["trace_id"] = result.get('trace_id') or request.trace_id or session_id
+        else:
+            raise HTTPException(status_code=500, detail="Log analysis agent did not return a valid report.")
         try:
             return LogAnalysisV2Response(**response_dict)
         except Exception as validation_error:
@@ -149,16 +161,26 @@ async def log_analysis_stream_generator(
 
         yield format_sse_data({'type': 'step', 'data': {'type': 'Starting Analysis', 'description': 'Initializing log analysis...', 'status': 'in-progress'}})
         async with user_context_scope(user_context):
-            initial_state = {"raw_log_content": log_content, "question": question, "trace_id": trace_id}
+            # Use unified agent's log_diagnoser tool
+            log_input = LogDiagnoserInput(
+                log_content=log_content,
+                question=question,
+                trace_id=trace_id,
+            )
             yield format_sse_data({'type': 'step', 'data': {'type': 'Parsing', 'description': 'Parsing log entries...', 'status': 'in-progress'}})
-            result = await run_log_analysis_agent(initial_state)
+            result = await log_diagnoser_tool.ainvoke(log_input)
             yield format_sse_data({'type': 'step', 'data': {'type': 'Analyzing', 'description': 'Analyzing patterns and issues...', 'status': 'complete'}})
 
-            final_report = result.get('final_report')
-            returned_trace_id = result.get('trace_id')
-            if final_report:
-                analysis_results = serialize_analysis_results(final_report)
-                yield format_sse_data({'type': 'result', 'data': {'analysis': analysis_results, 'trace_id': returned_trace_id or trace_id}})
+            # Handle unified agent tool response format
+            if isinstance(result, dict):
+                if "error" in result:
+                    yield format_sse_data({'type': 'error', 'data': {'message': result.get('message', 'Log analysis failed'), 'trace_id': trace_id}})
+                else:
+                    # Unified agent tool returns the analysis output directly
+                    final_report = result
+                    returned_trace_id = result.get('trace_id') or trace_id
+                    analysis_results = serialize_analysis_results(final_report)
+                    yield format_sse_data({'type': 'result', 'data': {'analysis': analysis_results, 'trace_id': returned_trace_id}})
             else:
                 yield format_sse_data({'type': 'error', 'data': {'message': 'Log analysis did not produce a report', 'trace_id': trace_id}})
 
