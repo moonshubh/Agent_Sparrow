@@ -227,7 +227,7 @@ async function searchFeedMe(topK: number = CONFIG.topK): Promise<FeedMeDocument[
 // ============================================================================
 
 function kbToPointer(doc: KBSearchResult): DocumentPointer {
-  const content = (doc.markdown || doc.url || '').slice(0, CONFIG.maxContentChars)
+  const content = (doc.markdown || '').slice(0, CONFIG.maxContentChars)
 
   return {
     documentId: `kb-${doc.id}`,
@@ -317,9 +317,20 @@ export function useAgentDocuments() {
 
     if (cached && Date.now() - cached.timestamp < CONFIG.ttlMs) {
       console.log(`[useAgentDocuments] Cache hit for session=${sessionId}, query="${query}"`)
+
+      // Apply deduplication even for cached documents
+      const sessionRegistered = registeredRef.current.get(sessionId) || new Set()
+      const dedupedCachedDocs = cached.documents.filter(
+        (doc) => !sessionRegistered.has(doc.documentId)
+      )
+
+      // Update registered set with newly returned docs
+      dedupedCachedDocs.forEach((doc) => sessionRegistered.add(doc.documentId))
+      registeredRef.current.set(sessionId, sessionRegistered)
+
       perf.mark('register-end')
       perf.measure('register-duration', 'register-start', 'register-end')
-      return cached.documents
+      return dedupedCachedDocs
     }
 
     // Fetch documents in parallel
@@ -415,6 +426,13 @@ export function useAgentDocuments() {
           debounceTimerRef.current = setTimeout(() => {
             console.log('[useAgentDocuments] FeedMe realtime update, invalidating cache')
 
+            // Skip DELETE events - they don't have payload.new
+            if (payload.eventType === 'DELETE') {
+              // For deletes, just invalidate cache
+              invalidateCache()
+              return
+            }
+
             // Check if the update qualifies (status change to approved/published)
             type FeedMeRealtimeRecord = {
               processing_status?: string | null
@@ -451,10 +469,12 @@ export function useAgentDocuments() {
       if (debounceTimerRef.current) {
         clearTimeout(debounceTimerRef.current)
       }
-      // Properly await unsubscribe and clear state
-      channel.unsubscribe().then(() => {
-        setRealtimeChannel(null)
-      })
+      // Unsubscribe without returning promise (React cleanup must be sync)
+      if (channel && typeof channel.unsubscribe === 'function') {
+        void channel.unsubscribe().then(() => {
+          setRealtimeChannel(null)
+        })
+      }
     }
   }, [invalidateCache])
 

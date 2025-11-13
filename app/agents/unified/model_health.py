@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import time
 from dataclasses import dataclass
-from typing import Dict, Optional
+from typing import Dict, Optional, Union
 
 from loguru import logger
 
@@ -28,7 +28,8 @@ class ModelHealth:
     circuit_state: str
     reason: Optional[str] = None
 
-    def as_dict(self) -> Dict[str, Optional[str]]:
+    def as_dict(self) -> Dict[str, Union[str, int, bool, None]]:
+        """Convert health data to dictionary with proper type annotations."""
         return {
             "model": self.model,
             "available": self.available,

@@ -121,6 +121,10 @@ app = FastAPI(
     description="API server for the MB-Sparrow multi-agent system."
 )
 
+# Configure LangSmith tracing during startup (if enabled)
+from app.core.tracing import configure_langsmith
+configure_langsmith()
+
 # Enable FastAPI auto-instrumentation for OpenTelemetry when enabled
 if ENABLE_OTEL:
     try:  # pragma: no cover - best-effort, do not fail app startup on instrumentation issues

@@ -1,5 +1,6 @@
 import { HttpAgent } from '@ag-ui/client';
 import type { RunAgentInput, Message } from '@ag-ui/core';
+import type { AttachmentInput } from './types';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
@@ -10,21 +11,28 @@ export interface AgentConfig {
   model?: string;
   agentType?: string;
   useServerMemory?: boolean;
-  attachments?: any[];
+  attachments?: AttachmentInput[];
 }
 
 export function createSparrowAgent(config: AgentConfig) {
+  const authToken = getAuthToken();
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    'Accept': 'text/event-stream',
+  };
+
+  // Only include Authorization header if token exists
+  if (authToken) {
+    headers['Authorization'] = `Bearer ${authToken}`;
+  }
+
   const agent = new HttpAgent({
     url: `${API_URL}/api/v1/copilot/stream`,
-    headers: {
-      'Authorization': `Bearer ${getAuthToken()}`,
-      'Content-Type': 'application/json',
-      'Accept': 'text/event-stream',
-    },
+    headers,
     threadId: config.sessionId,
   });
 
-  // Set initial properties for forwardedProps
+  // Set initial properties for agent.state
   agent.state = {
     session_id: config.sessionId,
     trace_id: config.traceId,
@@ -38,7 +46,7 @@ export function createSparrowAgent(config: AgentConfig) {
   return agent;
 }
 
-// Helper to get auth token from localStorage or cookies
+// Helper to get auth token from localStorage or sessionStorage
 function getAuthToken(): string {
   // Check localStorage first
   if (typeof window !== 'undefined') {

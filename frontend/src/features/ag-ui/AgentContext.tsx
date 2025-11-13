@@ -93,7 +93,12 @@ export function AgentProvider({
 
         // Handle complete message updates
         onMessagesChanged: ({ messages: agentMessages }) => {
-          setMessages([...agentMessages]);
+          // Ensure all messages have IDs
+          const messagesWithIds = agentMessages.map(msg => ({
+            ...msg,
+            id: msg.id || crypto.randomUUID(),
+          }));
+          setMessages(messagesWithIds);
         },
 
         // Handle custom events (interrupts)

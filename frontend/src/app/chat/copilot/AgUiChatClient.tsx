@@ -44,9 +44,9 @@ export default function AgUiChatClient() {
     };
 
     createSession();
-  }, []); // Only run once on mount
+  }, [agentType]); // Create new session when agent type changes
 
-  // Create agent instance
+  // Create agent instance (pure, no side effects)
   const agent = useMemo(() => {
     if (!sessionId) return null;
 
@@ -61,8 +61,29 @@ export default function AgUiChatClient() {
       });
     } catch (err) {
       console.error('Failed to create agent:', err);
-      setError(err as Error);
       return null;
+    }
+  }, [sessionId, model, agentType, memoryEnabled]);
+
+  // Handle agent creation errors separately in useEffect
+  useEffect(() => {
+    if (!sessionId) return;
+
+    // Clear previous error when dependencies change
+    setError(null);
+
+    // Try to create agent and capture error if it fails
+    try {
+      createSparrowAgent({
+        sessionId,
+        traceId: `trace-${Date.now()}-${uuidv4()}`,
+        provider: 'google',
+        model,
+        agentType: agentType === 'auto' ? undefined : agentType,
+        useServerMemory: memoryEnabled,
+      });
+    } catch (err) {
+      setError(err as Error);
     }
   }, [sessionId, model, agentType, memoryEnabled]);
 

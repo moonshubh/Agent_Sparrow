@@ -39,6 +39,14 @@ export function ChatInput({
       if (textareaRef.current) {
         textareaRef.current.style.height = 'auto';
       }
+
+      // Clear attachments after sending
+      onAttachmentsChange([]);
+
+      // Reset file input
+      if (fileInputRef.current) {
+        fileInputRef.current.value = '';
+      }
     }
   };
 
@@ -139,8 +147,10 @@ export function ChatInput({
                 ({(attachment.size / 1024).toFixed(1)}KB)
               </span>
               <button
+                type="button"
                 onClick={() => removeAttachment(index)}
                 className="ml-1 text-gray-400 hover:text-gray-600"
+                aria-label={`Remove attachment ${index + 1}`}
               >
                 <X className="w-4 h-4" />
               </button>
@@ -160,6 +170,7 @@ export function ChatInput({
             onClick={() => fileInputRef.current?.click()}
             disabled={disabled}
             className="mb-1"
+            aria-label="Attach file"
           >
             <Paperclip className="w-5 h-5" />
           </Button>
@@ -200,6 +211,7 @@ export function ChatInput({
               variant="destructive"
               size="icon"
               className="mb-1"
+              aria-label="Abort generation"
             >
               <Square className="w-4 h-4" />
             </Button>
@@ -210,6 +222,7 @@ export function ChatInput({
               disabled={!input.trim()}
               size="icon"
               className="mb-1"
+              aria-label="Send message"
             >
               <SendHorizontalIcon className="w-4 h-4" />
             </Button>

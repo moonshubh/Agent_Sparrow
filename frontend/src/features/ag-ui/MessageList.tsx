@@ -147,7 +147,7 @@ export function MessageList({ messages, isStreaming }: MessageListProps) {
     <div className="space-y-4">
       {visibleMessages.map((message, idx) => (
         <MessageItem
-          key={message.id || idx}
+          key={message.id}
           message={message}
           isLast={idx === visibleMessages.length - 1}
           isStreaming={isStreaming}

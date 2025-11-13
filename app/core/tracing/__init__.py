@@ -51,7 +51,8 @@ def configure_langsmith() -> bool:
     return _LANGSMITH_READY
 
 
-# Configure on import for long-running workers
-configure_langsmith()
-
 __all__ = ["configure_langsmith", "logger"]
+
+# Note: For long-running workers (FastAPI, Celery), configure_langsmith() should be
+# called explicitly during application startup (app/main.py, celery app init).
+# Avoid import-time side effects for better testability and startup control.

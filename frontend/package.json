@@ -14,8 +14,8 @@
     "verify:env": "node scripts/verify-env.js"
   },
   "dependencies": {
-    "@ag-ui/client": "^0.0.41",
-    "@ag-ui/core": "^0.0.41",
+    "@ag-ui/client": "0.0.41",
+    "@ag-ui/core": "0.0.41",
     "@hello-pangea/dnd": "^18.0.1",
     "@hookform/resolvers": "^3.9.1",
     "@radix-ui/react-accordion": "1.2.2",
