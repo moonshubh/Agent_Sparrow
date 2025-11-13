@@ -23,7 +23,18 @@ from typing import List, Dict, Any, Optional, Tuple
 from pdf2image import convert_from_bytes
 from PIL import Image
 
-import google.generativeai as genai
+try:
+    from google import genai  # type: ignore
+    GENAI_SDK = "google.genai"
+except ImportError:  # pragma: no cover
+    try:
+        import google.generativeai as genai  # type: ignore
+        GENAI_SDK = "google.generativeai"
+    except ImportError:
+        raise ImportError(
+            "Neither google.genai nor google.generativeai is available. "
+            "Install one of: pip install google-genai or pip install google-generativeai"
+        )
 
 from app.core.settings import settings
 from app.feedme.rate_limiting.gemini_tracker import get_tracker
@@ -184,4 +195,3 @@ def process_pdf_to_markdown(
     info["warnings"] = [w for w in info["warnings"] if w]
 
     return concatenated or "", info
-

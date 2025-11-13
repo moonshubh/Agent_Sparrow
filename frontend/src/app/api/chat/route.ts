@@ -5,7 +5,8 @@ export const runtime = 'edge'
 export async function POST() {
   return NextResponse.json(
     {
-      error: 'The /api/chat endpoint is deprecated. Please call the backend /api/v1/v2/agent/chat/stream endpoint directly via the unified client.',
+      error:
+        'The /api/chat endpoint is deprecated. Please use the AG-UI chat experience instead, which talks directly to the backend /api/v1/copilot/stream endpoint.',
     },
     { status: 410 },
   )
@@ -14,7 +15,8 @@ export async function POST() {
 export async function GET() {
   return NextResponse.json(
     {
-      error: 'The /api/chat endpoint is deprecated. Please call the backend /api/v1/v2/agent/chat/stream endpoint directly via the unified client.',
+      error:
+        'The /api/chat endpoint is deprecated. Please use the AG-UI chat experience instead, which talks directly to the backend /api/v1/copilot/stream endpoint.',
     },
     { status: 410 },
   )

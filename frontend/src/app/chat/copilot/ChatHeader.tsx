@@ -8,17 +8,15 @@ import { AgentSelector } from "./AgentSelector";
 import type { AgentChoice } from "@/features/chat/hooks/useAgentSelection";
 
 /**
- * Chat Header for Phase 3 + Phase 4 CopilotKit Integration
+ * Chat Header for the AG-UI client.
  *
- * Contains controls positioned outside the CopilotSidebar:
- * - Agent type indicator
+ * Controls:
+ * - Agent selector
  * - Memory toggle
- * - Knowledge source toggles (KB, FeedMe) - Phase 4
- * - Model/provider selector
- * - Navigation links (Settings, FeedMe)
+ * - Knowledge source toggles (future)
+ * - Gemini model selector
+ * - Navigation shortcuts (Settings, FeedMe)
  * - Optional MCP URL input
- *
- * These controls affect the properties passed to CopilotKit via the parent component.
  */
 export function ChatHeader({
   agentType,
@@ -28,11 +26,9 @@ export function ChatHeader({
   onKbToggle,
   feedmeEnabled,
   onFeedmeToggle,
-  provider,
   model,
-  onProviderChange,
   onModelChange,
-  modelsByProvider,
+  models,
   mcpUrl,
   onMcpUrlChange,
   // Phase 5: Multi-agent selection (optional)
@@ -47,11 +43,9 @@ export function ChatHeader({
   onKbToggle?: (enabled: boolean) => void;
   feedmeEnabled?: boolean;
   onFeedmeToggle?: (enabled: boolean) => void;
-  provider: "google" | "openai";
   model: string;
-  onProviderChange: (provider: "google" | "openai") => void;
   onModelChange: (model: string) => void;
-  modelsByProvider: Record<"google" | "openai", string[]>;
+  models: string[];
   mcpUrl?: string;
   onMcpUrlChange?: (url: string) => void;
   // Phase 5 (optional)
@@ -144,12 +138,10 @@ export function ChatHeader({
             )}
             {/* Model selector */}
             <ModelSelector
-              provider={provider}
               model={model}
-              onChangeProvider={onProviderChange}
               onChangeModel={onModelChange}
               align="right"
-              modelsByProvider={modelsByProvider}
+          models={models}
             />
 
             {/* MCP URL input (optional) */}

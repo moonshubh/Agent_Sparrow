@@ -1,16 +1,15 @@
 from __future__ import annotations
 
 """
-CopilotKit Remote Endpoint (AG-UI LangGraph)
+AG-UI Streaming Endpoint (LangGraph)
 
-Exposes `/api/v1/copilot/stream` as an auth-protected POST streaming endpoint
-compatible with CopilotKit's runtime client. Uses the official `ag_ui_langgraph`
-adapter to wrap our compiled LangGraph graph.
+Exposes `/api/v1/copilot/stream` (legacy path retained for compatibility) as an
+auth-protected POST streaming endpoint for the native AG-UI client. Uses the
+official `ag_ui_langgraph` adapter to wrap our compiled LangGraph graph.
 
-Phase 4 Implementation (AG-UI Protocol):
-- Uses LangGraphAgent wrapper from ag_ui_langgraph for proper AG-UI protocol support
-- Integrates EventEncoder from ag_ui.encoder for proper SSE formatting
-- Preserves all Phase 1 enhancements:
+Highlights:
+- Native AG-UI protocol support via LangGraphAgent and EventEncoder
+- Preserves Phase 1 safeguards:
   - Context merge: Extracts properties (session_id, trace_id, provider, model, agent_type)
     and merges them into both state dict and config.configurable for LangGraph execution
   - Attachment validation: Validates attachments using Attachment model with size/MIME checks
@@ -234,16 +233,13 @@ def _sanitize_attachments(payload: Any) -> List[Dict[str, Any]]:
     return attachments
 
 
-def _merge_copilot_context(
+def _merge_agui_context(
     properties: Dict[str, Any],
     state: Dict[str, Any],
     config: Dict[str, Any],
 ) -> None:
     """
-    Inject per-request CopilotKit context (provider, session, attachments) into state and config.
-
-    Phase 1 Enhancement: Ports context merge logic from SparrowLangGraphAgent._merge_context
-    to ensure feature parity between GraphQL and stream endpoints.
+    Inject per-request AG-UI context (provider, session, attachments) into state and config.
 
     This function:
     1. Extracts properties: session_id, trace_id, provider, model, agent_type, etc.
@@ -255,7 +251,7 @@ def _merge_copilot_context(
     Required: Fails loudly if critical properties are malformed (per requirement 3b).
 
     Args:
-        properties: Forwarded properties from CopilotKit client
+        properties: Forwarded properties from the AG-UI client
         state: State dict to be passed to LangGraph (modified in-place)
         config: Config dict with configurable field (modified in-place)
     """
@@ -284,6 +280,13 @@ def _merge_copilot_context(
     if not provider or not model:
         provider = provider or getattr(settings, "primary_agent_provider", "google")
         model = model or getattr(settings, "primary_agent_model", "gemini-2.5-flash")
+
+    # Backend default for memory toggle when client is silent
+    if use_server_memory is None:
+        if settings.should_enable_agent_memory():
+            use_server_memory = bool(getattr(settings, "agent_memory_default_enabled", False))
+        else:
+            use_server_memory = False
 
     # Validate and sanitize attachments (fails loudly on error)
     attachments = _sanitize_attachments(properties.get("attachments") or [])
@@ -321,13 +324,20 @@ def _merge_copilot_context(
     configurable["metadata"] = metadata
 
     tags = list(configurable.get("tags") or [])
-    for tag in ("copilot-stream", agent_type, provider):
+    tag_candidates = ["agui-stream", agent_type, provider]
+    if use_server_memory:
+        tag_candidates.append("memory_enabled")
+    if model:
+        tag_candidates.append(f"model:{model}")
+    if agent_type:
+        tag_candidates.append(f"task_type:{agent_type}")
+    for tag in tag_candidates:
         if tag and tag not in tags:
             tags.append(tag)
     configurable["tags"] = tags
 
     if settings.langsmith_tracing_enabled:
-        configurable.setdefault("name", "copilot-stream-run")
+        configurable.setdefault("name", "agui-stream-run")
         if settings.langsmith_project:
             configurable.setdefault("project", settings.langsmith_project)
         if settings.langsmith_endpoint:
@@ -335,31 +345,31 @@ def _merge_copilot_context(
 
     # Merge into state (GraphState fields)
     if session_id:
-        state.setdefault("session_id", str(session_id))
+        state["session_id"] = str(session_id)
     if trace_id:
-        state.setdefault("trace_id", str(trace_id))
+        state["trace_id"] = str(trace_id)
     if provider:
-        state.setdefault("provider", str(provider))
+        state["provider"] = str(provider)
     if model:
-        state.setdefault("model", str(model))
+        state["model"] = str(model)
     if agent_type:
-        state.setdefault("agent_type", str(agent_type))
+        state["agent_type"] = str(agent_type)
     if force_websearch is not None:
-        state.setdefault("force_websearch", force_websearch)
+        state["force_websearch"] = force_websearch
     if websearch_max_results is not None:
-        state.setdefault("websearch_max_results", websearch_max_results)
+        state["websearch_max_results"] = websearch_max_results
     if websearch_profile:
-        state.setdefault("websearch_profile", str(websearch_profile))
+        state["websearch_profile"] = str(websearch_profile)
     if formatting_mode:
-        state.setdefault("formatting", str(formatting_mode).lower())
+        state["formatting"] = str(formatting_mode).lower()
     if use_server_memory is not None:
-        state.setdefault("use_server_memory", use_server_memory)
+        state["use_server_memory"] = use_server_memory
     if attachments:
-        state.setdefault("attachments", attachments)
+        state["attachments"] = attachments
 
     # Comprehensive logging (Phase 1 requirement)
     logging.info(
-        "copilot_context_merge_complete",
+        "agui_context_merge_complete",
         extra={
             "session_id": session_id,
             "trace_id": trace_id,
@@ -374,16 +384,16 @@ def _merge_copilot_context(
 
 
 @router.post("/copilot/stream")
-async def copilot_stream(
+async def agui_stream(
     input_data: RunAgentInput,
     request: Request,
     user_id: str = Depends(get_current_user_id)
 ):
-    """Auth-protected CopilotKit streaming endpoint with AG-UI protocol.
+    """Auth-protected AG-UI streaming endpoint.
 
     Phase 4 Implementation:
     - Accepts AG-UI RunAgentInput for proper protocol compliance
-    - Applies custom context merge and attachment validation (Phase 1)
+    - Applies custom context merge and attachment validation (Phase 1 guardrails)
     - Uses LangGraphAgent.run() for AG-UI protocol streaming
     - Uses EventEncoder for proper SSE event formatting
     - Preserves authentication and telemetry
@@ -396,7 +406,7 @@ async def copilot_stream(
     Returns:
         StreamingResponse with AG-UI protocol formatted SSE events
     """
-    with tracer.start_as_current_span("copilot.stream") as span:
+    with tracer.start_as_current_span("agui.stream") as span:
         try:
             agent = get_langgraph_agent()
         except RuntimeError as e:
@@ -419,7 +429,7 @@ async def copilot_stream(
 
         # Comprehensive logging: Log incoming properties (Phase 1 requirement)
         logging.info(
-            "copilot_stream_request_received",
+            "agui_stream_request_received",
             extra={
                 "thread_id": thread_id,
                 "run_id": run_id,
@@ -435,22 +445,22 @@ async def copilot_stream(
 
         # Populate span attributes with non-PII diagnostics
         try:
-            span.set_attribute("copilot.thread_id", thread_id)
-            span.set_attribute("copilot.run_id", run_id)
-            span.set_attribute("copilot.message_count", len(input_data.messages) if input_data.messages else 0)
+            span.set_attribute("agui.thread_id", thread_id)
+            span.set_attribute("agui.run_id", run_id)
+            span.set_attribute("agui.message_count", len(input_data.messages) if input_data.messages else 0)
             if isinstance(forwarded, dict):
-                span.set_attribute("copilot.session_id", str(forwarded.get("session_id") or ""))
-                span.set_attribute("copilot.trace_id", str(forwarded.get("trace_id") or ""))
-                span.set_attribute("copilot.provider", str(forwarded.get("provider") or ""))
-                span.set_attribute("copilot.model", str(forwarded.get("model") or ""))
-                span.set_attribute("copilot.agent_type", str(forwarded.get("agent_type") or ""))
+                span.set_attribute("agui.session_id", str(forwarded.get("session_id") or ""))
+                span.set_attribute("agui.trace_id", str(forwarded.get("trace_id") or ""))
+                span.set_attribute("agui.provider", str(forwarded.get("provider") or ""))
+                span.set_attribute("agui.model", str(forwarded.get("model") or ""))
+                span.set_attribute("agui.agent_type", str(forwarded.get("agent_type") or ""))
                 att_count = len(forwarded.get("attachments", []) if isinstance(forwarded.get("attachments"), list) else [])
-                span.set_attribute("copilot.attachments_count", att_count)
+                span.set_attribute("agui.attachments_count", att_count)
         except Exception:
             # Defensive: never break request flow due to telemetry
             pass
 
-        # Phase 1: Merge CopilotKit context into state and config
+        # Phase 1: Merge AG-UI context into state and config
         # This ensures feature parity with GraphQL endpoint (SparrowLangGraphAgent)
         # Start with state from input_data (may be dict or None)
         state_dict: Dict[str, Any] = {}
@@ -469,9 +479,9 @@ async def copilot_stream(
         forwarded_without_attachments = {k: v for k, v in forwarded.items() if k != "attachments"}
 
         try:
-            _merge_copilot_context(forwarded, state_dict, config_dict)
+            _merge_agui_context(forwarded, state_dict, config_dict)
             logging.info(
-                "copilot_context_merge_applied",
+                "agui_context_merge_applied",
                 extra={
                     "state_keys": list(state_dict.keys()),
                     "config_keys": list(config_dict.get("configurable", {}).keys()),
@@ -488,13 +498,20 @@ async def copilot_stream(
                 status_code=400,
                 detail={
                     "error": "context_merge_failed",
-                    "message": f"Failed to merge CopilotKit context: {str(e)}",
+                    "message": f"Failed to merge AG-UI context: {str(e)}",
                 }
             )
 
         configurable = config_dict.setdefault("configurable", {})
         configurable.setdefault("thread_id", thread_id)
         configurable.setdefault("run_id", run_id)
+
+        metadata = dict(configurable.get("metadata") or {})
+        if user_id:
+            metadata["user_id"] = str(user_id)
+        configurable["metadata"] = metadata
+
+        state_dict["user_id"] = str(user_id)
 
         # Convert AG-UI messages to LangChain messages
         # AG-UI RunAgentInput already has properly typed messages, convert them to LangChain format
@@ -523,9 +540,10 @@ async def copilot_stream(
         graph_state.setdefault("trace_id", str(configurable.get("trace_id") or run_id))
         graph_state.setdefault("attachments", state_dict.get("attachments") or [])
         graph_state.setdefault("use_server_memory", configurable.get("use_server_memory", False))
+        # user_id already set in state_dict at line 514, no need for setdefault
 
         logging.info(
-            "copilot_stream_normalized",
+            "agui_stream_normalized",
             extra={
                 "message_count": len(normalized_messages),
                 "thread_id": graph_state.get("session_id"),
@@ -551,12 +569,12 @@ async def copilot_stream(
 
         async def event_generator():
             """Stream AG-UI protocol events from LangGraphAgent."""
-            with tracer.start_as_current_span("copilot.stream.run") as run_span:
+            with tracer.start_as_current_span("agui.stream.run") as run_span:
                 cfg = config_dict.get("configurable", {})
-                run_span.set_attribute("copilot.session_id", str(cfg.get("session_id") or ""))
-                run_span.set_attribute("copilot.trace_id", str(cfg.get("trace_id") or ""))
-                run_span.set_attribute("copilot.provider", str(cfg.get("provider") or ""))
-                run_span.set_attribute("copilot.model", str(cfg.get("model") or ""))
+                run_span.set_attribute("agui.session_id", str(cfg.get("session_id") or ""))
+                run_span.set_attribute("agui.trace_id", str(cfg.get("trace_id") or ""))
+                run_span.set_attribute("agui.provider", str(cfg.get("provider") or ""))
+                run_span.set_attribute("agui.model", str(cfg.get("model") or ""))
 
                 try:
                     # Stream events from AG-UI LangGraphAgent
@@ -581,8 +599,8 @@ async def copilot_stream(
 
 
 @router.get("/copilot/stream/health")
-async def copilot_stream_health():
-    """Return availability and configuration snapshot for the Copilot stream path.
+async def agui_stream_health():
+    """Return availability and configuration snapshot for the AG-UI stream path.
 
     Phase 4: Updated to reflect AG-UI protocol integration.
     """

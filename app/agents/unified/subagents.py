@@ -8,12 +8,13 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 
 from app.core.settings import settings
 
+from .prompts import LOG_ANALYSIS_PROMPT, RESEARCH_PROMPT
 from .tools import (
-    firecrawl_fetch_tool,
     kb_search_tool,
     log_diagnoser_tool,
     web_search_tool,
 )
+from .model_router import model_router
 
 # Import middleware classes for per-subagent configuration
 try:
@@ -40,55 +41,35 @@ def _get_chat_model(model_name: str) -> ChatGoogleGenerativeAI:
 
 
 def _research_subagent() -> Dict[str, Any]:
+    model_name = model_router.select_model("lightweight")
     subagent_spec = {
         "name": "research-agent",
         "description": "Gathers supporting evidence from Mailbird KB and the public web.",
-        "system_prompt": (
-            "You are a focused research assistant for Agent Sparrow.\n"
-            "Use search tools to gather up-to-date information, cite reliable sources,"
-            " and return concise findings with relevant URLs."
-        ),
-        "tools": [kb_search_tool, web_search_tool, firecrawl_fetch_tool],
-        "model": _get_chat_model(settings.primary_agent_model),
+        "system_prompt": RESEARCH_PROMPT,
+        "tools": [kb_search_tool, web_search_tool],
+        "model": _get_chat_model(model_name),
     }
 
-    # Add lightweight middleware for research agent (no TodoList needed for simple research)
+    # No middleware configured for research agent (placeholder for future additions)
     if MIDDLEWARE_AVAILABLE:
-        subagent_spec["middleware"] = [
-            SummarizationMiddleware(
-                model=_get_chat_model(settings.primary_agent_model),
-                max_tokens_before_summary=100000,  # Lower threshold for research
-                messages_to_keep=4,
-            ),
-            PatchToolCallsMiddleware(),
-        ]
+        subagent_spec["middleware"] = []
 
     return subagent_spec
 
 
 def _log_diagnoser_subagent() -> Dict[str, Any]:
+    model_name = model_router.select_model("log_analysis")
     subagent_spec = {
         "name": "log-diagnoser",
         "description": "Analyzes attached log files to identify issues and fixes.",
-        "system_prompt": (
-            "You specialize in parsing application logs. Provide root-cause analysis,"
-            " actionable fixes, and confidence levels."
-        ),
+        "system_prompt": LOG_ANALYSIS_PROMPT,
         "tools": [log_diagnoser_tool],
-        "model": _get_chat_model(settings.enhanced_log_model),
+        "model": _get_chat_model(model_name),
     }
 
-    # Add comprehensive middleware for log analysis (including TodoList for tracking issues)
+    # No middleware configured for log diagnoser (intentionally empty, placeholder for future)
     if MIDDLEWARE_AVAILABLE:
-        subagent_spec["middleware"] = [
-            TodoListMiddleware(),  # Track issues found and fixes to apply
-            SummarizationMiddleware(
-                model=_get_chat_model(settings.enhanced_log_model),
-                max_tokens_before_summary=170000,  # Large threshold for extensive logs
-                messages_to_keep=6,
-            ),
-            PatchToolCallsMiddleware(),
-        ]
+        subagent_spec["middleware"] = []
 
     return subagent_spec
 
@@ -97,4 +78,3 @@ def get_subagent_specs() -> List[Dict[str, Any]]:
     """Return subagent specifications consumed by DeepAgents."""
 
     return [_research_subagent(), _log_diagnoser_subagent()]
-

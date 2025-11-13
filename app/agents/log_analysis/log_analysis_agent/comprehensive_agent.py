@@ -1121,7 +1121,7 @@ class LogAnalysisAgent:
             markdown = analysis_result.generate_user_summary()
 
         analysis_result.conversational_markdown = markdown
-        # No structured output needed - CopilotKit handles UI rendering
+        # No structured output needed - AG-UI handles UI rendering
         analysis_result.structured_output = None
         analysis_result.structured_output_dict = None
 

@@ -15,7 +15,6 @@ from app.core.user_context import UserContext, user_context_scope
 from app.agents.unified.agent_sparrow import run_unified_agent
 from app.agents.orchestration.orchestration.state import GraphState
 from app.agents.unified.tools import kb_search_tool
-from app.agents.primary.primary_agent.feedme_knowledge_tool import EnhancedKBSearchInput
 import re
 
 logger = logging.getLogger(__name__)
@@ -299,12 +298,15 @@ async def _generate_reply(ticket_id: int | str, subject: str | None, description
         # Use unified agent's kb_search tool directly
         kb_ok = True  # Default to not forcing web search
         try:
-            kb_input = EnhancedKBSearchInput(
-                query=user_query,
-                max_results=settings.primary_agent_min_kb_results,
-                min_confidence=settings.primary_agent_min_kb_relevance,
-            )
-            kb_result = await kb_search_tool.ainvoke(kb_input)
+            kb_payload: Dict[str, Any] = {
+                "query": user_query,
+                "max_results": settings.primary_agent_min_kb_results,
+            }
+            min_conf = getattr(settings, "primary_agent_min_kb_relevance", None)
+            if min_conf is not None:
+                kb_payload["min_confidence"] = min_conf
+
+            kb_result = await kb_search_tool.ainvoke(kb_payload)
             # If KB search returns meaningful results, we don't need to force web search
             # Check if result is non-empty and contains useful information
             if isinstance(kb_result, str) and len(kb_result.strip()) > 50:

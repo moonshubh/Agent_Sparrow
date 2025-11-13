@@ -54,11 +54,15 @@ except ImportError:
     redis = None
 
 try:
-    import google.generativeai as genai
+    from google import genai  # type: ignore
     GENAI_AVAILABLE = True
 except ImportError:
-    GENAI_AVAILABLE = False
-    genai = None
+    try:  # pragma: no cover
+        import google.generativeai as genai  # type: ignore
+        GENAI_AVAILABLE = True
+    except ImportError:
+        GENAI_AVAILABLE = False
+        genai = None
 
 from PIL import Image
 import pdf2image

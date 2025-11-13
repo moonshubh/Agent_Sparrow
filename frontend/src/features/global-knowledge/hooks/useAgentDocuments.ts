@@ -1,7 +1,7 @@
 /**
- * useCopilotDocuments Hook
+ * useAgentDocuments Hook
  *
- * Phase 4: Document Integration for CopilotKit
+ * Phase 4: Document Integration for AG-UI client
  *
  * Provides on-demand document pointer registration for:
  * - Mailbird Knowledge Base (via search_mailbird_knowledge_rpc)
@@ -136,7 +136,7 @@ async function searchMailbirdKB(
     perf.measure('kb-search-duration', 'kb-search-start', 'kb-search-end')
 
     if (error) {
-      console.error('[useCopilotDocuments] KB search RPC error:', error)
+      console.error('[useAgentDocuments] KB search RPC error:', error)
       return []
     }
 
@@ -185,7 +185,7 @@ async function searchMailbirdKB(
 
     return boosted.slice(0, topK)
   } catch (error) {
-    console.error('[useCopilotDocuments] KB search error:', error)
+    console.error('[useAgentDocuments] KB search error:', error)
     return []
   }
 }
@@ -211,13 +211,13 @@ async function searchFeedMe(topK: number = CONFIG.topK): Promise<FeedMeDocument[
     perf.measure('feedme-search-duration', 'feedme-search-start', 'feedme-search-end')
 
     if (error) {
-      console.error('[useCopilotDocuments] FeedMe query error:', error)
+      console.error('[useAgentDocuments] FeedMe query error:', error)
       return []
     }
 
     return data || []
   } catch (error) {
-    console.error('[useCopilotDocuments] FeedMe search error:', error)
+    console.error('[useAgentDocuments] FeedMe search error:', error)
     return []
   }
 }
@@ -284,7 +284,7 @@ function applyAgentBias(
 // Main Hook
 // ============================================================================
 
-export function useCopilotDocuments() {
+export function useAgentDocuments() {
   // Cache: Map<sessionId, Map<query, CacheEntry>>
   const cacheRef = useRef<Map<string, Map<string, CacheEntry>>>(new Map())
 
@@ -316,7 +316,7 @@ export function useCopilotDocuments() {
     const cached = sessionCache?.get(query)
 
     if (cached && Date.now() - cached.timestamp < CONFIG.ttlMs) {
-      console.log(`[useCopilotDocuments] Cache hit for session=${sessionId}, query="${query}"`)
+      console.log(`[useAgentDocuments] Cache hit for session=${sessionId}, query="${query}"`)
       perf.mark('register-end')
       perf.measure('register-duration', 'register-start', 'register-end')
       return cached.documents
@@ -360,7 +360,7 @@ export function useCopilotDocuments() {
     perf.mark('register-end')
     perf.measure('register-duration', 'register-start', 'register-end')
 
-    console.log(`[useCopilotDocuments] Registered ${newPointers.length} new documents for session=${sessionId}`)
+    console.log(`[useAgentDocuments] Registered ${newPointers.length} new documents for session=${sessionId}`)
 
     return newPointers
   }, [])
@@ -413,7 +413,7 @@ export function useCopilotDocuments() {
           }
 
           debounceTimerRef.current = setTimeout(() => {
-            console.log('[useCopilotDocuments] FeedMe realtime update, invalidating cache')
+            console.log('[useAgentDocuments] FeedMe realtime update, invalidating cache')
 
             // Check if the update qualifies (status change to approved/published)
             type FeedMeRealtimeRecord = {
@@ -468,3 +468,4 @@ export function useCopilotDocuments() {
 
 // Export types
 export type { DocumentPointer, RegisterOptions }
+

@@ -4,7 +4,7 @@ from langchain_core.messages import BaseMessage
 from pydantic import BaseModel, Field, ConfigDict, field_validator, model_serializer
 
 class Attachment(BaseModel):
-    """Represents an attachment provided via CopilotKit or SSE frontends."""
+    """Represents an attachment provided via the AG-UI or SSE frontends."""
 
     ALLOWED_MIME_TYPES: ClassVar[Set[str]] = {
         "text/plain",
@@ -62,6 +62,7 @@ class GraphState(BaseModel):
 
     session_id: str = Field(default="default", description="Logical conversation / thread identifier.")
     trace_id: Optional[str] = Field(default=None, description="Trace or run identifier propagated to LangSmith.")
+    user_id: Optional[str] = Field(default=None, description="Authenticated user id for memory scoping and auditing.")
     messages: List[BaseMessage] = Field(default_factory=list, description="Ordered conversation history.")
     attachments: List[Attachment] = Field(
         default_factory=list,
@@ -69,11 +70,15 @@ class GraphState(BaseModel):
     )
     provider: Optional[str] = Field(
         default=None,
-        description="Model provider override (e.g., 'google', 'openai').",
+        description="Model provider override (currently 'google' for Gemini models).",
     )
     model: Optional[str] = Field(
         default=None,
         description="Model identifier override (e.g., 'gemini-2.5-flash').",
+    )
+    agent_type: Optional[str] = Field(
+        default=None,
+        description="Calling agent type or persona hint forwarded by the client.",
     )
     use_server_memory: bool = Field(
         default=False,

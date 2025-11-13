@@ -174,6 +174,10 @@ class Settings(BaseSettings):
 
     # Agent Memory Configuration
     enable_agent_memory: bool = Field(default=False, alias="ENABLE_AGENT_MEMORY")
+    agent_memory_default_enabled: bool = Field(
+        default=False,
+        alias="AGENT_MEMORY_DEFAULT_ENABLED",
+    )
     memory_backend: str = Field(default="supabase", alias="MEMORY_BACKEND")
     memory_collection_primary: str = Field(default="mem_primary", alias="MEMORY_COLLECTION_PRIMARY")
     memory_collection_logs: str = Field(default="mem_logs", alias="MEMORY_COLLECTION_LOGS")

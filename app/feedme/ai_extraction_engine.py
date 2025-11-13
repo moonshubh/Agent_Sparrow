@@ -13,7 +13,10 @@ from datetime import datetime
 from dataclasses import dataclass, field
 from enum import Enum
 
-import google.generativeai as genai
+try:  # Support new google-genai SDK first, fall back to legacy
+    import google.genai as genai  # type: ignore
+except ImportError:  # pragma: no cover - legacy fallback
+    import google.generativeai as genai  # type: ignore
 from bs4 import BeautifulSoup
 from google.api_core.exceptions import ResourceExhausted, InvalidArgument
 

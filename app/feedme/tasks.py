@@ -49,7 +49,10 @@ import base64
 from pypdf import PdfReader
 import io
 from app.feedme.parsers.zendesk_pdf_normalizer import normalize_zendesk_print_text
-import google.generativeai as genai
+try:  # Prefer modern google-genai package when available
+    import google.genai as genai  # type: ignore
+except ImportError:  # pragma: no cover
+    import google.generativeai as genai  # type: ignore
 
 # Feature flags / behavior toggles
 DELETE_PDF_AFTER_EXTRACT = True  # Immediately remove PDF payload after extraction

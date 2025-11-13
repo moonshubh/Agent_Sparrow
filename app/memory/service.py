@@ -15,6 +15,7 @@ from app.core.logging_config import get_logger
 from app.core.settings import settings
 from app.db.embedding_config import EXPECTED_DIM
 from app.memory.observability import memory_metrics
+from app.security.pii_redactor import redact_pii
 
 try:  # pragma: no cover - import guard for optional dependency during boot
     from mem0.configs.base import MemoryConfig
@@ -136,7 +137,15 @@ class MemoryService:
         if not self._is_configured():
             return {"results": []}
 
-        normalized_facts = [fact.strip() for fact in facts if isinstance(fact, str) and fact.strip()]
+        # Strip once, redact, and filter empty results
+        normalized_facts = []
+        for fact in facts:
+            if isinstance(fact, str):
+                stripped = fact.strip()
+                if stripped:
+                    redacted = redact_pii(stripped)
+                    if redacted:  # Also exclude if redaction produces empty string
+                        normalized_facts.append(redacted)
         if not normalized_facts:
             return {"results": []}
 
@@ -233,7 +242,7 @@ class MemoryService:
             return {"results": []}
 
         signature_value = (signature or "").strip()
-        content_value = (content or "").strip()
+        content_value = redact_pii((content or "").strip())
         if not signature_value or not content_value:
             return {"results": []}
 
@@ -321,7 +330,7 @@ class MemoryService:
         if not self._is_configured():
             return {"results": []}
 
-        text = (content or "").strip()
+        text = redact_pii((content or "").strip())
         if not text:
             return {"results": []}
 

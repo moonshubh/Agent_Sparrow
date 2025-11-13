@@ -28,11 +28,9 @@ from app.agents import agent_graph
 from app.agents import GraphState # Corrected import location
 from app.api.v1.endpoints import search_tools_endpoints # Added for search tools endpoints
 from app.api.v1.endpoints import (
-    chat_endpoints,  # Agent chat (SSE)
-    unified_endpoints,  # Unified router (SSE)
     logs_endpoints,  # Log analysis (JSON + SSE + sessions)
     research_endpoints,  # Research (JSON + SSE)
-    copilot_endpoints,  # CopilotKit runtime endpoint
+    copilot_endpoints,  # AG-UI streaming endpoint (primary streaming path)
     models_endpoints,  # Models listing for frontend selector
 )
 from app.api.v1.endpoints import agents_endpoints  # Agent metadata discovery
@@ -131,20 +129,20 @@ if ENABLE_OTEL:
         print(f"[OTel] Warning: failed to instrument FastAPI -> {_otel_exc}. Continuing without instrumentation.")
 
 @app.middleware("http")
-async def _debug_log_copilotkit_requests(request: Request, call_next):
-    if request.url.path.startswith("/api/v1/copilotkit"):
+async def _debug_log_agui_requests(request: Request, call_next):
+    if request.url.path.startswith("/api/v1/copilot"):
         body_bytes = await request.body()
         try:
             body_preview = body_bytes.decode("utf-8")
         except Exception:
             body_preview = repr(body_bytes)
-        logging.info("copilotkit_request path=%s method=%s body=%s", request.url.path, request.method, body_preview)
+        logging.info("agui_request path=%s method=%s body=%s", request.url.path, request.method, body_preview)
     response = await call_next(request)
     return response
 
-# CopilotKit endpoints
-# AG-UI LangGraph stream endpoint via router: /api/v1/copilot/stream
-# GraphQL shim removed - use stream endpoint for all CopilotKit interactions
+# AG-UI streaming endpoint
+# LangGraph stream endpoint via router: /api/v1/copilot/stream (legacy path retained)
+# GraphQL shim removed - use stream endpoint for all chat interactions
 
 # Add SlowAPI middleware for rate limiting
 app.state.limiter = limiter
@@ -159,6 +157,8 @@ else:
     allowed_origins = [
         "http://localhost:3000",
         "http://127.0.0.1:3000",
+        "http://localhost:3001",  # Added port 3001 support
+        "http://127.0.0.1:3001",  # Added port 3001 support
     ]
 
 app.add_middleware(
@@ -190,11 +190,9 @@ if os.getenv("ENABLE_LOCAL_AUTH_BYPASS", "false").lower() == "true":
 app.include_router(search_tools_endpoints.router, prefix="/api/v1/tools", tags=["Search Tools"])
 app.include_router(tavily_selftest.router, prefix="/api/v1", tags=["Search Tools"])  # GET /api/v1/tools/tavily/self-test
 # Register Agent Interaction routers (modularized)
-app.include_router(chat_endpoints.router, prefix="/api/v1", tags=["Agent Interaction"])
-app.include_router(unified_endpoints.router, prefix="/api/v1", tags=["Agent Interaction"])
 app.include_router(logs_endpoints.router, prefix="/api/v1", tags=["Agent Interaction"]) 
 app.include_router(research_endpoints.router, prefix="/api/v1", tags=["Agent Interaction"]) 
-app.include_router(copilot_endpoints.router, prefix="/api/v1", tags=["Copilot"])  # /api/v1/copilot/stream
+app.include_router(copilot_endpoints.router, prefix="/api/v1", tags=["AG-UI"])  # /api/v1/copilot/stream
 app.include_router(models_endpoints.router, prefix="/api/v1", tags=["Models"])  # /api/v1/models
 app.include_router(agents_endpoints.router, prefix="/api/v1", tags=["Agents"])  # /api/v1/agents
 app.include_router(global_knowledge_observability.router, prefix="/api/v1", tags=["Global Knowledge"])
