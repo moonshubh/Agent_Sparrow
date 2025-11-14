@@ -316,21 +316,61 @@ def _merge_agui_context(
     if attachments:
         configurable["attachments"] = attachments
 
+    # Enhanced LangSmith metadata for comprehensive observability (Phase 5)
     metadata = dict(configurable.get("metadata") or {})
+
+    # Core identifiers
     if session_id and "session_id" not in metadata:
         metadata["session_id"] = str(session_id)
     if trace_id and "trace_id" not in metadata:
         metadata["trace_id"] = str(trace_id)
+
+    # Agent configuration for analysis
+    metadata["agent_config"] = {
+        "provider": provider or "unknown",
+        "model": model or "unknown",
+        "agent_type": agent_type or "primary",
+        "coordinator_mode": "heavy" if model and "pro" in model.lower() else "light",
+    }
+
+    # Feature flags for tracking usage patterns
+    metadata["feature_flags"] = {
+        "memory_enabled": bool(use_server_memory),
+        "grounding_enabled": bool(settings.enable_grounding_search),
+        "attachments_present": len(attachments) > 0,
+        "attachments_count": len(attachments),
+        "force_websearch": bool(force_websearch),
+    }
+
+    # Search configuration if applicable
+    if websearch_max_results is not None or websearch_profile is not None:
+        metadata["search_config"] = {
+            "max_results": websearch_max_results,
+            "profile": websearch_profile,
+        }
+
     configurable["metadata"] = metadata
 
+    # Enhanced tags for filtering and analysis in LangSmith
     tags = list(configurable.get("tags") or [])
     tag_candidates = ["agui-stream", agent_type, provider]
+
+    # Memory and attachment tags
     if use_server_memory:
         tag_candidates.append("memory_enabled")
+    if attachments:
+        tag_candidates.append("attachments:true")
+
+    # Model and coordinator mode tags
     if model:
         tag_candidates.append(f"model:{model}")
+        coordinator_mode = "heavy" if "pro" in model.lower() else "light"
+        tag_candidates.append(f"coordinator_mode:{coordinator_mode}")
+
+    # Agent type and task tags
     if agent_type:
         tag_candidates.append(f"task_type:{agent_type}")
+
     for tag in tag_candidates:
         if tag and tag not in tags:
             tags.append(tag)

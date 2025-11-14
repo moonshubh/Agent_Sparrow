@@ -22,6 +22,12 @@ from app.agents.log_analysis.log_analysis_agent.simplified_schemas import (
 from app.agents.primary.primary_agent.feedme_knowledge_tool import (
     EnhancedKBSearchInput,
 )
+from app.agents.unified.grounding import (
+    GeminiGroundingService,
+    GroundingServiceError,
+    GroundingUnavailableError,
+)
+from app.agents.unified.quota_manager import QuotaExceededError
 from app.core.rate_limiting.agent_wrapper import rate_limited
 from app.core.settings import settings
 from app.db.embedding import utils as embedding_utils
@@ -60,6 +66,11 @@ def _supabase_client_cached():
     return get_supabase_client()
 
 
+@lru_cache(maxsize=1)
+def _grounding_service() -> GeminiGroundingService:
+    return GeminiGroundingService()
+
+
 def _build_kb_filters(context: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     if not context:
         return {}
@@ -92,6 +103,11 @@ def _summarize_snippets(snippets: List[str], max_chars: int = 400) -> str:
     if len(summary) <= max_chars:
         return summary
     return summary[: max_chars - 1].rstrip() + "…"
+
+
+async def _grounding_fallback(query: str, max_results: int, reason: str) -> Dict[str, Any]:
+    service = _grounding_service()
+    return await service.fallback_search(query, max_results, reason=reason)
 
 
 def _apply_supabase_filters(query, filters: Dict[str, Dict[str, Any]]):
@@ -133,6 +149,16 @@ class WebSearchInput(BaseModel):
         ge=1,
         le=10,
         description="Maximum number of URLs to return.",
+    )
+
+
+class GroundingSearchInput(BaseModel):
+    query: str = Field(..., description="Query to send through Gemini Search Grounding.")
+    max_results: int = Field(
+        default=5,
+        ge=1,
+        le=10,
+        description="Maximum number of grounded evidence chunks to return.",
     )
 
 
@@ -229,6 +255,30 @@ async def web_search_tool(input: WebSearchInput) -> Dict[str, Any]:
             await asyncio.sleep(1 * (attempt + 1))  # Exponential backoff
 
 
+@tool("grounding_search", args_schema=GroundingSearchInput)
+@rate_limited(TOOL_RATE_LIMIT_MODEL, fail_gracefully=True)
+async def grounding_search_tool(input: GroundingSearchInput) -> Dict[str, Any]:
+    """Call Gemini Search Grounding with automatic Tavily/Firecrawl fallback."""
+
+    try:
+        service = _grounding_service()
+        if not service.enabled:
+            raise GroundingUnavailableError("grounding_disabled")
+        response = await service.search_with_grounding(input.query, input.max_results)
+        if response.get("results"):
+            return response
+        return await _grounding_fallback(input.query, input.max_results, reason="empty_results")
+    except QuotaExceededError as exc:
+        logger.warning("grounding_search_quota", error=str(exc))
+        return await _grounding_fallback(input.query, input.max_results, reason="quota_exceeded")
+    except GroundingUnavailableError as exc:
+        logger.info("grounding_search_unavailable", error=str(exc))
+        return await _grounding_fallback(input.query, input.max_results, reason="unavailable")
+    except GroundingServiceError as exc:
+        logger.warning("grounding_search_error", error=str(exc))
+        return await _grounding_fallback(input.query, input.max_results, reason="service_error")
+
+
 @tool("fetch_url", args_schema=FirecrawlInput)
 @rate_limited(TOOL_RATE_LIMIT_MODEL, fail_gracefully=True)
 async def firecrawl_fetch_tool(input: FirecrawlInput) -> Dict[str, Any]:
@@ -250,11 +300,15 @@ def get_registered_tools() -> List[BaseTool]:
 
     return [
         kb_search_tool,
+        grounding_search_tool,
+        web_search_tool,
+        firecrawl_fetch_tool,
         feedme_search_tool,
         supabase_query_tool,
-        web_search_tool,
         log_diagnoser_tool,
     ]
+
+
 @tool("feedme_search", args_schema=FeedMeSearchInput)
 async def feedme_search_tool(input: FeedMeSearchInput) -> List[Dict[str, Any]]:
     """Search historical FeedMe conversations using embeddings and metadata."""

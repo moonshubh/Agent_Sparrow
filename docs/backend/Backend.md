@@ -15,7 +15,7 @@
 
 ## System Overview
 
-Agent Sparrow is a sophisticated multi-agent AI system built on FastAPI with a Next.js frontend. The backend implements an orchestrated agent graph using LangGraph, with specialized agents for different tasks (primary agent, log analysis, research, reflection). The system integrates with Supabase for data persistence, supports multiple AI providers, and now includes a CopilotKit-compatible streaming runtime at `/api/v1/copilot/stream`.
+Agent Sparrow is a unified DeepAgent-based AI system built on FastAPI with a Next.js frontend. The backend implements an orchestrated LangGraph graph with a single Unified Agent Sparrow that internally uses subagents and tools for different tasks (e.g. research and log analysis). The system integrates with Supabase for data persistence, uses Google Gemini as the model provider, and exposes a CopilotKit‑compatible streaming runtime at `/api/v1/copilot/stream`.
 
 **Recent Changes (2025-11-04)**:
 - ✅ **Phase 7 Migration Complete**: Removed legacy CopilotKit GraphQL shim and UI components
@@ -36,60 +36,35 @@ Re-organization note: canonical imports are `app.agents.*` and legacy `app.agent
 graph TB
     subgraph "Frontend Layer"
         NextJS[Next.js App]
-        MW[Middleware]
-        UC[Unified Client]
+        Copilot[CopilotKit / AG-UI Client]
     end
 
-    subgraph "API Gateway"
+    subgraph "API Layer"
         CORS[CORS Middleware]
         RL[Rate Limiter]
         Auth[Auth Middleware]
         FastAPI[FastAPI Server]
+        CopilotEP[AG-UI Stream<br/>/api/v1/copilot/stream]
+        LogsEP[Log Analysis APIs]
+        ResearchEP[Research APIs]
     end
 
-    subgraph "Agent Orchestration Layer"
-        AG[Agent Graph<br/>app/agents/orchestration/orchestration/graph.py]
-        Router[Query Router<br/>app/agents/router/router/router.py]
-        PreProc[Pre-Process Node]
-        PostProc[Post-Process Node]
-        Escalate[Escalation Node]
+    subgraph "Unified Agent Layer"
+        Graph[LangGraph Graph<br/>app/agents/orchestration/orchestration/graph.py]
+        Unified[Unified Agent Sparrow<br/>app/agents/unified/agent_sparrow.py]
+        Subagents[Subagents (research, log diagnoser)<br/>app/agents/unified/subagents.py]
     end
 
-    subgraph "Agent Nodes"
-        PA[Primary Agent<br/>app/agents/primary/primary_agent/agent.py]
-        LA[Log Analysis Agent<br/>app/agents/log_analysis/log_analysis_agent/agent.py]
-        RA[Research Agent<br/>app/agents/research/research_agent/research_agent.py]
-        RF[Reflection Agent<br/>app/agents/reflection/reflection/node.py]
-    end
-
-    subgraph "Agent Components"
-        RE[Reasoning Engine<br/>reasoning_engine.py]
-        TS[Troubleshooting Module<br/>troubleshooting/]
-        PS[Problem Solver<br/>problem_solver.py]
-        TI[Tool Intelligence<br/>tool_intelligence.py]
-        AB[Adapter Bridge<br/>adapter_bridge.py]
-    end
-
-    subgraph "Tools Layer"
-        ToolNode[Tool Node]
-        MKB[Mailbird KB Search]
-        TWS[Tavily Web Search]
-        RT[Research Tools<br/>app/tools/research_tools.py]
-        LAT[Log Analysis Tools<br/>app/tools/log_analysis_tools.py]
-        URT[User Research Tools<br/>app/tools/user_research_tools.py]
-    end
-
-    subgraph "Provider Layer"
-        PR[Provider Registry<br/>app/providers/registry.py]
-        GeminiAdapter[Gemini Adapter<br/>Google/Gemini-2.5-Flash/adapter.py]
-        OpenAIAdapter[OpenAI Adapter<br/>OpenAI/GPT-5-Mini/adapter.py]
+    subgraph "Tools & Services"
+        Tools[Unified Tools<br/>app/agents/unified/tools.py]
+        GK[Global Knowledge<br/>app/services/global_knowledge/*]
+        FeedMeSvc[FeedMe Intelligence<br/>app/feedme/*]
     end
 
     subgraph "Data Layer"
         SC[Supabase Client<br/>app/db/supabase/client.py]
         Models[DB Models<br/>app/db/models.py]
-        Embeddings[Embedding Utils<br/>app/db/embedding_utils.py]
-        Session[Session Manager<br/>app/db/session.py]
+        Embeddings[Embedding Utils<br/>app/db/embedding/*]
     end
 
     subgraph "Core Services"
@@ -97,7 +72,7 @@ graph TB
         UserContext[User Context<br/>app/core/user_context.py]
         Security[Security Module<br/>app/core/security.py]
         RateLimiting[Rate Limiting<br/>app/core/rate_limiting/]
-        QualityMgr[Quality Manager<br/>app/core/quality_manager.py]
+        Memory[Mem0 Memory Service<br/>app/memory/service.py]
         Cache[Redis Cache<br/>app/cache/redis_cache.py]
     end
 
@@ -105,77 +80,58 @@ graph TB
         Supabase[(Supabase DB)]
         Redis[(Redis)]
         Gemini[Google Gemini API]
-        OpenAI[OpenAI API]
         Tavily[Tavily API]
+        Firecrawl[Firecrawl API]
     end
 
     %% Frontend to Backend connections
-    NextJS --> MW
-    MW --> UC
-    UC --> |HTTP/WebSocket| FastAPI
+    NextJS --> Copilot
+    Copilot --> |HTTP/SSE| FastAPI
 
-    %% API Gateway flow
+    %% API Layer flow
     FastAPI --> CORS
     CORS --> RL
     RL --> Auth
-    Auth --> AG
+    Auth --> CopilotEP
+    Auth --> LogsEP
+    Auth --> ResearchEP
 
-    %% Agent Graph flow
-    AG --> PreProc
-    PreProc --> |Check Cache| Router
-    Router --> |Route Decision| PA
-    Router --> |Log Query| LA
-    Router --> |Research Query| RA
+    %% Unified agent flow
+    CopilotEP --> Graph
+    LogsEP --> Graph
+    ResearchEP --> Graph
+    Graph --> Unified
+    Unified --> Subagents
+    Unified --> Tools
 
-    %% Agent interactions
-    PA --> RE
-    PA --> AB
-    RE --> PS
-    RE --> TI
-    PA --> RF
-    RF --> |Refine| PA
-    RF --> |Complete| PostProc
-    RF --> |Escalate| Escalate
-
-    %% Tool interactions
-    PA --> ToolNode
-    LA --> ToolNode
-    RA --> ToolNode
-    ToolNode --> MKB
-    ToolNode --> TWS
-    ToolNode --> RT
-    ToolNode --> LAT
-    ToolNode --> URT
-
-    %% Provider connections
-    AB --> PR
-    PR --> GeminiAdapter
-    PR --> OpenAIAdapter
-    GeminiAdapter --> Gemini
-    OpenAIAdapter --> OpenAI
-    TWS --> Tavily
+    %% Tools & services interactions
+    Tools --> GK
+    Tools --> FeedMeSvc
 
     %% Data layer connections
-    FastAPI --> SC
+    Tools --> SC
+    GK --> SC
+    FeedMeSvc --> SC
     SC --> Supabase
-    FastAPI --> Models
-    FastAPI --> Session
-    FastAPI --> Embeddings
+    Tools --> Embeddings
+    Embeddings --> Models
 
     %% Core services
     FastAPI --> Settings
     FastAPI --> UserContext
     FastAPI --> Security
     FastAPI --> RateLimiting
-    FastAPI --> QualityMgr
+    FastAPI --> Memory
     RateLimiting --> Cache
     Cache --> Redis
 
-    style PA fill:#e1f5fe
-    style LA fill:#e1f5fe
-    style RA fill:#e1f5fe
-    style RF fill:#e1f5fe
-    style AG fill:#fff3e0
+    %% External providers
+    Unified --> Gemini
+    Tools --> Tavily
+    Tools --> Firecrawl
+
+    style Unified fill:#e1f5fe
+    style Graph fill:#fff3e0
     style FastAPI fill:#f3e5f5
     style Supabase fill:#c8e6c9
     style Redis fill:#ffccbc
@@ -194,106 +150,77 @@ graph TB
   - Global exception handlers for rate limiting
 
 ### 2. Agent Graph (`app/agents/orchestration/orchestration/graph.py`)
-- **Purpose**: Orchestrates the flow between different agents
+- **Purpose**: Orchestrates the flow of the unified agent and its subagents
 - **Components**:
   - StateGraph for managing agent state
-  - Router node for query classification
-  - Agent nodes (primary, log analysis, research)
+  - Unified agent node wrapping DeepAgents runtime
+  - Subagent nodes (research, log diagnoser)
   - Tool node for external tool execution
-  - Reflection node for quality assurance
   - Pre/post processing nodes
 
-### 3. Primary Agent (`app/agents/primary/primary_agent/agent.py`)
-- **Purpose**: Main conversational agent handling general queries
+### 3. Unified Agent (`app/agents/unified/agent_sparrow.py`)
+- **Purpose**: Main conversational agent handling all chat flows (primary, research, log analysis) via DeepAgents
 - **Features**:
-  - Reasoning engine integration
-  - Tool intelligence for smart tool usage
-  - Troubleshooting capabilities
-  - Support for thinking budget (Gemini 2.5)
-  - Streaming responses
-- **Key Files**:
-  - `reasoning_engine.py`: Core reasoning logic
-  - `problem_solver.py`: Problem-solving strategies
-  - `tool_intelligence.py`: Tool selection intelligence
-  - `adapter_bridge.py`: Provider abstraction
+  - Model routing and runtime config resolution
+  - Mem0-based memory integration
+  - PII redaction and observability hooks
+  - Streaming via LangGraph + AG‑UI
+  - Subagent orchestration (research, log diagnoser)
 
-### 4. Log Analysis Agent (`app/agents/log_analysis/log_analysis_agent/`)
-- **Purpose**: Specialized agent for analyzing logs and debugging
-- **Response Generation**: Gemini 2.5 Pro generates natural, conversational markdown directly (no formatters)
-- **Components**:
-  - `comprehensive_agent.py`: Quality-first pipeline (defaults to Google Gemini 2.5 Pro)
-  - `agent.py`: Main agent logic
-  - `simplified_agent.py`: Simplified version for basic analysis
-  - `extractors/`: Log pattern extractors (metadata, patterns)
-  - `reasoning/`: Reasoning engine and root cause classifier
-  - `tools/`: Log-specific tools (KB search, web search, FeedMe)
-  - `privacy/`: Sanitization and cleanup managers
-  - `security/`: Security validation and compliance
-  - `context/`: Context ingestion and settings loaders
+### 4. Log Analysis (Unified Tool)
+- **Location**:
+  - `app/agents/log_analysis/log_analysis_agent/simplified_agent.py`
+  - `app/agents/log_analysis/log_analysis_agent/simplified_schemas.py`
+- **Purpose**: Simplified log analysis agent surfaced as the `log_diagnoser` tool
+- **Usage**:
+  - Exposed through `app/agents/unified/tools.py` as `log_diagnoser_tool`
+  - Consumed by `app/api/v1/endpoints/logs_endpoints.py` (JSON + SSE)
 
-### 5. Research Agent (`app/agents/research/research_agent/research_agent.py`)
-- **Purpose**: Handles research queries and information gathering
-- **Features**:
-  - Web search integration
-  - Knowledge base search
-  - Multi-source aggregation
-
-### 6. Reflection Agent (`app/agents/reflection/reflection/node.py`)
-- **Purpose**: Quality assurance and response refinement
-- **Features**:
-  - Response quality checking
-  - Iterative refinement
-  - Escalation for complex issues
+### 5. Research (Unified Subagent)
+- **Location**:
+  - Subagent spec in `app/agents/unified/subagents.py`
+  - Runtime via `run_unified_agent` in `app/agents/unified/agent_sparrow.py`
+- **Purpose**: Handles research/information‑gathering queries using web search, global knowledge, and FeedMe
+- **Usage**:
+  - Exposed through `app/api/v1/endpoints/research_endpoints.py` (JSON + SSE)
 
 ## Directory Structure
 
 ```
 app/
 ├── agents/                      # Canonical agents package
+│   ├── unified/                 # Unified DeepAgent implementation
+│   │   ├── agent_sparrow.py
+│   │   ├── subagents.py
+│   │   ├── tools.py
+│   │   ├── model_router.py
+│   │   ├── prompts.py
+│   │   └── grounding.py
 │   ├── orchestration/
-│   │   └── orchestration/       # Graph, nodes, state, escalation
+│   │   └── orchestration/       # Graph + state for unified agent
 │   │       ├── graph.py
-│   │       ├── nodes.py
-│   │       ├── state.py
-│   │       └── escalation.py
-│   ├── router/
-│   │   └── router/              # Query routing logic
-│   │       ├── router.py
-│   │       └── schemas.py
-│   ├── primary/
-│   │   └── primary_agent/       # Primary conversational agent
-│   │       ├── agent.py
-│   │       ├── reasoning/
-│   │       ├── troubleshooting/
-│   │       ├── prompts/
-│   │       └── tools.py
-│   ├── log_analysis/
-│   │   └── log_analysis_agent/  # Log analysis specialist
-│   │       ├── comprehensive_agent.py  # Main quality-first pipeline
-│   │       ├── agent.py
-│   │       ├── simplified_agent.py
-│   │       ├── extractors/      # Pattern analysis & metadata
-│   │       ├── reasoning/       # Reasoning engine & root cause
-│   │       ├── tools/          # KB search, web search, orchestrator
-│   │       ├── privacy/        # Sanitization & cleanup
-│   │       ├── security/       # Validation & compliance
-│   │       ├── context/        # Context ingestion
-│   │       ├── schemas/        # Data models
-│   │       └── templates/      # Response templates
-│   ├── research/
-│   │   └── research_agent/
-│   │       └── research_agent.py
-│   ├── reflection/
-│   │   └── reflection/
-│   │       ├── node.py
-│   │       └── schema.py
-│   └── checkpointer/
-│       ├── postgres_checkpointer.py
-│       └── thread_manager.py
+│   │       └── state.py
+│   ├── checkpointer/
+│   │   ├── postgres_checkpointer.py
+│   │   └── thread_manager.py
+│   └── metadata.py
 ├── api/
 │   └── v1/
-│       ├── endpoints/           # chat, unified, logs, secure logs, research, feedme, api-keys, rate-limits, etc.
-│       └── websocket/           # FeedMe
+│       ├── endpoints/           # copilot (AG‑UI), logs, research, feedme, api-keys, rate-limits, etc.
+│       │   ├── copilot_endpoints.py
+│       │   ├── logs_endpoints.py
+│       │   ├── research_endpoints.py
+│       │   ├── feedme_endpoints.py
+│       │   ├── feedme_intelligence.py
+│       │   ├── chat_session_endpoints.py
+│       │   ├── text_approval_endpoints.py
+│       │   ├── api_key_endpoints.py
+│       │   ├── rate_limit_endpoints.py
+│       │   ├── agents_endpoints.py
+│       │   ├── agent_interrupt_endpoints.py
+│       │   └── tavily_selftest.py
+│       └── websocket/           # FeedMe WebSocket
+│           └── feedme_websocket.py
 ├── core/
 │   ├── transport/sse.py         # Unified SSE formatting
 │   ├── rate_limiting/           # Gemini limiters, circuit breaker, config
@@ -306,17 +233,19 @@ app/
 │   ├── embedding/utils.py
 │   ├── models.py
 │   └── migrations/
+├── memory/
+│   └── service.py               # Mem0-based memory service
+├── security/
+│   └── pii_redactor.py          # PII redaction hooks
+├── services/
+│   └── global_knowledge/        # Global knowledge retrieval + observability
 ├── providers/
-│   ├── registry.py
-│   ├── adapters/__init__.py     # Bootstraps known adapters
-│   ├── Google/
-│   │   ├── Gemini-2.5-Flash/adapter.py
-│   │   ├── Gemini-2.5-Pro/adapter.py
-│   │   └── LogAnalysis/Gemini-2.5-Pro/adapter.py
-│   └── OpenAI/GPT-5-Mini/adapter.py
+│   └── limits/                  # Thin wrappers around core rate limiting (optional)
 ├── tools/
+│   └── research_tools.py        # Tavily/Firecrawl clients used by unified tools
 ├── cache/redis_cache.py
 └── feedme/
+    └── ...                      # FeedMe ingestion, analytics, WebSocket, etc.
 ```
 
 ## Agent System
@@ -355,29 +284,28 @@ The reasoning engine (`reasoning_engine.py`) implements:
 ## API Layer
 
 For detailed developer guides, see:
-- docs/backend/primary-agent.md
-- docs/backend/log-analysis-agent.md
+- `docs/Unified-Agent-Implementation-Guide.md`
+- `docs/AG-UI-DeepAgent-Implementation-Plan.md`
+- `docs/Unified-Agent-Migration-Report.md`
 
 ### Key Endpoints
 
-#### Agent Endpoints (modularized)
-- chat_endpoints.py: `POST /api/v1/v2/agent/chat/stream` – Primary Agent streaming (SSE)
-- unified_endpoints.py: `POST /api/v1/agent/unified/stream` – Unified stream routing to primary/log-analysis/research
-- logs_endpoints.py: `POST /api/v1/agent/logs` (JSON), `POST /api/v1/agent/logs/stream` (SSE), sessions and rate-limits
-- research_endpoints.py: `POST /api/v1/agent/research` (JSON), `POST /api/v1/agent/research/stream` (SSE)
+#### AG‑UI / Chat Endpoints
+- `copilot_endpoints.py`:
+  - `POST /api/v1/copilot/stream` – Unified AG‑UI streaming endpoint (SSE)
+  - `GET /api/v1/copilot/stream/health` – Health and diagnostics
 
-#### Secure Log Analysis (`secure_log_analysis.py`)
-- `POST /api/v1/agent/secure/logs` – Paranoid secure JSON analysis (Gemini 2.5 Pro enforced)
-- `POST /api/v1/agent/secure/logs/file` – Secure file upload variant
-- `POST /api/v1/agent/secure/logs/stream` – Secure SSE stream with real-time security updates
-- `GET /api/v1/agent/secure/audit` – Security audit snapshot
-- `POST /api/v1/agent/secure/compliance/check` – Full compliance check
-- `DELETE /api/v1/agent/secure/cleanup` – Force immediate cleanup
+#### Agent Endpoints (JSON/SSE)
+- `logs_endpoints.py`:
+  - `POST /api/v1/agent/logs` – Log analysis (JSON) via unified `log_diagnoser` tool
+  - `POST /api/v1/agent/logs/stream` – Log analysis (SSE) with timeline steps
+- `research_endpoints.py`:
+  - `POST /api/v1/agent/research` – Research queries (JSON) via unified research subagent
+  - `POST /api/v1/agent/research/stream` – Research (SSE)
 
 Streaming contracts:
-- Primary chat stream emits: `text-start`, `text-delta`, optional `data-*` metadata, `text-end`, `finish`.
-- Unified stream (log analysis) emits timeline steps as `{ type: 'step', data: {...} }`, a final assistant message with `analysis_results`, and a terminal `[DONE]` marker.
-- Secure log stream emits: `security` (status/redaction) → `analysis` (processing) → `result` → `done`.
+- AG‑UI chat stream emits AG‑UI events (e.g. `text-delta`, `tool-call`, `tool-result`, `finish`) as defined by the AG‑UI LangGraph adapter.
+- Log analysis stream emits timeline steps as `{ type: 'step', data: {...} }`, a final assistant message with `analysis_results`, and a terminal `[DONE]` marker.
 
 #### API Key Management (`api_key_endpoints.py`)
 - `GET /api/v1/api-keys` – List masked keys; `POST /api/v1/api-keys` – Create/update; `PUT/DELETE /api/v1/api-keys/{type}`
@@ -386,11 +314,6 @@ Streaming contracts:
 
 #### Rate Limit Monitoring (`rate_limit_endpoints.py`)
 - `GET /api/v1/rate-limits/status|usage|health|config|metrics`, `POST /api/v1/rate-limits/check/{model}`, `POST /api/v1/rate-limits/reset`
-
-#### Advanced Agent Endpoints (`advanced_agent_endpoints.py`)
-- `POST /api/v1/advanced/reasoning/structured` – Structured reasoning
-- `POST /api/v1/advanced/troubleshoot/mailbird` – Mailbird-specific troubleshooting
-- `POST /api/v1/advanced/research` – Research mode
 
 #### FeedMe Endpoints (`feedme_endpoints.py`)
 - `POST /api/v1/feedme/ingest` – Transcript ingestion
@@ -546,7 +469,6 @@ DEVELOPMENT_USER_ID=dev-user-12345
 
 # API Keys
 GEMINI_API_KEY=your-gemini-key
-OPENAI_API_KEY=your-openai-key
 TAVILY_API_KEY=your-tavily-key
 
 # Supabase
@@ -582,33 +504,23 @@ python app/main.py
 
 ## Provider System
 
-### Provider Registry (`app/providers/registry.py`)
-- Dynamic provider registration
-- Adapter pattern for multiple AI providers
-- Fallback mechanisms
+### Model Provider
 
-### Supported Providers
-1. **Google Gemini** (Primary):
-   - Models: gemini-2.5-flash, gemini-2.5-pro
-   - Features: Thinking mode, streaming, function calling (secure log analysis enforces Pro)
+The current system is **Gemini-only**. Models are instantiated directly via
+`langchain_google_genai.ChatGoogleGenerativeAI` using names configured in
+`app/core/settings.py` (e.g. `gemini-2.5-flash`, `gemini-2.5-pro`).
 
-2. **OpenAI**:
-   - Models: GPT5-mini
-   - Features: Thinking mode, Function calling, streaming
+- `PRIMARY_AGENT_PROVIDER` / `primary_agent_provider` are expected to be `google`.
+- OpenAI adapters and the old provider registry (`app/providers/registry.py`) have
+  been removed from the runtime path; adding new providers now requires wiring
+  them into the unified agent implementation instead of the legacy registry.
 
-### Adding New Providers
-1. Create adapter in `app/providers/<provider>/`
-2. Implement base adapter interface
-3. Register in provider registry
-4. Update configuration
+## Troubleshooting Module (Legacy)
 
-## Troubleshooting Module
-
-### Components (`app/agents/primary/primary_agent/troubleshooting/`)
-- **Error Analysis**: Pattern matching for common errors
-- **Solution Database**: Known issue resolutions
-- **Diagnostic Tools**: System state inspection
-- **Guided Debugging**: Step-by-step troubleshooting
+The legacy troubleshooting module under
+`app/agents/primary/primary_agent/troubleshooting/` has been removed as part of
+the unified agent migration. Historical details are preserved in
+`docs/reference/legacy_architecture.md`.
 
 ## Cache System
 

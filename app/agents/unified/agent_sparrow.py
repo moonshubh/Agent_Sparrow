@@ -331,6 +331,16 @@ async def _prepend_memory_context(state: GraphState, enabled: bool) -> List[Base
     query = _extract_last_user_query(state.messages)
     if not query:
         return state.messages
+
+    # Initialize memory stats for LangSmith observability
+    memory_stats = {
+        "retrieval_attempted": True,
+        "query_length": len(query),
+        "facts_retrieved": 0,
+        "relevance_scores": [],
+        "retrieval_error": None,
+    }
+
     try:
         retrieved = await memory_service.retrieve(
             agent_id=MEMORY_AGENT_ID,
@@ -339,16 +349,39 @@ async def _prepend_memory_context(state: GraphState, enabled: bool) -> List[Base
         )
     except Exception as exc:  # pragma: no cover - defensive logging
         logger.warning("memory_retrieve_failed", error=str(exc))
+        memory_stats["retrieval_error"] = str(exc)
+        _update_memory_stats(state, memory_stats)
         return state.messages
 
     if not retrieved:
+        _update_memory_stats(state, memory_stats)
         return state.messages
+
+    # Extract stats from retrieved memories
+    memory_stats["facts_retrieved"] = len(retrieved)
+    memory_stats["relevance_scores"] = [
+        getattr(mem, "score", 0.0) for mem in retrieved
+        if hasattr(mem, "score")
+    ]
 
     memory_message = _build_memory_system_message(retrieved)
     if not memory_message:
+        _update_memory_stats(state, memory_stats)
         return state.messages
 
+    # Store memory stats in scratchpad for LangSmith
+    _update_memory_stats(state, memory_stats)
+
     return [memory_message, *state.messages]
+
+
+def _update_memory_stats(state: GraphState, stats: Dict[str, Any]) -> None:
+    """Update memory stats in scratchpad for LangSmith observability."""
+    if isinstance(state.scratchpad, dict):
+        system_bucket = state.scratchpad.setdefault("_system", {})
+        memory_section = system_bucket.setdefault("memory_stats", {})
+        memory_section.update(stats)
+        state.scratchpad["_system"] = system_bucket
 
 
 def _strip_memory_messages(messages: List[BaseMessage]) -> List[BaseMessage]:
@@ -368,7 +401,17 @@ async def _record_memory(state: GraphState, ai_message: BaseMessage) -> None:
         return
     fact_text = _coerce_message_text(ai_message).strip()
     facts = _summarize_response_to_facts(fact_text)
+
+    # Initialize memory write stats for LangSmith
+    write_stats = {
+        "write_attempted": True,
+        "facts_extracted": len(facts) if facts else 0,
+        "response_length": len(fact_text),
+        "write_error": None,
+    }
+
     if not facts:
+        _update_memory_stats(state, write_stats)
         return
 
     meta: Dict[str, Any] = {"source": "unified_agent"}
@@ -379,13 +422,21 @@ async def _record_memory(state: GraphState, ai_message: BaseMessage) -> None:
     meta["fact_strategy"] = "sentence_extract"
 
     try:
-        await memory_service.add_facts(
+        result = await memory_service.add_facts(
             agent_id=MEMORY_AGENT_ID,
             facts=facts,
             meta=meta,
         )
+        # Track successful write
+        write_stats["write_successful"] = bool(result)
+        write_stats["facts_written"] = len(facts)
     except Exception as exc:  # pragma: no cover - best effort persistence
         logger.warning("memory_add_failed", error=str(exc))
+        write_stats["write_error"] = str(exc)
+        write_stats["write_successful"] = False
+
+    # Update memory stats in scratchpad
+    _update_memory_stats(state, write_stats)
 
 
 async def run_unified_agent(state: GraphState, config: Optional[RunnableConfig] = None) -> Dict[str, Any]:

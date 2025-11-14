@@ -32,6 +32,7 @@ from app.api.v1.endpoints import (
     research_endpoints,  # Research (JSON + SSE)
     copilot_endpoints,  # AG-UI streaming endpoint (primary streaming path)
     models_endpoints,  # Models listing for frontend selector
+    metadata_endpoints,  # Phase 6: Memory stats, quota status, trace metadata
 )
 from app.api.v1.endpoints import agents_endpoints  # Agent metadata discovery
 from app.api.v1.endpoints import tavily_selftest  # Dev-only Tavily diagnostics
@@ -199,6 +200,7 @@ app.include_router(research_endpoints.router, prefix="/api/v1", tags=["Agent Int
 app.include_router(copilot_endpoints.router, prefix="/api/v1", tags=["AG-UI"])  # /api/v1/copilot/stream
 app.include_router(models_endpoints.router, prefix="/api/v1", tags=["Models"])  # /api/v1/models
 app.include_router(agents_endpoints.router, prefix="/api/v1", tags=["Agents"])  # /api/v1/agents
+app.include_router(metadata_endpoints.router, prefix="/api/v1", tags=["Metadata"])  # /api/v1/metadata - Phase 6
 app.include_router(global_knowledge_observability.router, prefix="/api/v1", tags=["Global Knowledge"])
 app.include_router(global_knowledge_feedback.router, prefix="/api/v1", tags=["Global Knowledge"])
 # Register FeedMe routes

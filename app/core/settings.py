@@ -56,6 +56,15 @@ class Settings(BaseSettings):
     redis_url: str = Field(default="redis://localhost:6379", alias="REDIS_URL")
     cache_ttl_sec: int = Field(default=3600, alias="CACHE_TTL_SEC")
     router_conf_threshold: float = Field(default=0.6, alias="ROUTER_CONF_THRESHOLD")
+
+    # Gemini Search Grounding configuration
+    enable_grounding_search: bool = Field(default=False, alias="ENABLE_GROUNDING_SEARCH")
+    grounding_model: str = Field(default="gemini-2.5-flash", alias="GROUNDING_MODEL")
+    grounding_max_results: int = Field(default=5, alias="GROUNDING_MAX_RESULTS")
+    grounding_timeout_sec: float = Field(default=10.0, alias="GROUNDING_TIMEOUT_SEC")
+    grounding_snippet_chars: int = Field(default=480, alias="GROUNDING_SNIPPET_CHARS")
+    grounding_minute_limit: int = Field(default=30, alias="GROUNDING_MINUTE_LIMIT")
+    grounding_daily_limit: int = Field(default=1000, alias="GROUNDING_DAILY_LIMIT")
     router_model: str = Field(default="gemini-2.5-flash-lite", alias="ROUTER_MODEL")
     node_timeout_sec: float = Field(default=30.0, alias="NODE_TIMEOUT_SEC")
     use_enhanced_log_analysis: bool = Field(default=True, alias="USE_ENHANCED_LOG_ANALYSIS")
