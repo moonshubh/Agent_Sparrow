@@ -264,27 +264,6 @@
     }
   }
   
-  /* Enhanced log analysis container for full-width display */
-  .log-analysis-container {
-    width: 100%;
-    max-width: none;
-  }
-  
-  /* Content-aware message containers */
-  .message-container-primary {
-    width: 100%;
-    max-width: min(1200px, 90%);
-    margin-left: auto;
-    margin-right: auto;
-  }
-  
-  .message-container-log-analysis {
-    width: 100%;
-    max-width: min(1400px, 95%);
-    margin-left: auto;
-    margin-right: auto;
-  }
-  
   /* Tiptap Editor Styles */
   .ProseMirror {
     outline: none;

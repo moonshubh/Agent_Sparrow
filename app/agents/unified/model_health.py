@@ -10,11 +10,8 @@ from typing import Dict, Optional, Union
 from loguru import logger
 
 from app.core.rate_limiting.agent_wrapper import get_rate_limiter
+from app.core.rate_limiting.config import RateLimitConfig
 from app.core.rate_limiting.schemas import CircuitState, RateLimitMetadata, UsageStats
-
-
-FLASH_FAMILY = {"gemini-2.5-flash", "gemini-2.5-flash-lite"}
-PRO_FAMILY = {"gemini-2.5-pro"}
 
 
 @dataclass
@@ -57,13 +54,13 @@ class ModelQuotaTracker:
         stats = await self._get_usage_stats()
         base = self._normalize_model(model)
 
-        if base in FLASH_FAMILY:
-            metadata = stats.flash_stats
-            circuit = stats.flash_circuit
-        elif base in PRO_FAMILY:
-            metadata = stats.pro_stats
-            circuit = stats.pro_circuit
-        else:
+        mapping = {
+            "gemini-2.5-flash": (stats.flash_stats, stats.flash_circuit),
+            "gemini-2.5-flash-lite": (stats.flash_lite_stats, stats.flash_lite_circuit),
+            "gemini-2.5-pro": (stats.pro_stats, stats.pro_circuit),
+        }
+
+        if base not in mapping:
             logger.warning("ModelQuotaTracker invoked for unsupported model '%s'", model)
             return ModelHealth(
                 model=model,
@@ -75,6 +72,8 @@ class ModelQuotaTracker:
                 circuit_state="unknown",
                 reason="unsupported_model",
             )
+
+        metadata, circuit = mapping[base]
 
         available, reason = self._evaluate_availability(metadata, circuit.state)
         return ModelHealth(
@@ -103,12 +102,13 @@ class ModelQuotaTracker:
             return stats
 
     def _normalize_model(self, model: str) -> str:
-        normalized = (model or "").strip().lower()
-        if normalized in FLASH_FAMILY:
-            return "gemini-2.5-flash"
-        if normalized in PRO_FAMILY:
-            return "gemini-2.5-pro"
-        return normalized
+        try:
+            return RateLimitConfig.normalize_model_name(model)
+        except ValueError:
+            normalized = (model or "").strip().lower()
+            if normalized.startswith("models/"):
+                normalized = normalized.split("/", 1)[1]
+            return normalized
 
     def _evaluate_availability(self, metadata: RateLimitMetadata, circuit_state: CircuitState) -> tuple[bool, Optional[str]]:
         if circuit_state == CircuitState.OPEN:
@@ -127,4 +127,3 @@ class ModelQuotaTracker:
 
 
 quota_tracker = ModelQuotaTracker()
-

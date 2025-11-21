@@ -24,9 +24,9 @@ except ImportError:  # pragma: no cover
     FirecrawlApp = None  # type: ignore
 
 try:  # pragma: no cover – optional dependency
-    from tavily import Tavily  # type: ignore
+    from tavily import TavilyClient  # type: ignore
 except ImportError:  # pragma: no cover
-    Tavily = None  # type: ignore
+    TavilyClient = None  # type: ignore
 
 # Load environment variables from .env file (noop if file missing)
 load_dotenv()
@@ -65,7 +65,7 @@ class TavilySearchTool:
 
     def __init__(self):
         # Disable tool if SDK missing or API key not set
-        if Tavily is None:
+        if TavilyClient is None:
             # SDK not installed – operate in disabled mode
             self.client = None  # type: ignore[assignment]
             self.disabled = True
@@ -78,8 +78,8 @@ class TavilySearchTool:
             self.disabled = True
             return
 
-        # `tavily-python` exposes a Tavily client – full functionality
-        self.client = Tavily(api_key=api_key)
+        # `tavily-python` exposes a TavilyClient – full functionality
+        self.client = TavilyClient(api_key=api_key)
         self.disabled = False
 
     @retry(
@@ -97,10 +97,21 @@ class TavilySearchTool:
 
         results = self.client.search(query=query, max_results=max_results)
 
-        # Tavily returns {"results": [{"url": "...", ...}, ...]}
-        urls = [item["url"] for item in results.get("results", [])][:max_results]
+        structured_results = results.get("results", [])
+        urls = []
+        for item in structured_results:
+            url = item.get("url")
+            if url:
+                urls.append(url)
+            if len(urls) >= max_results:
+                break
 
-        return {"urls": urls}
+        return {
+            "query": query,
+            "results": structured_results[:max_results],
+            "urls": urls,
+            "attribution": results.get("attribution"),
+        }
 
 
 class FirecrawlTool:
@@ -160,7 +171,11 @@ class FirecrawlTool:
             retry=retry_if_exception_type(Exception),
         )
         def _call_firecrawl(u: str):
-            return self.app.scrape_url(u)
+            # Firecrawl v2 exposes `.scrape()` rather than `scrape_url()`.
+            scrape_fn = getattr(self.app, "scrape", None)
+            if scrape_fn is None:
+                raise AttributeError("Firecrawl client missing `scrape` method")
+            return scrape_fn(u)
 
         try:
             scraped_data = _call_firecrawl(url)

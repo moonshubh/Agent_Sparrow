@@ -10,11 +10,12 @@ from app.core.settings import settings
 
 from .prompts import LOG_ANALYSIS_PROMPT, RESEARCH_PROMPT
 from .tools import (
-    firecrawl_fetch_tool,
     grounding_search_tool,
     kb_search_tool,
     log_diagnoser_tool,
     web_search_tool,
+    feedme_search_tool,
+    supabase_query_tool,
 )
 from .model_router import model_router
 
@@ -48,7 +49,13 @@ def _research_subagent() -> Dict[str, Any]:
         "name": "research-agent",
         "description": "Gathers supporting evidence from Mailbird KB and the public web.",
         "system_prompt": RESEARCH_PROMPT,
-        "tools": [kb_search_tool, grounding_search_tool, web_search_tool, firecrawl_fetch_tool],
+        "tools": [
+            kb_search_tool,
+            feedme_search_tool,
+            supabase_query_tool,
+            grounding_search_tool,
+            web_search_tool,
+        ],
         "model": _get_chat_model(model_name),
     }
 
@@ -65,7 +72,12 @@ def _log_diagnoser_subagent() -> Dict[str, Any]:
         "name": "log-diagnoser",
         "description": "Analyzes attached log files to identify issues and fixes.",
         "system_prompt": LOG_ANALYSIS_PROMPT,
-        "tools": [log_diagnoser_tool],
+        "tools": [
+            log_diagnoser_tool,
+            kb_search_tool,
+            feedme_search_tool,
+            supabase_query_tool,
+        ],
         "model": _get_chat_model(model_name),
     }
 

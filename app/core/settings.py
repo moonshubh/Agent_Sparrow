@@ -59,24 +59,25 @@ class Settings(BaseSettings):
 
     # Gemini Search Grounding configuration
     enable_grounding_search: bool = Field(default=False, alias="ENABLE_GROUNDING_SEARCH")
-    grounding_model: str = Field(default="gemini-2.5-flash", alias="GROUNDING_MODEL")
+    grounding_model: str = Field(default="gemini-2.5-flash-preview-09-2025", alias="GROUNDING_MODEL")
     grounding_max_results: int = Field(default=5, alias="GROUNDING_MAX_RESULTS")
     grounding_timeout_sec: float = Field(default=10.0, alias="GROUNDING_TIMEOUT_SEC")
     grounding_snippet_chars: int = Field(default=480, alias="GROUNDING_SNIPPET_CHARS")
     grounding_minute_limit: int = Field(default=30, alias="GROUNDING_MINUTE_LIMIT")
     grounding_daily_limit: int = Field(default=1000, alias="GROUNDING_DAILY_LIMIT")
-    router_model: str = Field(default="gemini-2.5-flash-lite", alias="ROUTER_MODEL")
+    router_model: str = Field(default="gemini-2.5-flash-lite-preview-09-2025", alias="ROUTER_MODEL")
     node_timeout_sec: float = Field(default=30.0, alias="NODE_TIMEOUT_SEC")
     use_enhanced_log_analysis: bool = Field(default=True, alias="USE_ENHANCED_LOG_ANALYSIS")
     enhanced_log_model: str = Field(default="gemini-2.5-pro", alias="ENHANCED_LOG_MODEL")
     # Provider/model selection for primary agent
     primary_agent_provider: str = Field(default="google", alias="PRIMARY_AGENT_PROVIDER")
-    primary_agent_model: str = Field(default="gemini-2.5-flash", alias="PRIMARY_AGENT_MODEL")
+    primary_agent_model: str = Field(default="gemini-2.5-flash-preview-09-2025", alias="PRIMARY_AGENT_MODEL")
     primary_agent_temperature: float = Field(default=0.2, alias="PRIMARY_AGENT_TEMPERATURE")
     primary_agent_thinking_budget: Optional[int] = Field(default=None, alias="THINKING_BUDGET")
     primary_agent_formatting: str = Field(default="natural", alias="PRIMARY_AGENT_FORMATTING")
     primary_agent_quality_level: str = Field(default="balanced", alias="PRIMARY_AGENT_QUALITY_LEVEL")
     primary_agent_prompt_version: str = Field(default="v10", alias="PRIMARY_AGENT_PROMPT_VERSION")
+    gemma_helper_model: str = Field(default="gemma-3-27b-it", alias="GEMMA_HELPER_MODEL")
     enable_websearch: bool = Field(default=True, alias="ENABLE_WEBSEARCH")
     enable_grounded_responses: bool = Field(default=True, alias="ENABLE_GROUNDED_RESPONSES")
     primary_agent_min_kb_relevance: float = Field(default=0.65, alias="PRIMARY_AGENT_MIN_KB_RELEVANCE")
@@ -221,9 +222,9 @@ class Settings(BaseSettings):
     global_knowledge_enable_adapter_fallback: bool = Field(default=True, alias="GLOBAL_KNOWLEDGE_ENABLE_ADAPTER_FALLBACK")
     
     # Rate Limiting Configuration (free tier defaults; override via env)
-    gemini_flash_rpm_limit: int = Field(default=15, alias="GEMINI_FLASH_RPM_LIMIT")
-    gemini_flash_rpd_limit: int = Field(default=1000, alias="GEMINI_FLASH_RPD_LIMIT")
-    gemini_pro_rpm_limit: int = Field(default=5, alias="GEMINI_PRO_RPM_LIMIT")
+    gemini_flash_rpm_limit: int = Field(default=10, alias="GEMINI_FLASH_RPM_LIMIT")
+    gemini_flash_rpd_limit: int = Field(default=250, alias="GEMINI_FLASH_RPD_LIMIT")
+    gemini_pro_rpm_limit: int = Field(default=2, alias="GEMINI_PRO_RPM_LIMIT")
     gemini_pro_rpd_limit: int = Field(default=100, alias="GEMINI_PRO_RPD_LIMIT")
 
     # Application-level usage budgets

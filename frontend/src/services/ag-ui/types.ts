@@ -2,8 +2,8 @@ import type { BinaryInputContent, TextInputContent } from '@ag-ui/core';
 
 export interface AttachmentInput {
   name: string;
-  mimeType: string;
-  dataUrl: string;
+  mime_type: string;
+  data_url: string;
   size: number;
 }
 

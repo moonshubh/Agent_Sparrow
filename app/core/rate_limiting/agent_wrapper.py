@@ -146,8 +146,20 @@ class RateLimitedAgent:
         
         # Preserve original agent attributes
         for attr in dir(agent):
-            if not attr.startswith('_') and not hasattr(self, attr):
-                setattr(self, attr, getattr(agent, attr))
+            if attr.startswith("_") or hasattr(self, attr):
+                continue
+            if attr in ("profile",):
+                continue
+            try:
+                value = getattr(agent, attr)
+            except ImportError:
+                continue
+            except Exception:
+                continue
+            try:
+                setattr(self, attr, value)
+            except Exception:
+                continue
     
     async def invoke(self, *args, **kwargs) -> Any:
         """

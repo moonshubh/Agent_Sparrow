@@ -1,12 +1,20 @@
 'use client'
 
-import { Label } from '@/shared/ui/label'
+import { ChevronDown } from 'lucide-react'
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/shared/ui/tooltip'
 
 interface ModelSelectorProps {
   model: string
   onChangeModel: (model: string) => void
   align?: 'left' | 'right'
   models: string[]
+  helperText?: string
+  recommended?: string
+}
+
+const MODEL_DESCRIPTIONS: Record<string, string> = {
+  'gemini-2.5-flash': 'Flash balances speed and cost for orchestrating subagents.',
+  'gemini-2.5-pro': 'Pro provides deeper reasoning and analysis for complex tasks.',
 }
 
 export function ModelSelector({
@@ -14,26 +22,50 @@ export function ModelSelector({
   onChangeModel,
   align = 'right',
   models,
+  helperText,
+  recommended,
 }: ModelSelectorProps) {
+  const supportedModels = new Set(['gemini-2.5-flash', 'gemini-2.5-pro']);
+  const vettedModels = models.filter((m) => supportedModels.has(m));
+  const displayModels = vettedModels.length > 0 ? vettedModels : models;
+  const tooltipText =
+    MODEL_DESCRIPTIONS[model] ||
+    (recommended && model === recommended ? `${model} (recommended)` : helperText) ||
+    'Select a model';
+  const hasModels = displayModels.length > 0;
+
   return (
-    <div className={`flex items-center gap-2 ${align === 'right' ? 'ml-auto' : ''}`}>
-      <div className="flex flex-col gap-1">
-        <Label className="text-xs text-muted-foreground">Model</Label>
-        <select
-          value={model}
-          onChange={(e) => onChangeModel(e.target.value)}
-          disabled={models.length === 0}
-          className="w-40 h-8 px-2 rounded-md border border-input bg-background text-sm disabled:opacity-50"
+    <TooltipProvider>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <div className={`relative ${align === 'right' ? 'ml-auto' : ''}`}>
+            <select
+              value={model}
+              onChange={(e) => onChangeModel(e.target.value)}
+              disabled={!hasModels}
+              aria-label="Select model"
+              className="w-full h-9 appearance-none rounded-xl border border-white/10 bg-white/5 pl-3 pr-8 text-sm text-gray-100 placeholder:text-gray-500 disabled:opacity-60 disabled:cursor-not-allowed focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40 cursor-pointer"
+            >
+              {!hasModels ? (
+                <option>No models available</option>
+              ) : (
+                displayModels.map((m) => (
+                  <option key={m} value={m}>
+                    {recommended && recommended === m ? `${m} (recommended)` : m}
+                  </option>
+                ))
+              )}
+            </select>
+            <ChevronDown className="pointer-events-none absolute right-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-gray-400" />
+          </div>
+        </TooltipTrigger>
+        <TooltipContent 
+          side="bottom" 
+          className="max-w-[200px] text-xs bg-[hsl(220,15%,15%)] border-white/10 text-gray-200 shadow-lg"
         >
-          {models.length === 0 ? (
-            <option>No models available</option>
-          ) : (
-            models.map((m) => (
-              <option key={m} value={m}>{m}</option>
-            ))
-          )}
-        </select>
-      </div>
-    </div>
+          <p>{tooltipText}</p>
+        </TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
   )
 }

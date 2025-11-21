@@ -53,7 +53,7 @@
 }
 
 .config-title {
-  font-family: var(--font-family-serif);
+  font-family: var(--font-family-sans-serif-alt);
   font-size: var(--font-size-lg);
   font-weight: var(--font-weight-semibold);
   color: var(--neutral-100);
@@ -380,7 +380,7 @@
 }
 
 .modal-title {
-  font-family: var(--font-family-serif);
+  font-family: var(--font-family-sans-serif-alt);
   font-size: var(--font-size-xl);
   font-weight: var(--font-weight-semibold);
   color: var(--neutral-100);

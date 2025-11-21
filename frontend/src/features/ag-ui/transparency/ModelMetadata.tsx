@@ -29,6 +29,27 @@ import {
 } from '@/shared/animations/crystalline-animations';
 import './transparency.css';
 
+const clampPercentage = (value?: number) => {
+  const numericValue = typeof value === 'number' && Number.isFinite(value) ? value : 0;
+  return Math.min(100, Math.max(0, Math.round(numericValue)));
+};
+
+const parseUsageString = (usageString?: string) => {
+  if (!usageString) {
+    return { used: 0, limitLabel: '—', percentage: 0 };
+  }
+  const [usedRaw = '0', limitRaw = '0'] = usageString.split('/');
+  const used = Number(usedRaw);
+  const limit = Number(limitRaw);
+  const safeUsed = Number.isFinite(used) && used >= 0 ? used : 0;
+  const safeLimit = Number.isFinite(limit) && limit > 0 ? limit : 0;
+  const limitLabel = safeLimit > 0 ? safeLimit : '∞';
+  const percentage = safeLimit > 0 ? clampPercentage((safeUsed / safeLimit) * 100) : 0;
+  return { used: safeUsed, limitLabel, percentage };
+};
+
+const formatServiceName = (service: string) => service.replace(/_/g, ' ');
+
 export interface ModelMetadata {
   taskType: string;
   selectedModel: string;
@@ -90,11 +111,6 @@ export const ModelMetadataPanel: React.FC<{
     if (model.includes('flash-lite')) return '⚡';
     if (model.includes('flash')) return '✨';
     return '🤖';
-  };
-
-  const parseUsage = (usageString: string) => {
-    const [used, limit] = usageString.split('/').map(s => parseInt(s));
-    return { used, limit, percentage: Math.round((used / limit) * 100) };
   };
 
   return (
@@ -276,8 +292,8 @@ const ModelHealth: React.FC<{
 }> = ({ health }) => {
   if (!health) return null;
 
-  const rpmUsage = parseUsage(health.rpmUsage);
-  const rpdUsage = parseUsage(health.rpdUsage);
+  const rpmUsage = parseUsageString(health.rpmUsage);
+  const rpdUsage = parseUsageString(health.rpdUsage);
 
   return (
     <div className="model-health">
@@ -296,13 +312,13 @@ const ModelHealth: React.FC<{
         <UsageMeter
           label="RPM"
           used={rpmUsage.used}
-          limit={rpmUsage.limit}
+          limit={rpmUsage.limitLabel}
           percentage={rpmUsage.percentage}
         />
         <UsageMeter
           label="RPD"
           used={rpdUsage.used}
-          limit={rpdUsage.limit}
+          limit={rpdUsage.limitLabel}
           percentage={rpdUsage.percentage}
         />
       </div>
@@ -319,10 +335,11 @@ const ModelHealth: React.FC<{
 const UsageMeter: React.FC<{
   label: string;
   used: number;
-  limit: number;
+  limit: number | string;
   percentage: number;
 }> = ({ label, used, limit, percentage }) => {
-  const status = percentage < 50 ? 'healthy' : percentage < 80 ? 'warning' : 'critical';
+  const safePercentage = clampPercentage(percentage);
+  const status = safePercentage < 50 ? 'healthy' : safePercentage < 80 ? 'warning' : 'critical';
 
   return (
     <div className="usage-meter">
@@ -335,10 +352,10 @@ const UsageMeter: React.FC<{
           className={`meter-bar meter-${status}`}
           variants={quotaMeterAnimation}
           animate={status}
-          custom={percentage}
-          style={{ width: `${percentage}%` }}
+          custom={safePercentage}
+          style={{ width: `${safePercentage}%` }}
         >
-          <span className="meter-percentage">{percentage}%</span>
+          <span className="meter-percentage">{safePercentage}%</span>
         </motion.div>
       </div>
     </div>
@@ -369,7 +386,7 @@ const SearchServiceInfo: React.FC<{
     <div className="search-service-info">
       <div className="service-header">
         {getServiceIcon()}
-        <span className="service-name">{service.replace('_', ' ')}</span>
+        <span className="service-name">{formatServiceName(service)}</span>
       </div>
 
       {metadata && (
@@ -409,11 +426,22 @@ const MemoryOperations: React.FC<{
           <TrendingUp className="w-4 h-4 text-cyan-400" />
           <span className="stat-text">
             Retrieved {ops.factsRetrieved} facts
-            {ops.relevanceScores && ops.relevanceScores.length > 0 && (
-              <span className="relevance-avg">
-                (avg: {Math.round(ops.relevanceScores.reduce((a, b) => a + b, 0) / ops.relevanceScores.length)}%)
-              </span>
-            )}
+            {(() => {
+              const scores = (ops.relevanceScores || []).filter(
+                (score): score is number => typeof score === 'number' && Number.isFinite(score)
+              );
+              if (!scores.length) {
+                return null;
+              }
+              const average = clampPercentage(
+                scores.reduce((sum, score) => sum + score, 0) / scores.length
+              );
+              return (
+                <span className="relevance-avg">
+                  (avg: {average}%)
+                </span>
+              );
+            })()}
           </span>
         </div>
       )}
@@ -436,11 +464,14 @@ const QuotaMeters: React.FC<{
 }> = ({ quotas }) => {
   if (!quotas) return null;
 
+  const normalize = (value?: number) =>
+    clampPercentage(typeof value === 'number' ? value : 0);
+
   const quotaItems = [
-    { label: 'Gemini Pro', value: quotas.geminiPro, icon: '🚀' },
-    { label: 'Gemini Flash', value: quotas.geminiFlash, icon: '✨' },
-    { label: 'Grounding', value: quotas.grounding, icon: '🔍' },
-    { label: 'Embeddings', value: quotas.embeddings, icon: '🧬' }
+    { label: 'Gemini Pro', percentage: normalize(quotas.geminiPro), icon: '🚀' },
+    { label: 'Gemini Flash', percentage: normalize(quotas.geminiFlash), icon: '✨' },
+    { label: 'Grounding', percentage: normalize(quotas.grounding), icon: '🔍' },
+    { label: 'Embeddings', percentage: normalize(quotas.embeddings), icon: '🧬' }
   ];
 
   return (
@@ -457,7 +488,7 @@ const QuotaMeters: React.FC<{
             <span className="quota-icon">{item.icon}</span>
             <span className="quota-label">{item.label}</span>
           </div>
-          <QuotaBar percentage={item.value} />
+          <QuotaBar percentage={item.percentage} />
         </motion.div>
       ))}
     </div>
@@ -466,7 +497,8 @@ const QuotaMeters: React.FC<{
 
 // Individual Quota Bar
 const QuotaBar: React.FC<{ percentage: number }> = ({ percentage }) => {
-  const status = percentage < 50 ? 'healthy' : percentage < 80 ? 'warning' : 'critical';
+  const safePercentage = clampPercentage(percentage);
+  const status = safePercentage < 50 ? 'healthy' : safePercentage < 80 ? 'warning' : 'critical';
 
   return (
     <div className="quota-bar-container">
@@ -474,11 +506,11 @@ const QuotaBar: React.FC<{ percentage: number }> = ({ percentage }) => {
         <motion.div
           className={`quota-bar quota-${status}`}
           initial={{ width: 0 }}
-          animate={{ width: `${percentage}%` }}
+          animate={{ width: `${safePercentage}%` }}
           transition={{ duration: 0.8, ease: [0.4, 0, 0.2, 1] }}
         />
       </div>
-      <span className={`quota-percentage quota-${status}`}>{percentage}%</span>
+      <span className={`quota-percentage quota-${status}`}>{safePercentage}%</span>
     </div>
   );
 };

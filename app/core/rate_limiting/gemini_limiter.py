@@ -4,6 +4,7 @@ and circuit breaker protection for Google Gemini API calls.
 """
 
 import asyncio
+import random
 from datetime import datetime, timedelta
 from typing import Dict, Any, Optional, Callable
 
@@ -53,15 +54,19 @@ class GeminiRateLimiter:
         )
         
         # Initialize circuit breakers for each model
-        flash_breaker = CircuitBreaker(
-            failure_threshold=self.config.circuit_breaker_failure_threshold,
-            timeout_seconds=self.config.circuit_breaker_timeout_seconds,
-            success_threshold=self.config.circuit_breaker_success_threshold,
-            name="flash"
-        )
         self.circuit_breakers = {
-            "gemini-2.5-flash": flash_breaker,
-            "gemini-2.5-flash-lite": flash_breaker,
+            "gemini-2.5-flash": CircuitBreaker(
+                failure_threshold=self.config.circuit_breaker_failure_threshold,
+                timeout_seconds=self.config.circuit_breaker_timeout_seconds,
+                success_threshold=self.config.circuit_breaker_success_threshold,
+                name="flash"
+            ),
+            "gemini-2.5-flash-lite": CircuitBreaker(
+                failure_threshold=self.config.circuit_breaker_failure_threshold,
+                timeout_seconds=self.config.circuit_breaker_timeout_seconds,
+                success_threshold=self.config.circuit_breaker_success_threshold,
+                name="flash_lite"
+            ),
             "gemini-2.5-pro": CircuitBreaker(
                 failure_threshold=self.config.circuit_breaker_failure_threshold,
                 timeout_seconds=self.config.circuit_breaker_timeout_seconds,
@@ -93,22 +98,14 @@ class GeminiRateLimiter:
         # Get effective limits for the model family
         rpm_limit, rpd_limit = self.config.get_effective_limits(base_model)
 
-        # Determine identifier for Redis keys
-        if base_model in {"gemini-2.5-flash", "gemini-2.5-flash-lite"}:
-            identifier = "flash"
-        elif base_model == "gemini-2.5-pro":
-            identifier = "pro"
-        else:
-            raise ValueError(f"Unsupported model: {model}")
-        
         try:
             # Check rate limits
             result = await self.redis_limiter.check_rate_limit(
-                identifier=identifier,
+                identifier=base_model,
                 rpm_limit=rpm_limit,
                 rpd_limit=rpd_limit,
                 model=model,
-                safety_margin=self.config.safety_margin
+                safety_margin=self.config.safety_margin,
             )
             
             self.logger.debug(
@@ -125,6 +122,19 @@ class GeminiRateLimiter:
             raise GeminiServiceUnavailableException(
                 f"Rate limiting service unavailable: {e}"
             )
+
+    async def release_slot(self, model: str, token_identifier: Optional[str]) -> None:
+        """Undo a provisional rate-limit reservation when a request fails early."""
+        if not token_identifier:
+            return
+        try:
+            base_model = self.config.normalize_model_name(model)
+        except ValueError:
+            return
+        try:
+            await self.redis_limiter.release(base_model, token_identifier)
+        except Exception as exc:  # pragma: no cover - defensive cleanup logging
+            self.logger.warning("release_slot_failed", model=model, error=str(exc))
     
     async def execute_with_protection(
         self,
@@ -150,17 +160,9 @@ class GeminiRateLimiter:
             CircuitBreakerOpenException: If circuit breaker is open
             GeminiServiceUnavailableException: If service is unavailable
         """
-        # First check rate limits
-        rate_limit_result = await self.check_and_consume(model)
+        # Acquire a slot respecting backpressure when enabled
+        rate_limit_result = await self._await_rate_limit_slot(model)
         base_model = self.config.normalize_model_name(model)
-        
-        if not rate_limit_result.allowed:
-            raise RateLimitExceededException(
-                message=f"Rate limit exceeded for {model}",
-                retry_after=rate_limit_result.retry_after,
-                limits=rate_limit_result.metadata.dict(),
-                model=model
-            )
         
         # Get circuit breaker for the model
         circuit_breaker = self.circuit_breakers[base_model]
@@ -193,59 +195,66 @@ class GeminiRateLimiter:
             
             # Get circuit breaker statuses
             flash_circuit = await self.circuit_breakers["gemini-2.5-flash"].get_status()
+            flash_lite_circuit = await self.circuit_breakers["gemini-2.5-flash-lite"].get_status()
             pro_circuit = await self.circuit_breakers["gemini-2.5-pro"].get_status()
             
             # Build metadata for each model
             flash_rpm_limit, flash_rpd_limit = self.config.get_effective_limits("gemini-2.5-flash")
+            flash_lite_rpm_limit, flash_lite_rpd_limit = self.config.get_effective_limits("gemini-2.5-flash-lite")
             pro_rpm_limit, pro_rpd_limit = self.config.get_effective_limits("gemini-2.5-pro")
             
-            flash_stats = redis_stats.get("flash", {})
-            pro_stats = redis_stats.get("pro", {})
+            flash_stats = redis_stats.get("gemini-2.5-flash", {})
+            flash_lite_stats = redis_stats.get("gemini-2.5-flash-lite", {})
+            pro_stats = redis_stats.get("gemini-2.5-pro", {})
             
             now = datetime.utcnow()
             
             # Create comprehensive usage stats
-            
-            flash_metadata = RateLimitMetadata(
-                rpm_limit=flash_rpm_limit,
-                rpm_used=flash_stats.get("rpm", 0),
-                rpm_remaining=max(0, flash_rpm_limit - flash_stats.get("rpm", 0)),
-                rpd_limit=flash_rpd_limit,
-                rpd_used=flash_stats.get("rpd", 0),
-                rpd_remaining=max(0, flash_rpd_limit - flash_stats.get("rpd", 0)),
-                reset_time_rpm=now.replace(second=0, microsecond=0) + timedelta(minutes=1),
-                reset_time_rpd=now.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1),
-                model="gemini-2.5-flash",
-                safety_margin=self.config.safety_margin
-            )
-            
-            pro_metadata = RateLimitMetadata(
-                rpm_limit=pro_rpm_limit,
-                rpm_used=pro_stats.get("rpm", 0),
-                rpm_remaining=max(0, pro_rpm_limit - pro_stats.get("rpm", 0)),
-                rpd_limit=pro_rpd_limit,
-                rpd_used=pro_stats.get("rpd", 0),
-                rpd_remaining=max(0, pro_rpd_limit - pro_stats.get("rpd", 0)),
-                reset_time_rpm=now.replace(second=0, microsecond=0) + timedelta(minutes=1),
-                reset_time_rpd=now.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1),
-                model="gemini-2.5-pro",
-                safety_margin=self.config.safety_margin
-            )
+            def _build_metadata(model_name: str, rpm_limit: int, rpd_limit: int, stats_bucket: Dict[str, int]) -> RateLimitMetadata:
+                return RateLimitMetadata(
+                    rpm_limit=rpm_limit,
+                    rpm_used=stats_bucket.get("rpm", 0),
+                    rpm_remaining=max(0, rpm_limit - stats_bucket.get("rpm", 0)),
+                    rpd_limit=rpd_limit,
+                    rpd_used=stats_bucket.get("rpd", 0),
+                    rpd_remaining=max(0, rpd_limit - stats_bucket.get("rpd", 0)),
+                    reset_time_rpm=now.replace(second=0, microsecond=0) + timedelta(minutes=1),
+                    reset_time_rpd=now.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1),
+                    model=model_name,
+                    safety_margin=self.config.safety_margin
+                )
+
+            flash_metadata = _build_metadata("gemini-2.5-flash", flash_rpm_limit, flash_rpd_limit, flash_stats)
+            flash_lite_metadata = _build_metadata("gemini-2.5-flash-lite", flash_lite_rpm_limit, flash_lite_rpd_limit, flash_lite_stats)
+            pro_metadata = _build_metadata("gemini-2.5-pro", pro_rpm_limit, pro_rpd_limit, pro_stats)
             
             # Calculate uptime percentage based on circuit breaker states
             uptime_percentage = 100.0
             if flash_circuit.state == CircuitState.OPEN:
-                uptime_percentage -= 50.0  # 50% down if Flash is down
+                uptime_percentage -= 33.3
+            if flash_lite_circuit.state == CircuitState.OPEN:
+                uptime_percentage -= 33.3
             if pro_circuit.state == CircuitState.OPEN:
-                uptime_percentage -= 50.0  # 50% down if Pro is down
+                uptime_percentage -= 33.3
+            uptime_percentage = max(0.0, min(100.0, uptime_percentage))
             
-            total_requests_today = flash_metadata.rpd_used + pro_metadata.rpd_used
-            total_requests_this_minute = flash_metadata.rpm_used + pro_metadata.rpm_used
+            total_requests_today = (
+                flash_metadata.rpd_used
+                + flash_lite_metadata.rpd_used
+                + pro_metadata.rpd_used
+            )
+            total_requests_this_minute = (
+                flash_metadata.rpm_used
+                + flash_lite_metadata.rpm_used
+                + pro_metadata.rpm_used
+            )
             
             return UsageStats(
                 flash_stats=flash_metadata,
+                flash_lite_stats=flash_lite_metadata,
                 pro_stats=pro_metadata,
                 flash_circuit=flash_circuit,
+                flash_lite_circuit=flash_lite_circuit,
                 pro_circuit=pro_circuit,
                 total_requests_today=total_requests_today,
                 total_requests_this_minute=total_requests_this_minute,
@@ -270,14 +279,14 @@ class GeminiRateLimiter:
             if model not in self.circuit_breakers:
                 raise ValueError(f"Unknown model: {model}")
             
-            identifier = "flash" if "flash" in model else "pro"
+            identifier = self.config.normalize_model_name(model)
             await self.redis_limiter.reset_limits(identifier)
             await self.circuit_breakers[model].reset()
             self.logger.info(f"Reset limits for {model}")
         else:
             # Reset all
-            await self.redis_limiter.reset_limits("flash")
-            await self.redis_limiter.reset_limits("pro")
+            for identifier in ("gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-2.5-pro"):
+                await self.redis_limiter.reset_limits(identifier)
             
             for cb in self.circuit_breakers.values():
                 await cb.reset()
@@ -313,11 +322,15 @@ class GeminiRateLimiter:
             # Get current usage
             stats = await self.get_usage_stats()
             health["rate_limits"] = {
-                "flash": {
+                "gemini-2.5-flash": {
                     "rpm_utilization": stats.flash_stats.rpm_used / max(1, stats.flash_stats.rpm_limit),
                     "rpd_utilization": stats.flash_stats.rpd_used / max(1, stats.flash_stats.rpd_limit)
                 },
-                "pro": {
+                "gemini-2.5-flash-lite": {
+                    "rpm_utilization": stats.flash_lite_stats.rpm_used / max(1, stats.flash_lite_stats.rpm_limit),
+                    "rpd_utilization": stats.flash_lite_stats.rpd_used / max(1, stats.flash_lite_stats.rpd_limit)
+                },
+                "gemini-2.5-pro": {
                     "rpm_utilization": stats.pro_stats.rpm_used / max(1, stats.pro_stats.rpm_limit),
                     "rpd_utilization": stats.pro_stats.rpd_used / max(1, stats.pro_stats.rpd_limit)
                 }
@@ -343,3 +356,37 @@ class GeminiRateLimiter:
         """Close Redis connection and cleanup resources."""
         await self.redis_client.close()
         self.logger.info("GeminiRateLimiter closed")
+
+    async def _await_rate_limit_slot(self, model: str) -> RateLimitResult:
+        """Wait for an available slot before surfacing rate limit errors."""
+        attempts = 0
+        while True:
+            result = await self.check_and_consume(model)
+            if result.allowed:
+                return result
+
+            if (
+                not self.config.enable_backpressure
+                or result.blocked_by == "rpd"
+                or attempts >= self.config.backpressure_retry_attempts
+            ):
+                raise RateLimitExceededException(
+                    message=f"Rate limit exceeded for {model}",
+                    retry_after=result.retry_after,
+                    limits=result.metadata.dict(),
+                    model=model
+                )
+
+            wait_seconds = result.retry_after or self.config.backpressure_max_wait_seconds
+            wait_seconds = min(wait_seconds, self.config.backpressure_max_wait_seconds)
+            wait_seconds += random.uniform(0, self.config.backpressure_jitter_seconds)
+            attempts += 1
+            self.logger.warning(
+                "Rate limit reached for %s (%s). Waiting %.2fs before retry %d/%d",
+                model,
+                result.blocked_by,
+                wait_seconds,
+                attempts,
+                self.config.backpressure_retry_attempts
+            )
+            await asyncio.sleep(wait_seconds)

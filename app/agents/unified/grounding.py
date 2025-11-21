@@ -8,7 +8,7 @@ import httpx
 
 from app.core.logging_config import get_logger
 from app.core.settings import settings
-from app.tools.research_tools import FirecrawlTool, TavilySearchTool
+from app.tools.research_tools import TavilySearchTool
 
 from .quota_manager import QuotaExceededError, QuotaManager
 
@@ -45,7 +45,6 @@ class GeminiGroundingService:
         self.max_results_default = settings.grounding_max_results
         self.snippet_limit = settings.grounding_snippet_chars
         self._tavily: Optional[TavilySearchTool] = None
-        self._firecrawl: Optional[FirecrawlTool] = None
 
     async def search_with_grounding(self, query: str, max_results: Optional[int] = None) -> Dict[str, Any]:
         if not self.enabled:
@@ -82,7 +81,7 @@ class GeminiGroundingService:
         }
 
     async def fallback_search(self, query: str, max_results: Optional[int] = None, reason: str = "error") -> Dict[str, Any]:
-        """Fallback chain: Tavily → Firecrawl (best-effort)."""
+        """Fallback chain: Tavily."""
 
         limit = self._resolve_limit(max_results)
         tavily = self._get_tavily()
@@ -90,8 +89,6 @@ class GeminiGroundingService:
         # Track services used for LangSmith
         services_used = []
         tavily_success = False
-        firecrawl_attempts = 0
-        firecrawl_successes = 0
 
         fallback_payload: Dict[str, Any] = {
             "source": "tavily_fallback",
@@ -100,6 +97,7 @@ class GeminiGroundingService:
             "extracted": [],
         }
 
+        tavily_result: Optional[Dict[str, Any]] = None
         try:
             tavily_result = await asyncio.to_thread(tavily.search, query, limit)
             urls = tavily_result.get("urls", [])
@@ -110,28 +108,27 @@ class GeminiGroundingService:
             urls = []
         fallback_payload["results"] = [{"url": url} for url in urls]
 
-        if urls:
-            firecrawl = self._get_firecrawl()
-            extracts: List[Dict[str, Any]] = []
-            for url in urls[: min(3, len(urls))]:
-                firecrawl_attempts += 1
-                try:
-                    scrape = await asyncio.to_thread(firecrawl.scrape_url, url)
-                    firecrawl_successes += 1
-                    if "firecrawl" not in services_used:
-                        services_used.append("firecrawl")
-                except Exception as exc:  # pragma: no cover - best effort
-                    self.logger.warning("grounding_fallback_firecrawl_error", url=url, error=str(exc))
-                    continue
+        extracts: List[Dict[str, Any]] = []
+        if isinstance(tavily_result, dict):
+            structured_results = tavily_result.get("results") or []
+            for item in structured_results[: min(3, len(structured_results))]:
+                url = item.get("url") or item.get("source") or ""
                 snippet = self._trim_snippet(
-                    scrape.get("markdown")
-                    or scrape.get("content")
-                    or scrape.get("data", {}).get("content")
+                    item.get("content")
+                    or item.get("snippet")
+                    or item.get("title")
                     or ""
                 )
-                extracts.append({"url": url, "snippet": snippet, "source": "firecrawl"})
-            if extracts:
-                fallback_payload["extracted"] = extracts
+                if url or snippet:
+                    extracts.append(
+                        {
+                            "url": url,
+                            "snippet": snippet,
+                            "source": "tavily",
+                        }
+                    )
+        if extracts:
+            fallback_payload["extracted"] = extracts
 
         # Add LangSmith observability metadata
         langsmith_metadata = {
@@ -140,8 +137,6 @@ class GeminiGroundingService:
             "services_used": services_used,
             "tavily_success": tavily_success,
             "urls_found": len(urls),
-            "firecrawl_attempts": firecrawl_attempts,
-            "firecrawl_successes": firecrawl_successes,
             "query_length": len(query or ""),
         }
         fallback_payload["langsmith_metadata"] = langsmith_metadata
@@ -149,24 +144,22 @@ class GeminiGroundingService:
         return fallback_payload
 
     async def _call_grounding_api(self, query: str, limit: int) -> Dict[str, Any]:
+        # Use the currently supported googleSearch tool for the Generative Language API.
+        # Note: responseMimeType="application/json" is not supported when tools are used,
+        # so we omit it here and parse groundingMetadata from the normal response payload.
         body = {
             "contents": [
                 {
                     "role": "user",
                     "parts": [
                         {
-                            "text": (
-                                "Return grounded search findings for the following user query as JSON nodes.\n"
-                                "Include urls, titles, snippets and keep snippets concise.\n"
-                                f"Query: {query}"
-                            )
+                            "text": query,
                         }
                     ],
                 }
             ],
-            "tools": [{"google_search": {"disable_cache": False}}],
+            "tools": [{"googleSearch": {}}],
             "generationConfig": {
-                "responseMimeType": "application/json",
                 "maxOutputTokens": 512,
             },
         }
@@ -189,12 +182,19 @@ class GeminiGroundingService:
             citation_map = self._map_citations(citations)
             for chunk_id, chunk in chunk_refs.items():
                 web_info = chunk.get("web") or {}
+                # Fallback to model text when no explicit web/snippet text is present.
+                fallback_text = ""
+                content_obj = candidate.get("content") or {}
+                if isinstance(content_obj, dict):
+                    parts = content_obj.get("parts") or []
+                    if parts and isinstance(parts[0], dict):
+                        fallback_text = parts[0].get("text") or ""
+
                 snippet = self._trim_snippet(
                     web_info.get("text")
                     or chunk.get("snippet")
                     or chunk.get("text")
-                    or candidate.get("content", [{}])[0].get("parts", [{}])[0].get("text")
-                    or ""
+                    or fallback_text
                 )
                 results.append(
                     {
@@ -210,12 +210,14 @@ class GeminiGroundingService:
         if not results and candidates:
             # Fall back to textual content when no structured grounding metadata returned
             for candidate in candidates:
-                text_parts = []
-                for content in candidate.get("content", []):
-                    for part in content.get("parts", []):
-                        value = part.get("text")
-                        if value:
-                            text_parts.append(value)
+                text_parts: List[str] = []
+                content_obj = candidate.get("content") or {}
+                if isinstance(content_obj, dict):
+                    for part in content_obj.get("parts", []) or []:
+                        if isinstance(part, dict):
+                            value = part.get("text")
+                            if value:
+                                text_parts.append(value)
                 if text_parts:
                     results.append(
                         {
@@ -257,8 +259,3 @@ class GeminiGroundingService:
         if self._tavily is None:
             self._tavily = TavilySearchTool()
         return self._tavily
-
-    def _get_firecrawl(self) -> FirecrawlTool:
-        if self._firecrawl is None:
-            self._firecrawl = FirecrawlTool()
-        return self._firecrawl

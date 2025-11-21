@@ -7,6 +7,7 @@ import ReactMarkdown from 'react-markdown';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import { cn } from '@/shared/lib/utils';
+import { User } from 'lucide-react';
 
 interface MessageItemProps {
   message: Message;
@@ -17,9 +18,13 @@ interface MessageItemProps {
 function MessageItem({ message, isLast, isStreaming }: MessageItemProps) {
   const isUser = message.role === 'user';
   const isSystem = message.role === 'system';
+  const isTool = message.role === 'tool';
 
   // Skip system messages in UI
   if (isSystem) return null;
+
+  // Tool messages are now surfaced via the agentic timeline / sidebar, not inline
+  if (isTool) return null;
 
   // Extract metadata for reasoning traces
   const metadata = (message as any).metadata || {};
@@ -34,86 +39,105 @@ function MessageItem({ message, isLast, isStreaming }: MessageItemProps) {
   return (
     <div
       className={cn(
-        'flex',
-        isUser ? 'justify-end' : 'justify-start'
+        'flex gap-4 mb-6 animate-in fade-in slide-in-from-bottom-2 duration-500',
+        isUser ? 'flex-row-reverse' : 'flex-row'
       )}
     >
-      <div
-        className={cn(
-          'max-w-[70%] rounded-lg px-4 py-3',
-          isUser
-            ? 'bg-slate-700 text-white'
-            : 'bg-white border border-gray-200 text-slate-800'
+      {/* User Avatar (Only for user) */}
+      {isUser && (
+        <div
+          className="flex-shrink-0 w-8 h-8 rounded-full flex items-center justify-center shadow-lg bg-gradient-to-br from-blue-500 to-blue-600"
+          aria-label="User avatar"
+        >
+          <User className="w-4 h-4 text-white" />
+        </div>
+      )}
+
+      {/* Message Content */}
+      <div className={cn(
+        "flex flex-col max-w-[85%]",
+        isUser ? "items-end" : "items-start"
+      )}>
+        {/* Label (Only for user) */}
+        {isUser && (
+          <div className="text-xs font-medium mb-1 opacity-50 text-right mr-1">
+            You
+          </div>
         )}
-      >
-        {/* Message role indicator */}
-        <div className={cn(
-          'text-xs font-medium mb-2',
-          isUser ? 'text-slate-300' : 'text-slate-500'
-        )}>
-          {isUser ? 'You' : 'Assistant'}
-        </div>
 
-        {/* Message content with markdown rendering */}
-        <div className={cn(
-          'prose prose-sm max-w-none',
-          isUser && 'prose-invert'
-        )}>
-          <ReactMarkdown
-            components={{
-              code({ node, inline, className, children, ...props }) {
-                const match = /language-(\w+)/.exec(className || '');
-                return !inline && match ? (
-                  <SyntaxHighlighter
-                    {...props}
-                    style={vscDarkPlus}
-                    language={match[1]}
-                    PreTag="div"
-                  >
-                    {String(children).replace(/\n$/, '')}
-                  </SyntaxHighlighter>
-                ) : (
-                  <code
-                    {...props}
-                    className={cn(
-                      className,
-                      'bg-gray-100 px-1 py-0.5 rounded text-sm',
-                      isUser && 'bg-slate-600'
-                    )}
-                  >
-                    {children}
-                  </code>
-                );
-              },
-            }}
-          >
-            {content}
-          </ReactMarkdown>
-        </div>
+        <div
+          className={cn(
+            'text-sm leading-relaxed',
+            isUser
+              ? 'bg-blue-600 text-white rounded-2xl rounded-tr-sm px-5 py-3.5 shadow-sm'
+              : 'bg-transparent text-gray-100 px-0 py-0' // Completely transparent, no padding for agent
+          )}
+        >
+          <div className={cn(
+            'prose prose-sm max-w-none prose-invert',
+            !isUser && 'prose-headings:text-gray-100 prose-p:text-gray-300 prose-strong:text-white prose-code:text-blue-300'
+          )}>
+            <ReactMarkdown
+              components={{
+                code({ node, inline, className, children, ...props }: any) {
+                  const match = /language-(\w+)/.exec(className || '');
+                  return !inline && match ? (
+                    <div className="rounded-lg overflow-hidden my-4 border border-white/10 shadow-lg">
+                      <div className="bg-white/5 px-4 py-2 text-xs text-gray-400 border-b border-white/5 flex justify-between">
+                        <span>{match[1]}</span>
+                      </div>
+                      <SyntaxHighlighter
+                        {...props}
+                        style={vscDarkPlus}
+                        language={match[1]}
+                        PreTag="div"
+                        customStyle={{ margin: 0, borderRadius: 0, background: 'rgba(0,0,0,0.3)' }}
+                      >
+                        {String(children).replace(/\n$/, '')}
+                      </SyntaxHighlighter>
+                    </div>
+                  ) : (
+                    <code
+                      {...props}
+                      className={cn(
+                        className,
+                        'bg-white/10 px-1.5 py-0.5 rounded text-xs font-mono text-blue-200',
+                      )}
+                    >
+                      {children}
+                    </code>
+                  );
+                },
+              }}
+            >
+              {content}
+            </ReactMarkdown>
+          </div>
 
-        {/* Streaming indicator */}
-        {isLast && isStreaming && !isUser && (
-          <div className="flex items-center gap-2 mt-3 text-xs text-slate-500">
-            <div className="flex gap-1">
-              <span className="animate-bounce animation-delay-0">●</span>
-              <span className="animate-bounce animation-delay-200">●</span>
-              <span className="animate-bounce animation-delay-400">●</span>
+          {/* Streaming indicator */}
+          {isLast && isStreaming && !isUser && (
+            <div className="flex items-center gap-2 mt-2 text-xs text-blue-400/80">
+              <div className="flex gap-1">
+                <span className="animate-bounce animation-delay-0 w-1.5 h-1.5 bg-current rounded-full"></span>
+                <span className="animate-bounce animation-delay-200 w-1.5 h-1.5 bg-current rounded-full"></span>
+                <span className="animate-bounce animation-delay-400 w-1.5 h-1.5 bg-current rounded-full"></span>
+              </div>
+              <span>Thinking...</span>
             </div>
-            <span>Generating response...</span>
+          )}
+        </div>
+
+        {/* Reasoning Panel (for assistant messages) */}
+        {!isUser && (thinkingTrace || latestThought) && (
+          <div className="mt-4 w-full">
+            <ReasoningPanel
+              trace={thinkingTrace}
+              latestThought={latestThought}
+              isStreaming={isLast && isStreaming}
+            />
           </div>
         )}
       </div>
-
-      {/* Reasoning Panel (for assistant messages) */}
-      {!isUser && (thinkingTrace || latestThought) && (
-        <div className="ml-4">
-          <ReasoningPanel
-            trace={thinkingTrace}
-            latestThought={latestThought}
-            isStreaming={isLast && isStreaming}
-          />
-        </div>
-      )}
     </div>
   );
 }
@@ -130,21 +154,11 @@ export function MessageList({ messages, isStreaming }: MessageListProps) {
   );
 
   if (visibleMessages.length === 0) {
-    return (
-      <div className="flex flex-col items-center justify-center h-full text-center py-12">
-        <div className="text-4xl mb-4">👋</div>
-        <h2 className="text-xl font-semibold text-slate-700 mb-2">
-          Welcome to Agent Sparrow
-        </h2>
-        <p className="text-slate-500 max-w-md">
-          Start a conversation by typing a message below. I&apos;m here to help with your questions and tasks.
-        </p>
-      </div>
-    );
+    return null; // Handled by ChatContainer empty state
   }
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-2 py-4">
       {visibleMessages.map((message, idx) => (
         <MessageItem
           key={message.id ?? idx}
@@ -155,19 +169,4 @@ export function MessageList({ messages, isStreaming }: MessageListProps) {
       ))}
     </div>
   );
-}
-
-// Add animation delay styles
-if (typeof window !== 'undefined') {
-  const style = document.createElement('style');
-  style.textContent = `
-    @keyframes bounce {
-      0%, 100% { transform: translateY(0); }
-      50% { transform: translateY(-4px); }
-    }
-    .animation-delay-0 { animation-delay: 0ms; }
-    .animation-delay-200 { animation-delay: 200ms; }
-    .animation-delay-400 { animation-delay: 400ms; }
-  `;
-  document.head.appendChild(style);
 }

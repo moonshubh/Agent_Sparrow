@@ -264,34 +264,3 @@ async def retrieve_global_knowledge(query_text: str, *, top_k: Optional[int] = N
             span.record_exception(Exception(";".join(errors)))
 
         return result
-
-    logger.info(
-        "global_knowledge_retrieval",
-        query_len=len(query),
-        hits=len(ranked_items),
-        source=source,
-        fallback_used=fallback_used,
-        latency_ms=round(latency_ms, 2),
-        errors=errors,
-    )
-
-    result = {
-        "items": ranked_items,
-        "memory_snippet": memory_snippet,
-        "source": source,
-        "fallback_used": fallback_used,
-        "latency_ms": latency_ms,
-        "errors": errors,
-        "top_k": k,
-        "char_budget": char_budget,
-    }
-
-    span.set_status(Status(StatusCode.OK))
-    span.set_attribute("global_knowledge.hits", len(ranked_items))
-    span.set_attribute("global_knowledge.source", source)
-    span.set_attribute("global_knowledge.fallback_used", fallback_used)
-    span.set_attribute("global_knowledge.latency_ms", round(latency_ms, 2))
-    if errors:
-        span.record_exception(Exception(";".join(errors)))
-
-    return result

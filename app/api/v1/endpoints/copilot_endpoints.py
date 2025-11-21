@@ -19,7 +19,7 @@ Highlights:
 import json
 import logging
 from copy import deepcopy
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Query
@@ -57,6 +57,70 @@ tracer = trace.get_tracer(__name__)
 # Initialize AG-UI LangGraph agent wrapper
 # This wraps our compiled graph with AG-UI protocol support
 _langgraph_agent: Optional[LangGraphAgent] = None
+DEFAULT_LANGGRAPH_RECURSION_LIMIT = 120
+
+class SparrowLangGraphAgent(LangGraphAgent):
+    """LangGraphAgent variant that preserves full message history."""
+
+    def langgraph_default_merge_state(self, state, messages, input):  # type: ignore[override]
+        # DeepAgents inserts a synthetic system message at the beginning; drop it
+        pruned_messages = list(messages or [])
+        if pruned_messages and isinstance(pruned_messages[0], SystemMessage):
+            pruned_messages = pruned_messages[1:]
+
+        existing_messages = list(state.get("messages", []) or [])
+        seen_ids = {
+            str(getattr(msg, "id"))
+            for msg in existing_messages
+            if getattr(msg, "id", None) is not None
+        }
+
+        merged_messages = list(existing_messages)
+        for message in pruned_messages:
+            message_id = getattr(message, "id", None)
+            if message_id is not None:
+                key = str(message_id)
+                if key in seen_ids:
+                    continue
+                seen_ids.add(key)
+            merged_messages.append(message)
+
+        tools = input.tools or []
+        tools_as_dicts = []
+        for tool in tools:
+            if hasattr(tool, "model_dump"):
+                tools_as_dicts.append(tool.model_dump())
+            elif hasattr(tool, "dict"):
+                tools_as_dicts.append(tool.dict())
+            else:
+                tools_as_dicts.append(tool)
+
+        all_tools = [*state.get("tools", []), *tools_as_dicts]
+        seen_tool_names = set()
+        unique_tools = []
+        for tool in all_tools:
+            tool_name = None
+            if isinstance(tool, dict):
+                tool_name = tool.get("name")
+            else:
+                tool_name = getattr(tool, "name", None)
+
+            if tool_name and tool_name in seen_tool_names:
+                continue
+            if tool_name:
+                seen_tool_names.add(tool_name)
+            unique_tools.append(tool)
+
+        return {
+            **state,
+            "messages": merged_messages,
+            "tools": unique_tools,
+            "ag-ui": {
+                "tools": unique_tools,
+                "context": input.context or [],
+            },
+        }
+
 
 def get_langgraph_agent() -> LangGraphAgent:
     """Get or create the AG-UI LangGraph agent wrapper."""
@@ -64,10 +128,18 @@ def get_langgraph_agent() -> LangGraphAgent:
     if _langgraph_agent is None:
         if compiled_graph is None:
             raise RuntimeError("Compiled graph not available")
-        _langgraph_agent = LangGraphAgent(
+        settings = get_settings()
+        recur_limit = getattr(settings, "langgraph_recursion_limit", None) or getattr(settings, "agui_recursion_limit", None)
+        try:
+            recur_limit = int(recur_limit) if recur_limit is not None else DEFAULT_LANGGRAPH_RECURSION_LIMIT
+        except Exception:
+            recur_limit = DEFAULT_LANGGRAPH_RECURSION_LIMIT
+        _langgraph_agent = SparrowLangGraphAgent(
             name="sparrow",
             graph=compiled_graph,
             description="Agent Sparrow - Multi-agent AI system with research, log analysis, and conversational capabilities",
+            # LangGraph's default recursion_limit (25) is too low for multi-hop research flows.
+            config={"recursion_limit": recur_limit},
         )
     return _langgraph_agent
 
@@ -88,7 +160,50 @@ def _coerce_text(content: Any) -> str:
     return str(content)
 
 
+def _normalize_tool_call_dict(raw: Any) -> Any:
+    """Normalize various tool_call dict shapes into LangChain's {name, args, id} form.
+
+    DeepAgents / Gemini may emit OpenAI-style tool_calls where arguments are nested
+    under a `function` key. LangChain's ToolCall expects only name/args/id, so we
+    strip the wrapper and coerce arguments into a dict when possible.
+    """
+
+    if not isinstance(raw, dict):
+        return raw
+
+    # OpenAI-style: {"id": "...", "type": "tool_call", "function": {"name": str, "arguments": str}}
+    fn = raw.get("function")
+    if isinstance(fn, dict):
+        name = raw.get("name") or fn.get("name")
+        args = raw.get("args") or fn.get("arguments") or fn.get("args")
+        parsed_args: Any = args
+        if isinstance(args, str):
+            try:
+                parsed_args = json.loads(args)
+            except Exception:
+                # Fall back to passing the raw string; LangChain will still accept
+                parsed_args = {"input": args}
+        if not isinstance(parsed_args, dict):
+            parsed_args = {"input": parsed_args}
+
+        return {
+            "id": raw.get("id"),
+            "name": name or "tool",
+            "args": parsed_args,
+        }
+
+    # Already close to expected shape; just drop unknown keys that create_tool_call doesn't support
+    cleaned: Dict[str, Any] = {}
+    for key in ("id", "name", "args"):
+        if key in raw:
+            cleaned[key] = raw[key]
+    return cleaned or raw
+
+
 def _coerce_message(raw: Any) -> Optional[BaseMessage]:
+    if isinstance(raw, BaseMessage):
+        return raw
+
     data = raw.model_dump() if hasattr(raw, "model_dump") else raw
     if not isinstance(data, dict):
         return None
@@ -103,14 +218,25 @@ def _coerce_message(raw: Any) -> Optional[BaseMessage]:
 
     if role == "assistant":
         tool_calls = data.get("tool_calls") or data.get("toolCalls")
+        invalid_tool_calls = data.get("invalid_tool_calls") or data.get("invalidToolCalls")
+
         if tool_calls and not isinstance(tool_calls, list):
             tool_calls = [tool_calls]
+        if invalid_tool_calls and not isinstance(invalid_tool_calls, list):
+            invalid_tool_calls = [invalid_tool_calls]
+
+        normalized_tool_calls = [
+            _normalize_tool_call_dict(tc) for tc in (tool_calls or [])
+        ]
+        resolved_tool_calls = normalized_tool_calls if normalized_tool_calls else []
+
         return AIMessage(
             content=_coerce_text(data.get("content")),
             name=name,
             additional_kwargs=additional_kwargs,
             response_metadata=response_metadata,
-            tool_calls=tool_calls,
+            tool_calls=resolved_tool_calls,
+            invalid_tool_calls=invalid_tool_calls or [],
         )
 
     if role == "system":
@@ -131,13 +257,40 @@ def _coerce_message(raw: Any) -> Optional[BaseMessage]:
 
 def _normalize_messages(raw_messages: Any) -> List[BaseMessage]:
     normalized: List[BaseMessage] = []
-    if not isinstance(raw_messages, list):
+    if raw_messages is None:
         return normalized
+    if isinstance(raw_messages, BaseMessage):
+        return [raw_messages]
+    if not isinstance(raw_messages, list):
+        raw_messages = [raw_messages]
     for item in raw_messages:
         msg = _coerce_message(item)
         if msg is not None:
             normalized.append(msg)
     return normalized
+
+
+def _merge_message_history(
+    existing: Optional[List[BaseMessage]],
+    new: Optional[List[BaseMessage]],
+) -> List[BaseMessage]:
+    merged: List[BaseMessage] = list(existing or [])
+    seen_ids: Set[str] = {
+        str(getattr(message, "id"))
+        for message in merged
+        if getattr(message, "id", None) is not None
+    }
+
+    for message in new or []:
+        message_id = getattr(message, "id", None)
+        if message_id is not None:
+            key = str(message_id)
+            if key in seen_ids:
+                continue
+            seen_ids.add(key)
+        merged.append(message)
+
+    return merged
 
 
 def _extract_chunk_text(chunk: Any) -> str:
@@ -555,6 +708,8 @@ async def agui_stream(
 
         # Convert AG-UI messages to LangChain messages
         # AG-UI RunAgentInput already has properly typed messages, convert them to LangChain format
+        persisted_messages = _normalize_messages(state_dict.pop("messages", None))
+
         messages_payload = []
         if input_data.messages:
             for msg in input_data.messages:
@@ -567,11 +722,12 @@ async def agui_stream(
                     messages_payload.append(msg)
 
         normalized_messages = _normalize_messages(messages_payload)
+        merged_messages = _merge_message_history(persisted_messages, normalized_messages)
 
         # Create enriched graph state with merged context
         graph_state = {
             **state_dict,
-            "messages": normalized_messages,
+            "messages": merged_messages,
             "forwarded_props": forwarded_without_attachments,
             "scratchpad": state_dict.get("scratchpad") or {},
         }
@@ -647,33 +803,64 @@ async def agui_stream_health():
     graph_ok = compiled_graph is not None
     agent_ok = False
     try:
-        agent = get_langgraph_agent()
-        agent_ok = agent is not None
+        _ = get_langgraph_agent()
+        agent_ok = True
     except Exception:
-        pass
-
-    from app.core.settings import settings as _settings
-    if not graph_ok or not agent_ok:
-        return JSONResponse(
-            status_code=503,
-            content={
-                "status": "unavailable",
-                "ag_ui_available": True,
-                "graph_compiled": graph_ok,
-                "agent_initialized": agent_ok,
-            },
-        )
+        agent_ok = False
     return {
-        "status": "ok",
-        "protocol": "ag-ui",
-        "ag_ui_available": True,
-        "graph_compiled": True,
-        "agent_initialized": True,
-        "agent": "sparrow",
-        "agents": [{"name": "sparrow", "status": "ready"}],
-        "models": {
-            "router": getattr(_settings, "router_model", None),
-            "primary": getattr(_settings, "primary_agent_model", None),
-            "log_analysis": getattr(_settings, "enhanced_log_model", None),
-        },
+        "status": "ok" if graph_ok else "error",
+        "graph_available": graph_ok,
+        "agent_available": agent_ok,
+        "protocol": "ag-ui-langgraph",
     }
+
+
+# --- Subgraphs Support ---
+
+try:
+    from app.agents.unified.agent_travel import graph as travel_graph
+except ImportError:
+    travel_graph = None  # type: ignore[assignment]
+
+_travel_agent: Optional[LangGraphAgent] = None
+
+def get_travel_agent() -> LangGraphAgent:
+    """Get or create the Travel Agent wrapper."""
+    global _travel_agent
+    if _travel_agent is None:
+        if travel_graph is None:
+            raise RuntimeError("Travel graph not available")
+        _travel_agent = LangGraphAgent(
+            name="travel_agent",
+            graph=travel_graph,
+            description="Travel Agent Supervisor",
+            config={"recursion_limit": DEFAULT_LANGGRAPH_RECURSION_LIMIT},
+        )
+    return _travel_agent
+
+@router.post("/copilot/subgraphs/stream")
+async def agui_subgraphs_stream(
+    input_data: RunAgentInput,
+    request: Request,
+    user_id: str = Depends(get_current_user_id)
+):
+    """Endpoint for Subgraphs demo (Travel Agent)."""
+    with tracer.start_as_current_span("agui.subgraphs.stream") as span:
+        try:
+            agent = get_travel_agent()
+        except Exception as e:
+            return JSONResponse(status_code=500, content={"error": str(e)})
+
+        # Basic encoder setup
+        accept_header = request.headers.get("accept")
+        encoder = EventEncoder(accept=accept_header)
+
+        async def event_generator():
+            async for event in agent.run(input_data):
+                yield encoder.encode(event)
+
+        return StreamingResponse(
+            event_generator(),
+            status_code=200,
+            media_type=encoder.get_content_type()
+        )

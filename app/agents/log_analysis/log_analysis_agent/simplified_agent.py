@@ -34,7 +34,7 @@ class AgentConfig:
     
     def __init__(self):
         """Load configuration from environment with sensible defaults."""
-        self.model_name = os.getenv("SIMPLIFIED_LOG_MODEL", "gemini-2.5-flash")
+        self.model_name = os.getenv("SIMPLIFIED_LOG_MODEL", "gemini-2.5-pro")
         self.temperature = float(os.getenv("LOG_AGENT_TEMPERATURE", "0.1"))
         self.max_log_size = int(os.getenv("MAX_LOG_SIZE", "500000"))
         self.context_window = int(os.getenv("LOG_CONTEXT_WINDOW", "50"))

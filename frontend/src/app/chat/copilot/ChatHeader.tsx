@@ -2,159 +2,164 @@
 
 import React from "react";
 import Link from "next/link";
+import Image from "next/image";
+import { useRouter } from "next/navigation";
 import { Button } from "@/shared/ui/button";
 import { ModelSelector } from "@/app/chat/components/ModelSelector";
 import { AgentSelector } from "./AgentSelector";
 import type { AgentChoice } from "@/features/chat/hooks/useAgentSelection";
+import { Settings, Activity, PanelsTopLeft } from "lucide-react";
+
+interface ChatHeaderProps {
+  agentType: AgentChoice;
+  memoryEnabled: boolean;
+  onMemoryToggle: (enabled: boolean) => void;
+  model: string;
+  onModelChange: (model: string) => void;
+  models: string[];
+  onAgentChange?: (v: AgentChoice) => void;
+  modelHelperText?: string;
+  recommendedModel?: string;
+  activeTools?: string[];
+  hasActiveConversation?: boolean;
+}
 
 /**
  * Chat Header for the AG-UI client.
- *
- * Controls:
- * - Agent selector
- * - Memory toggle
- * - Knowledge source toggles (future)
- * - Gemini model selector
- * - Navigation shortcuts (Settings, FeedMe)
- * - Optional MCP URL input
+ * Polished Mailbird Dark Theme
  */
 export function ChatHeader({
   agentType,
   memoryEnabled,
   onMemoryToggle,
-  kbEnabled,
-  onKbToggle,
-  feedmeEnabled,
-  onFeedmeToggle,
   model,
   onModelChange,
   models,
-  mcpUrl,
-  onMcpUrlChange,
-  // Phase 5: Multi-agent selection (optional)
-  selectedAgent,
   onAgentChange,
-}: {
-  agentType: "primary" | "log_analysis";
-  memoryEnabled: boolean;
-  onMemoryToggle: (enabled: boolean) => void;
-  // Phase 4: Knowledge source toggles
-  kbEnabled?: boolean;
-  onKbToggle?: (enabled: boolean) => void;
-  feedmeEnabled?: boolean;
-  onFeedmeToggle?: (enabled: boolean) => void;
-  model: string;
-  onModelChange: (model: string) => void;
-  models: string[];
-  mcpUrl?: string;
-  onMcpUrlChange?: (url: string) => void;
-  // Phase 5 (optional)
-  selectedAgent?: AgentChoice;
-  onAgentChange?: (v: AgentChoice) => void;
-}) {
-  // Show knowledge toggles if handlers are provided
-  const showKnowledgeToggles = onKbToggle !== undefined || onFeedmeToggle !== undefined;
+  modelHelperText,
+  recommendedModel,
+  activeTools,
+  hasActiveConversation = false,
+}: ChatHeaderProps) {
+  const router = useRouter();
+  const activeToolCount = activeTools?.length ?? 0;
+  const hasActiveTools = activeToolCount > 0;
+  const agentBadge =
+    agentType === "log_analysis"
+      ? "Log Analysis"
+      : agentType === "research"
+        ? "Research"
+        : agentType === "auto"
+          ? "Auto Route"
+          : "Primary Support";
+  const handleFeedMe = () => {
+    router.push("/feedme-revamped");
+  };
+
   return (
-    <div className="border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
-      <div className="max-w-7xl mx-auto px-4 py-3 space-y-3">
-        {/* Top row: Title and navigation */}
-        <div className="flex items-center justify-between gap-4">
-          <div className="flex items-center gap-3">
-            <h2 className="text-xl font-semibold">Agent Sparrow</h2>
-            <span className="text-xs px-2 py-1 rounded border bg-muted/40">
-              {agentType === "log_analysis" ? "Log Analysis" : "Primary"} Agent
-            </span>
-          </div>
+    <div className="w-full z-50 border-b border-white/5 bg-[hsl(220,15%,10%)]/70 backdrop-blur-md transition-all duration-300">
+      <div className="max-w-7xl mx-auto px-6 py-2.5">
+        <div className="flex flex-col gap-2.5">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            {/* Branding + status */}
+            <div className="flex items-center gap-3 min-w-0">
+              <div className="flex items-center gap-3">
+                <div className="relative w-10 h-10 rounded-2xl bg-white/5 border border-white/10 overflow-hidden shadow-lg shadow-blue-500/25">
+                  <Image
+                    src="/Sparrow_logo_cropped.png"
+                    alt="Agent Sparrow"
+                    fill
+                    className="object-cover"
+                    sizes="40px"
+                    priority
+                  />
+                </div>
+                <h2 className="text-base font-semibold text-white tracking-tight leading-tight">Agent Sparrow</h2>
+              </div>
 
-          <div className="flex items-center gap-2">
-            <Button asChild variant="outline" className="h-8 px-3">
-              <Link href="/settings" aria-label="Open Settings">
-                Settings
-              </Link>
-            </Button>
-            <Button asChild variant="secondary" className="h-8 px-3">
-              <Link href="/feedme-revamped" aria-label="Open FeedMe">
-                FeedMe
-              </Link>
-            </Button>
-          </div>
-        </div>
-
-        {/* Bottom row: Controls */}
-        <div className="flex items-center justify-between gap-4">
-          <div className="flex items-center gap-4">
-            {/* Memory toggle */}
-            <label className="inline-flex items-center gap-2 text-sm cursor-pointer">
-              <input
-                type="checkbox"
-                aria-label="Use server memory"
-                className="accent-primary cursor-pointer"
-                checked={memoryEnabled}
-                onChange={(e) => onMemoryToggle(e.target.checked)}
-              />
-              <span>Server Memory</span>
-            </label>
-
-            {/* Phase 4: Knowledge Source Toggles */}
-            {showKnowledgeToggles && (
-              <div className="flex items-center gap-3 pl-4 border-l">
-                <span className="text-xs font-medium text-muted-foreground">
-                  Knowledge Sources:
-                </span>
-
-                {onKbToggle && (
-                  <label className="inline-flex items-center gap-2 text-sm cursor-pointer">
-                    <input
-                      type="checkbox"
-                      aria-label="Enable Knowledge Base documents"
-                      className="accent-primary cursor-pointer"
-                      checked={kbEnabled ?? true}
-                      onChange={(e) => onKbToggle(e.target.checked)}
-                    />
-                    <span>KB</span>
-                  </label>
+              <div className="flex items-center gap-2 pl-3 border-l border-white/10 text-xs text-gray-400">
+                {hasActiveConversation ? (
+                  <AgentSelector
+                    value={agentType}
+                    onChange={(value) => onAgentChange?.(value)}
+                    disabled={!onAgentChange}
+                    variant="dropdown"
+                    showLabel={false}
+                    className="min-w-[150px] !gap-0"
+                  />
+                ) : (
+                  <span className="text-xs font-medium px-2.5 py-1 rounded-full bg-white/5 text-gray-300 border border-white/10">
+                    {agentBadge}
+                  </span>
                 )}
-
-                {onFeedmeToggle && (
-                  <label className="inline-flex items-center gap-2 text-sm cursor-pointer">
-                    <input
-                      type="checkbox"
-                      aria-label="Enable FeedMe conversations"
-                      className="accent-primary cursor-pointer"
-                      checked={feedmeEnabled ?? true}
-                      onChange={(e) => onFeedmeToggle(e.target.checked)}
-                    />
-                    <span>FeedMe</span>
-                  </label>
+                {hasActiveTools && (
+                  <span className="flex items-center gap-2 px-2.5 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-xs font-medium text-emerald-300">
+                    <Activity className="w-3 h-3 text-emerald-300 animate-pulse" />
+                    {activeToolCount} tool{activeToolCount === 1 ? '' : 's'}
+                  </span>
                 )}
               </div>
-            )}
+            </div>
+
+            {/* Controls */}
+            <div className="flex items-center gap-2 flex-shrink-0">
+              <button
+                onClick={() => onMemoryToggle(!memoryEnabled)}
+                className={`text-xs font-medium px-3 py-1.5 rounded-xl transition-all duration-200 border whitespace-nowrap ${
+                  memoryEnabled
+                    ? "bg-blue-500/15 border-blue-500/30 text-blue-300 shadow-[0_0_15px_rgba(56,189,248,0.2)]"
+                    : "bg-white/5 border-white/10 text-gray-400 hover:text-white"
+                }`}
+                aria-pressed={memoryEnabled}
+              >
+                Memory {memoryEnabled ? "On" : "Off"}
+              </button>
+
+              <button
+                onClick={handleFeedMe}
+                className="text-xs font-medium px-3 py-1.5 rounded-xl border border-white/10 bg-white/5 text-gray-300 hover:text-white transition-all duration-200 flex items-center gap-1.5 whitespace-nowrap"
+                aria-label="Open Feed Me"
+              >
+                <PanelsTopLeft className="w-3.5 h-3.5 text-gray-400" />
+                Feed Me
+              </button>
+
+              <div className="w-[140px]">
+                <ModelSelector
+                  model={model}
+                  onChangeModel={onModelChange}
+                  align="right"
+                  models={models}
+                  helperText={modelHelperText}
+                  recommended={recommendedModel}
+                />
+              </div>
+
+              <Button asChild variant="ghost" size="icon" className="h-9 w-9 text-gray-400 hover:text-white hover:bg-white/5 rounded-xl flex-shrink-0">
+                <Link href="/settings" aria-label="Open Settings">
+                  <Settings className="w-4 h-4" />
+                </Link>
+              </Button>
+            </div>
           </div>
 
-          <div className="flex items-center gap-4">
-            {/* Phase 5: Agent Selector (feature-flagged externally) */}
-            {onAgentChange && selectedAgent && (
-              <AgentSelector value={selectedAgent} onChange={onAgentChange} />
-            )}
-            {/* Model selector */}
-            <ModelSelector
-              model={model}
-              onChangeModel={onModelChange}
-              align="right"
-          models={models}
-            />
-
-            {/* MCP URL input (optional) */}
-            {onMcpUrlChange !== undefined && (
-              <input
-                value={mcpUrl || ""}
-                onChange={(e) => onMcpUrlChange(e.target.value)}
-                placeholder="MCP SSE URL (optional)"
-                className="h-8 w-56 px-2 py-1 text-xs border rounded-md bg-background"
-                aria-label="MCP SSE URL"
+          {/* Agent Selector + mobile active status */}
+          {!hasActiveConversation && (
+            <div className="flex justify-center w-full">
+              <AgentSelector
+                value={agentType}
+                onChange={(value) => onAgentChange?.(value)}
+                disabled={!onAgentChange}
               />
-            )}
-          </div>
+            </div>
+          )}
+
+          {hasActiveTools && (
+            <div className="flex sm:hidden justify-center items-center gap-2 px-3 py-2 rounded-2xl bg-emerald-500/10 border border-emerald-500/20 text-xs font-medium text-emerald-200 w-fit mx-auto">
+              <Activity className="w-3 h-3 text-emerald-200 animate-pulse" />
+              {activeToolCount} tool{activeToolCount === 1 ? '' : 's'} active
+            </div>
+          )}
         </div>
       </div>
     </div>

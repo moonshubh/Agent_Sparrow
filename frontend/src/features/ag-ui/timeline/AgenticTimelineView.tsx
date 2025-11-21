@@ -1,32 +1,24 @@
-/**
- * Agentic Timeline View
- * Complete workflow visualization with parallel operations and branching
- */
+'use client';
 
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
-  Play,
-  Pause,
-  CheckCircle,
-  XCircle,
-  AlertCircle,
-  GitBranch,
+  CheckCircle2,
+  Circle,
   Clock,
-  Zap,
-  Database,
-  Search,
-  FileText,
-  Users,
-  Layers,
+  AlertCircle,
   ChevronRight,
-  ChevronDown
+  ChevronDown,
+  Terminal,
+  BrainCircuit,
+  Search,
+  Database,
+  Cpu
 } from 'lucide-react';
-import { timelineBranchAnimation, crystalCardAnimation } from '@/shared/animations/crystalline-animations';
 import './agentic-timeline.css';
 
-export type OperationStatus = 'pending' | 'running' | 'success' | 'error' | 'skipped';
-export type OperationType = 'agent' | 'tool' | 'subagent' | 'decision' | 'memory' | 'search';
+export type OperationStatus = 'pending' | 'running' | 'success' | 'error';
+export type OperationType = 'agent' | 'tool' | 'chain' | 'thought' | 'todo';
 
 export interface TimelineOperation {
   id: string;
@@ -44,412 +36,144 @@ export interface TimelineOperation {
   error?: string;
 }
 
-export interface AgenticTimelineViewProps {
+interface AgenticTimelineViewProps {
   operations: TimelineOperation[];
   currentOperation?: string;
-  isPlaying?: boolean;
-  onOperationClick?: (operation: TimelineOperation) => void;
-  onPlayPause?: () => void;
   className?: string;
 }
 
-const operationIcons: Record<OperationType, React.ReactNode> = {
-  agent: <Users className="w-4 h-4" />,
-  tool: <Zap className="w-4 h-4" />,
-  subagent: <Layers className="w-4 h-4" />,
-  decision: <GitBranch className="w-4 h-4" />,
-  memory: <Database className="w-4 h-4" />,
-  search: <Search className="w-4 h-4" />
+const StatusIcon = ({ status, type }: { status: OperationStatus; type: OperationType }) => {
+  if (status === 'running') {
+    return <Circle className="node-icon" />;
+  }
+  if (status === 'success') {
+    return <CheckCircle2 className="node-icon" />;
+  }
+  if (status === 'error') {
+    return <AlertCircle className="node-icon" />;
+  }
+  return <Circle className="node-icon opacity-50" />;
 };
 
-const operationColors: Record<OperationType, string> = {
-  agent: 'var(--crystal-cyan-400)',
-  tool: 'var(--accent-amber-400)',
-  subagent: 'var(--accent-gold-400)',
-  decision: 'var(--status-warning)',
-  memory: 'var(--status-info)',
-  search: 'var(--crystal-cyan-300)'
-};
-
-const statusColors: Record<OperationStatus, string> = {
-  pending: 'var(--neutral-500)',
-  running: 'var(--accent-amber-400)',
-  success: 'var(--status-success)',
-  error: 'var(--status-error)',
-  skipped: 'var(--neutral-600)'
+const TypeIcon = ({ type }: { type: OperationType }) => {
+  switch (type) {
+    case 'agent':
+      return <BrainCircuit className="w-3 h-3" />;
+    case 'tool':
+      return <Terminal className="w-3 h-3" />;
+    case 'chain':
+      return <Cpu className="w-3 h-3" />;
+    case 'thought':
+      return <Search className="w-3 h-3" />;
+    case 'todo':
+      return <CheckCircle2 className="w-3 h-3" />;
+    default:
+      return <Database className="w-3 h-3" />;
+  }
 };
 
 export const AgenticTimelineView: React.FC<AgenticTimelineViewProps> = ({
   operations,
   currentOperation,
-  isPlaying = false,
-  onOperationClick,
-  onPlayPause,
   className = ''
 }) => {
-  const [selectedOperation, setSelectedOperation] = useState<TimelineOperation | null>(null);
-  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
   const containerRef = useRef<HTMLDivElement>(null);
+  const previousLengthRef = useRef<number>(0);
+  const [expandedNodes, setExpandedNodes] = useState<Set<string>>(new Set());
 
-  // Build operation hierarchy
-  const buildHierarchy = () => {
-    const roots: TimelineOperation[] = [];
-    const opMap = new Map<string, TimelineOperation>();
-
-    operations.forEach(op => opMap.set(op.id, op));
-
-    operations.forEach(op => {
-      if (!op.parent) {
-        roots.push(op);
-      }
-    });
-
-    return roots;
-  };
-
-  const rootOperations = buildHierarchy();
-
-  // Get parallel operations
-  const getParallelOperations = (groupId: string): TimelineOperation[] => {
-    return operations.filter(op => op.parallelGroup === groupId);
-  };
-
-  // Toggle group expansion
-  const toggleGroup = (groupId: string) => {
-    const newExpanded = new Set(expandedGroups);
-    if (newExpanded.has(groupId)) {
-      newExpanded.delete(groupId);
-    } else {
-      newExpanded.add(groupId);
+  // Auto-scroll to bottom
+  useEffect(() => {
+    if (!containerRef.current) return;
+    const previous = previousLengthRef.current;
+    if (operations.length > previous) {
+      containerRef.current.scrollTop = containerRef.current.scrollHeight;
     }
-    setExpandedGroups(newExpanded);
+    previousLengthRef.current = operations.length;
+  }, [operations.length]);
+
+  const toggleNode = (id: string) => {
+    setExpandedNodes(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
   };
 
-  // Handle operation click
-  const handleOperationClick = (operation: TimelineOperation) => {
-    setSelectedOperation(operation);
-    onOperationClick?.(operation);
+  const formatDuration = (ms?: number) => {
+    if (!ms) return '';
+    if (ms < 1000) return `${ms}ms`;
+    return `${(ms / 1000).toFixed(1)}s`;
   };
+
+  // Filter out root agent operation to avoid redundancy if desired, 
+  // or keep it for completeness. Here we keep everything but style it cleanly.
+  const displayOperations = operations;
 
   return (
-    <motion.div
-      ref={containerRef}
-      className={`agentic-timeline-view glass-panel ${className}`}
-      variants={crystalCardAnimation}
-      initial="hidden"
-      animate="visible"
-    >
-      {/* Timeline Header */}
-      <div className="timeline-header">
-        <div className="header-left">
-          <div className="timeline-icon">
-            <GitBranch className="w-5 h-5" />
-          </div>
-          <div className="header-text">
-            <h3 className="timeline-title">Agent Workflow</h3>
-            <p className="timeline-subtitle">
-              {operations.filter(op => op.status === 'success').length} / {operations.length} completed
-            </p>
-          </div>
-        </div>
-        <div className="header-actions">
-          {onPlayPause && (
-            <motion.button
-              className="play-pause-btn"
-              onClick={onPlayPause}
-              whileHover={{ scale: 1.05 }}
-              whileTap={{ scale: 0.95 }}
-              aria-label={isPlaying ? 'Pause' : 'Play'}
-            >
-              {isPlaying ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4" />}
-            </motion.button>
-          )}
-        </div>
-      </div>
-
-      {/* Timeline Content */}
+    <div className={`agentic-timeline-container ${className}`} ref={containerRef}>
       <div className="timeline-content">
-        <svg className="timeline-connections">
-          {operations.map((op, index) => {
-            if (!op.parent) return null;
-
-            const parent = operations.find(o => o.id === op.parent);
-            if (!parent) return null;
-
-            const parentIndex = operations.indexOf(parent);
-            const startY = 80 + parentIndex * 100;
-            const endY = 80 + index * 100;
-
-            return (
-              <motion.path
-                key={`connection-${op.id}`}
-                d={`M 40 ${startY} Q 40 ${(startY + endY) / 2}, 40 ${endY}`}
-                className="timeline-connection"
-                stroke={operationColors[op.type]}
-                strokeWidth="2"
-                fill="none"
-                initial={{ pathLength: 0, opacity: 0 }}
-                animate={{ pathLength: 1, opacity: 0.3 }}
-                transition={{ duration: 0.5, delay: index * 0.1 }}
-              />
-            );
-          })}
-        </svg>
-
-        <div className="operations-list">
-          {rootOperations.map((operation, index) => (
-            <OperationNode
-              key={operation.id}
-              operation={operation}
-              allOperations={operations}
-              level={0}
-              index={index}
-              isSelected={selectedOperation?.id === operation.id}
-              isCurrent={currentOperation === operation.id}
-              onClick={handleOperationClick}
-              expandedGroups={expandedGroups}
-              onToggleGroup={toggleGroup}
-            />
-          ))}
-        </div>
-      </div>
-
-      {/* Operation Detail Panel */}
-      <AnimatePresence>
-        {selectedOperation && (
-          <OperationDetailPanel
-            operation={selectedOperation}
-            onClose={() => setSelectedOperation(null)}
-          />
-        )}
-      </AnimatePresence>
-    </motion.div>
-  );
-};
-
-// Operation Node Component
-const OperationNode: React.FC<{
-  operation: TimelineOperation;
-  allOperations: TimelineOperation[];
-  level: number;
-  index: number;
-  isSelected: boolean;
-  isCurrent: boolean;
-  onClick: (op: TimelineOperation) => void;
-  expandedGroups: Set<string>;
-  onToggleGroup: (groupId: string) => void;
-}> = ({
-  operation,
-  allOperations,
-  level,
-  index,
-  isSelected,
-  isCurrent,
-  onClick,
-  expandedGroups,
-  onToggleGroup
-}) => {
-  const hasChildren = operation.children && operation.children.length > 0;
-  const isExpanded = expandedGroups.has(operation.id);
-  const icon = operationIcons[operation.type];
-  const color = operationColors[operation.type];
-  const statusColor = statusColors[operation.status];
-
-  // Get child operations
-  const children = hasChildren
-    ? allOperations.filter(op => operation.children?.includes(op.id))
-    : [];
-
-  // Check if operation is part of parallel group
-  const parallelSiblings = operation.parallelGroup
-    ? allOperations.filter(op => op.parallelGroup === operation.parallelGroup && op.id !== operation.id)
-    : [];
-
-  return (
-    <>
-      <motion.div
-        className={`operation-node ${operation.status} ${isSelected ? 'selected' : ''} ${isCurrent ? 'current' : ''}`}
-        style={{
-          '--operation-color': color,
-          '--status-color': statusColor,
-          '--level-indent': `${level * 40}px`
-        } as React.CSSProperties}
-        variants={timelineBranchAnimation}
-        initial="hidden"
-        animate="visible"
-        custom={index}
-        onClick={() => onClick(operation)}
-      >
-        {/* Expand/Collapse Button */}
-        {hasChildren && (
-          <button
-            className="expand-btn"
-            onClick={(e) => {
-              e.stopPropagation();
-              onToggleGroup(operation.id);
-            }}
-            aria-label={isExpanded ? 'Collapse' : 'Expand'}
-          >
-            {isExpanded ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
-          </button>
-        )}
-
-        {/* Operation Icon */}
-        <div className="operation-icon">{icon}</div>
-
-        {/* Operation Content */}
-        <div className="operation-content">
-          <div className="operation-header">
-            <h4 className="operation-name">{operation.name}</h4>
-            {operation.duration && (
-              <span className="operation-duration">
-                <Clock className="w-3 h-3" />
-                {Math.round(operation.duration)}ms
-              </span>
-            )}
-          </div>
-          {operation.description && (
-            <p className="operation-description">{operation.description}</p>
-          )}
-          {parallelSiblings.length > 0 && (
-            <div className="parallel-indicator">
-              <GitBranch className="w-3 h-3" />
-              Parallel with {parallelSiblings.length} other operations
-            </div>
-          )}
-        </div>
-
-        {/* Status Badge */}
-        <div className="status-badge">
-          {operation.status === 'success' && <CheckCircle className="w-4 h-4" />}
-          {operation.status === 'error' && <XCircle className="w-4 h-4" />}
-          {operation.status === 'running' && (
+        <AnimatePresence initial={false}>
+          {displayOperations.map((op, index) => (
             <motion.div
-              animate={{ rotate: 360 }}
-              transition={{ duration: 1, repeat: Infinity, ease: 'linear' }}
+              key={op.id}
+              initial={{ opacity: 0, x: -10 }}
+              animate={{ opacity: 1, x: 0 }}
+              transition={{ duration: 0.2 }}
+              className={`timeline-node status-${op.status} ${currentOperation === op.id ? 'active' : ''}`}
+              onClick={() => toggleNode(op.id)}
             >
-              <Zap className="w-4 h-4" />
-            </motion.div>
-          )}
-          {operation.status === 'pending' && <AlertCircle className="w-4 h-4" />}
-        </div>
-      </motion.div>
+              {/* Connector Line */}
+              {index !== displayOperations.length - 1 && <div className="node-connector" />}
 
-      {/* Render children if expanded */}
-      <AnimatePresence>
-        {isExpanded && hasChildren && (
-          <motion.div
-            className="operation-children"
-            initial={{ opacity: 0, height: 0 }}
-            animate={{ opacity: 1, height: 'auto' }}
-            exit={{ opacity: 0, height: 0 }}
-          >
-            {children.map((child, childIndex) => (
-              <OperationNode
-                key={child.id}
-                operation={child}
-                allOperations={allOperations}
-                level={level + 1}
-                index={childIndex}
-                isSelected={isSelected}
-                isCurrent={isCurrent}
-                onClick={onClick}
-                expandedGroups={expandedGroups}
-                onToggleGroup={onToggleGroup}
-              />
-            ))}
-          </motion.div>
-        )}
-      </AnimatePresence>
-    </>
-  );
-};
+              {/* Icon */}
+              <div className="node-icon-wrapper">
+                <StatusIcon status={op.status} type={op.type} />
+              </div>
 
-// Operation Detail Panel
-const OperationDetailPanel: React.FC<{
-  operation: TimelineOperation;
-  onClose: () => void;
-}> = ({ operation, onClose }) => {
-  return (
-    <motion.div
-      className="operation-detail-panel glass-panel"
-      initial={{ opacity: 0, x: 300 }}
-      animate={{ opacity: 1, x: 0 }}
-      exit={{ opacity: 0, x: 300 }}
-      transition={{ type: 'spring', stiffness: 300, damping: 30 }}
-    >
-      <div className="detail-header">
-        <div className="detail-icon" style={{ '--operation-color': operationColors[operation.type] } as React.CSSProperties}>
-          {operationIcons[operation.type]}
-        </div>
-        <div className="detail-title-section">
-          <h4 className="detail-title">{operation.name}</h4>
-          <span className={`detail-status status-${operation.status}`}>
-            {operation.status}
-          </span>
-        </div>
-        <button className="close-btn" onClick={onClose} aria-label="Close">
-          <XCircle className="w-5 h-5" />
-        </button>
-      </div>
-
-      <div className="detail-content">
-        {operation.description && (
-          <div className="detail-section">
-            <h5 className="section-label">Description</h5>
-            <p className="section-text">{operation.description}</p>
-          </div>
-        )}
-
-        {(operation.startTime || operation.endTime) && (
-          <div className="detail-section">
-            <h5 className="section-label">Timing</h5>
-            <div className="timing-info">
-              {operation.startTime && (
-                <div className="timing-row">
-                  <span className="timing-label">Started:</span>
-                  <span className="timing-value">{operation.startTime.toLocaleTimeString()}</span>
-                </div>
-              )}
-              {operation.endTime && (
-                <div className="timing-row">
-                  <span className="timing-label">Completed:</span>
-                  <span className="timing-value">{operation.endTime.toLocaleTimeString()}</span>
-                </div>
-              )}
-              {operation.duration && (
-                <div className="timing-row">
-                  <span className="timing-label">Duration:</span>
-                  <span className="timing-value">{Math.round(operation.duration)}ms</span>
-                </div>
-              )}
-            </div>
-          </div>
-        )}
-
-        {operation.metadata && Object.keys(operation.metadata).length > 0 && (
-          <div className="detail-section">
-            <h5 className="section-label">Metadata</h5>
-            <div className="metadata-grid">
-              {Object.entries(operation.metadata).map(([key, value]) => (
-                <div key={key} className="metadata-row">
-                  <span className="metadata-key">{key}:</span>
-                  <span className="metadata-value">
-                    {typeof value === 'object' ? JSON.stringify(value, null, 2) : String(value)}
+              {/* Info */}
+              <div className="node-info">
+                <div className="node-header">
+                  <span className="node-name" title={op.name}>
+                    {op.name}
+                  </span>
+                  <span className="node-duration">
+                    {formatDuration(op.duration)}
                   </span>
                 </div>
-              ))}
-            </div>
-          </div>
-        )}
 
-        {operation.error && (
-          <div className="detail-section error-section">
-            <h5 className="section-label">Error</h5>
-            <pre className="error-text">{operation.error}</pre>
-          </div>
-        )}
+                {op.description && (
+                  <div className="node-details">{op.description}</div>
+                )}
+
+                {/* Expanded Details */}
+                <AnimatePresence>
+                  {expandedNodes.has(op.id) && op.metadata && (
+                    <motion.div
+                      initial={{ height: 0, opacity: 0 }}
+                      animate={{ height: 'auto', opacity: 1 }}
+                      exit={{ height: 0, opacity: 0 }}
+                      className="detail-panel"
+                    >
+                      {Object.entries(op.metadata).map(([key, value]) => (
+                        <div key={key} className="detail-row">
+                          <span className="detail-key">{key}:</span>
+                          <span className="detail-value">
+                            {typeof value === 'object' ? JSON.stringify(value) : String(value)}
+                          </span>
+                        </div>
+                      ))}
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+              </div>
+            </motion.div>
+          ))}
+        </AnimatePresence>
       </div>
-    </motion.div>
+    </div>
   );
 };

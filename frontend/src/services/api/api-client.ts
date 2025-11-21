@@ -14,9 +14,46 @@ const validateApiBaseUrl = (url: string): string => {
   }
 }
 
-const API_BASE_URL = validateApiBaseUrl(
-  process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
-)
+const resolveApiBaseUrl = (): string => {
+  const envUrl = process.env.NEXT_PUBLIC_API_URL
+
+  // When running in browser on https and env is missing or points to http localhost,
+  // prefer same-origin to avoid mixed-content "Failed to fetch".
+  if (typeof window !== 'undefined') {
+    const currentOrigin = window.location.origin
+    const looksLikeLocalHttp = envUrl?.startsWith('http://localhost')
+    if (!envUrl || (currentOrigin.startsWith('https://') && looksLikeLocalHttp)) {
+      return currentOrigin
+    }
+  }
+
+  return validateApiBaseUrl(envUrl || 'http://localhost:8000')
+}
+
+const API_BASE_URL = resolveApiBaseUrl()
+const TRUSTED_FALLBACK_ORIGINS = (process.env.NEXT_PUBLIC_TRUSTED_API_ORIGINS || '')
+  .split(',')
+  .map((origin) => origin.trim())
+  .filter(Boolean)
+
+const buildRequestUrl = (endpoint: string): string => {
+  try {
+    // Absolute endpoints pass through unchanged
+    new URL(endpoint)
+    return endpoint
+  } catch {
+    return `${API_BASE_URL}${endpoint}`
+  }
+}
+
+const toOrigin = (url?: string | null): string | null => {
+  if (!url) return null
+  try {
+    return new URL(url).origin
+  } catch {
+    return null
+  }
+}
 
 // TypeScript interfaces for better type safety
 interface User {
@@ -203,8 +240,7 @@ class APIClient {
         'Content-Type': customContentType || 'application/json',
         ...(token && { Authorization: `Bearer ${token}` })
       }
-    } catch (error) {
-      console.error('Failed to retrieve session:', error)
+    } catch {
       return {
         'Content-Type': customContentType || 'application/json'
       }
@@ -228,10 +264,45 @@ class APIClient {
       new Headers(headers).forEach((value, key) => requestHeaders.set(key, value))
     }
 
-    const response = await fetch(`${API_BASE_URL}${endpoint}`, {
-      ...restOptions,
-      headers: requestHeaders
-    })
+    const targetUrl = buildRequestUrl(endpoint)
+    const sameOrigin = typeof window !== 'undefined' ? window.location.origin : null
+    const apiOrigin = toOrigin(API_BASE_URL)
+    const trustedOrigins = new Set<string>(
+      [apiOrigin, ...TRUSTED_FALLBACK_ORIGINS].filter(Boolean) as string[]
+    )
+    const scrubHeadersForOrigin = (targetOrigin?: string | null) => {
+      if (!targetOrigin) return requestHeaders
+      const sanitized = new Headers(requestHeaders)
+      if (apiOrigin && targetOrigin !== apiOrigin) {
+        sanitized.delete('authorization')
+      }
+      return sanitized
+    }
+
+    let response: Response
+    try {
+      response = await fetch(targetUrl, {
+        ...restOptions,
+        headers: requestHeaders
+      })
+    } catch (err) {
+      // Mixed-content or bad base URL can throw TypeError; retry relative if allowed.
+      const originIsTrusted = !!(sameOrigin && trustedOrigins.has(sameOrigin))
+      const shouldRetrySameOrigin =
+        err instanceof TypeError &&
+        originIsTrusted &&
+        !endpoint.startsWith('http') &&
+        sameOrigin !== API_BASE_URL
+      if (shouldRetrySameOrigin) {
+        const fallbackHeaders = scrubHeadersForOrigin(sameOrigin)
+        response = await fetch(endpoint, {
+          ...restOptions,
+          headers: fallbackHeaders
+        })
+      } else {
+        throw err
+      }
+    }
 
     const contentType = response.headers.get('content-type')
 

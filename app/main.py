@@ -11,6 +11,10 @@ import os
 import asyncio
 from langchain_core.messages import HumanMessage
 
+# Ensure AG-UI LangGraph custom events propagate even if site-packages are overwritten
+from app.patches.agui_custom_events import apply_patch as _apply_agui_patch
+_apply_agui_patch()
+
 # Rate limiting imports
 from slowapi import Limiter
 from slowapi.util import get_remote_address
@@ -164,6 +168,8 @@ else:
         "http://127.0.0.1:3000",
         "http://localhost:3001",  # Added port 3001 support
         "http://127.0.0.1:3001",  # Added port 3001 support
+        "http://localhost:3010",  # Playwright / dev override
+        "http://127.0.0.1:3010",
     ]
 
 app.add_middleware(

@@ -4,9 +4,10 @@ import React, { useState, useRef, KeyboardEvent } from 'react';
 import { Button } from '@/shared/ui/button';
 import { Textarea } from '@/shared/ui/textarea';
 import { cn } from '@/shared/lib/utils';
-import { SendHorizontalIcon, Square, Paperclip, X } from 'lucide-react';
+import { SendHorizontalIcon, Square, Paperclip, X, Mic, Plus, Sparkles, RefreshCw } from 'lucide-react';
 import type { AttachmentInput } from '@/services/ag-ui/types';
 import { createBinaryContent } from '@/services/ag-ui/types';
+import type { AgentChoice } from '@/features/chat/hooks/useAgentSelection';
 
 interface ChatInputProps {
   onSend: (message: string) => void;
@@ -15,6 +16,8 @@ interface ChatInputProps {
   attachments: AttachmentInput[];
   onAttachmentsChange: (attachments: AttachmentInput[]) => void;
   sessionId: string;
+  agentType?: AgentChoice;
+  variant?: 'default' | 'centered';
 }
 
 export function ChatInput({
@@ -24,11 +27,14 @@ export function ChatInput({
   attachments,
   onAttachmentsChange,
   sessionId,
+  agentType,
+  variant = 'default',
 }: ChatInputProps) {
   const [input, setInput] = useState('');
   const [isDragOver, setIsDragOver] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const isLogAgent = agentType === 'log_analysis';
 
   const handleSend = () => {
     if (input.trim() && !disabled) {
@@ -64,6 +70,7 @@ export function ChatInput({
 
     for (let i = 0; i < files.length; i++) {
       const file = files[i];
+      const normalizedType = file.type || 'application/octet-stream';
 
       // Validate file size (10MB limit)
       if (file.size > 10 * 1024 * 1024) {
@@ -75,8 +82,8 @@ export function ChatInput({
         const binaryContent = await createBinaryContent(file);
         newAttachments.push({
           name: file.name,
-          mimeType: file.type,
-          dataUrl: `data:${file.type};base64,${binaryContent.data}`,
+          mime_type: normalizedType,
+          data_url: `data:${normalizedType};base64,${binaryContent.data}`,
           size: file.size,
         });
       } catch (error) {
@@ -121,11 +128,14 @@ export function ChatInput({
     }
   };
 
+  const isCentered = variant === 'centered';
+
   return (
     <div
       className={cn(
-        'border-t bg-white p-4',
-        isDragOver && 'bg-blue-50 border-blue-300'
+        'transition-all duration-500 ease-in-out w-full',
+        isCentered ? 'max-w-2xl mx-auto' : 'border-t bg-[hsl(220,15%,10%)] p-4',
+        isDragOver && 'bg-blue-500/10 border-blue-500/50'
       )}
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
@@ -137,19 +147,19 @@ export function ChatInput({
           {attachments.map((attachment, index) => (
             <div
               key={index}
-              className="flex items-center gap-2 bg-gray-100 rounded-lg px-3 py-2"
+              className="flex items-center gap-2 bg-white/10 backdrop-blur-md rounded-lg px-3 py-2 border border-white/10"
             >
-              <Paperclip className="w-4 h-4 text-gray-500" />
-              <span className="text-sm text-gray-700 max-w-[200px] truncate">
+              <Paperclip className="w-4 h-4 text-gray-300" />
+              <span className="text-sm text-gray-200 max-w-[200px] truncate">
                 {attachment.name}
               </span>
-              <span className="text-xs text-gray-500">
+              <span className="text-xs text-gray-400">
                 ({(attachment.size / 1024).toFixed(1)}KB)
               </span>
               <button
                 type="button"
                 onClick={() => removeAttachment(index)}
-                className="ml-1 text-gray-400 hover:text-gray-600"
+                className="ml-1 text-gray-400 hover:text-white"
                 aria-label={`Remove attachment ${index + 1}`}
               >
                 <X className="w-4 h-4" />
@@ -159,29 +169,48 @@ export function ChatInput({
         </div>
       )}
 
-      {/* Input area */}
-      <div className="max-w-4xl mx-auto">
-        <div className="flex items-end gap-2">
+      {/* Input Container */}
+      <div className={cn(
+        "relative flex flex-col gap-4",
+        isCentered ? "" : "max-w-4xl mx-auto"
+      )}>
+
+        {/* Main Input Bar */}
+        <div className={cn(
+          "flex items-center gap-2 p-2 transition-all duration-300",
+          isCentered
+            ? "bg-[hsl(220,15%,16%)]/80 backdrop-blur-xl border border-white/10 rounded-2xl shadow-2xl min-h-[64px]"
+            : "bg-[hsl(220,15%,14%)] border border-white/5 rounded-xl"
+        )}>
           {/* File upload button */}
           <Button
             type="button"
             variant="ghost"
-            size="icon"
             onClick={() => fileInputRef.current?.click()}
             disabled={disabled}
-            className="mb-1"
+            className={cn(
+              "text-gray-400 hover:text-white hover:bg-white/5 transition-colors",
+              isCentered ? "rounded-xl px-3 h-10 gap-2 bg-white/5" : "h-10 w-10 p-0 rounded-lg"
+            )}
             aria-label="Attach file"
           >
-            <Paperclip className="w-5 h-5" />
+            {isCentered ? (
+              <>
+                <Plus className="w-4 h-4" />
+                <span className="text-sm font-medium">Add files</span>
+              </>
+            ) : (
+              <Paperclip className="w-5 h-5" />
+            )}
           </Button>
 
           <input
             ref={fileInputRef}
             type="file"
             multiple
-            className="hidden"
+            className="sr-only"
             onChange={(e) => handleFileSelect(e.target.files)}
-            accept="image/*,application/pdf,.txt,.md,.csv,.json"
+            accept="text/plain,.log,.txt,.md,.csv,.json,application/pdf,image/*"
           />
 
           {/* Message input */}
@@ -193,54 +222,104 @@ export function ChatInput({
             placeholder={
               disabled
                 ? 'Generating response...'
-                : 'Type a message... (Enter to send, Shift+Enter for new line)'
+                : isCentered ? 'Ask anything...' : 'Type a message...'
             }
             disabled={disabled}
             className={cn(
-              'flex-1 min-h-[44px] max-h-[200px] resize-none',
-              'focus:ring-2 focus:ring-blue-500'
+              'flex-1 bg-transparent border-0 focus:ring-0 text-gray-100 placeholder:text-gray-500 resize-none py-3',
+              isCentered ? 'text-lg' : 'text-base',
+              'min-h-[44px] max-h-[200px]'
             )}
             rows={1}
           />
 
-          {/* Send/Stop button */}
-          {disabled ? (
-            <Button
-              type="button"
-              onClick={onAbort}
-              variant="destructive"
-              size="icon"
-              className="mb-1"
-              aria-label="Abort generation"
-            >
-              <Square className="w-4 h-4" />
-            </Button>
-          ) : (
-            <Button
-              type="button"
-              onClick={handleSend}
-              disabled={!input.trim()}
-              size="icon"
-              className="mb-1"
-              aria-label="Send message"
-            >
-              <SendHorizontalIcon className="w-4 h-4" />
-            </Button>
-          )}
+          {/* Right Actions */}
+          <div className="flex items-center gap-1 pr-1">
+            {isCentered && (
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                disabled
+                title="Voice input coming soon"
+                className="text-gray-400 hover:text-white hover:bg-white/5 rounded-full h-10 w-10"
+                aria-disabled="true"
+              >
+                <Mic className="w-5 h-5" />
+              </Button>
+            )}
+
+            {/* Send/Stop button */}
+            {disabled ? (
+              <Button
+                type="button"
+                onClick={onAbort}
+                variant="destructive"
+                size="icon"
+                className={cn(
+                  "transition-all",
+                  isCentered ? "rounded-full h-10 w-10" : "rounded-lg h-10 w-10"
+                )}
+                aria-label="Abort generation"
+              >
+                <Square className="w-4 h-4" />
+              </Button>
+            ) : (
+              <Button
+                type="button"
+                onClick={handleSend}
+                disabled={!input.trim()}
+                className={cn(
+                  "transition-all bg-white/10 hover:bg-white/20 text-white border border-white/5",
+                  isCentered ? "rounded-full h-10 w-10 p-0" : "rounded-lg h-10 w-10 p-0"
+                )}
+                aria-label="Send message"
+              >
+                <SendHorizontalIcon className="w-4 h-4" />
+              </Button>
+            )}
+          </div>
         </div>
 
-        {/* Drag and drop indicator */}
-        {isDragOver && (
-          <div className="mt-2 p-4 border-2 border-dashed border-blue-400 rounded-lg bg-blue-50 text-center">
-            <p className="text-blue-600">Drop files here to attach</p>
+        {/* Action Pills (Centered Mode Only) */}
+        {isCentered && (
+          <div className="flex items-center justify-center gap-2 animate-in fade-in slide-in-from-bottom-4 duration-700 delay-100">
+            <Button
+              variant="outline"
+              disabled
+              aria-disabled="true"
+              title="Skills shortcuts coming soon"
+              className="rounded-full bg-white/5 border-white/10 hover:bg-white/10 text-gray-300 text-xs h-8 gap-2"
+            >
+              <Sparkles className="w-3 h-3" />
+              Skills
+            </Button>
+            <Button
+              variant="outline"
+              disabled
+              aria-disabled="true"
+              title="Rephrase option coming soon"
+              className="rounded-full bg-white/5 border-white/10 hover:bg-white/10 text-gray-300 text-xs h-8 gap-2"
+            >
+              <RefreshCw className="w-3 h-3" />
+              Rephrase
+            </Button>
           </div>
         )}
 
-        {/* Character count */}
-        {input.length > 0 && (
-          <div className="mt-1 text-xs text-gray-500 text-right">
-            {input.length} characters
+        {/* Drag and drop indicator */}
+        {isDragOver && (
+          <div className="absolute inset-0 z-50 flex items-center justify-center bg-blue-500/20 backdrop-blur-sm rounded-2xl border-2 border-dashed border-blue-400">
+            <p className="text-blue-200 font-medium">Drop files here to attach</p>
           </div>
+        )}
+
+        {isLogAgent && (
+          <p className="text-center text-xs text-amber-500/80">
+            {attachments.length > 0
+              ? 'Attached logs will be analyzed automatically.'
+              : 'Attach log files for diagnosis.'}
+          </p>
         )}
       </div>
     </div>

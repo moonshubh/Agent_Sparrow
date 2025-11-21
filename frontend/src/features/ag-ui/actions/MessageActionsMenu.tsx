@@ -3,7 +3,7 @@
  * Radial hover menu with quick actions for messages
  */
 
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Copy,
@@ -54,6 +54,15 @@ export const MessageActionsMenu: React.FC<MessageActionsMenuProps> = ({
 }) => {
   const [isOpen, setIsOpen] = useState(false);
   const [copiedAction, setCopiedAction] = useState<string | null>(null);
+  const copyTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (copyTimeoutRef.current) {
+        clearTimeout(copyTimeoutRef.current);
+      }
+    };
+  }, []);
 
   const handleCopy = async () => {
     try {
@@ -64,7 +73,13 @@ export const MessageActionsMenu: React.FC<MessageActionsMenuProps> = ({
       await navigator.clipboard.writeText(messageContent);
       setCopiedAction('copy');
       onCopy?.();
-      setTimeout(() => setCopiedAction(null), 2000);
+      if (copyTimeoutRef.current) {
+        clearTimeout(copyTimeoutRef.current);
+      }
+      copyTimeoutRef.current = setTimeout(() => {
+        setCopiedAction(null);
+        copyTimeoutRef.current = null;
+      }, 2000);
     } catch (error) {
       console.error('Failed to copy text:', error);
     }
@@ -80,7 +95,13 @@ export const MessageActionsMenu: React.FC<MessageActionsMenuProps> = ({
       await navigator.clipboard.writeText(markdown);
       setCopiedAction('markdown');
       onCopyAsMarkdown?.();
-      setTimeout(() => setCopiedAction(null), 2000);
+      if (copyTimeoutRef.current) {
+        clearTimeout(copyTimeoutRef.current);
+      }
+      copyTimeoutRef.current = setTimeout(() => {
+        setCopiedAction(null);
+        copyTimeoutRef.current = null;
+      }, 2000);
     } catch (error) {
       console.error('Failed to copy markdown:', error);
     }
@@ -235,6 +256,15 @@ export const MessageActionsInline: React.FC<MessageActionsMenuProps> = ({
   className = ''
 }) => {
   const [copied, setCopied] = useState(false);
+  const copyTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (copyTimeoutRef.current) {
+        clearTimeout(copyTimeoutRef.current);
+      }
+    };
+  }, []);
 
   const handleCopy = async () => {
     try {
@@ -245,7 +275,13 @@ export const MessageActionsInline: React.FC<MessageActionsMenuProps> = ({
       await navigator.clipboard.writeText(messageContent);
       setCopied(true);
       onCopy?.();
-      setTimeout(() => setCopied(false), 2000);
+      if (copyTimeoutRef.current) {
+        clearTimeout(copyTimeoutRef.current);
+      }
+      copyTimeoutRef.current = setTimeout(() => {
+        setCopied(false);
+        copyTimeoutRef.current = null;
+      }, 2000);
     } catch (error) {
       console.error('Failed to copy text:', error);
     }

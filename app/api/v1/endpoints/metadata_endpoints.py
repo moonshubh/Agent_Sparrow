@@ -13,7 +13,7 @@ from pydantic import BaseModel, Field
 
 from app.core.auth import get_current_user, User
 from app.core.settings import settings
-from app.db.supabase_service import get_supabase_client
+from app.db.supabase.client import get_supabase_client
 from app.agents.unified.quota_manager import QuotaManager
 from app.agents.unified.model_health import quota_tracker
 from app.memory.service import MemoryService

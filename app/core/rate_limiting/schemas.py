@@ -42,6 +42,10 @@ class RateLimitResult(BaseModel):
     metadata: RateLimitMetadata = Field(description="Rate limit metadata")
     retry_after: Optional[int] = Field(default=None, description="Seconds to wait before retry")
     blocked_by: Optional[str] = Field(default=None, description="Which limit blocked the request")
+    token_identifier: Optional[str] = Field(
+        default=None,
+        description="Identifier for the reserved slot used for optional release/rollback."
+    )
     
     model_config = ConfigDict(from_attributes=True)
 
@@ -62,9 +66,11 @@ class UsageStats(BaseModel):
     """Current usage statistics."""
     
     flash_stats: RateLimitMetadata = Field(description="Gemini 2.5 Flash usage stats")
+    flash_lite_stats: RateLimitMetadata = Field(description="Gemini 2.5 Flash Lite usage stats")
     pro_stats: RateLimitMetadata = Field(description="Gemini 2.5 Pro usage stats")
     
     flash_circuit: CircuitBreakerStatus = Field(description="Flash circuit breaker status")
+    flash_lite_circuit: CircuitBreakerStatus = Field(description="Flash Lite circuit breaker status")
     pro_circuit: CircuitBreakerStatus = Field(description="Pro circuit breaker status")
     
     total_requests_today: int = Field(description="Total requests across all models today")

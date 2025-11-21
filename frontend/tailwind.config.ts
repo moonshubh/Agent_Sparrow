@@ -1,4 +1,7 @@
 import type { Config } from "tailwindcss";
+import tailwindcssAnimate from "tailwindcss-animate";
+import typography from "@tailwindcss/typography";
+import plugin from "tailwindcss/plugin";
 
 const config: Config = {
     darkMode: ["class"],
@@ -154,8 +157,15 @@ const config: Config = {
   	}
   },
   plugins: [
-    require("tailwindcss-animate"),
-    require("@tailwindcss/typography")
+    tailwindcssAnimate,
+    typography,
+    plugin(({ addUtilities }) => {
+      addUtilities({
+        '.animation-delay-0': { 'animation-delay': '0ms' },
+        '.animation-delay-200': { 'animation-delay': '200ms' },
+        '.animation-delay-400': { 'animation-delay': '400ms' },
+      });
+    }),
   ],
 };
 export default config;

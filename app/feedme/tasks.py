@@ -772,8 +772,8 @@ def generate_ai_tags(self, conversation_id: int, max_input_chars: int = 4000) ->
         try:
             from app.feedme.rate_limiting.gemini_tracker import get_tracker
             tracker = get_tracker(
-                daily_limit=getattr(fallback_settings, 'gemini_flash_rpd_limit', 1000),
-                rpm_limit=getattr(fallback_settings, 'gemini_flash_rpm_limit', 15),
+                daily_limit=getattr(fallback_settings, 'gemini_flash_rpd_limit', 250),
+                rpm_limit=getattr(fallback_settings, 'gemini_flash_rpm_limit', 10),
             )
         except Exception:
             tracker = None

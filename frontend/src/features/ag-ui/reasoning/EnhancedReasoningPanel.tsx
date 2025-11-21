@@ -11,7 +11,6 @@ import {
   Lightbulb,
   Search,
   Zap,
-  CheckCircle,
   XCircle,
   TrendingUp,
   GitBranch,
@@ -51,6 +50,15 @@ export interface EnhancedReasoningPanelProps {
   isExpanded?: boolean;
   onToggle?: () => void;
   className?: string;
+  agentLabel?: string;
+  runStatus?: 'idle' | 'running' | 'error';
+  statusMessage?: string;
+  activeOperationName?: string;
+  activeToolCount?: number;
+  errorMessage?: string;
+  todoCount?: number;
+  inProgressTodoCount?: number;
+  pendingTodoCount?: number;
 }
 
 const phaseIcons: Record<ReasoningPhase, React.ReactNode> = {
@@ -72,7 +80,16 @@ export const EnhancedReasoningPanel: React.FC<EnhancedReasoningPanelProps> = ({
   currentPhase,
   isExpanded: initialExpanded = false,
   onToggle,
-  className = ''
+  className = '',
+  agentLabel,
+  runStatus = 'idle',
+  statusMessage,
+  activeOperationName,
+  activeToolCount,
+  errorMessage,
+  todoCount,
+  inProgressTodoCount,
+  pendingTodoCount,
 }) => {
   const [isExpanded, setIsExpanded] = useState(initialExpanded);
   const [selectedPhase, setSelectedPhase] = useState<PhaseData | null>(null);
@@ -134,6 +151,53 @@ export const EnhancedReasoningPanel: React.FC<EnhancedReasoningPanelProps> = ({
         </button>
       </div>
 
+      <div className="status-overview">
+        <StatusPill
+          label="Status"
+          value={runStatus === 'running' ? 'Running' : runStatus === 'error' ? 'Needs attention' : 'Idle'}
+          variant={runStatus}
+        />
+        {agentLabel && (
+          <StatusPill
+            label="Agent"
+            value={agentLabel}
+            variant="idle"
+          />
+        )}
+        <StatusPill
+          label="Focus"
+          value={activeOperationName || (currentPhase ? `${currentPhase} phase` : 'Standing by')}
+          variant={activeOperationName ? 'running' : 'idle'}
+        />
+        <StatusPill
+          label="Tools"
+          value={
+            activeToolCount && activeToolCount > 0
+              ? `${activeToolCount} active ${activeToolCount === 1 ? 'tool' : 'tools'}`
+              : 'No tools running'
+          }
+          variant={activeToolCount && activeToolCount > 0 ? 'running' : 'idle'}
+        />
+        {typeof todoCount === 'number' && (
+          <StatusPill
+            label="Todos"
+            value={
+              todoCount === 0
+                ? 'None'
+                : `${todoCount} (${inProgressTodoCount || 0} doing, ${pendingTodoCount || 0} todo)`
+            }
+            variant={todoCount > 0 ? 'running' : 'idle'}
+          />
+        )}
+      </div>
+
+      {errorMessage && (
+        <div className="status-error">
+          <XCircle className="w-4 h-4" />
+          <span>{errorMessage}</span>
+        </div>
+      )}
+
       <AnimatePresence>
         {isExpanded && (
           <motion.div
@@ -149,15 +213,15 @@ export const EnhancedReasoningPanel: React.FC<EnhancedReasoningPanelProps> = ({
                 {phases.map((phase, index) => {
                   if (index === phases.length - 1) return null;
 
-                  const startY = 60 + index * 120;
-                  const endY = 60 + (index + 1) * 120;
+                  const startY = 20 + index * 52;
+                  const endY = 20 + (index + 1) * 52;
 
                   return (
                     <motion.line
                       key={`line-${index}`}
-                      x1="40"
+                      x1="0"
                       y1={startY}
-                      x2="40"
+                      x2="0"
                       y2={endY}
                       className="timeline-line"
                       variants={timelineBranchAnimation}
@@ -177,6 +241,7 @@ export const EnhancedReasoningPanel: React.FC<EnhancedReasoningPanelProps> = ({
                   index={index}
                   onClick={() => setSelectedPhase(phase)}
                   isSelected={selectedPhase?.phase === phase.phase}
+                  hasActiveTools={Boolean(activeToolCount && activeToolCount > 0)}
                 />
               ))}
             </div>
@@ -204,17 +269,14 @@ const PhaseNode: React.FC<{
   index: number;
   onClick: () => void;
   isSelected: boolean;
-}> = ({ phase, status, index, onClick, isSelected }) => {
+  hasActiveTools: boolean;
+}> = ({ phase, status, index, onClick, isSelected, hasActiveTools }) => {
   const icon = phaseIcons[phase.phase];
   const color = phaseColors[phase.phase];
 
   return (
-    <motion.div
-      className={`phase-node ${status} ${isSelected ? 'selected' : ''}`}
-      variants={timelineNodeAnimation}
-      initial="future"
-      animate={status}
-      custom={index}
+    <div
+      className={`phase-node ${status} ${isSelected ? 'selected' : ''} ${hasActiveTools && status === 'current' ? 'tool-hot' : ''}`}
       onClick={onClick}
       style={{
         '--phase-color': color
@@ -222,11 +284,6 @@ const PhaseNode: React.FC<{
     >
       <div className="node-indicator">
         <div className="node-icon">{icon}</div>
-        {status === 'complete' && (
-          <div className="completion-badge">
-            <CheckCircle className="w-3 h-3" />
-          </div>
-        )}
       </div>
 
       <div className="node-content">
@@ -234,7 +291,7 @@ const PhaseNode: React.FC<{
           <h4 className="node-title">{phase.title}</h4>
           {phase.duration && (
             <span className="node-duration">
-              <Clock className="w-3 h-3" />
+              <Clock className="w-2.5 h-2.5" />
               {Math.round(phase.duration)}ms
             </span>
           )}
@@ -249,7 +306,37 @@ const PhaseNode: React.FC<{
           </div>
         )}
       </div>
-    </motion.div>
+    </div>
+  );
+};
+
+const StatusPill = ({
+  label,
+  value,
+  variant = 'idle'
+}: {
+  label: string;
+  value: string;
+  variant?: 'idle' | 'running' | 'error';
+}) => {
+  const getVariantStyles = () => {
+    switch (variant) {
+      case 'running':
+        return 'status-pill-running';
+      case 'error':
+        return 'status-pill-error';
+      default:
+        return 'status-pill-idle';
+    }
+  };
+
+  return (
+    <div className={`status-pill ${getVariantStyles()}`}>
+      <span className="pill-content">
+        <span className="pill-label">{label}</span>
+        <span className="pill-value">{value}</span>
+      </span>
+    </div>
   );
 };
 
@@ -321,11 +408,6 @@ const ToolDecisionCard: React.FC<{
     <div className={`tool-decision-card ${decision.selected ? 'selected' : 'rejected'}`}>
       <div className="decision-header">
         <div className="tool-name-section">
-          {decision.selected ? (
-            <CheckCircle className="w-4 h-4 text-green-500" />
-          ) : (
-            <XCircle className="w-4 h-4 text-gray-500" />
-          )}
           <span className="tool-name">{decision.toolName}</span>
         </div>
         {decision.confidence !== undefined && decision.selected && (

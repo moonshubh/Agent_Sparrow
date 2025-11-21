@@ -6,8 +6,15 @@ Provides basic authentication and permission verification functions.
 
 import logging
 from typing import Optional, Dict, Any
+from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
+
+
+class User(BaseModel):
+    id: str
+    email: Optional[str] = None
+    permissions: list[str] = []
 
 
 async def verify_user_permission(user_id: str, permission: str) -> bool:
@@ -27,7 +34,7 @@ async def verify_user_permission(user_id: str, permission: str) -> bool:
     return True
 
 
-async def get_current_user(token: Optional[str] = None) -> Optional[Dict[str, Any]]:
+async def get_current_user(token: Optional[str] = None) -> User:
     """
     Get the current authenticated user from a token.
     
@@ -38,13 +45,11 @@ async def get_current_user(token: Optional[str] = None) -> Optional[Dict[str, An
         Dict containing user information or None if not authenticated
     """
     # Placeholder implementation
-    if token:
-        return {
-            "id": "default_user",
-            "email": "user@example.com",
-            "permissions": ["read", "write", "approve"]
-        }
-    return None
+    return User(
+        id="default_user",
+        email="user@example.com",
+        permissions=["read", "write", "approve"]
+    )
 
 
 async def require_permission(permission: str):

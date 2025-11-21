@@ -92,6 +92,10 @@ class GraphState(BaseModel):
         default_factory=dict,
         description="Ephemeral state used by tools/subagents during execution.",
     )
+    todos: List[Dict[str, Any]] = Field(
+        default_factory=list,
+        description="Optional todo list shared across the run (e.g., from planning middleware).",
+    )
 
     # ------------------------------------------------------------------
     # Dict-like access helpers (compatibility with legacy nodes)

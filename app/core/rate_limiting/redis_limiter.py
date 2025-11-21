@@ -46,7 +46,9 @@ class RedisRateLimiter:
         rpm_limit: int,
         rpd_limit: int,
         model: str = "gemini",
-        safety_margin: float = 0.0
+        safety_margin: float = 0.0,
+        *,
+        token_identifier: Optional[str] = None,
     ) -> RateLimitResult:
         self.logger.info(f"Redis rate limit check for {model} (identifier: {identifier})")
         """
@@ -69,12 +71,14 @@ class RedisRateLimiter:
         effective_rpd = int(rpd_limit * (1.0 - safety_margin))
         
         # Check both RPM and RPD limits
+        token_id = token_identifier or f"{now:.6f}"
+
         rpm_result = await self._check_sliding_window(
-            identifier, "rpm", effective_rpm, 60, now
+            identifier, "rpm", effective_rpm, 60, now, token_id
         )
-        
+
         rpd_result = await self._check_sliding_window(
-            identifier, "rpd", effective_rpd, 86400, now  # 24 hours
+            identifier, "rpd", effective_rpd, 86400, now, token_id  # 24 hours
         )
         
         # Determine if request is allowed
@@ -113,7 +117,8 @@ class RedisRateLimiter:
             allowed=allowed,
             metadata=metadata,
             retry_after=retry_after,
-            blocked_by=blocked_by
+            blocked_by=blocked_by,
+            token_identifier=token_id if allowed else None,
         )
     
     async def _check_sliding_window(
@@ -122,7 +127,8 @@ class RedisRateLimiter:
         window_type: str,  # "rpm" or "rpd"
         limit: int,
         window_seconds: int,
-        now: float
+        now: float,
+        token_identifier: str,
     ) -> Dict[str, Any]:
         """
         Check sliding window rate limit using Redis sorted sets.
@@ -146,6 +152,7 @@ class RedisRateLimiter:
         local cutoff = tonumber(ARGV[2])
         local limit = tonumber(ARGV[3])
         local window_seconds = tonumber(ARGV[4])
+        local token_id = ARGV[5]
         
         -- Remove expired entries
         redis.call('ZREMRANGEBYSCORE', key, 0, cutoff)
@@ -155,7 +162,7 @@ class RedisRateLimiter:
         
         if current_count < limit then
             -- Add current request
-            redis.call('ZADD', key, now, tostring(now))
+            redis.call('ZADD', key, now, token_id)
             -- Set expiration
             redis.call('EXPIRE', key, window_seconds + 60)
             return {1, current_count + 1}  -- allowed=true, used=count+1
@@ -169,11 +176,12 @@ class RedisRateLimiter:
             result = await self.redis.eval(
                 lua_script, 
                 1, 
-                key, 
-                str(now), 
-                str(cutoff), 
-                str(limit), 
-                str(window_seconds)
+                key,
+                str(now),
+                str(cutoff),
+                str(limit),
+                str(window_seconds),
+                token_identifier,
             )
             
             allowed = bool(result[0])
@@ -255,6 +263,21 @@ class RedisRateLimiter:
                 
         except Exception as e:
             self.logger.error(f"Failed to reset limits for {identifier}: {e}")
+
+    async def release(self, identifier: str, token_identifier: str) -> None:
+        """Remove a previously reserved slot to avoid leaking counts on failures."""
+        if not token_identifier:
+            return
+        keys = [
+            f"{self.key_prefix}:{identifier}:rpm",
+            f"{self.key_prefix}:{identifier}:rpd",
+        ]
+
+        for key in keys:
+            try:
+                await self.redis.zrem(key, token_identifier)
+            except Exception as exc:  # pragma: no cover - best effort cleanup
+                self.logger.warning("redis_rate_limit_release_failed", key=key, error=str(exc))
     
     async def get_all_usage_stats(self) -> Dict[str, Dict[str, int]]:
         """

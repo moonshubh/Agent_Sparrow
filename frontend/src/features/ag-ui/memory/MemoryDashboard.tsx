@@ -48,8 +48,17 @@ export interface MemoryDashboardProps {
 
 // Helper function to calculate hours since creation
 const getHoursSinceCreation = (createdAt: string): number => {
-  return Math.round((Date.now() - new Date(createdAt).getTime()) / (1000 * 60 * 60));
+  const timestamp = Date.parse(createdAt);
+  if (Number.isNaN(timestamp)) {
+    return 0;
+  }
+  const diff = Date.now() - timestamp;
+  if (diff <= 0) {
+    return 0;
+  }
+  return Math.round(diff / (1000 * 60 * 60));
 };
+
 
 export const MemoryDashboard: React.FC<MemoryDashboardProps> = ({
   sessionId,
@@ -260,7 +269,7 @@ export const MemoryDashboard: React.FC<MemoryDashboardProps> = ({
                       <Star className="w-3 h-3" />
                     )}
                   </div>
-                  {fact.relevanceScore && (
+                  {typeof fact.relevanceScore === 'number' && (
                     <div className="relevance-badge">
                       {Math.round(fact.relevanceScore)}%
                     </div>
@@ -377,7 +386,7 @@ const FactDetailPanel: React.FC<{
         <p className="fact-content">{fact.fact}</p>
 
         <div className="fact-metadata">
-          {fact.relevanceScore && (
+          {typeof fact.relevanceScore === 'number' && (
             <div className="metadata-item">
               <TrendingUp className="w-3 h-3" />
               <span>Relevance: {Math.round(fact.relevanceScore)}%</span>
@@ -393,7 +402,7 @@ const FactDetailPanel: React.FC<{
                 : `${Math.floor(hoursSinceCreation / 24)}d ago`}
             </span>
           </div>
-          {fact.retrievedCount && (
+          {typeof fact.retrievedCount === 'number' && (
             <div className="metadata-item">
               <Hash className="w-3 h-3" />
               <span>Retrieved {fact.retrievedCount}x</span>

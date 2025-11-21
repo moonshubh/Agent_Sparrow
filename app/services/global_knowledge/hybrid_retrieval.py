@@ -6,6 +6,7 @@ import asyncio
 from typing import Any, Dict, List, Optional
 
 from loguru import logger
+from postgrest.exceptions import APIError
 
 from app.core.settings import settings
 from app.db.supabase.client import SupabaseClient, get_supabase_client
@@ -106,11 +107,24 @@ class HybridRetrieval:
         try:
             response = await asyncio.to_thread(_call_rpc)
             return response.data or []
+        except APIError as exc:
+            logger.warning(
+                "Full-text RPC search failed with APIError",
+                error=str(exc),
+                code=getattr(exc, "code", None),
+                hint=getattr(exc, "hint", None),
+            )
+            return []
         except Exception as exc:
             logger.warning("Full-text RPC search failed: %s", exc)
             return []
 
     async def _legacy_text_search(self, query_text: str, top_k: int) -> List[Dict[str, Any]]:
+        safe_query = " ".join((query_text or "").split())
+        if not safe_query:
+            return []
+        safe_query = safe_query[:400]
+
         def _run_query():
             builder = (
                 self.supabase.client
@@ -119,7 +133,7 @@ class HybridRetrieval:
             )
             # Escape SQL wildcards to prevent injection
             escaped_pattern = (
-                query_text
+                safe_query
                 .replace(",", " ")
                 .replace("\\", "\\\\")
                 .replace("%", "\\%")

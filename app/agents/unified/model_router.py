@@ -22,11 +22,15 @@ CoordinatorTask = str
 def _default_model_map() -> Dict[CoordinatorTask, str]:
     """Build the default task→model mapping from settings."""
 
+    coordinator_model = settings.primary_agent_model or "gemini-2.5-flash"
+    lite_model = settings.router_model or "gemini-2.5-flash-lite"
+    heavy_model = settings.enhanced_log_model or "gemini-2.5-pro"
+
     return {
-        "coordinator": settings.primary_agent_model or "gemini-2.5-flash",
-        "coordinator_heavy": "gemini-2.5-pro",
-        "log_analysis": settings.enhanced_log_model or "gemini-2.5-pro",
-        "lightweight": settings.router_model or "gemini-2.5-flash-lite",
+        "coordinator": coordinator_model,
+        "coordinator_heavy": heavy_model,
+        "log_analysis": heavy_model,
+        "lightweight": lite_model,
         "embeddings": "models/gemini-embedding-001",
     }
 
@@ -34,6 +38,7 @@ def _default_model_map() -> Dict[CoordinatorTask, str]:
 def _default_fallbacks() -> Dict[str, str]:
     return {
         "gemini-2.5-pro": "gemini-2.5-flash",
+        "gemini-2.5-flash": "gemini-2.5-flash-lite",
         "gemini-2.5-flash-lite": "gemini-2.5-flash",
     }
 

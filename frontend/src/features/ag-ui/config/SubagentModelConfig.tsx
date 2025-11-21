@@ -73,17 +73,29 @@ export const SubagentModelConfig: React.FC<SubagentModelConfigProps> = ({
 }) => {
   const [selectedAgent, setSelectedAgent] = useState<AgentType | null>(null);
   const [showOverrideWarning, setShowOverrideWarning] = useState<AgentType | null>(null);
+  const [pendingOverride, setPendingOverride] = useState<{ agentType: AgentType; modelId: string } | null>(null);
 
   const handleModelChange = (agentType: AgentType, modelId: string, isRecommended: boolean) => {
     if (!isRecommended) {
+      setPendingOverride({ agentType, modelId });
       setShowOverrideWarning(agentType);
-    } else {
-      onModelChange(agentType, modelId);
+      return;
     }
+    setPendingOverride(null);
+    setShowOverrideWarning(null);
+    onModelChange(agentType, modelId);
   };
 
-  const confirmOverride = (agentType: AgentType, modelId: string) => {
-    onModelChange(agentType, modelId);
+  const confirmOverride = () => {
+    if (pendingOverride) {
+      onModelChange(pendingOverride.agentType, pendingOverride.modelId);
+    }
+    setPendingOverride(null);
+    setShowOverrideWarning(null);
+  };
+
+  const cancelOverride = () => {
+    setPendingOverride(null);
     setShowOverrideWarning(null);
   };
 
@@ -123,13 +135,22 @@ export const SubagentModelConfig: React.FC<SubagentModelConfigProps> = ({
 
       {/* Override Warning Modal */}
       <AnimatePresence>
-        {showOverrideWarning && (
-          <OverrideWarningModal
-            agent={agents.find(a => a.type === showOverrideWarning)!}
-            onConfirm={(modelId) => confirmOverride(showOverrideWarning, modelId)}
-            onCancel={() => setShowOverrideWarning(null)}
-          />
-        )}
+        {showOverrideWarning && pendingOverride && pendingOverride.agentType === showOverrideWarning && (() => {
+          const agent = agents.find(a => a.type === showOverrideWarning);
+          if (!agent) {
+            return null;
+          }
+          const pendingModel = agent.availableModels.find(model => model.id === pendingOverride.modelId);
+          return (
+            <OverrideWarningModal
+              agent={agent}
+              pendingModelId={pendingOverride.modelId}
+              pendingModel={pendingModel}
+              onConfirm={confirmOverride}
+              onCancel={cancelOverride}
+            />
+          );
+        })()}
       </AnimatePresence>
     </motion.div>
   );
@@ -303,9 +324,13 @@ const PerformanceBadge: React.FC<{
 // Override Warning Modal
 const OverrideWarningModal: React.FC<{
   agent: AgentConfig;
-  onConfirm: (modelId: string) => void;
+  pendingModelId: string;
+  pendingModel?: ModelOption;
+  onConfirm: () => void;
   onCancel: () => void;
-}> = ({ agent, onConfirm, onCancel }) => {
+}> = ({ agent, pendingModelId, pendingModel, onConfirm, onCancel }) => {
+  const modelLabel = pendingModel?.name || pendingModelId;
+
   return (
     <>
       <motion.div
@@ -331,7 +356,7 @@ const OverrideWarningModal: React.FC<{
 
         <div className="modal-content">
           <p className="warning-message">
-            You are about to override the recommended model for <strong>{agent.name}</strong>.
+            You are about to override the recommended model for <strong>{agent.name}</strong> with <strong>{modelLabel}</strong>.
           </p>
 
           {agent.overrideWarning && (
@@ -363,7 +388,7 @@ const OverrideWarningModal: React.FC<{
           </motion.button>
           <motion.button
             className="confirm-btn"
-            onClick={() => onConfirm(agent.currentModel)}
+            onClick={onConfirm}
             whileHover={{ scale: 1.02 }}
             whileTap={{ scale: 0.98 }}
           >

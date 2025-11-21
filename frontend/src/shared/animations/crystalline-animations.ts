@@ -170,23 +170,22 @@ export const progressBarAnimation: Variants = {
 // ============================================
 export const timelineNodeAnimation: Variants = {
   future: {
-    scale: 0.5,
-    opacity: 0.2,
+    scale: 0.95,
+    opacity: 0.35,
   },
   current: {
-    scale: 1.2,
+    scale: 1,
     opacity: 1,
-    boxShadow: '0 0 20px rgba(255, 215, 0, 0.5)',
     transition: {
-      duration: 0.3,
-      ease: easings.bounce,
+      duration: 0.2,
+      ease: easings.smooth,
     },
   },
   past: {
     scale: 1,
-    opacity: 0.6,
+    opacity: 0.65,
     transition: {
-      duration: 0.3,
+      duration: 0.2,
       ease: easings.smooth,
     },
   },

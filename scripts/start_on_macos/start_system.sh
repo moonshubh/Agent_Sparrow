@@ -37,6 +37,9 @@ VENV_PIP="$VENV_DIR/bin/pip"
 # Export Python path to ensure local package resolution
 export PYTHONPATH="$ROOT_DIR:${PYTHONPATH}"
 
+# Fix for macOS forking safety (prevents segfaults with some libraries)
+export OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES
+
 # Helper to detect python version of venv
 get_python_version() {
     "$1" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}")' 2>/dev/null || echo "unknown"

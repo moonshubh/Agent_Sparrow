@@ -77,10 +77,22 @@ async def get_rate_limit_status():
         # Check if approaching limits
         flash_rpm_usage = stats.flash_stats.rpm_used / max(1, stats.flash_stats.rpm_limit)
         flash_rpd_usage = stats.flash_stats.rpd_used / max(1, stats.flash_stats.rpd_limit)
+        flash_lite_rpm_usage = stats.flash_lite_stats.rpm_used / max(1, stats.flash_lite_stats.rpm_limit)
+        flash_lite_rpd_usage = stats.flash_lite_stats.rpd_used / max(1, stats.flash_lite_stats.rpd_limit)
         pro_rpm_usage = stats.pro_stats.rpm_used / max(1, stats.pro_stats.rpm_limit)
         pro_rpd_usage = stats.pro_stats.rpd_used / max(1, stats.pro_stats.rpd_limit)
         
-        if any(usage > 0.8 for usage in [flash_rpm_usage, flash_rpd_usage, pro_rpm_usage, pro_rpd_usage]):
+        if any(
+            usage > 0.8
+            for usage in [
+                flash_rpm_usage,
+                flash_rpd_usage,
+                flash_lite_rpm_usage,
+                flash_lite_rpd_usage,
+                pro_rpm_usage,
+                pro_rpd_usage,
+            ]
+        ):
             status = "warning"
             message = "Approaching rate limits"
         
@@ -94,6 +106,8 @@ async def get_rate_limit_status():
                 "utilization": {
                     "flash_rpm": flash_rpm_usage,
                     "flash_rpd": flash_rpd_usage,
+                    "flash_lite_rpm": flash_lite_rpm_usage,
+                    "flash_lite_rpd": flash_lite_rpd_usage,
                     "pro_rpm": pro_rpm_usage,
                     "pro_rpd": pro_rpd_usage
                 }
@@ -262,6 +276,10 @@ async def get_rate_limit_config():
                 "rpm": config.flash_rpm_limit,
                 "rpd": config.flash_rpd_limit
             },
+            "flash_lite_limits": {
+                "rpm": config.flash_lite_rpm_limit,
+                "rpd": config.flash_lite_rpd_limit
+            },
             "pro_limits": {
                 "rpm": config.pro_rpm_limit,
                 "rpd": config.pro_rpd_limit
@@ -304,6 +322,11 @@ async def get_rate_limit_metrics():
             "gemini_flash_rpm_limit": stats.flash_stats.rpm_limit,
             "gemini_flash_rpd_used": stats.flash_stats.rpd_used,
             "gemini_flash_rpd_limit": stats.flash_stats.rpd_limit,
+            # Flash Lite metrics
+            "gemini_flash_lite_rpm_used": stats.flash_lite_stats.rpm_used,
+            "gemini_flash_lite_rpm_limit": stats.flash_lite_stats.rpm_limit,
+            "gemini_flash_lite_rpd_used": stats.flash_lite_stats.rpd_used,
+            "gemini_flash_lite_rpd_limit": stats.flash_lite_stats.rpd_limit,
             
             # Pro model metrics
             "gemini_pro_rpm_used": stats.pro_stats.rpm_used,
@@ -313,8 +336,10 @@ async def get_rate_limit_metrics():
             
             # Circuit breaker metrics
             "circuit_breaker_flash_state": 1 if stats.flash_circuit.state == "open" else 0,
+            "circuit_breaker_flash_lite_state": 1 if stats.flash_lite_circuit.state == "open" else 0,
             "circuit_breaker_pro_state": 1 if stats.pro_circuit.state == "open" else 0,
             "circuit_breaker_flash_failures": stats.flash_circuit.failure_count,
+            "circuit_breaker_flash_lite_failures": stats.flash_lite_circuit.failure_count,
             "circuit_breaker_pro_failures": stats.pro_circuit.failure_count,
             
             # Overall metrics
@@ -325,6 +350,8 @@ async def get_rate_limit_metrics():
             # Utilization metrics (0.0 to 1.0)
             "flash_rpm_utilization": stats.flash_stats.rpm_used / max(1, stats.flash_stats.rpm_limit),
             "flash_rpd_utilization": stats.flash_stats.rpd_used / max(1, stats.flash_stats.rpd_limit),
+            "flash_lite_rpm_utilization": stats.flash_lite_stats.rpm_used / max(1, stats.flash_lite_stats.rpm_limit),
+            "flash_lite_rpd_utilization": stats.flash_lite_stats.rpd_used / max(1, stats.flash_lite_stats.rpd_limit),
             "pro_rpm_utilization": stats.pro_stats.rpm_used / max(1, stats.pro_stats.rpm_limit),
             "pro_rpd_utilization": stats.pro_stats.rpd_used / max(1, stats.pro_stats.rpd_limit),
         }
