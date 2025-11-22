@@ -197,7 +197,7 @@ function ErrorFallback({ error, errorInfo, errorCount, onReset }: ErrorFallbackP
 
   const handleGoToDashboard = () => {
     if (mounted) {
-      router.push('/feedme-revamped')
+      router.push('/feedme')
     }
   }
 

@@ -5,9 +5,9 @@ import Link from "next/link";
 import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { Button } from "@/shared/ui/button";
-import { ModelSelector } from "@/app/chat/components/ModelSelector";
+import { ModelSelector } from "./ModelSelector";
 import { AgentSelector } from "./AgentSelector";
-import type { AgentChoice } from "@/features/chat/hooks/useAgentSelection";
+import type { AgentChoice } from "@/features/ag-ui/hooks/useAgentSelection";
 import { Settings, Activity, PanelsTopLeft } from "lucide-react";
 
 interface ChatHeaderProps {
@@ -53,7 +53,7 @@ export function ChatHeader({
           ? "Auto Route"
           : "Primary Support";
   const handleFeedMe = () => {
-    router.push("/feedme-revamped");
+    router.push("/feedme");
   };
 
   return (
@@ -105,11 +105,10 @@ export function ChatHeader({
             <div className="flex items-center gap-2 flex-shrink-0">
               <button
                 onClick={() => onMemoryToggle(!memoryEnabled)}
-                className={`text-xs font-medium px-3 py-1.5 rounded-xl transition-all duration-200 border whitespace-nowrap ${
-                  memoryEnabled
-                    ? "bg-blue-500/15 border-blue-500/30 text-blue-300 shadow-[0_0_15px_rgba(56,189,248,0.2)]"
-                    : "bg-white/5 border-white/10 text-gray-400 hover:text-white"
-                }`}
+                className={`text-xs font-medium px-3 py-1.5 rounded-xl transition-all duration-200 border whitespace-nowrap ${memoryEnabled
+                  ? "bg-blue-500/15 border-blue-500/30 text-blue-300 shadow-[0_0_15px_rgba(56,189,248,0.2)]"
+                  : "bg-white/5 border-white/10 text-gray-400 hover:text-white"
+                  }`}
                 aria-pressed={memoryEnabled}
               >
                 Memory {memoryEnabled ? "On" : "Off"}

@@ -257,7 +257,7 @@ export default function UnassignedDialog({ isOpen, onClose }: Props) {
   }
 
   const handleConversationClick = useCallback((conversationId: number) => {
-    router.push(`/feedme-revamped/conversation/${conversationId}`)
+    router.push(`/feedme/conversation/${conversationId}`)
     onClose()
   }, [router, onClose])
 

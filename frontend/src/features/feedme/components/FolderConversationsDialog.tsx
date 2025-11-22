@@ -144,7 +144,7 @@ const FolderConversationsDialog = React.memo(function FolderConversationsDialog(
   }, [editingId])
 
   const handleOpenConversation = useCallback((conversationId: number) => {
-    router.push(`/feedme-revamped/conversation/${conversationId}`)
+    router.push(`/feedme/conversation/${conversationId}`)
     onClose()
   }, [router, onClose])
 

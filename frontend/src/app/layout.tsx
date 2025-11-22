@@ -20,6 +20,13 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en" suppressHydrationWarning>
+      <head>
+        <link
+          rel="stylesheet"
+          href="https://cdn.jsdelivr.net/npm/katex@0.16.25/dist/katex.min.css"
+          crossOrigin="anonymous"
+        />
+      </head>
       <body className="antialiased" suppressHydrationWarning>
         <Script 
           id="disable-grammarly" 

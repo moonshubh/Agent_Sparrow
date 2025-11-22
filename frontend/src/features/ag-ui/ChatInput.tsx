@@ -7,7 +7,7 @@ import { cn } from '@/shared/lib/utils';
 import { SendHorizontalIcon, Square, Paperclip, X, Mic, Plus, Sparkles, RefreshCw } from 'lucide-react';
 import type { AttachmentInput } from '@/services/ag-ui/types';
 import { createBinaryContent } from '@/services/ag-ui/types';
-import type { AgentChoice } from '@/features/chat/hooks/useAgentSelection';
+import type { AgentChoice } from '@/features/ag-ui/hooks/useAgentSelection';
 
 interface ChatInputProps {
   onSend: (message: string) => void;

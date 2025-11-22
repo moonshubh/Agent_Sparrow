@@ -18,7 +18,7 @@ export function FeedMeButton({ onClick }: FeedMeButtonProps) {
 
   const handleNavigate = useCallback(() => {
     onClick?.()
-    router.push('/feedme-revamped')
+    router.push('/feedme')
   }, [onClick, router])
 
   return (

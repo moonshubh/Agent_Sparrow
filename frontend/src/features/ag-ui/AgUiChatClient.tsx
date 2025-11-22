@@ -6,7 +6,7 @@ import { AgentProvider } from '@/features/ag-ui/AgentContext';
 import { ChatContainer } from '@/features/ag-ui/ChatContainer';
 import { InterruptHandler } from '@/features/ag-ui/InterruptHandler';
 import { sessionsAPI } from '@/services/api/endpoints/sessions';
-import { useAgentSelection } from '@/features/chat/hooks/useAgentSelection';
+import { useAgentSelection } from '@/features/ag-ui/hooks/useAgentSelection';
 import { v4 as uuidv4 } from 'uuid';
 
 const GEMINI_MODELS = [

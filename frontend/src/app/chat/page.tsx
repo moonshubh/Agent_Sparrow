@@ -5,7 +5,7 @@ import dynamic from "next/dynamic";
 
 // AG-UI Native client implementation
 const AgUiChatClient = dynamic(
-  () => import("./copilot/AgUiChatClient"),
+  () => import("@/features/ag-ui/AgUiChatClient"),
   { ssr: false }
 );
 

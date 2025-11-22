@@ -4,9 +4,9 @@ import React, { useEffect, useRef, useState, useMemo } from 'react';
 import { useAgent } from './hooks/useAgent';
 import { MessageList } from './MessageList';
 import { ChatInput } from './ChatInput';
-import { ChatHeader } from '@/app/chat/copilot/ChatHeader';
+import { ChatHeader } from './ChatHeader';
 import type { AttachmentInput } from '@/services/ag-ui/types';
-import type { AgentChoice } from '@/features/chat/hooks/useAgentSelection';
+import type { AgentChoice } from '@/features/ag-ui/hooks/useAgentSelection';
 import { TimelineOperation } from './timeline/AgenticTimelineView';
 import { ThinkingTrace } from './sidebar/ThinkingTrace';
 import { ToolEvidenceSidebar } from './evidence/ToolEvidenceSidebar';
@@ -340,12 +340,12 @@ export function ChatContainer({
                         const status = (todo.status || 'pending').toLowerCase();
                         const statusLabel =
                           status === 'done' ? 'Done' :
-                          status === 'in_progress' ? 'In progress' :
-                          'Pending';
+                            status === 'in_progress' ? 'In progress' :
+                              'Pending';
                         const statusColor =
                           status === 'done' ? 'bg-emerald-400' :
-                          status === 'in_progress' ? 'bg-amber-400' :
-                          'bg-gray-400';
+                            status === 'in_progress' ? 'bg-amber-400' :
+                              'bg-gray-400';
                         return (
                           <div
                             key={todo.id}

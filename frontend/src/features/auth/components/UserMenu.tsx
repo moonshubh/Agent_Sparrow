@@ -13,14 +13,14 @@ import {
   DropdownMenuTrigger,
 } from '@/shared/ui/dropdown-menu'
 import { Button } from '@/shared/ui/button'
-import { 
-  LogOut, 
-  Settings, 
+import {
+  LogOut,
+  Settings,
   User as UserIcon,
   Key
 } from 'lucide-react'
 import { cn } from '@/shared/lib/utils'
-import { useRouter } from 'next/navigation'
+import { useRouter, useSearchParams } from 'next/navigation'
 
 interface UserMenuProps {
   user: User
@@ -30,17 +30,18 @@ interface UserMenuProps {
 
 export const UserMenu: React.FC<UserMenuProps> = ({ user, onLogout, className }) => {
   const router = useRouter()
+  const searchParams = useSearchParams()
 
   const getUserName = () => {
     // Check user metadata first
     if (user?.user_metadata?.full_name) {
       return user.user_metadata.full_name
     }
-    
+
     if (user?.user_metadata?.name) {
       return user.user_metadata.name
     }
-    
+
     // Extract username from email with validation
     if (user?.email) {
       const emailUsername = user.email.split('@')[0]
@@ -48,13 +49,15 @@ export const UserMenu: React.FC<UserMenuProps> = ({ user, onLogout, className })
         return emailUsername.trim()
       }
     }
-    
+
     // Final fallback
     return 'User'
   }
 
-  const handleNavigation = (path: string) => {
-    router.push(path)
+  const handleSettingsNavigation = (tab: string) => {
+    const params = new URLSearchParams(searchParams?.toString() || '')
+    params.set('settings', tab)
+    router.push(`?${params.toString()}`)
   }
 
   return (
@@ -79,15 +82,15 @@ export const UserMenu: React.FC<UserMenuProps> = ({ user, onLogout, className })
         </DropdownMenuLabel>
         <DropdownMenuSeparator />
         <DropdownMenuGroup>
-          <DropdownMenuItem onClick={() => handleNavigation('/profile')}>
+          <DropdownMenuItem onClick={() => handleSettingsNavigation('account')}>
             <UserIcon className="mr-2 h-4 w-4" />
             <span>Profile</span>
           </DropdownMenuItem>
-          <DropdownMenuItem onClick={() => handleNavigation('/settings')}>
+          <DropdownMenuItem onClick={() => handleSettingsNavigation('general')}>
             <Settings className="mr-2 h-4 w-4" />
             <span>Settings</span>
           </DropdownMenuItem>
-          <DropdownMenuItem onClick={() => handleNavigation('/api-keys')}>
+          <DropdownMenuItem onClick={() => handleSettingsNavigation('api-keys')}>
             <Key className="mr-2 h-4 w-4" />
             <span>API Keys</span>
           </DropdownMenuItem>

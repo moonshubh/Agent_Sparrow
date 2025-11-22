@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react"
 import { ZendeskStats, type ZendeskHealth } from "@/features/zendesk/components/ZendeskStats"
-import { FeatureToggles } from "@/app/settings/zendesk/FeatureToggles"
+import { FeatureToggles } from "@/features/settings/components/zendesk/FeatureToggles"
 
 export function ZendeskPanel() {
   const [health, setHealth] = useState<ZendeskHealth | null>(null)

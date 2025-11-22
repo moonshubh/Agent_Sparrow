@@ -5,10 +5,10 @@ import { useParams, useRouter } from 'next/navigation'
 import { ArrowLeft, Loader2, AlertCircle, RefreshCcw, CheckCircle2, Clock, Pencil } from 'lucide-react'
 import { Button } from '@/shared/ui/button'
 import { Input } from '@/shared/ui/input'
-import UnifiedTextCanvas from '@/features/feedme/components/feedme-revamped/UnifiedTextCanvas'
-import ConversationSidebar from '@/features/feedme/components/feedme-revamped/ConversationSidebar'
-import { ErrorBoundary } from '@/features/feedme/components/feedme-revamped/ErrorBoundary'
-import PlatformTagSelector from '@/features/feedme/components/feedme-revamped/PlatformTagSelector'
+import UnifiedTextCanvas from '@/features/feedme/components/UnifiedTextCanvas'
+import ConversationSidebar from '@/features/feedme/components/ConversationSidebar'
+import { ErrorBoundary } from '@/features/feedme/components/ErrorBoundary'
+import PlatformTagSelector from '@/features/feedme/components/PlatformTagSelector'
 import { feedMeApi } from '@/features/feedme/services/feedme-api'
 import { useUIStore } from '@/state/stores/ui-store'
 import { cn } from '@/shared/lib/utils'
@@ -72,7 +72,7 @@ export default function FeedMeConversationPage() {
   }, [conversationId])
 
   // Simple navigation - no need for useCallback
-  const handleBack = () => router.push('/feedme-revamped')
+  const handleBack = () => router.push('/feedme')
 
   // Passed to UnifiedTextCanvas but it's not memoized - keep useCallback
   const handleTextUpdate = useCallback(async (text: string) => {

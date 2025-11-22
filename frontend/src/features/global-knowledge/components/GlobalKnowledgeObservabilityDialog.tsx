@@ -2,7 +2,7 @@
 
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/shared/ui/dialog'
 import { ScrollArea } from '@/shared/ui/scroll-area'
-import { ObservabilityTab } from '@/features/feedme/components/feedme-revamped/global-knowledge/ObservabilityTab'
+import { ObservabilityTab } from '@/features/feedme/components/global-knowledge/ObservabilityTab'
 
 interface GlobalKnowledgeObservabilityDialogProps {
   open: boolean

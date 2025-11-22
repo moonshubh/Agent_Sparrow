@@ -14,7 +14,7 @@
 'use client'
 
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react'
-import { withErrorBoundary } from '@/features/feedme/components/feedme-revamped/ErrorBoundary'
+import { withErrorBoundary } from '@/features/feedme/components/ErrorBoundary'
 import { Card, CardContent } from '@/shared/ui/card'
 import { Button } from '@/shared/ui/button'
 import { Badge } from '@/shared/ui/badge'

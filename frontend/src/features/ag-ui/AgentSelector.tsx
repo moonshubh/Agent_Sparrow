@@ -1,7 +1,7 @@
 "use client";
 
 import React from "react";
-import type { AgentChoice } from "@/features/chat/hooks/useAgentSelection";
+import { AgentChoice } from "@/features/ag-ui/hooks/useAgentSelection";
 import { cn } from "@/shared/lib/utils";
 import { ChevronDown } from "lucide-react";
 
