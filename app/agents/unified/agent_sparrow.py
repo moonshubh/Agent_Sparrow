@@ -74,7 +74,7 @@ BASE_AGENT_PROMPT = (
 DEFAULT_RECURSION_LIMIT = 120
 MAX_ATTACHMENTS = 5
 HELPER_TIMEOUT_SECONDS = 8.0
-MAX_BASE64_CHARS = 480000  # Prevent unbounded base64 payloads from consuming memory.
+MAX_BASE64_CHARS = 2500000  # Prevent unbounded base64 payloads from consuming memory while allowing larger logs.
 
 
 tracer = trace.get_tracer(__name__)
@@ -878,10 +878,14 @@ async def run_unified_agent(state: GraphState, config: Optional[RunnableConfig] 
                 if not data_url:
                     logger.info("attachment_skipped", name=name, reason="missing_data_url")
                     continue
-                # Focus on textual/log attachments only
+                # Focus on textual/log attachments only. Some browsers upload .log files as application/octet-stream,
+                # so treat those as text when the filename clearly indicates a log/text file.
                 if mime and not str(mime).startswith("text"):
-                    logger.info("attachment_skipped", name=name, reason="non_text_mime", mime=mime)
-                    continue
+                    if str(mime) == "application/octet-stream" and name and str(name).lower().endswith((".log", ".txt")):
+                        logger.info("attachment_treated_as_text", name=name, mime=mime)
+                    else:
+                        logger.info("attachment_skipped", name=name, reason="non_text_mime", mime=mime)
+                        continue
                 text = _decode_data_url_text(str(data_url))
                 if not text:
                     logger.info("attachment_skipped", name=name, reason="decode_failed", mime=mime)
@@ -1055,23 +1059,83 @@ async def run_unified_agent(state: GraphState, config: Optional[RunnableConfig] 
                 _emit_custom_event("agent_timeline_update", value)
 
             def _normalize_todos(raw: Any) -> List[Dict[str, Any]]:
+                """Best-effort normalization of todo payloads from tools/middleware.
+
+                Accepts several shapes, for example:
+                - List[dict]:     [{"title": ..., "status": ...}, ...]
+                - Dict with list: {"todos": [...]} or {"items": [...]} or {"steps": [...]} etc.
+                - Single dict:    {"title": ..., "status": ...} (treated as one-item list)
+                """
+
                 normalized: List[Dict[str, Any]] = []
-                if not isinstance(raw, list):
+
+                # Handle JSON-encoded payloads
+                if isinstance(raw, str):
+                    trimmed = raw.strip()
+                    json_candidate: Optional[str] = None
+                    if trimmed.startswith(("{", "[")) and trimmed.endswith(("}", "]")):
+                        json_candidate = trimmed
+                    else:
+                        # Try to extract a JSON object/array from noisy strings (e.g., "content={...}")
+                        brace_idx = trimmed.find("{")
+                        bracket_idx = trimmed.find("[")
+                        candidates = [i for i in (brace_idx, bracket_idx) if i >= 0]
+                        start_idx = min(candidates) if candidates else -1
+                        if start_idx >= 0:
+                            json_candidate = trimmed[start_idx:]
+                    if json_candidate:
+                        try:
+                            parsed = json.loads(json_candidate)
+                            return _normalize_todos(parsed)
+                        except Exception:
+                            # Try a more forgiving parser for single-quoted or pythonic dict strings
+                            try:
+                                import ast
+
+                                parsed = ast.literal_eval(json_candidate)
+                                return _normalize_todos(parsed)
+                            except Exception:
+                                return normalized
+
+                # Unwrap common container shapes emitted by tools/middleware
+                items: Any = raw
+                if isinstance(raw, dict):
+                    container_list: Optional[List[Any]] = None
+                    for key in ("todos", "items", "steps", "data", "value"):
+                        value = raw.get(key)
+                        if isinstance(value, list):
+                            container_list = value
+                            break
+                    if container_list is not None:
+                        items = container_list
+                    else:
+                        # Treat a plain dict that looks like a todo as a single-item list
+                        items = [raw]
+
+                if not isinstance(items, list):
                     return normalized
-                for idx, item in enumerate(raw):
+
+                for idx, item in enumerate(items):
                     if not isinstance(item, dict):
                         continue
-                    title = str(item.get("title") or item.get("content") or item.get("description") or f"Step {idx + 1}")
+                    title = str(
+                        item.get("title")
+                        or item.get("content")
+                        or item.get("description")
+                        or f"Step {idx + 1}"
+                    )
                     status = str(item.get("status") or "pending").lower()
                     if status not in {"pending", "in_progress", "done"}:
                         status = "pending"
                     todo_id = str(item.get("id") or f"{root_operation_id}-todo-{idx + 1}")
-                    normalized.append({
-                        "id": todo_id,
-                        "title": title,
-                        "status": status,
-                        "metadata": item.get("metadata") or {},
-                    })
+                    normalized.append(
+                        {
+                            "id": todo_id,
+                            "title": title,
+                            "status": status,
+                            "metadata": item.get("metadata") or {},
+                        }
+                    )
                 return normalized
 
             def _sync_todo_operations() -> None:
@@ -1108,6 +1172,12 @@ async def run_unified_agent(state: GraphState, config: Optional[RunnableConfig] 
                         children = parent_op.setdefault("children", [])
                         if op_id not in children:
                             children.append(op_id)
+                # Emit timeline/todo updates for AG-UI
+                logger.info(
+                    "agent_todos_update_emit",
+                    todo_count=len(todo_items),
+                    todos=_safe_json_value(todo_items),
+                )
                 _emit_timeline_update()
                 _emit_custom_event("agent_todos_update", {"todos": todo_items})
 
@@ -1273,9 +1343,20 @@ async def run_unified_agent(state: GraphState, config: Optional[RunnableConfig] 
                                 except Exception as exc:
                                     logger.warning("gemma_rerank_grounding_failed", error=str(exc))
                             if isinstance(tool_name, str) and tool_name == "write_todos":
-                                normalized_todos = _normalize_todos(
-                                    output.get("todos") if isinstance(output, dict) else output
+                                # Normalize todo payloads from the write_todos tool regardless of wrapper shape
+                                logger.info(
+                                    "write_todos_raw_output",
+                                    raw_output=_safe_json_value(output),
                                 )
+                                normalized_todos = _normalize_todos(output)
+                                if not normalized_todos and safe_output is not None:
+                                    normalized_todos = _normalize_todos(safe_output)
+                                logger.info(
+                                    "write_todos_normalized",
+                                    normalized_count=len(normalized_todos),
+                                    todos=_safe_json_value(normalized_todos),
+                                )
+                                effective_todos = normalized_todos or todo_items
                                 if normalized_todos:
                                     todo_items.clear()
                                     todo_items.extend(normalized_todos)
@@ -1284,7 +1365,14 @@ async def run_unified_agent(state: GraphState, config: Optional[RunnableConfig] 
                                         state.todos = list(normalized_todos)  # type: ignore[attr-defined]
                                     except Exception as exc:
                                         logger.warning("state_todos_set_failed", error=str(exc))
-                                    _sync_todo_operations()
+                                else:
+                                    logger.info(
+                                        "write_todos_no_new_items",
+                                        prior_count=len(todo_items),
+                                    )
+                                # Always emit updates so the UI gets a todos event
+                                _sync_todo_operations()
+                                _emit_custom_event("agent_todos_update", {"todos": list(todo_items)})
                             _emit_custom_event(
                                 "tool_evidence_update",
                                 {

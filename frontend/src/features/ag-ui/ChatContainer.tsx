@@ -310,6 +310,7 @@ export function ChatContainer({
                   todoCount={todos.length}
                   inProgressTodoCount={inProgressTodos.length}
                   pendingTodoCount={pendingTodos.length}
+                  todos={todos as any}
                 />
               </div>
 
@@ -323,6 +324,49 @@ export function ChatContainer({
                   onStepFocus={setActiveTraceStep}
                   className="min-h-[320px]"
                 />
+              </div>
+
+              {/* Todos Sidebar */}
+              <div className="animate-in fade-in slide-in-from-right-4 duration-500 delay-150">
+                <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3 px-1">
+                  Run Tasks
+                </h3>
+                <div className="rounded-2xl bg-white/5 border border-white/10 p-3 space-y-3 shadow-lg">
+                  {todos.length === 0 ? (
+                    <p className="text-sm text-gray-400">No tasks yet. They will appear here while the agent works.</p>
+                  ) : (
+                    <div className="space-y-2">
+                      {todos.map((todo) => {
+                        const status = (todo.status || 'pending').toLowerCase();
+                        const statusLabel =
+                          status === 'done' ? 'Done' :
+                          status === 'in_progress' ? 'In progress' :
+                          'Pending';
+                        const statusColor =
+                          status === 'done' ? 'bg-emerald-400' :
+                          status === 'in_progress' ? 'bg-amber-400' :
+                          'bg-gray-400';
+                        return (
+                          <div
+                            key={todo.id}
+                            className="flex items-start justify-between rounded-xl bg-black/20 px-3 py-2 border border-white/5"
+                          >
+                            <div className="flex items-start gap-2">
+                              <span className={`mt-1 h-2.5 w-2.5 rounded-full ${statusColor}`} />
+                              <div className="space-y-0.5">
+                                <div className="text-sm font-medium text-gray-100">{todo.title}</div>
+                                {todo.metadata?.note && (
+                                  <div className="text-xs text-gray-400">{todo.metadata.note}</div>
+                                )}
+                              </div>
+                            </div>
+                            <span className="text-xs text-gray-400">{statusLabel}</span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
               </div>
 
               {/* Evidence Sidebar */}

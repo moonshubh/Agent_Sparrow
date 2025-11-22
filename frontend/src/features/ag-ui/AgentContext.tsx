@@ -37,6 +37,114 @@ interface AgentProviderProps {
   agent: AbstractAgent;
 }
 
+const stripCodeFence = (text: string) => {
+  const trimmed = text.trim();
+  const fenceMatch = trimmed.match(/^```[a-zA-Z0-9]*\s*([\s\S]*?)```$/m);
+  return fenceMatch ? fenceMatch[1].trim() : trimmed;
+};
+
+const extractTodosFromPayload = (input: any): any[] => {
+  const queue: any[] = [input];
+  while (queue.length) {
+    const raw = queue.shift();
+    if (!raw) continue;
+
+    if (typeof raw === 'string') {
+      const stripped = stripCodeFence(raw);
+      const direct = stripped.trim();
+      const hasJsonFence = direct.startsWith('{') || direct.startsWith('[');
+      if (hasJsonFence) {
+        try {
+          queue.push(JSON.parse(direct));
+        } catch {
+          // ignore
+        }
+      } else {
+        // Try to extract the first JSON object/array from noisy strings like "content={...}"
+        const braceIdx = direct.indexOf('{');
+        const bracketIdx = direct.indexOf('[');
+        const candidates = [braceIdx, bracketIdx].filter((i) => i >= 0);
+        const startIdx = candidates.length ? Math.min(...candidates) : -1;
+        if (startIdx >= 0) {
+          const candidate = direct.slice(startIdx);
+          try {
+            queue.push(JSON.parse(candidate));
+          } catch {
+            // ignore parse failure and continue
+          }
+        }
+      }
+      continue;
+    }
+
+    if (Array.isArray(raw)) {
+      // If the raw payload is already a list of todo-like objects, return it.
+      return raw;
+    }
+
+    if (typeof raw === 'object') {
+      if (Array.isArray(raw.todos)) return raw.todos;
+      if (Array.isArray((raw as any).result?.todos)) return (raw as any).result.todos;
+      if (Array.isArray((raw as any).items)) return (raw as any).items;
+      if (Array.isArray((raw as any).steps)) return (raw as any).steps;
+      if (Array.isArray((raw as any).value)) return (raw as any).value;
+      // Explore nested containers for todos
+      const nestedKeys = ['output', 'data', 'result', 'payload', 'content'];
+      nestedKeys.forEach((key) => {
+        if (raw && typeof raw === 'object' && key in raw) {
+          queue.push((raw as any)[key]);
+        }
+      });
+    }
+  }
+  return [];
+};
+
+const parseStructuredLogSegments = (content: string): any[] | null => {
+  const trimmed = stripCodeFence(content);
+  if (!(trimmed.startsWith('{') || trimmed.startsWith('['))) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(trimmed);
+    const segments = Array.isArray(parsed)
+      ? parsed
+      : Array.isArray((parsed as any).sections)
+        ? (parsed as any).sections
+        : Array.isArray((parsed as any).items)
+          ? (parsed as any).items
+          : Array.isArray((parsed as any).segments)
+            ? (parsed as any).segments
+            : null;
+    if (!segments || !Array.isArray(segments)) return null;
+    const normalized = segments.filter((seg) => typeof seg === 'object');
+    return normalized.length ? normalized : null;
+  } catch {
+    return null;
+  }
+};
+
+const formatStructuredLogSegments = (segments: any[]): string => {
+  return segments.map((seg, idx) => {
+    const lineRange = seg.line_range || seg.lines || seg.range || seg.lineRange;
+    const relevance = seg.relevance || seg.summary || seg.description;
+    const keyInfo = seg.key_info || seg.key || seg.detail || seg.info;
+    const parts = [];
+    if (lineRange) parts.push(`Lines ${lineRange}`);
+    if (relevance) parts.push(String(relevance));
+    if (keyInfo) parts.push(`Key: ${keyInfo}`);
+    return `${idx + 1}. ${parts.filter(Boolean).join(' — ')}`;
+  }).join('\n');
+};
+
+const formatIfStructuredLog = (content: any): string | null => {
+  if (typeof content !== 'string') return null;
+  const segments = parseStructuredLogSegments(content);
+  if (!segments) return null;
+  return formatStructuredLogSegments(segments);
+};
+
 const normalizeTraceStep = (raw: any): TraceStep => {
   const id = raw?.id ? String(raw.id) : crypto.randomUUID();
   const timestampValue = raw?.timestamp
@@ -132,20 +240,36 @@ export function AgentProvider({
           signal: abortControllerRef.current.signal,
 
           // Handle streaming text content
-          onTextMessageContentEvent: ({ event }: { event: any }) => {
+          onTextMessageContentEvent: ({ event, textMessageBuffer }: { event: any; textMessageBuffer?: string }) => {
+          const agentType = (agent?.state as any)?.agent_type || (agent?.state as any)?.agentType;
+          let buffer =
+            typeof textMessageBuffer === 'string'
+              ? textMessageBuffer
+              : typeof (event as any)?.delta === 'string'
+                ? (event as any).delta
+                : '';
+          if (!buffer) {
+            return;
+          }
+          if (agentType === 'log_analysis') {
+            const formatted = formatIfStructuredLog(buffer);
+            if (formatted) {
+              buffer = formatted;
+            }
+          }
           setMessages(prev => {
             const updated = [...prev];
             const lastMsg = updated[updated.length - 1];
 
-            // If the last message is an assistant message, append to it
+            // If the last message is an assistant message, replace its content with the latest buffer
             if (lastMsg && lastMsg.role === 'assistant') {
-              lastMsg.content = (lastMsg.content as string || '') + event.delta;
+              lastMsg.content = buffer;
             } else {
               // Otherwise create a new assistant message
               updated.push({
                 id: crypto.randomUUID(),
                 role: 'assistant',
-                content: event.delta,
+                content: buffer,
               });
             }
             return updated;
@@ -156,7 +280,7 @@ export function AgentProvider({
           onMessagesChanged: ({ messages: agentMessages }: { messages: any[] }) => {
           console.debug('[AG-UI] onMessagesChanged received:', agentMessages);
           // Ensure all messages have IDs
-          const messagesWithIds = agentMessages.map(msg => ({
+          let messagesWithIds = agentMessages.map(msg => ({
             ...msg,
             id: msg.id || crypto.randomUUID(),
           }));
@@ -176,6 +300,33 @@ export function AgentProvider({
               }
             }
           }
+
+          // Format or hide raw structured-log dumps for log-analysis runs
+          if (agentType === 'log_analysis') {
+            messagesWithIds = messagesWithIds.map((msg) => {
+              if (msg.role === 'assistant') {
+                const formatted = formatIfStructuredLog(msg.content);
+                if (formatted) {
+                  return {
+                    ...msg,
+                    content: formatted,
+                    metadata: { ...(msg as any).metadata, structured_log: true },
+                  };
+                }
+              }
+              return msg;
+            });
+
+            const hasReadableAssistant = messagesWithIds.some(
+              (msg) => msg.role === 'assistant' && !(msg as any).metadata?.structured_log,
+            );
+            if (hasReadableAssistant) {
+              messagesWithIds = messagesWithIds.filter(
+                (msg) => !(msg.role === 'assistant' && (msg as any).metadata?.structured_log),
+              );
+            }
+          }
+
           if (messagesWithIds.length > 0) {
             const last = messagesWithIds[messagesWithIds.length - 1];
             console.debug('[AG-UI] onMessagesChanged last message:', {
@@ -210,6 +361,13 @@ export function AgentProvider({
             if (typeof value.currentOperationId === 'string') {
               setCurrentOperationId(value.currentOperationId);
             }
+            // Fallback: extract todos from timeline operations (type === 'todo')
+            const timelineTodos = operations
+              .filter((op: any) => op?.type === 'todo' && op?.metadata?.todo)
+              .map((op: any) => op.metadata.todo);
+            if (timelineTodos.length) {
+              setTodos(timelineTodos);
+            }
           } else if (event.name === 'tool_evidence_update') {
             const value = event.value || {};
             const id = value.toolCallId as string | undefined;
@@ -218,6 +376,12 @@ export function AgentProvider({
                 ...prev,
                 [id]: value,
               }));
+            }
+            if (typeof value.toolName === 'string' && value.toolName === 'write_todos') {
+              const extracted = extractTodosFromPayload(value.output ?? value.result ?? value.data ?? value.value);
+              if (Array.isArray(extracted) && extracted.length) {
+                setTodos(extracted);
+              }
             }
           } else if (event.name === 'agent_thinking_trace') {
             const value = event.value || {};
@@ -245,9 +409,17 @@ export function AgentProvider({
               setActiveTraceStepId(String(value.latestStep.id));
             }
           } else if (event.name === 'agent_todos_update') {
-            const value = event.value || {};
-            if (Array.isArray(value.todos)) {
-              setTodos(value.todos);
+            // Some backends emit `data`, AG-UI maps it to `value`, but be defensive.
+            console.debug('[AG-UI] Todos raw custom event:', event);
+            const payload = (event.value ?? event.data ?? {}) as any;
+            console.debug('[AG-UI] Todos normalized payload:', payload);
+            if (Array.isArray(payload.todos)) {
+              setTodos(payload.todos);
+            } else {
+              const extracted = extractTodosFromPayload(payload);
+              if (extracted.length) {
+                setTodos(extracted);
+              }
             }
           }
 
@@ -262,7 +434,7 @@ export function AgentProvider({
           // Handle tool calls (for debugging + UI visibility)
           onToolCallStartEvent: ({ event }: { event: any }) => {
             console.debug('[AG-UI] Tool call started:', event.toolCallName, event.toolCallId);
-            const id = event.toolCallId;
+            const id = event.toolCallId || crypto.randomUUID();
             const name = (event.toolCallName as string) || id || 'tool';
             toolNameByIdRef.current[id] = name;
             setActiveTools((prev) => (prev.includes(name) ? prev : [...prev, name]));
@@ -270,13 +442,24 @@ export function AgentProvider({
 
           onToolCallResultEvent: ({ event }: { event: any }) => {
             console.debug('[AG-UI] Tool call result:', event.toolCallId);
-            const id = event.toolCallId;
-            const name = toolNameByIdRef.current[id];
-            if (!name) {
-              return;
+            const id = event.toolCallId || event.tool_call_id;
+            const name = toolNameByIdRef.current[id] || event.toolCallName || event.tool_call_name;
+
+            // Try to extract todos from the result payload even if it arrives as a JSON string
+            const output = (event.result ?? event.output ?? event.data ?? {}) as any;
+            const extracted = extractTodosFromPayload(output);
+            if (name === 'write_todos') {
+              if (Array.isArray(extracted) && extracted.length) {
+                setTodos(extracted);
+              }
             }
-            delete toolNameByIdRef.current[id];
-            setActiveTools((prev) => prev.filter((n) => n !== name));
+
+            if (name) {
+              if (id) {
+                delete toolNameByIdRef.current[id];
+              }
+              setActiveTools((prev) => prev.filter((n) => n !== name));
+            }
           },
 
           // Handle errors

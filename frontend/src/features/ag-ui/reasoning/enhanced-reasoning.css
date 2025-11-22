@@ -538,6 +538,80 @@
   box-shadow: 0 2px 8px rgba(251, 191, 36, 0.3);
 }
 
+/* Todo Section */
+.todo-section {
+  margin-bottom: var(--space-xl);
+}
+
+.todo-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-bottom: var(--space-md);
+}
+
+.todo-summary-main {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--neutral-100);
+}
+
+.todo-summary-sub {
+  font-size: 12px;
+  color: var(--neutral-400);
+}
+
+.todo-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.todo-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: rgba(255, 255, 255, 0.02);
+  font-size: 13px;
+  color: var(--neutral-100);
+}
+
+.todo-status-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  flex-shrink: 0;
+}
+
+.todo-item-pending .todo-status-dot {
+  background: radial-gradient(circle at 30% 30%, rgba(148, 163, 184, 1), rgba(51, 65, 85, 1));
+}
+
+.todo-item-in-progress .todo-status-dot {
+  background: radial-gradient(circle at 30% 30%, rgba(234, 179, 8, 1), rgba(161, 98, 7, 1));
+}
+
+.todo-item-done .todo-status-dot {
+  background: radial-gradient(circle at 30% 30%, rgba(34, 197, 94, 1), rgba(21, 128, 61, 1));
+}
+
+.todo-item-done .todo-title {
+  text-decoration: line-through;
+  opacity: 0.7;
+}
+
+.todo-compact-note {
+  margin-top: var(--space-sm);
+  font-size: 12px;
+  color: var(--neutral-400);
+}
+
 /* Tool Decisions */
 .tool-decisions {
   margin-top: var(--space-lg);

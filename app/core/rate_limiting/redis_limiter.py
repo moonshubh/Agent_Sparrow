@@ -65,10 +65,13 @@ class RedisRateLimiter:
             RateLimitResult with decision and metadata
         """
         now = time.time()
-        
+
         # Apply safety margin
         effective_rpm = int(rpm_limit * (1.0 - safety_margin))
         effective_rpd = int(rpd_limit * (1.0 - safety_margin))
+
+        # Compute whole-second window boundaries once so we avoid fractional retry_after
+        seconds_until_next_minute = max(1, int(60 - (now % 60)))
         
         # Check both RPM and RPD limits
         token_id = token_identifier or f"{now:.6f}"
@@ -88,7 +91,8 @@ class RedisRateLimiter:
         
         if not rpm_result["allowed"]:
             blocked_by = "rpm"
-            retry_after = 60 - (now % 60)  # Seconds until next minute
+            # Ensure retry_after is an integer number of seconds to satisfy Pydantic
+            retry_after = seconds_until_next_minute
         elif not rpd_result["allowed"]:
             blocked_by = "rpd"
             # Calculate seconds until next day
@@ -105,7 +109,7 @@ class RedisRateLimiter:
             rpd_limit=effective_rpd,
             rpd_used=rpd_result["used"],
             rpd_remaining=max(0, effective_rpd - rpd_result["used"]),
-            reset_time_rpm=datetime.fromtimestamp(now + (60 - (now % 60))),
+            reset_time_rpm=datetime.fromtimestamp(now + seconds_until_next_minute),
             reset_time_rpd=datetime.utcnow().replace(
                 hour=0, minute=0, second=0, microsecond=0
             ) + timedelta(days=1),

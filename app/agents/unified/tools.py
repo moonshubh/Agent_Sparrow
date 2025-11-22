@@ -8,7 +8,7 @@ from datetime import datetime
 from functools import lru_cache
 import json
 import uuid
-from typing import Any, Dict, List, Optional, Annotated
+from typing import Any, Dict, List, Optional, Annotated, Union
 
 import httpx
 from bs4 import BeautifulSoup
@@ -17,7 +17,7 @@ from loguru import logger
 from langchain_core.tools import BaseTool, tool, InjectedToolArg
 from langchain_core.runnables import RunnableConfig
 from langchain_core.callbacks.manager import adispatch_custom_event
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict, field_validator, model_validator
 
 from app.agents.log_analysis.log_analysis_agent.simplified_agent import (
     SimplifiedLogAnalysisAgent,
@@ -550,7 +550,7 @@ class TodoItem(BaseModel):
     """Lightweight todo list entry for planning."""
 
     id: Optional[str] = Field(default=None, description="Stable id for tracking updates.")
-    title: str = Field(description="Short title of the todo item (imperative).")
+    title: str = Field(description="Short title of the todo item (imperative).", alias="content")
     status: Optional[str] = Field(
         default="pending",
         description="Status of the todo item (normalized to pending|in_progress|done).",
@@ -558,6 +558,123 @@ class TodoItem(BaseModel):
     metadata: Optional[Dict[str, Any]] = Field(
         default=None, description="Optional metadata to display alongside the item."
     )
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class TodoPayload(BaseModel):
+    """Relaxed schema used for inbound todo items from tools."""
+
+    id: Optional[str] = Field(default=None, description="Stable id for tracking updates.")
+    title: Optional[str] = Field(
+        default=None,
+        description="Short title of the todo item (imperative).",
+        alias="content",
+    )
+    description: Optional[str] = Field(
+        default=None,
+        description="Alternative text field if title/content is not provided.",
+    )
+    status: Optional[str] = Field(
+        default=None,
+        description="Status of the todo item (pending|in_progress|done).",
+    )
+    metadata: Optional[Dict[str, Any]] = Field(
+        default=None, description="Optional metadata to display alongside the item."
+    )
+
+    model_config = ConfigDict(populate_by_name=True, extra="allow")
+
+    @model_validator(mode="before")
+    @classmethod
+    def coerce_to_dict(cls, value: Any) -> Any:
+        """Allow strings or primitives to be coerced into todo dicts."""
+        if isinstance(value, dict):
+            return value
+        if isinstance(value, cls):
+            return value
+        text = str(value).strip()
+        if not text:
+            return {"title": ""}
+        return {"title": text}
+
+
+class WriteTodosInput(BaseModel):
+    """Flexible input schema for write_todos to tolerate imperfect tool calls.
+
+    Allows the LLM to send either structured todo objects or plain strings,
+    and we normalize everything server-side into a consistent shape.
+    """
+
+    todos: List[TodoPayload] = Field(
+        ...,
+        description=(
+            "List of todo items. Each item can be an object with title/content/status/id "
+            "fields or a plain string describing the task."
+        ),
+    )
+
+    model_config = ConfigDict(populate_by_name=True, extra="allow")
+
+    @field_validator("todos", mode="before")
+    @classmethod
+    def coerce_todos(cls, value: Any) -> List[Any]:
+        """Coerce arbitrary inputs into objects the model schema will accept."""
+        if value is None:
+            return []
+        if isinstance(value, dict):
+            # Common case: nested dict accidentally placed directly under todos
+            if "todos" in value:
+                value = value.get("todos")
+        if not isinstance(value, list):
+            return [value]
+
+        coerced: List[Any] = []
+        for item in value:
+            if isinstance(item, (TodoPayload, dict, str)):
+                coerced.append(item)
+            else:
+                coerced.append(str(item))
+        return coerced
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_shapes(cls, value: Any) -> Any:
+        """Allow nested payloads like {'update': {'todos': [...]}}."""
+        # Accept a bare list as the complete todos payload
+        if isinstance(value, list):
+            return {"todos": value}
+
+        if not isinstance(value, dict):
+            return value
+
+        # Flatten common wrappers used by LangChain/LangGraph
+        for wrapper_key in ("input", "tool_input", "args", "payload"):
+            inner = value.get(wrapper_key)
+            if isinstance(inner, dict):
+                for key, inner_val in inner.items():
+                    if key not in value:
+                        value[key] = inner_val
+
+        # Unwrap common nested shapes
+        if "update" in value and isinstance(value["update"], dict):
+            inner = value["update"]
+            if "todos" in inner and "todos" not in value:
+                value = {**value, "todos": inner["todos"]}
+
+        # Fallback aliases
+        if "todo_list" in value and "todos" not in value:
+            value["todos"] = value["todo_list"]
+
+        # If we still didn't get todos, but a single todo-like dict was passed
+        if "todos" not in value and {"title", "content", "description"} & set(value.keys()):
+            value["todos"] = [value]
+
+        # Ensure todos field always exists to avoid validation errors
+        if "todos" not in value:
+            value["todos"] = []
+
+        return value
 
 
 @tool
@@ -609,26 +726,62 @@ async def generate_task_steps_generative_ui(
     return "Steps generated and executed."
 
 
-@tool
-def write_todos(
-    todos: Annotated[
-        List[TodoItem],
-        "List of todo items to set/update for the current task. Use for multi-step tasks only.",
-    ]
-):
+@tool("write_todos", args_schema=WriteTodosInput)
+def write_todos(todos: List[TodoPayload], **_: Any):
+    """Update the task todo list.
+
+    Keep it short (3-6 items), imperative, and update statuses as you progress.
+    This tool is tolerant of slightly malformed tool calls and will do its best
+    to coerce arbitrary items into well-formed todos.
     """
-    Update the task todo list. Keep it short (3-6 items), imperative, and update statuses as you progress.
-    """
+
+    input = WriteTodosInput(todos=todos)
     normalized: List[Dict[str, Any]] = []
-    for item in todos:
-        item_dict = item.model_dump()
-        if not item_dict.get("id"):
-            item_dict["id"] = f"todo-{uuid.uuid4().hex[:8]}"
+    for idx, raw in enumerate(input.todos):
+        item_dict: Dict[str, Any]
+
+        # Preserve already-structured TodoItem instances when present
+        if isinstance(raw, TodoItem):
+            item_dict = raw.model_dump()
+        elif isinstance(raw, TodoPayload):
+            item_dict = raw.model_dump()
+        elif isinstance(raw, dict):
+            item_dict = dict(raw)
+        else:
+            # Treat plain strings or other primitives as a single pending todo
+            text = str(raw).strip()
+            if not text:
+                continue
+            item_dict = {"title": text, "status": "pending"}
+
+        # Normalize title/content fields
+        title = (
+            item_dict.get("title")
+            or item_dict.get("content")
+            or item_dict.get("description")
+            or f"Step {idx + 1}"
+        )
+        item_dict["title"] = str(title)
+
+        # Normalize status
         status = str(item_dict.get("status") or "pending").lower()
         if status not in {"pending", "in_progress", "done"}:
             status = "pending"
         item_dict["status"] = status
+
+        # Ensure we always have a stable id
+        if not item_dict.get("id"):
+            item_dict["id"] = f"todo-{uuid.uuid4().hex[:8]}"
+
+        # Ensure metadata is always a dict when present
+        metadata = item_dict.get("metadata")
+        if metadata is None:
+            item_dict["metadata"] = {}
+        elif not isinstance(metadata, dict):
+            item_dict["metadata"] = {"raw": str(metadata)}
+
         normalized.append(item_dict)
+
     return {"todos": normalized}
 
 

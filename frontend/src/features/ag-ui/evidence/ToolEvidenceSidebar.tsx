@@ -18,7 +18,13 @@ export const ToolEvidenceSidebar: React.FC<ToolEvidenceSidebarProps> = ({
 }) => {
   // Filter for tool operations that have evidence
   const evidenceItems = operations
-    .filter(op => op.type === 'tool' && toolEvidence[op.id])
+    .filter(op => {
+      // Skip rendering todo updates as tool evidence; they belong in Run Tasks
+      if (op.name?.toLowerCase().includes('write_todos')) return false;
+      const evidence = toolEvidence[op.id];
+      if (evidence?.toolName === 'write_todos') return false;
+      return op.type === 'tool' && evidence;
+    })
     .map(op => {
       const evidence = toolEvidence[op.id];
       const outputText = typeof evidence.output === 'string'

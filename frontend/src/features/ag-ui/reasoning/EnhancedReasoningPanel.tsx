@@ -59,6 +59,12 @@ export interface EnhancedReasoningPanelProps {
   todoCount?: number;
   inProgressTodoCount?: number;
   pendingTodoCount?: number;
+  todos?: {
+    id: string;
+    title: string;
+    status?: string;
+    metadata?: Record<string, any>;
+  }[];
 }
 
 const phaseIcons: Record<ReasoningPhase, React.ReactNode> = {
@@ -90,6 +96,7 @@ export const EnhancedReasoningPanel: React.FC<EnhancedReasoningPanelProps> = ({
   todoCount,
   inProgressTodoCount,
   pendingTodoCount,
+  todos,
 }) => {
   const [isExpanded, setIsExpanded] = useState(initialExpanded);
   const [selectedPhase, setSelectedPhase] = useState<PhaseData | null>(null);
@@ -252,6 +259,7 @@ export const EnhancedReasoningPanel: React.FC<EnhancedReasoningPanelProps> = ({
                 <PhaseDetailView
                   phase={selectedPhase}
                   onClose={() => setSelectedPhase(null)}
+                  todos={todos}
                 />
               )}
             </AnimatePresence>
@@ -344,7 +352,32 @@ const StatusPill = ({
 const PhaseDetailView: React.FC<{
   phase: PhaseData;
   onClose: () => void;
-}> = ({ phase, onClose }) => {
+  todos?: {
+    id: string;
+    title: string;
+    status?: string;
+    metadata?: Record<string, any>;
+  }[];
+}> = ({ phase, onClose, todos }) => {
+  const todoItems = (todos ?? []).map((t) => ({
+    ...t,
+    status: (t.status || 'pending').toLowerCase(),
+  }));
+  const totalTodos = todoItems.length;
+  const completedCount = todoItems.filter((t) => t.status === 'done').length;
+  const inProgressCount = todoItems.filter((t) => t.status === 'in_progress').length;
+  const pendingCount = totalTodos - completedCount - inProgressCount;
+  const isPlanningPhase = phase.phase === 'planning';
+  const getStatusRank = (status: string) => {
+    if (status === 'in_progress') return 0;
+    if (status === 'pending') return 1;
+    if (status === 'done') return 2;
+    return 3;
+  };
+  const sortedTodos = [...todoItems].sort(
+    (a, b) => getStatusRank(a.status as string) - getStatusRank(b.status as string)
+  );
+
   return (
     <motion.div
       className="phase-detail-view glass-panel"
@@ -380,6 +413,48 @@ const PhaseDetailView: React.FC<{
               </motion.li>
             ))}
           </ul>
+        </div>
+      )}
+
+      {totalTodos > 0 && (
+        <div className="todo-section">
+          <h5 className="section-title">Run Tasks</h5>
+          <div className="todo-summary">
+            <span className="todo-summary-main">
+              {completedCount} / {totalTodos} tasks done
+            </span>
+            <span className="todo-summary-sub">
+              {inProgressCount > 0 && `${inProgressCount} in progress`}
+              {inProgressCount > 0 && pendingCount > 0 && ' · '}
+              {pendingCount > 0 && `${pendingCount} pending`}
+            </span>
+          </div>
+          {isPlanningPhase ? (
+            <ul className="todo-list">
+              {sortedTodos.map((todo) => {
+                const status = (todo.status || 'pending').toLowerCase();
+                const statusClass =
+                  status === 'in_progress'
+                    ? 'in-progress'
+                    : status === 'done'
+                      ? 'done'
+                      : 'pending';
+                return (
+                  <li
+                    key={todo.id}
+                    className={`todo-item todo-item-${statusClass}`}
+                  >
+                    <span className="todo-status-dot" />
+                    <span className="todo-title">{todo.title}</span>
+                  </li>
+                );
+              })}
+            </ul>
+          ) : (
+            <div className="todo-compact-note">
+              Tasks progress applies across phases and will update as the agent runs.
+            </div>
+          )}
         </div>
       )}
 

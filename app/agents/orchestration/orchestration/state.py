@@ -13,6 +13,7 @@ class Attachment(BaseModel):
         "image/png",
         "image/jpeg",
         "image/gif",
+        "application/octet-stream",
     }
     MAX_ATTACHMENT_SIZE_BYTES: ClassVar[int] = 10 * 1024 * 1024  # 10 MiB
 
