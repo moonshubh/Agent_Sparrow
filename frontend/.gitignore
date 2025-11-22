@@ -25,6 +25,7 @@ next-env.d.ts
 
 # Testing
 coverage
+test-results
 .nyc_output
 
 # IDE

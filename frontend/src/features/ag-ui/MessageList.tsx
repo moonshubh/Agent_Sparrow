@@ -2,7 +2,7 @@
 
 import React from 'react';
 import type { Message } from '@ag-ui/core';
-import { ReasoningPanel } from '@/features/chat/components/ReasoningPanel';
+import { EnhancedReasoningPanel } from '@/features/ag-ui/reasoning/EnhancedReasoningPanel';
 import ReactMarkdown from 'react-markdown';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
@@ -130,10 +130,11 @@ function MessageItem({ message, isLast, isStreaming }: MessageItemProps) {
         {/* Reasoning Panel (for assistant messages) */}
         {!isUser && (thinkingTrace || latestThought) && (
           <div className="mt-4 w-full">
-            <ReasoningPanel
-              trace={thinkingTrace}
-              latestThought={latestThought}
-              isStreaming={isLast && isStreaming}
+            <EnhancedReasoningPanel
+              phases={[]}
+              currentPhase={isStreaming ? 'responding' : undefined}
+              isExpanded={true}
+              statusMessage={latestThought || 'Thinking...'}
             />
           </div>
         )}

@@ -89,6 +89,9 @@ export default function AgUiChatClient() {
         setSessionId(String(session.id));
       } catch (err) {
         console.error('Failed to create session:', err);
+        if (err && typeof err === 'object') {
+          console.error('Error details:', JSON.stringify(err, Object.getOwnPropertyNames(err)));
+        }
         setError(err as Error);
       } finally {
         setIsCreating(false);
