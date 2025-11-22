@@ -4,7 +4,7 @@ import React, { useState } from 'react'
 import { LightDarkToggle } from '@/shared/ui/LightDarkToggle'
 import { FeedMeButton } from '@/shared/ui/FeedMeButton'
 import { SettingsButtonV2 } from '@/shared/ui/SettingsButtonV2'
-import { DailyUsageTracker } from '@/features/rate-limiting/components/DailyUsageTracker'
+
 import { useAuth } from '@/features/auth/hooks/useAuth'
 import { UserMenu } from '@/features/auth/components/UserMenu'
 import { Button } from '@/shared/ui/button'
@@ -21,7 +21,7 @@ export function Header() {
   const handleLogin = async () => {
     try {
       setIsNavigating(true)
-      
+
       // Attempt navigation to login page
       if (typeof window !== 'undefined') {
         try {
@@ -33,10 +33,10 @@ export function Header() {
     } catch (error) {
       // Handle navigation errors gracefully
       console.error('Navigation to login page failed:', error)
-      
+
       // Show user-friendly error message
       toast.error('Unable to navigate to login page. Please try again.')
-      
+
       // Optionally, try alternative navigation method
       if (typeof window !== 'undefined') {
         try {
@@ -52,7 +52,7 @@ export function Header() {
   }
 
   return (
-    <header 
+    <header
       className="sticky top-0 z-30 flex h-14 items-center justify-between px-4 bg-[hsl(var(--brand-surface)/0.95)] backdrop-blur border-b border-border/30"
       role="banner"
     >
@@ -70,11 +70,11 @@ export function Header() {
         <span className="text-base font-semibold text-accent">Agent Sparrow</span>
       </div>
       <div className="flex items-center gap-3">
-        <DailyUsageTracker />
+
         <FeedMeButton />
         <SettingsButtonV2 />
         <LightDarkToggle />
-        
+
         {isAuthenticated && user ? (
           <UserMenu user={user} onLogout={logout} />
         ) : (
