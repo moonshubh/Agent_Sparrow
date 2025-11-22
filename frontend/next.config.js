@@ -13,6 +13,20 @@ const nextConfig = {
   },
   // Security headers configuration
   // Note: Runtime header toggling should be handled in middleware.ts for dynamic control
+  async rewrites() {
+    const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
+    return [
+      {
+        source: '/api/:path*',
+        destination: `${apiUrl}/api/:path*`,
+      },
+      // Proxy WebSocket connections
+      {
+        source: '/ws/:path*',
+        destination: `${apiUrl}/ws/:path*`,
+      },
+    ]
+  },
   async headers() {
     const isProduction = process.env.NODE_ENV === 'production'
     const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'

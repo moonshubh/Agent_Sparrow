@@ -125,9 +125,9 @@
    /* =================================
      Typography Scale - App-like
      ================================= */
-   --font-family-sans-serif-alt: 'Inter', -apple-system, sans-serif;
+   --font-family-sans-serif-alt: 'Poppins', -apple-system, sans-serif;
    /* Removed serif for cleaner look */
-   --font-family-sans: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+   --font-family-sans: 'Poppins', -apple-system, BlinkMacSystemFont, sans-serif;
    --font-family-mono: 'JetBrains Mono', 'Fira Code', monospace;
 
    --font-size-xs: 0.75rem;

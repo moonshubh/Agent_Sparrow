@@ -1,14 +1,14 @@
 "use client";
 
 import React from "react";
-import Link from "next/link";
+import { SettingsButtonV2 } from "@/shared/ui/SettingsButtonV2";
 import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { Button } from "@/shared/ui/button";
 import { ModelSelector } from "./ModelSelector";
 import { AgentSelector } from "./AgentSelector";
 import type { AgentChoice } from "@/features/ag-ui/hooks/useAgentSelection";
-import { Settings, Activity, PanelsTopLeft } from "lucide-react";
+import { Activity, PanelsTopLeft } from "lucide-react";
 
 interface ChatHeaderProps {
   agentType: AgentChoice;
@@ -134,11 +134,7 @@ export function ChatHeader({
                 />
               </div>
 
-              <Button asChild variant="ghost" size="icon" className="h-9 w-9 text-gray-400 hover:text-white hover:bg-white/5 rounded-xl flex-shrink-0">
-                <Link href="/settings" aria-label="Open Settings">
-                  <Settings className="w-4 h-4" />
-                </Link>
-              </Button>
+              <SettingsButtonV2 />
             </div>
           </div>
 

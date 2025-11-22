@@ -17,14 +17,10 @@ const validateApiBaseUrl = (url: string): string => {
 const resolveApiBaseUrl = (): string => {
   const envUrl = process.env.NEXT_PUBLIC_API_URL
 
-  // When running in browser on https and env is missing or points to http localhost,
-  // prefer same-origin to avoid mixed-content "Failed to fetch".
+  // In the browser, use relative paths to leverage Next.js rewrites (proxy).
+  // This avoids CORS issues by routing API requests through the same origin.
   if (typeof window !== 'undefined') {
-    const currentOrigin = window.location.origin
-    const looksLikeLocalHttp = envUrl?.startsWith('http://localhost')
-    if (!envUrl || (currentOrigin.startsWith('https://') && looksLikeLocalHttp)) {
-      return currentOrigin
-    }
+    return ''
   }
 
   return validateApiBaseUrl(envUrl || 'http://localhost:8000')

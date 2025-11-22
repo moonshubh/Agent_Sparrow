@@ -34,7 +34,7 @@ const config: Config = {
 	extend: {
 		fontFamily: {
 			sans: [
-				'"Source Sans Pro"',
+				'"Poppins"',
 				'-apple-system',
 				'BlinkMacSystemFont',
 				'"Segoe UI"',
