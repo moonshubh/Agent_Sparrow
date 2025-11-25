@@ -98,6 +98,16 @@ class GraphState(BaseModel):
         description="Optional todo list shared across the run (e.g., from planning middleware).",
     )
 
+    @field_validator("forwarded_props", "scratchpad", mode="before")
+    @classmethod
+    def _coerce_dict_fields(cls, value: Any) -> Dict[str, Any]:
+        """Convert None to empty dict to prevent validation errors during state routing."""
+        if value is None:
+            return {}
+        if isinstance(value, dict):
+            return value
+        return {}
+
     # ------------------------------------------------------------------
     # Dict-like access helpers (compatibility with legacy nodes)
     # ------------------------------------------------------------------

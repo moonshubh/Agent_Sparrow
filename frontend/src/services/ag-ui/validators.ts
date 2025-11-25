@@ -1,0 +1,233 @@
+/**
+ * AG-UI Event Validators
+ *
+ * Zod schemas for runtime validation of AG-UI custom events.
+ * These validators ensure type safety at runtime when receiving events from the backend.
+ */
+
+import { z } from 'zod';
+import type {
+  AgentThinkingTraceEvent,
+  AgentTimelineUpdateEvent,
+  ToolEvidenceUpdateEvent,
+  AgentTodosUpdateEvent,
+  TraceStep,
+  TimelineOperation,
+  TodoItem,
+} from './event-types';
+
+// -----------------------------------------------------------------------------
+// Trace Step Schema
+// -----------------------------------------------------------------------------
+
+export const TraceStepSchema = z.object({
+  id: z.string(),
+  timestamp: z.string(),
+  type: z.enum(['thought', 'action', 'result']),
+  content: z.string(),
+  metadata: z.record(z.unknown()),
+});
+
+// -----------------------------------------------------------------------------
+// Timeline Operation Schema
+// -----------------------------------------------------------------------------
+
+export const TimelineOperationSchema = z.object({
+  id: z.string(),
+  type: z.enum(['agent', 'tool', 'thought', 'todo']),
+  name: z.string(),
+  status: z.enum(['pending', 'running', 'success', 'error']),
+  parent: z.string().optional(),
+  children: z.array(z.string()),
+  startTime: z.string().optional(),
+  endTime: z.string().optional(),
+  duration: z.number().optional(),
+  metadata: z.record(z.unknown()).optional(),
+});
+
+// -----------------------------------------------------------------------------
+// Todo Item Schema
+// -----------------------------------------------------------------------------
+
+export const TodoItemSchema = z.object({
+  id: z.string(),
+  title: z.string(),
+  status: z.enum(['pending', 'in_progress', 'done']),
+  metadata: z.record(z.unknown()).optional(),
+});
+
+// -----------------------------------------------------------------------------
+// Event Schemas
+// -----------------------------------------------------------------------------
+
+export const AgentThinkingTraceEventSchema = z.object({
+  totalSteps: z.number(),
+  thinkingTrace: z.array(TraceStepSchema).optional(),
+  latestStep: TraceStepSchema.optional(),
+  activeStepId: z.string().optional(),
+});
+
+export const AgentTimelineUpdateEventSchema = z.object({
+  operations: z.array(TimelineOperationSchema),
+  currentOperationId: z.string().optional(),
+});
+
+export const ToolEvidenceUpdateEventSchema = z.object({
+  toolCallId: z.string(),
+  toolName: z.string(),
+  output: z.unknown().transform((val) => val ?? null), // Ensure output is always present
+  summary: z.string().optional(),
+});
+
+export const AgentTodosUpdateEventSchema = z.object({
+  todos: z.array(TodoItemSchema),
+});
+
+export const GenuiStateUpdateEventSchema = z.record(z.unknown());
+
+// -----------------------------------------------------------------------------
+// Validation Utilities
+// -----------------------------------------------------------------------------
+
+/**
+ * Validation result type
+ */
+export interface ValidationResult<T> {
+  success: boolean;
+  data?: T;
+  error?: string;
+  issues?: z.ZodIssue[];
+}
+
+/**
+ * Validate data against a Zod schema with detailed error reporting.
+ */
+export function validateEvent<T>(
+  schema: z.ZodSchema<T>,
+  data: unknown
+): ValidationResult<T> {
+  const result = schema.safeParse(data);
+
+  if (result.success) {
+    return {
+      success: true,
+      data: result.data,
+    };
+  }
+
+  return {
+    success: false,
+    error: result.error.message,
+    issues: result.error.issues,
+  };
+}
+
+/**
+ * Validate and return data or null with console warning.
+ */
+export function validateOrNull<T>(
+  schema: z.ZodSchema<T>,
+  data: unknown,
+  eventName?: string
+): T | null {
+  const result = validateEvent(schema, data);
+
+  if (!result.success) {
+    console.warn(`[AG-UI] Event validation failed${eventName ? ` for ${eventName}` : ''}:`, result.error);
+    if (result.issues) {
+      console.warn('[AG-UI] Validation issues:', result.issues);
+    }
+    return null;
+  }
+
+  return result.data ?? null;
+}
+
+/**
+ * Validate a thinking trace event.
+ */
+export function validateThinkingTrace(
+  data: unknown
+): AgentThinkingTraceEvent | null {
+  return validateOrNull(AgentThinkingTraceEventSchema, data, 'agent_thinking_trace');
+}
+
+/**
+ * Validate a timeline update event.
+ */
+export function validateTimelineUpdate(
+  data: unknown
+): AgentTimelineUpdateEvent | null {
+  return validateOrNull(AgentTimelineUpdateEventSchema, data, 'agent_timeline_update');
+}
+
+/**
+ * Validate a tool evidence event.
+ */
+export function validateToolEvidence(
+  data: unknown
+): ToolEvidenceUpdateEvent | null {
+  const result = validateOrNull(ToolEvidenceUpdateEventSchema, data, 'tool_evidence_update');
+  if (!result) return null;
+  // Ensure output is present (transform guarantees this)
+  return {
+    toolCallId: result.toolCallId,
+    toolName: result.toolName,
+    output: result.output,
+    summary: result.summary,
+  };
+}
+
+/**
+ * Validate a todos update event.
+ */
+export function validateTodosUpdate(
+  data: unknown
+): AgentTodosUpdateEvent | null {
+  return validateOrNull(AgentTodosUpdateEventSchema, data, 'agent_todos_update');
+}
+
+/**
+ * Validate a GenUI state update event.
+ */
+export function validateGenuiState(
+  data: unknown
+): Record<string, unknown> | null {
+  return validateOrNull(GenuiStateUpdateEventSchema, data, 'genui_state_update');
+}
+
+// -----------------------------------------------------------------------------
+// Event Router
+// -----------------------------------------------------------------------------
+
+/**
+ * Map of event names to their validators.
+ */
+export const eventValidators = {
+  agent_thinking_trace: validateThinkingTrace,
+  agent_timeline_update: validateTimelineUpdate,
+  tool_evidence_update: validateToolEvidence,
+  agent_todos_update: validateTodosUpdate,
+  genui_state_update: validateGenuiState,
+} as const;
+
+/**
+ * Validate any AG-UI custom event by name.
+ *
+ * @param eventName - The event name to validate
+ * @param data - The event data to validate
+ * @returns Validated data or null if validation fails or event is unknown
+ *
+ * @remarks Unknown events return null to maintain consistent validation behavior.
+ */
+export function validateCustomEvent(
+  eventName: string,
+  data: unknown
+): unknown | null {
+  const validator = eventValidators[eventName as keyof typeof eventValidators];
+  if (!validator) {
+    console.warn(`[AG-UI] Unknown event type '${eventName}' - discarding event`);
+    return null; // Return null for unknown events (consistent with validation failures)
+  }
+  return validator(data);
+}

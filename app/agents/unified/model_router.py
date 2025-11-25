@@ -35,20 +35,34 @@ def _default_model_map() -> Dict[CoordinatorTask, str]:
     }
 
 
-def _default_fallbacks() -> Dict[str, str]:
+def _default_fallbacks() -> Dict[str, Optional[str]]:
+    """Return the fallback chain for model selection.
+
+    The chain is strictly linear with no cycles:
+    gemini-2.5-pro -> gemini-2.5-flash -> gemini-2.5-flash-lite -> None (terminal)
+
+    When gemini-2.5-flash-lite is exhausted, there are no more fallbacks.
+    """
     return {
         "gemini-2.5-pro": "gemini-2.5-flash",
         "gemini-2.5-flash": "gemini-2.5-flash-lite",
-        "gemini-2.5-flash-lite": "gemini-2.5-flash",
+        "gemini-2.5-flash-lite": None,  # Terminal - no more fallbacks
     }
 
 
 @dataclass
 class ModelRouter:
-    """Simple task-based router with soft availability checks."""
+    """Simple task-based router with soft availability checks.
+
+    The router maintains a fallback chain for graceful degradation:
+    gemini-2.5-pro -> gemini-2.5-flash -> gemini-2.5-flash-lite -> None
+
+    When a model is unavailable (quota exhausted, circuit open), the router
+    automatically tries the next model in the chain.
+    """
 
     default_models: Dict[CoordinatorTask, str] = field(default_factory=_default_model_map)
-    fallback_chain: Dict[str, str] = field(default_factory=_default_fallbacks)
+    fallback_chain: Dict[str, Optional[str]] = field(default_factory=_default_fallbacks)
     allowed_models: Optional[Set[str]] = None
 
     def is_available(self, model: str) -> bool:

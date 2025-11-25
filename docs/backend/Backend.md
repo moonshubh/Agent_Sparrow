@@ -184,6 +184,33 @@ graph TB
 - **Usage**:
   - Exposed through `app/api/v1/endpoints/research_endpoints.py` (JSON + SSE)
 
+### 6. DeepAgents Harness & Middleware Stack
+
+The unified agent uses a DeepAgents-inspired harness architecture with composable middleware:
+
+#### Middleware Components (`app/agents/harness/middleware/`)
+- **MemoryMiddleware** (`memory_middleware.py`): Mem0-based memory injection with sentinel pattern for failed imports, standardized dict access for memory objects
+- **RateLimitMiddleware** (`rate_limit_middleware.py`): Per-model rate limiting with fallback chain support, model injection for retries
+- **EvictionMiddleware** (`eviction_middleware.py`): Large result eviction to ephemeral storage with async-safe stats tracking
+
+#### Storage Backends (`app/agents/harness/backends/`)
+- **CompositeBackend** (`composite.py`): Routes paths to appropriate storage:
+  - `/memories/*` → Persistent (Supabase)
+  - `/knowledge/*` → Persistent (Supabase)
+  - `/scratch/*` → Ephemeral (in-memory)
+  - `/large_results/*` → Ephemeral (auto-cleanup)
+- **SupabaseStoreBackend** (`supabase_store.py`): Persistent storage with UTF-8 byte size validation, optimized queries
+
+#### Streaming Infrastructure (`app/agents/streaming/`)
+- **StreamEventEmitter** (`emitter.py`): Centralized AG-UI event emission with timeline/trace/todos state tracking
+- **Normalizers** (`normalizers.py`): Transform raw tool outputs into typed event structures
+- **StreamHandler** (`handler.py`): Orchestrates streaming with fallback path event emission
+
+#### Session Management (`app/agents/unified/`)
+- **SessionCache** (`session_cache.py`): Thread-safe LRU cache with double-checked locking singleton
+- **ToolContracts** (`tool_contracts.py`): Consistent error handling across sync/async tool wrappers
+- **MessagePreparer** (`message_preparation.py`): Pre-agent transformations (memory injection, query rewriting, history summarization)
+
 ## Directory Structure
 
 ```
@@ -193,9 +220,25 @@ app/
 │   │   ├── agent_sparrow.py
 │   │   ├── subagents.py
 │   │   ├── tools.py
+│   │   ├── tool_contracts.py   # Sync/async tool wrappers with error handling
+│   │   ├── session_cache.py    # Thread-safe LRU cache singleton
+│   │   ├── message_preparation.py  # Pre-agent message transformations
 │   │   ├── model_router.py
 │   │   ├── prompts.py
 │   │   └── grounding.py
+│   ├── harness/                 # DeepAgents-inspired harness
+│   │   ├── backends/            # Storage backends
+│   │   │   ├── composite.py     # Path-based routing
+│   │   │   └── supabase_store.py  # Persistent storage
+│   │   └── middleware/          # Composable middleware
+│   │       ├── memory_middleware.py
+│   │       ├── rate_limit_middleware.py
+│   │       └── eviction_middleware.py
+│   ├── streaming/               # AG-UI streaming infrastructure
+│   │   ├── emitter.py           # Centralized event emission
+│   │   ├── normalizers.py       # Output normalization
+│   │   ├── handler.py           # Stream orchestration
+│   │   └── event_types.py       # Typed event definitions
 │   ├── orchestration/
 │   │   └── orchestration/       # Graph + state for unified agent
 │   │       ├── graph.py
