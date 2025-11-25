@@ -26,7 +26,7 @@ from app.agents.log_analysis.log_analysis_agent.simplified_schemas import (
     SimplifiedAgentState,
     SimplifiedLogAnalysisOutput,
 )
-from app.agents.primary.primary_agent.feedme_knowledge_tool import (
+from app.tools.feedme_knowledge import (
     EnhancedKBSearchInput,
 )
 from app.agents.unified.grounding import (

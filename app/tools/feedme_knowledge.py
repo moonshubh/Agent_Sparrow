@@ -3,6 +3,9 @@ Enhanced Knowledge Base Search Tool with FeedMe Integration
 
 Replaces the placeholder mailbird_kb_search tool with comprehensive knowledge retrieval
 from both traditional knowledge base and FeedMe customer support examples.
+
+Migrated from: app/agents/primary/primary_agent/feedme_knowledge_tool.py
+Migration date: 2025-11-25
 """
 
 import json
@@ -21,18 +24,15 @@ from app.utils.async_bridge import run_coro_blocking
 logger = logging.getLogger(__name__)
 
 
- 
-
-
 class EnhancedKBSearchInput(BaseModel):
     """Enhanced input schema for knowledge base search with FeedMe integration"""
     query: str = Field(..., description="The search query to find relevant articles and support examples")
     context: Optional[Dict[str, Any]] = Field(
-        default=None, 
+        default=None,
         description="Additional context from Primary Agent (emotional state, platform, etc.)"
     )
     max_results: int = Field(
-        default=5, 
+        default=5,
         description="Maximum number of results to return (3-10)",
         ge=1,
         le=10
@@ -58,22 +58,40 @@ class SearchResultSummary(BaseModel):
     search_time_ms: int
     sources_used: List[str]
     fallback_used: bool = False
-    
-    
+
+
 # Initialize FeedMe connector (global instance for efficiency)
 _feedme_connector = None
+_feedme_connector_lock = None  # Lazy-init lock to avoid import-time issues
+
+
+def _get_connector_lock():
+    """Get or create the connector lock (thread-safe)."""
+    global _feedme_connector_lock
+    if _feedme_connector_lock is None:
+        import threading
+        _feedme_connector_lock = threading.Lock()
+    return _feedme_connector_lock
 
 
 def get_feedme_connector() -> PrimaryAgentConnector:
-    """Get or create FeedMe connector instance"""
+    """Get or create FeedMe connector instance (thread-safe)."""
     global _feedme_connector
-    if _feedme_connector is None:
+    # Fast path: already initialized
+    if _feedme_connector is not None:
+        return _feedme_connector
+
+    # Slow path: need to initialize with lock
+    with _get_connector_lock():
+        # Double-check after acquiring lock
+        if _feedme_connector is not None:
+            return _feedme_connector
         try:
             _feedme_connector = PrimaryAgentConnector()
             logger.info("Initialized FeedMe Primary Agent connector")
         except Exception as e:
             logger.error(f"Failed to initialize FeedMe connector: {e}")
-            _feedme_connector = None
+            # Don't set to None - leave it uninitialized for retry
     return _feedme_connector
 
 
@@ -86,45 +104,45 @@ def _enhanced_mailbird_kb_search_payload(
 ) -> Dict[str, Any]:
     """
     Enhanced knowledge base search with FeedMe integration.
-    
+
     Searches both traditional knowledge base articles and FeedMe customer support examples
     to provide comprehensive, relevant information for customer support queries.
-    
+
     Args:
         query: Search query text
         context: Additional context from Primary Agent
         max_results: Maximum number of results (1-10)
         search_sources: Sources to search ("knowledge_base", "feedme", or both)
         min_confidence: Minimum confidence for FeedMe results
-        
+
     Returns:
         Formatted search results with relevance scores and source information
     """
     import time
     start_time = time.time()
-    
+
     try:
         logger.debug(
             "Enhanced KB search invoked: query_len=%s sources=%s",
             len(query),
             search_sources,
         )
-        
+
         # Validate inputs
         max_results = max(1, min(10, max_results))
         if not search_sources:
             search_sources = ["knowledge_base", "feedme"]
-        
+
         # Initialize results
         all_results = []
         kb_count = 0
         feedme_count = 0
         fallback_used = False
-        
+
         # Determine search strategy
         use_kb = "knowledge_base" in search_sources
         use_feedme = "feedme" in search_sources and settings.feedme_enabled
-        
+
         # Strategy 1: Use FeedMe integration if available and requested
         if use_feedme:
             try:
@@ -137,11 +155,11 @@ def _enhanced_mailbird_kb_search_payload(
                 all_results.extend(feedme_results)
                 feedme_count = len(feedme_results)
                 logger.debug(f"FeedMe search returned {feedme_count} results")
-                
+
             except Exception as e:
                 logger.warning(f"FeedMe search failed, falling back: {e}")
                 fallback_used = True
-        
+
         # Strategy 2: Use traditional KB search if needed or requested
         if use_kb and (not all_results or len(all_results) < max_results):
             try:
@@ -152,15 +170,16 @@ def _enhanced_mailbird_kb_search_payload(
                 all_results.extend(kb_results)
                 kb_count = len(kb_results)
                 logger.debug(f"Traditional KB search returned {kb_count} results")
-                
+
             except Exception as e:
                 logger.warning(f"Traditional KB search failed: {e}")
                 fallback_used = True
-        
-        # Strategy 3: Combined search fallback
-        if not all_results or fallback_used:
+
+        # Strategy 3: Combined search fallback - only if we have NO results
+        # Don't overwrite partial results from successful searches
+        if not all_results:
             try:
-                logger.info("Using combined search fallback")
+                logger.info("Using combined search fallback (no results from primary methods)")
                 combined_results = _search_combined_fallback(query, max_results)
                 if combined_results:
                     all_results = combined_results
@@ -168,7 +187,7 @@ def _enhanced_mailbird_kb_search_payload(
                     kb_count = len([r for r in combined_results if r.get('source') == 'knowledge_base'])
                     feedme_count = len([r for r in combined_results if r.get('source') == 'feedme'])
                     fallback_used = True
-                
+
             except Exception as e:
                 logger.error(f"All search methods failed: {e}")
                 formatted_error = _format_error_response(query, str(e))
@@ -188,14 +207,14 @@ def _enhanced_mailbird_kb_search_payload(
                     "query": query,
                     "error": str(e),
                 }
-        
+
         # Limit and format results
         all_results = all_results[:max_results]
-        
+
         # Calculate metrics
         search_time_ms = int((time.time() - start_time) * 1000)
         avg_relevance = _calculate_average_relevance(all_results)
-        
+
         # Create summary
         summary = SearchResultSummary(
             total_results=len(all_results),
@@ -206,7 +225,7 @@ def _enhanced_mailbird_kb_search_payload(
             sources_used=search_sources,
             fallback_used=fallback_used
         )
-        
+
         # Format final response
         formatted = _format_search_response(all_results, summary, query)
         return {
@@ -261,22 +280,22 @@ def _search_with_feedme(
     min_confidence: Optional[float]
 ) -> List[Dict[str, Any]]:
     """Search using FeedMe integration"""
-    
+
     # Get FeedMe connector
     connector = get_feedme_connector()
     if not connector:
         raise Exception("FeedMe connector not available")
-    
+
     # Build query object for FeedMe
     feedme_query = {
         'query_text': query,
         **context
     }
-    
+
     # Add confidence threshold to context if specified
     if min_confidence is not None:
         feedme_query['min_confidence'] = min_confidence
-    
+
     # Perform async search (run in thread pool if needed)
     try:
         # Use asyncio if available, otherwise fallback
@@ -288,7 +307,7 @@ def _search_with_feedme(
             ),
             timeout=30,
         )
-        
+
     except Exception as e:
         logger.error(f"Error in FeedMe search execution: {e}")
         raise
@@ -378,18 +397,18 @@ def _calculate_average_relevance(results: List[Dict[str, Any]]) -> float:
     """Calculate average relevance score"""
     if not results:
         return 0.0
-    
+
     total_relevance = sum(r.get('relevance_score', 0.0) for r in results)
     return total_relevance / len(results)
 
 
 def _format_search_response(
-    results: List[Dict[str, Any]], 
+    results: List[Dict[str, Any]],
     summary: SearchResultSummary,
     original_query: str
 ) -> str:
     """Format search results for Primary Agent consumption"""
-    
+
     if not results:
         return f"""# Knowledge Search Results
 
@@ -412,12 +431,12 @@ I couldn't find any relevant information for your query. You may want to:
         f"**Average Relevance:** {summary.avg_relevance:.2f}",
         f""
     ]
-    
+
     # Format each result
     for i, result in enumerate(results, 1):
         source_icon = "📖" if result['source'] == 'knowledge_base' else "💬"
         confidence_icon = "🔥" if result.get('confidence', 0) >= 0.8 else "✅" if result.get('confidence', 0) >= 0.7 else "ℹ️"
-        
+
         response_parts.extend([
             f"## {source_icon} Result {i}: {result.get('title', 'Knowledge Item')}",
             f"{confidence_icon} **Relevance:** {result.get('relevance_score', 0):.2f} | **Source:** {result['source']}",
@@ -425,23 +444,23 @@ I couldn't find any relevant information for your query. You may want to:
             f"{result.get('content', 'No content available')[:500]}{'...' if len(result.get('content', '')) > 500 else ''}",
             f""
         ])
-        
+
         # Add metadata for high-quality results
         if result.get('confidence', 0) >= 0.8:
             quality_info = []
             qi = result.get('quality_indicators', {})
-            
+
             if qi.get('frequently_used'):
                 quality_info.append("Frequently used solution")
             if qi.get('recent_usage'):
                 quality_info.append("Recently validated")
             if qi.get('high_confidence'):
                 quality_info.append("High confidence match")
-            
+
             if quality_info:
                 response_parts.append(f"*{', '.join(quality_info)}*")
                 response_parts.append("")
-        
+
         # Add source-specific context
         if result['source'] == 'feedme':
             metadata = result.get('metadata', {})
@@ -450,28 +469,28 @@ I couldn't find any relevant information for your query. You may want to:
             if metadata.get('tags'):
                 response_parts.append(f"**Tags:** {', '.join(metadata['tags'][:3])}")
             response_parts.append("")
-        
+
         response_parts.append("---")
         response_parts.append("")
-    
+
     # Add search metadata
     response_parts.extend([
         f"*Search completed in {summary.search_time_ms}ms using {', '.join(summary.sources_used)}*",
         f"*{'Fallback search used due to primary method issues' if summary.fallback_used else 'Primary search methods successful'}*"
     ])
-    
+
     return "\n".join(response_parts)
 
 
 def _format_error_response(query: str, error_message: str) -> str:
     """Format error response for Primary Agent"""
-    
+
     return f"""# Knowledge Search Error
 
 **Query:** {query}
 **Status:** Search temporarily unavailable
 
-I encountered an issue while searching for information about your query. 
+I encountered an issue while searching for information about your query.
 
 **Error:** {error_message}
 
@@ -488,7 +507,7 @@ I encountered an issue while searching for information about your query.
 def mailbird_kb_search(query: str, **kwargs) -> str:
     """
     Legacy compatibility wrapper for enhanced knowledge base search.
-    
+
     This maintains backward compatibility with existing Primary Agent code
     while providing enhanced functionality through FeedMe integration.
     """

@@ -40,7 +40,7 @@ from app.api.v1.endpoints import (
 )
 from app.api.v1.endpoints import agents_endpoints  # Agent metadata discovery
 from app.api.v1.endpoints import tavily_selftest  # Dev-only Tavily diagnostics
-from app.api.v1.endpoints import feedme_endpoints  # FeedMe transcript ingestion
+from app.api.v1.endpoints import feedme  # FeedMe transcript ingestion (modular package)
 from app.api.v1.endpoints import text_approval_endpoints  # Text approval workflow for FeedMe
 from app.api.v1.endpoints import chat_session_endpoints  # Chat session persistence
 from app.api.v1.endpoints import rate_limit_endpoints  # Rate limiting monitoring
@@ -209,8 +209,8 @@ app.include_router(agents_endpoints.router, prefix="/api/v1", tags=["Agents"])  
 app.include_router(metadata_endpoints.router, prefix="/api/v1", tags=["Metadata"])  # /api/v1/metadata - Phase 6
 app.include_router(global_knowledge_observability.router, prefix="/api/v1", tags=["Global Knowledge"])
 app.include_router(global_knowledge_feedback.router, prefix="/api/v1", tags=["Global Knowledge"])
-# Register FeedMe routes
-app.include_router(feedme_endpoints.router, prefix="/api/v1", tags=["FeedMe"])
+# Register FeedMe routes (modular package)
+app.include_router(feedme.router, prefix="/api/v1", tags=["FeedMe"])
 # Register FeedMe Text Approval routes  
 app.include_router(text_approval_endpoints.router, tags=["FeedMe Text Approval"])
 # Register FeedMe Intelligence routes
