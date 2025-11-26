@@ -17,7 +17,7 @@ from app.tools.research_tools import get_research_tools # To get TavilySearchToo
 from app.db.embedding import utils as embedding_utils  # For internal KB search
 
 if TYPE_CHECKING:
-    from app.db.embedding_utils import SearchResult as InternalSearchResult  # pragma: no cover
+    from app.db.embedding.utils import SearchResult as InternalSearchResult  # pragma: no cover
 else:
     InternalSearchResult = Dict[str, Any]
 

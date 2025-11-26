@@ -16,7 +16,7 @@ from pydantic import BaseModel, Field
 from langchain_core.tools import tool
 
 from app.db.embedding.utils import get_embedding_model
-from app.db.supabase_client import SupabaseClient
+from app.db.supabase.client import SupabaseClient
 from app.feedme.integration.primary_agent_connector import PrimaryAgentConnector
 from app.core.settings import settings
 from app.utils.async_bridge import run_coro_blocking

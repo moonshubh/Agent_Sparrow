@@ -44,7 +44,7 @@ export function ModelSelector({
               onChange={(e) => onChangeModel(e.target.value)}
               disabled={!hasModels}
               aria-label="Select model"
-              className="w-full h-9 appearance-none rounded-xl border border-white/10 bg-white/5 pl-3 pr-8 text-sm text-gray-100 placeholder:text-gray-500 disabled:opacity-60 disabled:cursor-not-allowed focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40 cursor-pointer"
+              className="w-full h-9 appearance-none rounded-organic border border-border bg-secondary pl-3 pr-8 text-sm text-foreground placeholder:text-muted-foreground disabled:opacity-60 disabled:cursor-not-allowed focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-terracotta-400/40 cursor-pointer"
             >
               {!hasModels ? (
                 <option>No models available</option>
@@ -56,12 +56,12 @@ export function ModelSelector({
                 ))
               )}
             </select>
-            <ChevronDown className="pointer-events-none absolute right-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-gray-400" />
+            <ChevronDown className="pointer-events-none absolute right-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
           </div>
         </TooltipTrigger>
-        <TooltipContent 
-          side="bottom" 
-          className="max-w-[200px] text-xs bg-[hsl(220,15%,15%)] border-white/10 text-gray-200 shadow-lg"
+        <TooltipContent
+          side="bottom"
+          className="max-w-[200px] text-xs bg-card border-border text-foreground shadow-academia-md"
         >
           <p>{tooltipText}</p>
         </TooltipContent>

@@ -126,7 +126,15 @@ class VersioningService:
                 update_data=update_data
             )
             
-            # TODO: Trigger async reprocessing via Celery
+            # Trigger async reprocessing via Celery if configured
+            try:
+                from app.feedme.tasks import reprocess_conversation
+
+                reprocess_conversation.delay(conversation_id)
+            except Exception as exc:  # pragma: no cover - best effort
+                logger.warning(
+                    f"versioning_reprocess_not_triggered conversation_id={conversation_id} error={exc}"
+                )
             
             return EditResponse(
                 conversation_id=conversation_id,

@@ -14,6 +14,7 @@ import httpx
 from bs4 import BeautifulSoup
 
 from loguru import logger
+from langgraph.prebuilt import InjectedState, ToolRuntime
 from langchain_core.tools import BaseTool, tool, InjectedToolArg
 from langchain_core.runnables import RunnableConfig
 from langchain_core.callbacks.manager import adispatch_custom_event
@@ -35,6 +36,7 @@ from app.agents.unified.grounding import (
     GroundingUnavailableError,
 )
 from app.agents.unified.quota_manager import QuotaExceededError
+from app.agents.orchestration.orchestration.state import GraphState
 from app.core.rate_limiting.agent_wrapper import rate_limited
 from app.core.settings import settings
 from app.db.embedding import utils as embedding_utils
@@ -51,6 +53,10 @@ ALLOWED_SUPABASE_TABLES = {
     "chat_sessions",
     "web_research_snapshots",
 }
+
+# Naming guidance for new tools:
+# - search_* for retrieval, read_* for file/record reads,
+# - write_* for mutations, analyze_* for diagnostics.
 
 
 @lru_cache(maxsize=1)
@@ -302,8 +308,14 @@ async def kb_search_tool(
     max_results: int = 5,
     search_sources: Optional[List[str]] = None,
     min_confidence: Optional[float] = None,
+    state: Annotated[Optional[GraphState], InjectedState] = None,
+    runtime: Optional[ToolRuntime] = None,
 ) -> str:
     """Search the Mailbird knowledge base via hybrid vector/text retrieval."""
+
+    session_id = getattr(state, "session_id", "default")
+    if runtime and getattr(runtime, "stream_writer", None):
+        runtime.stream_writer.write("Searching knowledge base…")
 
     sources = search_sources or ["knowledge_base"]
     if "knowledge_base" not in sources:
@@ -312,6 +324,7 @@ async def kb_search_tool(
             "query": query,
             "results": [],
             "reason": "knowledge_base_not_requested",
+            "session_id": session_id,
         })
 
     retriever = _hybrid_retriever()
@@ -329,6 +342,7 @@ async def kb_search_tool(
         "filters": filters,
         "result_count": len(results),
         "results": results,
+        "session_id": session_id,
     }
     return _serialize_tool_output(payload)
 
@@ -343,6 +357,16 @@ class LogDiagnoserInput(BaseModel):
         default=None,
         description="Optional trace identifier for auditing.",
     )
+    offset: int = Field(
+        default=0,
+        ge=0,
+        description="Optional line offset for large logs to keep prompts small.",
+    )
+    limit: Optional[int] = Field(
+        default=None,
+        ge=1,
+        description="Optional max number of lines to include from the log (applied after offset).",
+    )
 
 
 class FirecrawlInput(BaseModel):
@@ -355,27 +379,52 @@ async def log_diagnoser_tool(
     log_content: Optional[str] = None,
     question: Optional[str] = None,
     trace_id: Optional[str] = None,
+    offset: Optional[int] = None,
+    limit: Optional[int] = None,
+    state: Annotated[Optional[GraphState], InjectedState] = None,
+    runtime: Optional[ToolRuntime] = None,
 ) -> Dict[str, Any]:
     """Analyze application logs and return targeted diagnostics with error handling.
 
     Supports both structured invocation with a LogDiagnoserInput object and
     direct kwargs (log_content, question, trace_id) so that LangChain/DeepAgents
-    tool calls that pass raw arguments continue to work.
+    tool calls that pass raw arguments continue to work. For large logs, supply
+    offset/limit to paginate the content client-side before sending to the model.
     """
 
     # Normalize inputs regardless of how the tool is invoked
+    effective_trace_id = trace_id or getattr(state, "trace_id", None)
+    if runtime and getattr(runtime, "stream_writer", None):
+        runtime.stream_writer.write("Analyzing logs…")
+
     if input is None:
         input = LogDiagnoserInput(
             log_content=log_content or "",
             question=question,
-            trace_id=trace_id,
+            trace_id=effective_trace_id,
+            offset=offset or 0,
+            limit=limit,
         )
+    elif effective_trace_id and not input.trace_id:
+        # Propagate trace_id from injected state when caller did not supply one
+        input.trace_id = effective_trace_id
+    # Normalize offset/limit from either args_schema or fallback kwargs
+    if log_content is not None and input.log_content == (log_content or ""):
+        input.offset = input.offset or 0
+        input.limit = input.limit
+    elif log_content is None and input.offset is None:
+        input.offset = 0
+    # Apply pagination slicing if provided
+    lines = input.log_content.splitlines()
+    start = max(input.offset or 0, 0)
+    end = start + input.limit if input.limit else None
+    sliced = "\n".join(lines[start:end]) if lines else input.log_content
 
     try:
         state = SimplifiedAgentState(
-            raw_log_content=input.log_content,
+            raw_log_content=sliced,
             question=input.question,
-            trace_id=input.trace_id,
+            trace_id=input.trace_id or effective_trace_id,
         )
         async with SimplifiedLogAnalysisAgent() as agent:
             result: SimplifiedLogAnalysisOutput = await agent.analyze(state)
@@ -434,6 +483,8 @@ async def grounding_search_tool(
     input: Optional[GroundingSearchInput] = None,
     query: Optional[str] = None,
     max_results: int = 5,
+    state: Annotated[Optional[GraphState], InjectedState] = None,
+    runtime: Optional[ToolRuntime] = None,
 ) -> Dict[str, Any]:
     """Call Gemini Search Grounding with automatic Tavily/Firecrawl fallback.
 
@@ -446,6 +497,8 @@ async def grounding_search_tool(
         input = GroundingSearchInput(query=query or "", max_results=max_results)
 
     try:
+        if runtime and getattr(runtime, "stream_writer", None):
+            runtime.stream_writer.write("Running grounding search…")
         service = _grounding_service()
         if not service.enabled:
             raise GroundingUnavailableError("grounding_disabled")

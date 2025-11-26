@@ -219,7 +219,7 @@ export function ChatContainer({
   const agentDisplayName = agentLabels[agentType] || 'Primary Support';
 
   return (
-    <main className="h-screen w-screen flex flex-col bg-[hsl(220,15%,10%)] text-gray-100 font-sans overflow-hidden">
+    <main className="h-screen w-screen flex flex-col bg-background text-foreground font-serif overflow-hidden">
       <ChatHeader
         agentType={agentType}
         onAgentChange={(newType) => onAgentChange?.(newType)}
@@ -274,7 +274,7 @@ export function ChatContainer({
 
           {/* Input Area - Fixed at bottom (Only when not empty) */}
           {!isEmptyState && (
-            <div className="sticky bottom-0 p-6 bg-gradient-to-t from-[hsl(220,15%,10%)] via-[hsl(220,15%,10%)] to-transparent z-10 animate-in slide-in-from-bottom-10 duration-500">
+            <div className="sticky bottom-0 p-6 bg-gradient-to-t from-background via-background to-transparent z-10 animate-in slide-in-from-bottom-10 duration-500">
               <div className="max-w-4xl mx-auto">
                 <ChatInput
                   onSend={handleSendMessage}
@@ -291,10 +291,10 @@ export function ChatContainer({
           )}
         </div>
 
-        {/* Agent Sidebar - Right */}
+        {/* Agent Sidebar - Right - Scholarly Panel */}
         {hasAgentActivity && (
-          <div className="w-[400px] xl:w-[450px] border-l border-[hsla(220,10%,90%,0.08)] bg-[hsla(220,15%,14%,0.4)] backdrop-blur-xl flex flex-col overflow-hidden transition-all duration-300 ease-in-out">
-            <div className="flex-1 overflow-y-auto p-4 space-y-6 custom-scrollbar">
+          <div className="w-[400px] xl:w-[450px] border-l border-border bg-sidebar flex flex-col overflow-hidden transition-all duration-300 ease-in-out paper-texture">
+            <div className="flex-1 overflow-y-auto p-4 space-y-6 custom-scrollbar relative z-10">
               {/* Reasoning Panel */}
               <div className="animate-in fade-in slide-in-from-right-4 duration-500">
                 <EnhancedReasoningPanel
@@ -326,14 +326,14 @@ export function ChatContainer({
                 />
               </div>
 
-              {/* Todos Sidebar */}
+              {/* Todos Sidebar - Scholarly Task List */}
               <div className="animate-in fade-in slide-in-from-right-4 duration-500 delay-150">
-                <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3 px-1">
+                <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3 px-1">
                   Run Tasks
                 </h3>
-                <div className="rounded-2xl bg-white/5 border border-white/10 p-3 space-y-3 shadow-lg">
+                <div className="rounded-organic-lg bg-card border border-border p-3 space-y-3 shadow-academia-sm">
                   {todos.length === 0 ? (
-                    <p className="text-sm text-gray-400">No tasks yet. They will appear here while the agent works.</p>
+                    <p className="text-sm text-muted-foreground italic">No tasks yet. They will appear here while the agent works.</p>
                   ) : (
                     <div className="space-y-2">
                       {todos.map((todo) => {
@@ -343,24 +343,24 @@ export function ChatContainer({
                             status === 'in_progress' ? 'In progress' :
                               'Pending';
                         const statusColor =
-                          status === 'done' ? 'bg-emerald-400' :
-                            status === 'in_progress' ? 'bg-amber-400' :
-                              'bg-gray-400';
+                          status === 'done' ? 'bg-sage-500' :
+                            status === 'in_progress' ? 'bg-gold-500' :
+                              'bg-stone-400';
                         return (
                           <div
                             key={todo.id}
-                            className="flex items-start justify-between rounded-xl bg-black/20 px-3 py-2 border border-white/5"
+                            className="flex items-start justify-between rounded-organic bg-secondary/50 px-3 py-2 border border-border"
                           >
                             <div className="flex items-start gap-2">
                               <span className={`mt-1 h-2.5 w-2.5 rounded-full ${statusColor}`} />
                               <div className="space-y-0.5">
-                                <div className="text-sm font-medium text-gray-100">{todo.title}</div>
+                                <div className="text-sm font-medium text-foreground">{todo.title}</div>
                                 {todo.metadata?.note && (
-                                  <div className="text-xs text-gray-400">{todo.metadata.note}</div>
+                                  <div className="text-xs text-muted-foreground">{todo.metadata.note}</div>
                                 )}
                               </div>
                             </div>
-                            <span className="text-xs text-gray-400">{statusLabel}</span>
+                            <span className="text-xs text-muted-foreground">{statusLabel}</span>
                           </div>
                         );
                       })}
@@ -369,9 +369,9 @@ export function ChatContainer({
                 </div>
               </div>
 
-              {/* Evidence Sidebar */}
+              {/* Evidence Sidebar - Research Notes */}
               <div className="animate-in fade-in slide-in-from-right-4 duration-500 delay-200">
-                <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3 px-1">
+                <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3 px-1">
                   Tool Evidence
                 </h3>
                 <ToolEvidenceSidebar

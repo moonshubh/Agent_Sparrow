@@ -1,3 +1,4 @@
+import asyncio
 from pathlib import Path
 from typing import Optional
 
@@ -6,6 +7,7 @@ from langgraph.graph import StateGraph, END
 
 from app.core.logging_config import get_logger
 from app.core.settings import settings
+from app.agents.unified.quota_manager import QuotaExceededError
 
 from .state import GraphState
 
@@ -39,6 +41,16 @@ def _build_checkpointer() -> Optional[object]:
     return MemorySaver()
 
 
+def _get_store() -> Optional[object]:
+    """Return the shared LangGraph store if available."""
+    try:
+        from app.agents.harness.store import sparrow_memory_store
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning("store_init_failed", error=str(exc))
+        return None
+    return sparrow_memory_store
+
+
 def _export_graph_visualization(graph_app: object) -> None:
     """Render a Mermaid diagram for the unified graph when enabled."""
     if not settings.graph_viz_export_enabled:
@@ -67,14 +79,50 @@ def _build_tool_node():
     return ToolNode(get_registered_tools())
 
 
+async def _run_agent_with_retry(state: GraphState, config: Optional[dict] = None) -> dict:
+    """Run the unified agent with lightweight retry/backoff for transient errors."""
+
+    from app.agents.unified.agent_sparrow import run_unified_agent
+
+    max_attempts = getattr(settings, "graph_retry_attempts", 3) or 3
+    backoff_factor = getattr(settings, "graph_retry_backoff", 2.0) or 2.0
+    retryable_errors = (QuotaExceededError, asyncio.TimeoutError)
+
+    last_exc: Optional[Exception] = None
+    for attempt in range(1, max_attempts + 1):
+        try:
+            return await run_unified_agent(state, config)
+        except retryable_errors as exc:
+            last_exc = exc
+            if attempt >= max_attempts:
+                logger.error(
+                    "graph_agent_retry_exhausted",
+                    attempts=max_attempts,
+                    error=str(exc),
+                )
+                break
+
+            delay = backoff_factor ** (attempt - 1)
+            logger.warning(
+                "graph_agent_retry",
+                attempt=attempt,
+                delay=delay,
+                error=str(exc),
+            )
+            await asyncio.sleep(delay)
+    if last_exc:
+        raise last_exc
+    raise RuntimeError("graph_agent_retry_failed_without_exception")
+
+
 def build_unified_graph():
     """Construct the unified LangGraph app."""
-    from app.agents.unified.agent_sparrow import run_unified_agent, should_continue
+    from app.agents.unified.agent_sparrow import should_continue
 
     workflow = StateGraph(GraphState)
     logger.debug("state_graph_instantiated")
 
-    workflow.add_node("agent", run_unified_agent)
+    workflow.add_node("agent", _run_agent_with_retry)
     logger.debug("graph_node_added", node="agent")
 
     workflow.add_node("tools", _build_tool_node())
@@ -97,7 +145,8 @@ def build_unified_graph():
     logger.debug("graph_edge_added", source="tools", target="agent")
 
     checkpointer = _build_checkpointer()
-    app = workflow.compile(checkpointer=checkpointer)
+    store = _get_store()
+    app = workflow.compile(checkpointer=checkpointer, store=store)
     _export_graph_visualization(app)
     logger.info("graph_compile_complete")
     return app

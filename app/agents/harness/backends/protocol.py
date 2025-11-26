@@ -46,7 +46,7 @@ class BackendProtocol(Protocol):
         self,
         file_path: str,
         offset: int = 0,
-        limit: int = 2000,
+        limit: int = 500,
     ) -> Optional[str]:
         """Read content from storage with pagination support.
 
@@ -166,7 +166,7 @@ class InMemoryBackend:
         self,
         file_path: str,
         offset: int = 0,
-        limit: int = 2000,
+        limit: int = 500,
     ) -> Optional[str]:
         # Validate offset and limit are non-negative
         offset = max(0, offset)

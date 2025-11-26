@@ -4,6 +4,6 @@ Supabase-only implementation - local PostgreSQL repositories deprecated
 """
 
 # All repository operations now handled through Supabase client
-# Import app.db.supabase_client for database operations
+# Import app.db.supabase.client for database operations
 
 __all__ = []

@@ -22,6 +22,7 @@ if TYPE_CHECKING:
 # Constants
 DEFAULT_TABLE = "agent_files"
 MAX_CONTENT_SIZE = 10_000_000  # 10MB limit
+DEFAULT_READ_LIMIT = 500  # lines
 
 
 @dataclass
@@ -141,14 +142,14 @@ class SupabaseStoreBackend:
         self,
         file_path: str,
         offset: int = 0,
-        limit: int = 2000,
+        limit: int = DEFAULT_READ_LIMIT,
     ) -> Optional[str]:
         """Read content from storage.
 
         Args:
             file_path: Path to the file.
             offset: Line offset to start reading from.
-            limit: Maximum number of lines to read.
+            limit: Maximum number of lines to read (defaults to 500).
 
         Returns:
             File content as string, or None if not found.
@@ -171,7 +172,9 @@ class SupabaseStoreBackend:
 
             # Apply offset and limit by lines
             lines = content.split("\n")
-            selected_lines = lines[offset : offset + limit]
+            start = max(offset, 0)
+            end = start + max(limit, 0)
+            selected_lines = lines[start:end]
             return "\n".join(selected_lines)
 
         except Exception as exc:
@@ -478,3 +481,8 @@ class SupabaseStoreBackend:
             return response.data is not None
         except Exception:
             return False
+
+    def list_paths(self, prefix: str = "/") -> List[str]:
+        """List paths with the given prefix."""
+        files = self.ls_info(prefix or "/")
+        return [f.path for f in files if f.path.startswith(prefix)]

@@ -26,7 +26,7 @@ interface ChatHeaderProps {
 
 /**
  * Chat Header for the AG-UI client.
- * Polished Mailbird Dark Theme
+ * Dark Academia Theme - Scholarly Warmth
  */
 export function ChatHeader({
   agentType,
@@ -57,14 +57,14 @@ export function ChatHeader({
   };
 
   return (
-    <div className="w-full z-50 border-b border-white/5 bg-[hsl(220,15%,10%)]/70 backdrop-blur-md transition-all duration-300">
+    <div className="w-full z-50 border-b border-border bg-background/90 backdrop-blur-sm transition-all duration-300">
       <div className="max-w-7xl mx-auto px-6 py-2.5">
         <div className="flex flex-col gap-2.5">
           <div className="flex flex-wrap items-center justify-between gap-3">
             {/* Branding + status */}
             <div className="flex items-center gap-3 min-w-0">
               <div className="flex items-center gap-3">
-                <div className="relative w-10 h-10 rounded-2xl bg-white/5 border border-white/10 overflow-hidden shadow-lg shadow-blue-500/25">
+                <div className="relative w-10 h-10 rounded-organic bg-secondary border border-border overflow-hidden shadow-academia-sm">
                   <Image
                     src="/Sparrow_logo_cropped.png"
                     alt="Agent Sparrow"
@@ -74,10 +74,10 @@ export function ChatHeader({
                     priority
                   />
                 </div>
-                <h2 className="text-base font-semibold text-white tracking-tight leading-tight">Agent Sparrow</h2>
+                <h2 className="text-base font-semibold text-foreground tracking-tight leading-tight">Agent Sparrow</h2>
               </div>
 
-              <div className="flex items-center gap-2 pl-3 border-l border-white/10 text-xs text-gray-400">
+              <div className="flex items-center gap-2 pl-3 border-l border-border text-xs text-muted-foreground">
                 {hasActiveConversation ? (
                   <AgentSelector
                     value={agentType}
@@ -88,13 +88,13 @@ export function ChatHeader({
                     className="min-w-[150px] !gap-0"
                   />
                 ) : (
-                  <span className="text-xs font-medium px-2.5 py-1 rounded-full bg-white/5 text-gray-300 border border-white/10">
+                  <span className="text-xs font-medium px-2.5 py-1 rounded-organic-sm bg-secondary text-secondary-foreground border border-border">
                     {agentBadge}
                   </span>
                 )}
                 {hasActiveTools && (
-                  <span className="flex items-center gap-2 px-2.5 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-xs font-medium text-emerald-300">
-                    <Activity className="w-3 h-3 text-emerald-300 animate-pulse" />
+                  <span className="flex items-center gap-2 px-2.5 py-1 rounded-organic-sm bg-sage-600/15 border border-sage-600/25 text-xs font-medium text-sage-300">
+                    <Activity className="w-3 h-3 text-sage-400 animate-pulse" />
                     {activeToolCount} tool{activeToolCount === 1 ? '' : 's'}
                   </span>
                 )}
@@ -105,9 +105,9 @@ export function ChatHeader({
             <div className="flex items-center gap-2 flex-shrink-0">
               <button
                 onClick={() => onMemoryToggle(!memoryEnabled)}
-                className={`text-xs font-medium px-3 py-1.5 rounded-xl transition-all duration-200 border whitespace-nowrap ${memoryEnabled
-                  ? "bg-blue-500/15 border-blue-500/30 text-blue-300 shadow-[0_0_15px_rgba(56,189,248,0.2)]"
-                  : "bg-white/5 border-white/10 text-gray-400 hover:text-white"
+                className={`text-xs font-medium px-3 py-1.5 rounded-organic transition-all duration-200 border whitespace-nowrap ${memoryEnabled
+                  ? "bg-sage-600/15 border-sage-500/30 text-sage-300 shadow-sage-glow"
+                  : "bg-secondary border-border text-muted-foreground hover:text-foreground"
                   }`}
                 aria-pressed={memoryEnabled}
               >
@@ -116,10 +116,10 @@ export function ChatHeader({
 
               <button
                 onClick={handleFeedMe}
-                className="text-xs font-medium px-3 py-1.5 rounded-xl border border-white/10 bg-white/5 text-gray-300 hover:text-white transition-all duration-200 flex items-center gap-1.5 whitespace-nowrap"
+                className="text-xs font-medium px-3 py-1.5 rounded-organic border border-border bg-secondary text-secondary-foreground hover:text-foreground transition-all duration-200 flex items-center gap-1.5 whitespace-nowrap"
                 aria-label="Open Feed Me"
               >
-                <PanelsTopLeft className="w-3.5 h-3.5 text-gray-400" />
+                <PanelsTopLeft className="w-3.5 h-3.5 text-muted-foreground" />
                 Feed Me
               </button>
 
@@ -150,8 +150,8 @@ export function ChatHeader({
           )}
 
           {hasActiveTools && (
-            <div className="flex sm:hidden justify-center items-center gap-2 px-3 py-2 rounded-2xl bg-emerald-500/10 border border-emerald-500/20 text-xs font-medium text-emerald-200 w-fit mx-auto">
-              <Activity className="w-3 h-3 text-emerald-200 animate-pulse" />
+            <div className="flex sm:hidden justify-center items-center gap-2 px-3 py-2 rounded-organic bg-sage-600/15 border border-sage-600/25 text-xs font-medium text-sage-300 w-fit mx-auto">
+              <Activity className="w-3 h-3 text-sage-400 animate-pulse" />
               {activeToolCount} tool{activeToolCount === 1 ? '' : 's'} active
             </div>
           )}

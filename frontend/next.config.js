@@ -1,10 +1,24 @@
+const path = require('path')
+
+const katexCssStub = path.join(__dirname, 'src/styles/katex-stub.css')
+
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  eslint: {
-    ignoreDuringBuilds: true,
-  },
+  // Note: eslint config moved to eslint.config.js (Next.js 16+ requirement)
   typescript: {
     ignoreBuildErrors: true,
+  },
+  // Empty turbopack config to acknowledge Turbopack is the default bundler in Next.js 16
+  // The webpack config below is used for the katex CSS alias (Turbopack doesn't support false aliases)
+  turbopack: {},
+  // Webpack config for katex CSS alias - prevents bundling since we load via CDN
+  webpack(config) {
+    config.resolve = config.resolve || {}
+    config.resolve.alias = {
+      ...(config.resolve.alias || {}),
+      'katex/dist/katex.min.css': katexCssStub,
+    }
+    return config
   },
   env: {
     GEMINI_API_KEY: process.env.GEMINI_API_KEY,
@@ -91,15 +105,6 @@ const nextConfig = {
   // Note: crypto is a Node.js built-in and doesn't need external package config
   // Disable x-powered-by header for security
   poweredByHeader: false,
-  // Workaround: prevent bundling Katex CSS from streamdown, we add it via CDN in app/head.tsx
-  webpack(config) {
-    config.resolve = config.resolve || {}
-    config.resolve.alias = {
-      ...(config.resolve.alias || {}),
-      'katex/dist/katex.min.css': false,
-    }
-    return config
-  }
 }
 
 module.exports = nextConfig;

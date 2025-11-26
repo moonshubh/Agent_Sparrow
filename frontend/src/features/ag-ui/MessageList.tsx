@@ -43,13 +43,13 @@ function MessageItem({ message, isLast, isStreaming }: MessageItemProps) {
         isUser ? 'flex-row-reverse' : 'flex-row'
       )}
     >
-      {/* User Avatar (Only for user) */}
+      {/* User Avatar (Only for user) - Terracotta warmth */}
       {isUser && (
         <div
-          className="flex-shrink-0 w-8 h-8 rounded-full flex items-center justify-center shadow-lg bg-gradient-to-br from-blue-500 to-blue-600"
+          className="flex-shrink-0 w-8 h-8 rounded-full flex items-center justify-center shadow-academia-sm bg-gradient-to-br from-terracotta-500 to-terracotta-600"
           aria-label="User avatar"
         >
-          <User className="w-4 h-4 text-white" />
+          <User className="w-4 h-4 text-cream-50" />
         </div>
       )}
 
@@ -67,23 +67,23 @@ function MessageItem({ message, isLast, isStreaming }: MessageItemProps) {
 
         <div
           className={cn(
-            'text-sm leading-relaxed',
+            'text-academia-base leading-relaxed',
             isUser
-              ? 'bg-blue-600 text-white rounded-2xl rounded-tr-sm px-5 py-3.5 shadow-sm'
-              : 'bg-transparent text-gray-100 px-0 py-0' // Completely transparent, no padding for agent
+              ? 'bg-chat-user-bg text-chat-user-text bubble-user px-5 py-3.5 shadow-academia-sm'
+              : 'bg-transparent text-foreground px-0 py-0' // Completely transparent, no padding for agent
           )}
         >
           <div className={cn(
             'prose prose-sm max-w-none prose-invert',
-            !isUser && 'prose-headings:text-gray-100 prose-p:text-gray-300 prose-strong:text-white prose-code:text-blue-300'
+            !isUser && 'prose-headings:text-foreground prose-p:text-foreground/90 prose-strong:text-foreground prose-code:text-terracotta-300'
           )}>
             <ReactMarkdown
               components={{
                 code({ node, inline, className, children, ...props }: any) {
                   const match = /language-(\w+)/.exec(className || '');
                   return !inline && match ? (
-                    <div className="rounded-lg overflow-hidden my-4 border border-white/10 shadow-lg">
-                      <div className="bg-white/5 px-4 py-2 text-xs text-gray-400 border-b border-white/5 flex justify-between">
+                    <div className="rounded-organic overflow-hidden my-4 border border-border shadow-academia-sm">
+                      <div className="bg-secondary px-4 py-2 text-xs text-muted-foreground border-b border-border flex justify-between font-mono">
                         <span>{match[1]}</span>
                       </div>
                       <SyntaxHighlighter
@@ -91,7 +91,7 @@ function MessageItem({ message, isLast, isStreaming }: MessageItemProps) {
                         style={vscDarkPlus}
                         language={match[1]}
                         PreTag="div"
-                        customStyle={{ margin: 0, borderRadius: 0, background: 'rgba(0,0,0,0.3)' }}
+                        customStyle={{ margin: 0, borderRadius: 0, background: 'hsl(var(--code-block-bg))' }}
                       >
                         {String(children).replace(/\n$/, '')}
                       </SyntaxHighlighter>
@@ -101,7 +101,7 @@ function MessageItem({ message, isLast, isStreaming }: MessageItemProps) {
                       {...props}
                       className={cn(
                         className,
-                        'bg-white/10 px-1.5 py-0.5 rounded text-xs font-mono text-blue-200',
+                        'bg-secondary px-1.5 py-0.5 rounded-organic-sm text-xs font-mono text-terracotta-300',
                       )}
                     >
                       {children}
@@ -114,9 +114,9 @@ function MessageItem({ message, isLast, isStreaming }: MessageItemProps) {
             </ReactMarkdown>
           </div>
 
-          {/* Streaming indicator */}
+          {/* Streaming indicator - Warm gold glow */}
           {isLast && isStreaming && !isUser && (
-            <div className="flex items-center gap-2 mt-2 text-xs text-blue-400/80">
+            <div className="flex items-center gap-2 mt-2 text-xs text-gold-400/90 thinking-indicator">
               <div className="flex gap-1">
                 <span className="animate-bounce animation-delay-0 w-1.5 h-1.5 bg-current rounded-full"></span>
                 <span className="animate-bounce animation-delay-200 w-1.5 h-1.5 bg-current rounded-full"></span>

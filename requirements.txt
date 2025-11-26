@@ -5,7 +5,7 @@ slowapi==0.1.9
 redis==4.6.0
 uvicorn==0.29.0
 python-multipart==0.0.20
-pydantic==2.11.5
+pydantic==2.12.4
 pydantic-settings==2.10.1
 email-validator==2.3.0
 python-dotenv==1.1.1
@@ -16,7 +16,8 @@ langchain-core>=1.0.0,<1.1.0
 # langchain-community>=0.3.14,<0.4.0  # Removed - conflicts with langchain-core 1.x, not used by unified agent
 langchain-google-genai==2.1.12  # Compatible with langchain-core 1.x
 # langchain-openai>=1.0.0,<1.1.0  # Removed - conflicts with openai 1.58.1, not used by unified agent
-langgraph>=1.0.0,<1.1.0
+langgraph>=1.0.4,<1.1.0
+langgraph-prebuilt>=1.0.5,<1.1.0
 langgraph-sdk>=0.2.0,<0.3.0  # Required for AG-UI protocol
 langsmith>=0.3.45,<0.4.0
 copilotkit>=0.1.70
@@ -24,9 +25,8 @@ ag-ui-langgraph>=0.0.18  # AG-UI protocol adapter for LangGraph
 ag-ui-protocol>=0.1.9  # AG-UI protocol definitions
 
 # Google AI SDK (explicitly required for FeedMe modules only)
-# NOTE: Removed for unified agent compatibility - FeedMe modules will need separate handling
-# google-generativeai==0.8.5  # Conflicts with langchain-google-genai 2.1.12
 google-genai==1.0.0
+google-ai-generativelanguage==0.9.0  # Required by langchain-google-genai>=0.7
 
 # OpenAI SDK
 openai==1.58.1
@@ -39,8 +39,8 @@ torch==2.4.1
 torchvision==0.19.1
 
 # Database & Auth
-supabase==2.16.0
-gotrue==2.12.4
+supabase==2.24.0
+supabase-auth==2.24.0  # required for direct supabase_auth imports (supabase-py 2.24)
 qdrant-client==1.15.1
 PyJWT==2.10.1
 python-jose[cryptography]==3.3.0

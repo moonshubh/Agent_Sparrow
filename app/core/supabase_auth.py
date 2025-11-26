@@ -13,8 +13,12 @@ import jwt
 from functools import lru_cache
 
 from supabase import create_client, Client
-from gotrue import AuthResponse, Session, User
-from gotrue.errors import AuthError
+try:  # supabase-py 2.24+ splits auth into supabase_auth
+    from supabase_auth import AuthResponse, Session, User
+    from supabase_auth.errors import AuthError
+except ImportError:  # Backward compatibility with supabase-py <=2.16
+    from gotrue import AuthResponse, Session, User  # type: ignore
+    from gotrue.errors import AuthError  # type: ignore
 
 from app.core.settings import settings
 from app.db.supabase.client import get_supabase_client
@@ -226,9 +230,19 @@ class SupabaseAuthClient:
             user_data = await self.verify_jwt(jwt_token)
             user_id = user_data.get("sub") if user_data else None
             
-            # Set the session for sign out
-            self.client.auth.set_session(jwt_token, None)
-            self.client.auth.sign_out()
+            # Prefer admin sign-out when service key is available; fallback to local sign-out
+            admin_sign_out = False
+            try:
+                admin_client = getattr(self.client.auth, "admin", None)
+                if admin_client:
+                    admin_client.sign_out(jwt_token, scope="global")
+                    admin_sign_out = True
+            except Exception as admin_exc:
+                logger.debug(f"Admin sign out failed: {admin_exc}")
+
+            if not admin_sign_out:
+                # Local sign-out (no session priming in supabase-py 2.24+)
+                self.client.auth.sign_out()
             
             # Revoke session in database
             if user_id:
@@ -264,9 +278,8 @@ class SupabaseAuthClient:
             Tuple of (Session, error_message)
         """
         try:
-            # Set the refresh token
-            self.client.auth.set_session(None, refresh_token)
-            session = self.client.auth.refresh_session()
+            auth_response = self.client.auth.refresh_session(refresh_token)
+            session = getattr(auth_response, "session", auth_response)
             
             if session:
                 # Update session info
@@ -346,9 +359,28 @@ class SupabaseAuthClient:
             Tuple of (User, error_message)
         """
         try:
-            # Set the session
-            self.client.auth.set_session(jwt_token, None)
-            user = self.client.auth.update_user(attributes)
+            user_data = await self.verify_jwt(jwt_token)
+            user_id = user_data.get("sub") if user_data else None
+            if not user_id:
+                return None, "Invalid token for user update"
+
+            user = None
+            try:
+                admin_client = getattr(self.client.auth, "admin", None)
+                if admin_client:
+                    user_response = admin_client.update_user_by_id(user_id, attributes)
+                    user = getattr(user_response, "user", user_response)
+            except Exception as admin_exc:
+                logger.error(f"Admin user update failed: {admin_exc}")
+
+            # Fallback to session-scoped update when admin client is unavailable
+            if user is None:
+                user_response = self.client.auth.get_user(jwt_token)
+                current_user = getattr(user_response, "user", user_response)
+                if not current_user:
+                    return None, "User update failed: session not available"
+                user_response = self.client.auth.update_user(attributes)
+                user = getattr(user_response, "user", user_response)
             
             if user:
                 # Log user update
@@ -470,9 +502,9 @@ class SupabaseAuthClient:
             if not payload:
                 return None
                 
-            # Set session and get user
-            self.client.auth.set_session(jwt_token, None)
-            user = self.client.auth.get_user()
+            # Fetch user directly with the provided JWT (supabase-py 2.24 compatible)
+            user_response = self.client.auth.get_user(jwt_token)
+            user = getattr(user_response, "user", user_response)
             
             return user
             

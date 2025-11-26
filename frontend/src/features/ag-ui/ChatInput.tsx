@@ -134,32 +134,32 @@ export function ChatInput({
     <div
       className={cn(
         'transition-all duration-500 ease-in-out w-full',
-        isCentered ? 'max-w-2xl mx-auto' : 'border-t bg-[hsl(220,15%,10%)] p-4',
-        isDragOver && 'bg-blue-500/10 border-blue-500/50'
+        isCentered ? 'max-w-2xl mx-auto' : 'border-t border-border bg-background p-4',
+        isDragOver && 'bg-terracotta-600/10 border-terracotta-500/50'
       )}
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
     >
-      {/* Attachments preview */}
+      {/* Attachments preview - Paper-like cards */}
       {attachments.length > 0 && (
         <div className="mb-3 flex flex-wrap gap-2">
           {attachments.map((attachment, index) => (
             <div
               key={index}
-              className="flex items-center gap-2 bg-white/10 backdrop-blur-md rounded-lg px-3 py-2 border border-white/10"
+              className="flex items-center gap-2 bg-card rounded-organic px-3 py-2 border border-border shadow-academia-sm"
             >
-              <Paperclip className="w-4 h-4 text-gray-300" />
-              <span className="text-sm text-gray-200 max-w-[200px] truncate">
+              <Paperclip className="w-4 h-4 text-muted-foreground" />
+              <span className="text-sm text-foreground max-w-[200px] truncate">
                 {attachment.name}
               </span>
-              <span className="text-xs text-gray-400">
+              <span className="text-xs text-muted-foreground">
                 ({(attachment.size / 1024).toFixed(1)}KB)
               </span>
               <button
                 type="button"
                 onClick={() => removeAttachment(index)}
-                className="ml-1 text-gray-400 hover:text-white"
+                className="ml-1 text-muted-foreground hover:text-foreground transition-colors"
                 aria-label={`Remove attachment ${index + 1}`}
               >
                 <X className="w-4 h-4" />
@@ -175,12 +175,12 @@ export function ChatInput({
         isCentered ? "" : "max-w-4xl mx-auto"
       )}>
 
-        {/* Main Input Bar */}
+        {/* Main Input Bar - Scholarly Paper Feel */}
         <div className={cn(
           "flex items-center gap-2 p-2 transition-all duration-300",
           isCentered
-            ? "bg-[hsl(220,15%,16%)]/80 backdrop-blur-xl border border-white/10 rounded-2xl shadow-2xl min-h-[64px]"
-            : "bg-[hsl(220,15%,14%)] border border-white/5 rounded-xl"
+            ? "bg-card/95 border border-border rounded-organic-xl shadow-academia-lg min-h-[64px]"
+            : "bg-input border border-border rounded-organic-lg"
         )}>
           {/* File upload button */}
           <Button
@@ -189,8 +189,8 @@ export function ChatInput({
             onClick={() => fileInputRef.current?.click()}
             disabled={disabled}
             className={cn(
-              "text-gray-400 hover:text-white hover:bg-white/5 transition-colors",
-              isCentered ? "rounded-xl px-3 h-10 gap-2 bg-white/5" : "h-10 w-10 p-0 rounded-lg"
+              "text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors",
+              isCentered ? "rounded-organic px-3 h-10 gap-2 bg-secondary" : "h-10 w-10 p-0 rounded-organic"
             )}
             aria-label="Attach file"
           >
@@ -226,8 +226,8 @@ export function ChatInput({
             }
             disabled={disabled}
             className={cn(
-              'flex-1 bg-transparent border-0 focus:ring-0 text-gray-100 placeholder:text-gray-500 resize-none py-3',
-              isCentered ? 'text-lg' : 'text-base',
+              'flex-1 bg-transparent border-0 focus:ring-0 text-foreground placeholder:text-muted-foreground resize-none py-3 font-serif',
+              isCentered ? 'text-lg' : 'text-academia-base',
               'min-h-[44px] max-h-[200px]'
             )}
             rows={1}
@@ -242,7 +242,7 @@ export function ChatInput({
                 size="icon"
                 disabled
                 title="Voice input coming soon"
-                className="text-gray-400 hover:text-white hover:bg-white/5 rounded-full h-10 w-10"
+                className="text-muted-foreground hover:text-foreground hover:bg-secondary rounded-full h-10 w-10"
                 aria-disabled="true"
               >
                 <Mic className="w-5 h-5" />
@@ -258,7 +258,7 @@ export function ChatInput({
                 size="icon"
                 className={cn(
                   "transition-all",
-                  isCentered ? "rounded-full h-10 w-10" : "rounded-lg h-10 w-10"
+                  isCentered ? "rounded-full h-10 w-10" : "rounded-organic h-10 w-10"
                 )}
                 aria-label="Abort generation"
               >
@@ -270,8 +270,8 @@ export function ChatInput({
                 onClick={handleSend}
                 disabled={!input.trim()}
                 className={cn(
-                  "transition-all bg-white/10 hover:bg-white/20 text-white border border-white/5",
-                  isCentered ? "rounded-full h-10 w-10 p-0" : "rounded-lg h-10 w-10 p-0"
+                  "transition-all bg-primary hover:bg-terracotta-400 text-primary-foreground border-0",
+                  isCentered ? "rounded-full h-10 w-10 p-0" : "rounded-organic h-10 w-10 p-0"
                 )}
                 aria-label="Send message"
               >
@@ -281,7 +281,7 @@ export function ChatInput({
           </div>
         </div>
 
-        {/* Action Pills (Centered Mode Only) */}
+        {/* Action Pills (Centered Mode Only) - Scholarly shortcuts */}
         {isCentered && (
           <div className="flex items-center justify-center gap-2 animate-in fade-in slide-in-from-bottom-4 duration-700 delay-100">
             <Button
@@ -289,7 +289,7 @@ export function ChatInput({
               disabled
               aria-disabled="true"
               title="Skills shortcuts coming soon"
-              className="rounded-full bg-white/5 border-white/10 hover:bg-white/10 text-gray-300 text-xs h-8 gap-2"
+              className="rounded-full bg-secondary border-border hover:bg-secondary/80 text-muted-foreground text-xs h-8 gap-2"
             >
               <Sparkles className="w-3 h-3" />
               Skills
@@ -299,7 +299,7 @@ export function ChatInput({
               disabled
               aria-disabled="true"
               title="Rephrase option coming soon"
-              className="rounded-full bg-white/5 border-white/10 hover:bg-white/10 text-gray-300 text-xs h-8 gap-2"
+              className="rounded-full bg-secondary border-border hover:bg-secondary/80 text-muted-foreground text-xs h-8 gap-2"
             >
               <RefreshCw className="w-3 h-3" />
               Rephrase
@@ -307,15 +307,15 @@ export function ChatInput({
           </div>
         )}
 
-        {/* Drag and drop indicator */}
+        {/* Drag and drop indicator - Terracotta warmth */}
         {isDragOver && (
-          <div className="absolute inset-0 z-50 flex items-center justify-center bg-blue-500/20 backdrop-blur-sm rounded-2xl border-2 border-dashed border-blue-400">
-            <p className="text-blue-200 font-medium">Drop files here to attach</p>
+          <div className="absolute inset-0 z-50 flex items-center justify-center bg-terracotta-600/20 backdrop-blur-sm rounded-organic-xl border-2 border-dashed border-terracotta-400">
+            <p className="text-terracotta-300 font-medium">Drop files here to attach</p>
           </div>
         )}
 
         {isLogAgent && (
-          <p className="text-center text-xs text-amber-500/80">
+          <p className="text-center text-xs text-gold-500/80 italic">
             {attachments.length > 0
               ? 'Attached logs will be analyzed automatically.'
               : 'Attach log files for diagnosis.'}

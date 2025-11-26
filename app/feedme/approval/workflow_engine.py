@@ -162,9 +162,22 @@ class ApprovalWorkflowEngine:
             # Example already in production table
             return {"status": "approved", "example_id": temp_example_id}
         else:
-            # Delete rejected examples
-            # TODO: Implement delete in Supabase client
-            return {"status": "rejected", "example_id": temp_example_id}
+            # Delete rejected examples with logging/verification
+            try:
+                deleted = await self.supabase_client.delete_example(temp_example_id)
+                logger.info(f"Deleted rejected example {temp_example_id}")
+                return {
+                    "status": "rejected",
+                    "example_id": temp_example_id,
+                    "deleted": bool(deleted)
+                }
+            except Exception as e:
+                logger.error(f"Failed to delete rejected example {temp_example_id}: {e}")
+                return {
+                    "status": "rejected",
+                    "example_id": temp_example_id,
+                    "deleted": False
+                }
 
     async def bulk_approve_examples(
         self,

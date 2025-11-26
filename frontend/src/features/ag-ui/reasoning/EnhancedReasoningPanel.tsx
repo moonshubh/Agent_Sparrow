@@ -75,10 +75,10 @@ const phaseIcons: Record<ReasoningPhase, React.ReactNode> = {
 };
 
 const phaseColors: Record<ReasoningPhase, string> = {
-  planning: 'var(--crystal-cyan-400)',
-  searching: 'var(--accent-amber-400)',
-  analyzing: 'var(--accent-gold-400)',
-  responding: 'var(--status-success)'
+  planning: 'hsl(var(--terracotta-400))',
+  searching: 'hsl(var(--gold-400))',
+  analyzing: 'hsl(var(--sage-400))',
+  responding: 'hsl(var(--sage-500))'
 };
 
 export const EnhancedReasoningPanel: React.FC<EnhancedReasoningPanelProps> = ({

@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
+import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from functools import wraps
@@ -41,6 +43,7 @@ if TYPE_CHECKING:
 DEFAULT_EVICTION_THRESHOLD = 20000  # tokens (~80k chars at 4 chars/token)
 DEFAULT_CHAR_THRESHOLD = 80000  # characters
 SUMMARY_LENGTH = 500  # characters for the summary in pointer message
+TIMESTAMP_PATTERN = re.compile(r"_\d{14}$")
 
 
 @dataclass
@@ -154,9 +157,23 @@ class ToolResultEvictionMiddleware(AgentMiddleware if AGENT_MIDDLEWARE_AVAILABLE
             backend: Optional storage backend (defaults to in-memory).
         """
         self.char_threshold = char_threshold
-        self.backend = backend or EvictionBackend()
+        self.backend = backend or self._build_backend()
         self._stats = EvictionStats()
         self._stats_lock = asyncio.Lock()  # Lock for thread-safe stat updates
+
+    def _build_backend(self) -> Any:
+        """Build an eviction backend, preferring Supabase when enabled."""
+        if os.getenv("SPARROW_EVICTION_USE_SUPABASE", "").lower() in {"1", "true", "yes"}:
+            try:
+                from app.agents.harness.backends import SupabaseStoreBackend
+                from app.db.supabase.client import get_supabase_client
+
+                client = get_supabase_client()
+                logger.info("eviction_backend_supabase_enabled")
+                return SupabaseStoreBackend(client)
+            except Exception as exc:  # pragma: no cover - defensive
+                logger.warning("eviction_backend_supabase_failed", error=str(exc))
+        return EvictionBackend()
 
     @property
     def name(self) -> str:
@@ -395,7 +412,8 @@ class ToolResultEvictionMiddleware(AgentMiddleware if AGENT_MIDDLEWARE_AVAILABLE
         path = f"/large_results/{tool_call_id}_{timestamp}"
 
         # Write to backend
-        success = self.backend.write(path, content)
+        write_result = self.backend.write(path, content)
+        success = getattr(write_result, "success", write_result)
         if not success:
             logger.warning("eviction_write_failed", path=path, tool=tool_name)
             return result
@@ -432,7 +450,8 @@ class ToolResultEvictionMiddleware(AgentMiddleware if AGENT_MIDDLEWARE_AVAILABLE
         path = f"/large_results/{tool_call_id}_{timestamp}"
 
         # Write to backend
-        success = self.backend.write(path, content)
+        write_result = self.backend.write(path, content)
+        success = getattr(write_result, "success", write_result)
         if not success:
             logger.warning("eviction_write_failed", path=path, tool=tool_name)
             return result
@@ -577,11 +596,16 @@ class ToolResultEvictionMiddleware(AgentMiddleware if AGENT_MIDDLEWARE_AVAILABLE
         """
         return self.backend.read(path)
 
-    def cleanup_evicted_results(self, prefix: str = "/large_results/") -> int:
+    def cleanup_evicted_results(
+        self,
+        prefix: str = "/large_results/",
+        max_age_seconds: Optional[int] = None,
+    ) -> int:
         """Clean up evicted results from storage.
 
         Args:
             prefix: Path prefix to clean up.
+            max_age_seconds: Optional age threshold; if provided, only results older than this are removed.
 
         Returns:
             Number of items deleted.
@@ -589,6 +613,20 @@ class ToolResultEvictionMiddleware(AgentMiddleware if AGENT_MIDDLEWARE_AVAILABLE
         paths = self.backend.list_paths(prefix)
         deleted = 0
         for path in paths:
+            if max_age_seconds is not None:
+                # Expect path format: /large_results/{tool_call_id}_%Y%m%d%H%M%S
+                suffix = path.rsplit("/", 1)[-1]
+                if not TIMESTAMP_PATTERN.search(suffix):
+                    continue
+                try:
+                    timestamp_part = suffix.split("_")[-1]
+                    ts = datetime.strptime(timestamp_part, "%Y%m%d%H%M%S").replace(tzinfo=timezone.utc)
+                    age = (datetime.now(timezone.utc) - ts).total_seconds()
+                    if age < max_age_seconds:
+                        continue
+                except (ValueError, IndexError):
+                    # Skip malformed timestamps instead of deleting
+                    continue
             if self.backend.delete(path):
                 deleted += 1
         return deleted

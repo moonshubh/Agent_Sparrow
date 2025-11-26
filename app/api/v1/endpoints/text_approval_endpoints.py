@@ -4,6 +4,7 @@ Handles human approval workflow for extracted text from PDF OCR and manual entry
 """
 
 import logging
+from functools import lru_cache
 from typing import Dict, List, Optional, Any
 from datetime import datetime, timezone
 from fastapi import APIRouter, HTTPException, Depends, Query, Body
@@ -82,11 +83,18 @@ class ApprovalStatsResponse(BaseModel):
     quality_indicators: Dict[str, int] = Field(..., description="Quality indicators")
 
 
+@lru_cache(maxsize=1)
+def _get_cached_workflow() -> HumanApprovalWorkflow:
+    """Create and cache a single workflow instance."""
+    from app.db.supabase.client import get_supabase_client
+
+    return HumanApprovalWorkflow(supabase_client=get_supabase_client())
+
+
 # Dependency to get approval workflow instance
 async def get_approval_workflow() -> HumanApprovalWorkflow:
-    """Get approval workflow instance with Supabase client"""
-    # In production, inject the actual Supabase client
-    return HumanApprovalWorkflow(supabase_client=None)  # TODO: Inject actual client
+    """Return a singleton approval workflow (created on first use)."""
+    return _get_cached_workflow()
 
 
 # API Endpoints
