@@ -211,7 +211,9 @@ export function ChatContainer({
   const statusMessage = error?.message
     ? error.message
     : isStreaming
-      ? `Working on ${activeOperation?.name || 'response'}`
+      ? agentType === 'log_analysis'
+        ? 'Deep log analysis in progress (Pro model takes longer for thorough results)'
+        : `Working on ${activeOperation?.name || 'response'}`
       : hasConversation
         ? 'Ready for the next instruction'
         : 'Waiting for your first question';
@@ -257,7 +259,7 @@ export function ChatContainer({
               </div>
             ) : (
               <>
-                <MessageList messages={messages} isStreaming={isStreaming} />
+                <MessageList messages={messages} isStreaming={isStreaming} agentType={agentType} />
 
                 {error && (
                   <div className="p-4 bg-red-500/10 border border-red-500/20 rounded-lg">
@@ -324,49 +326,6 @@ export function ChatContainer({
                   onStepFocus={setActiveTraceStep}
                   className="min-h-[320px]"
                 />
-              </div>
-
-              {/* Todos Sidebar - Scholarly Task List */}
-              <div className="animate-in fade-in slide-in-from-right-4 duration-500 delay-150">
-                <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3 px-1">
-                  Run Tasks
-                </h3>
-                <div className="rounded-organic-lg bg-card border border-border p-3 space-y-3 shadow-academia-sm">
-                  {todos.length === 0 ? (
-                    <p className="text-sm text-muted-foreground italic">No tasks yet. They will appear here while the agent works.</p>
-                  ) : (
-                    <div className="space-y-2">
-                      {todos.map((todo) => {
-                        const status = (todo.status || 'pending').toLowerCase();
-                        const statusLabel =
-                          status === 'done' ? 'Done' :
-                            status === 'in_progress' ? 'In progress' :
-                              'Pending';
-                        const statusColor =
-                          status === 'done' ? 'bg-sage-500' :
-                            status === 'in_progress' ? 'bg-gold-500' :
-                              'bg-stone-400';
-                        return (
-                          <div
-                            key={todo.id}
-                            className="flex items-start justify-between rounded-organic bg-secondary/50 px-3 py-2 border border-border"
-                          >
-                            <div className="flex items-start gap-2">
-                              <span className={`mt-1 h-2.5 w-2.5 rounded-full ${statusColor}`} />
-                              <div className="space-y-0.5">
-                                <div className="text-sm font-medium text-foreground">{todo.title}</div>
-                                {todo.metadata?.note && (
-                                  <div className="text-xs text-muted-foreground">{todo.metadata.note}</div>
-                                )}
-                              </div>
-                            </div>
-                            <span className="text-xs text-muted-foreground">{statusLabel}</span>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
-                </div>
               </div>
 
               {/* Evidence Sidebar - Research Notes */}

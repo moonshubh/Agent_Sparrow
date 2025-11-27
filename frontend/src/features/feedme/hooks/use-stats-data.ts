@@ -12,7 +12,6 @@ import {
   feedMeApi,
   type GeminiUsage,
   type EmbeddingUsage,
-  searchExamples,
   listConversations,
 } from '@/features/feedme/services/feedme-api'
 import { useAnalyticsStore } from '@/state/stores/analytics-store'
@@ -287,10 +286,9 @@ export function useStatsData(options: UseStatsDataOptions = {}): UseStatsDataRet
       await analyticsActions.loadUsageStats()
       const analyticsData = useAnalyticsStore.getState()
 
-      // Supplement totals and platforms using existing endpoints
-      const [windowsRes, macosRes, listRes] = await Promise.allSettled([
-        searchExamples({ query: '', page: 1, page_size: 1, filters: { platforms: ['windows'] } }),
-        searchExamples({ query: '', page: 1, page_size: 1, filters: { platforms: ['macos'] } }),
+      // Supplement totals using existing endpoints
+      // Note: Platform-specific counts are no longer available (feedme_examples table removed)
+      const [listRes] = await Promise.allSettled([
         listConversations(1, 1, undefined, undefined, null)
       ])
 
@@ -328,8 +326,8 @@ export function useStatsData(options: UseStatsDataOptions = {}): UseStatsDataRet
               ? (listRes.value.total_conversations ?? listRes.value.total_count ?? 0)
               : undefined,
           platformCounts: {
-            windows: windowsRes.status === 'fulfilled' ? windowsRes.value.total_count : 0,
-            macos: macosRes.status === 'fulfilled' ? macosRes.value.total_count : 0,
+            windows: 0, // Platform counts no longer available (feedme_examples table removed)
+            macos: 0,
           }
         }
       )

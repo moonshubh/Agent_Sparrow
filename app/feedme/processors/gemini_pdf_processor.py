@@ -25,10 +25,12 @@ from PIL import Image
 
 try:
     from google import genai  # type: ignore
+    from google.genai import types  # type: ignore
     GENAI_SDK = "google.genai"
 except ImportError:  # pragma: no cover
     try:
         import google.generativeai as genai  # type: ignore
+        types = None  # Old SDK doesn't have types module
         GENAI_SDK = "google.generativeai"
     except ImportError:
         raise ImportError(
@@ -40,6 +42,10 @@ from app.core.settings import settings
 from app.feedme.rate_limiting.gemini_tracker import get_tracker
 
 logger = logging.getLogger(__name__)
+
+# Module-level client for google.genai SDK
+_genai_client = None
+_genai_client_api_key: Optional[str] = None
 
 
 def _to_jpeg_bytes(img: Image.Image, width: int = 1024, quality: int = 80) -> bytes:
@@ -86,10 +92,66 @@ def _final_merge_prompt() -> str:
     )
 
 
-def _ensure_model(api_key: str):
-    genai.configure(api_key=api_key)
+def _ensure_model(api_key: str) -> str:
+    """Initialize the Gemini client and return the model name."""
+    global _genai_client, _genai_client_api_key
     model_name = getattr(settings, "feedme_model_name", None) or "gemini-2.5-flash-lite-preview-09-2025"
-    return genai.GenerativeModel(model_name)
+
+    if GENAI_SDK == "google.genai":
+        # New SDK (google-genai 1.0+) uses Client pattern
+        if _genai_client is None or _genai_client_api_key != api_key:
+            _genai_client = genai.Client(api_key=api_key)
+            _genai_client_api_key = api_key
+    else:
+        # Old SDK (google-generativeai) uses configure pattern
+        genai.configure(api_key=api_key)
+        if _genai_client is None or _genai_client_api_key != api_key:
+            _genai_client = genai.GenerativeModel(model_name)
+            _genai_client_api_key = api_key
+
+    return model_name
+
+
+def _generate_content(model_name: str, parts: List[Any]) -> str:
+    """Generate content using the appropriate SDK method."""
+    global _genai_client
+
+    if GENAI_SDK == "google.genai":
+        # New SDK: use client.models.generate_content
+        # Convert parts to the format expected by the new SDK
+        contents = []
+        for part in parts:
+            if isinstance(part, str):
+                contents.append(types.Part.from_text(text=part))
+            elif isinstance(part, dict) and "mime_type" in part and "data" in part:
+                # Image part - create inline data
+                contents.append(types.Part.from_bytes(
+                    data=base64.b64decode(part["data"]),
+                    mime_type=part["mime_type"]
+                ))
+            else:
+                contents.append(part)
+
+        resp = _genai_client.models.generate_content(
+            model=model_name,
+            contents=contents
+        )
+        # Extract text from response
+        if hasattr(resp, 'text'):
+            return resp.text or ""
+        elif hasattr(resp, 'candidates') and resp.candidates:
+            candidate = resp.candidates[0]
+            if hasattr(candidate, 'content') and candidate.content:
+                if hasattr(candidate.content, 'parts') and candidate.content.parts:
+                    return candidate.content.parts[0].text or ""
+        return ""
+    else:
+        # Old SDK: use model.generate_content directly
+        resp = _genai_client.generate_content(parts)
+        text = getattr(resp, "text", None)
+        if not text and getattr(resp, "candidates", None):
+            text = resp.candidates[0].content.parts[0].text if resp.candidates[0].content.parts else ""
+        return text or ""
 
 
 def process_pdf_to_markdown(
@@ -117,7 +179,7 @@ def process_pdf_to_markdown(
             raise ValueError("No Gemini API key available")
         api_key = settings.gemini_api_key
 
-    model = _ensure_model(api_key)
+    model_name = _ensure_model(api_key)
     tracker = get_tracker(daily_limit=rpd, rpm_limit=rpm)
 
     # Render pages
@@ -152,10 +214,7 @@ def process_pdf_to_markdown(
         tracker.throttle()
         try:
             parts = [prompt] + chunk
-            resp = model.generate_content(parts)
-            text = getattr(resp, "text", None)
-            if not text and getattr(resp, "candidates", None):
-                text = resp.candidates[0].content.parts[0].text if resp.candidates[0].content.parts else ""
+            text = _generate_content(model_name, parts)
             md_segments.append(text or "")
             calls_used += 1
             tracker.record()
@@ -172,10 +231,7 @@ def process_pdf_to_markdown(
             tracker.throttle()
             try:
                 merge_prompt = _final_merge_prompt()
-                resp = model.generate_content([merge_prompt, concatenated])
-                final_text = getattr(resp, "text", None)
-                if not final_text and getattr(resp, "candidates", None):
-                    final_text = resp.candidates[0].content.parts[0].text if resp.candidates[0].content.parts else ""
+                final_text = _generate_content(model_name, [merge_prompt, concatenated])
                 if final_text:
                     concatenated = final_text
                 tracker.record()

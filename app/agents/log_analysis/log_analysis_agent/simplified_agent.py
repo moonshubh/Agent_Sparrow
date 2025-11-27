@@ -33,7 +33,11 @@ class AgentConfig:
     """Configuration for the simplified log analysis agent."""
     
     def __init__(self):
-        """Load configuration from environment with sensible defaults."""
+        """Load configuration from environment with sensible defaults.
+
+        Note: Defaults to gemini-2.5-pro for superior reasoning and analysis quality.
+        Log analysis benefits from the Pro model's deeper understanding capabilities.
+        """
         self.model_name = os.getenv("SIMPLIFIED_LOG_MODEL", "gemini-2.5-pro")
         self.temperature = float(os.getenv("LOG_AGENT_TEMPERATURE", "0.1"))
         self.max_log_size = int(os.getenv("MAX_LOG_SIZE", "500000"))

@@ -122,6 +122,66 @@ class StreamEventEmitter:
         })
 
     # -------------------------------------------------------------------------
+    # Text message emission (AG-UI protocol)
+    # -------------------------------------------------------------------------
+
+    def start_text_message(self, message_id: Optional[str] = None) -> str:
+        """Emit TEXT_MESSAGE_START event.
+
+        Returns:
+            The message_id used for the message.
+        """
+        if message_id is None:
+            message_id = f"msg-{self.root_id}-{int(datetime.now(timezone.utc).timestamp() * 1000)}"
+
+        self._current_message_id = message_id
+        self._message_started = True
+
+        if self.writer is not None:
+            self.writer({
+                "type": "TEXT_MESSAGE_START",
+                "messageId": message_id,
+                "role": "assistant",
+            })
+        return message_id
+
+    def emit_text_content(self, delta: str) -> None:
+        """Emit TEXT_MESSAGE_CONTENT event with streaming text delta.
+
+        Args:
+            delta: The text chunk to emit.
+        """
+        if self.writer is None or not delta:
+            logger.debug(f"emit_text_content skipped: writer={self.writer is not None}, delta={bool(delta)}")
+            return
+
+        # Ensure message is started
+        if not getattr(self, '_message_started', False):
+            logger.info("emit_text_content: Starting new text message")
+            self.start_text_message()
+
+        event = {
+            "type": "TEXT_MESSAGE_CONTENT",
+            "messageId": getattr(self, '_current_message_id', self.root_id),
+            "delta": delta,
+        }
+        logger.info(f"emit_text_content: Emitting event with delta length={len(delta)}")
+        self.writer(event)
+
+    def end_text_message(self) -> None:
+        """Emit TEXT_MESSAGE_END event."""
+        if self.writer is None:
+            return
+
+        message_id = getattr(self, '_current_message_id', self.root_id)
+        self._message_started = False
+
+        self.writer({
+            "type": "TEXT_MESSAGE_END",
+            "messageId": message_id,
+        })
+
+    # -------------------------------------------------------------------------
     # Timeline operations
     # -------------------------------------------------------------------------
 
@@ -184,6 +244,7 @@ class StreamEventEmitter:
         tool_name: str,
         output: Any,
         summary: Optional[str] = None,
+        cards: Optional[List[Dict[str, Any]]] = None,
     ) -> None:
         """Record a tool operation completing."""
         from .event_types import _safe_json_value
@@ -213,7 +274,7 @@ class StreamEventEmitter:
             tool_call_id, tool_name, str(output) if output is not None else None
         )
 
-        # Emit tool evidence
+        # Emit tool evidence with cards
         self.emit_custom_event(
             "tool_evidence_update",
             ToolEvidenceUpdateEvent(
@@ -221,6 +282,7 @@ class StreamEventEmitter:
                 tool_name=tool_name,
                 output=safe_output,
                 summary=summary,
+                cards=cards or [],
             ).to_dict(),
         )
 
@@ -371,7 +433,7 @@ class StreamEventEmitter:
         if alias:
             self.trace_step_aliases[alias] = step
 
-        self._emit_thinking_trace(step, sync_all=len(self.thinking_trace) == 1)
+        self._emit_thinking_trace(step)
         return step
 
     def update_trace_step(
@@ -478,12 +540,11 @@ class StreamEventEmitter:
     def _emit_thinking_trace(
         self,
         step: Optional[TraceStep] = None,
-        sync_all: bool = False,
     ) -> None:
-        """Emit a thinking trace update event."""
+        """Emit a thinking trace update event with the full trace for deterministic UI sync."""
         payload = AgentThinkingTraceEvent(
             total_steps=len(self.thinking_trace),
-            thinking_trace=self.thinking_trace if sync_all or not self.thinking_trace else None,
+            thinking_trace=self.thinking_trace,
             latest_step=step,
             active_step_id=step.id if step else (
                 self.thinking_trace[-1].id if self.thinking_trace else None

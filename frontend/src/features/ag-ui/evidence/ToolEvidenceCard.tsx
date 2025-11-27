@@ -3,7 +3,7 @@
  * Crystalline card design for displaying tool results with glass morphism effects
  */
 
-import React, { useState, useRef, useEffect, ReactNode } from 'react';
+import React, { useState, useRef, useEffect, ReactNode, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   ChevronDown,
@@ -14,9 +14,10 @@ import {
   Sparkles,
   Database,
   Globe,
-  FileText
+  FileText,
+  Code
 } from 'lucide-react';
-import { crystalCardAnimation, shimmerAnimation } from '@/shared/animations/crystalline-animations';
+import { crystalCardAnimation } from '@/shared/animations/crystalline-animations';
 import './evidence-cards.css';
 
 export interface ToolEvidenceProps {
@@ -50,6 +51,61 @@ const typeColors = {
   grounding: 'cyan'
 };
 
+// Helper: Try to parse JSON from snippet
+function tryParseJson(text: string): { parsed: any; isJson: boolean } {
+  if (!text || typeof text !== 'string') return { parsed: null, isJson: false };
+  const trimmed = text.trim();
+  if (!((trimmed.startsWith('{') && trimmed.endsWith('}')) ||
+        (trimmed.startsWith('[') && trimmed.endsWith(']')))) {
+    return { parsed: null, isJson: false };
+  }
+  try {
+    return { parsed: JSON.parse(trimmed), isJson: true };
+  } catch {
+    return { parsed: null, isJson: false };
+  }
+}
+
+// Helper: Render key-value grid for flat objects
+const KeyValueGrid: React.FC<{ obj: Record<string, any> }> = ({ obj }) => {
+  const entries = Object.entries(obj || {}).filter(([_, v]) => v !== undefined && v !== null);
+  if (!entries.length) return null;
+  return (
+    <div className="kv-grid">
+      {entries.slice(0, 6).map(([k, v]) => (
+        <div key={k} className="kv-row">
+          <span className="kv-key">{k}:</span>
+          <span className="kv-val" title={typeof v === 'string' ? v : undefined}>
+            {typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean'
+              ? String(v).slice(0, 80)
+              : Array.isArray(v)
+                ? v.slice(0, 3).map((x, i) => <span key={i} className="kv-pill">{String(x).slice(0, 20)}</span>)
+                : '[object]'
+            }
+          </span>
+        </div>
+      ))}
+    </div>
+  );
+};
+
+// Helper: Render bullet list for arrays
+const BulletList: React.FC<{ items: any[] }> = ({ items }) => {
+  const trimmed = items.slice(0, 5);
+  return (
+    <ul className="nice-list">
+      {trimmed.map((it, i) => (
+        <li key={i}>
+          {typeof it === 'string'
+            ? it.slice(0, 100)
+            : (it?.title || it?.name || it?.id || `Item ${i + 1}`)}
+          {it?.snippet && <span className="muted"> — {String(it.snippet).slice(0, 80)}</span>}
+        </li>
+      ))}
+    </ul>
+  );
+};
+
 export const ToolEvidenceCard: React.FC<ToolEvidenceProps> = ({
   type,
   title,
@@ -67,7 +123,12 @@ export const ToolEvidenceCard: React.FC<ToolEvidenceProps> = ({
   className = ''
 }) => {
   const [isCopied, setIsCopied] = useState(false);
+  const [isExpanded, setIsExpanded] = useState(false);
+  const [showRawJson, setShowRawJson] = useState(false);
   const copyTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  // Parse snippet to detect JSON
+  const { parsed, isJson } = useMemo(() => tryParseJson(snippet), [snippet]);
 
   // Cleanup timeout on unmount
   useEffect(() => {
@@ -133,6 +194,42 @@ export const ToolEvidenceCard: React.FC<ToolEvidenceProps> = ({
     </div>
   );
 
+  // Render structured content when JSON is detected
+  const renderContent = () => {
+    if (!isJson || !parsed) {
+      // Plain text snippet
+      return (
+        <div className="snippet-text">
+          {snippet}
+        </div>
+      );
+    }
+
+    // JSON detected - render structured
+    if (Array.isArray(parsed)) {
+      return <BulletList items={parsed} />;
+    }
+
+    if (typeof parsed === 'object') {
+      // Check for common container shapes
+      const containerKeys = ['results', 'items', 'documents', 'entries', 'data'];
+      for (const key of containerKeys) {
+        if (Array.isArray(parsed[key])) {
+          return <BulletList items={parsed[key]} />;
+        }
+      }
+      // Flat object - render as key-value grid
+      return <KeyValueGrid obj={parsed} />;
+    }
+
+    // Fallback to plain text
+    return (
+      <div className="snippet-text">
+        {snippet}
+      </div>
+    );
+  };
+
   return (
     <motion.div
       className={`tool-evidence-card glass-panel ${type}-type ${className}`}
@@ -144,7 +241,7 @@ export const ToolEvidenceCard: React.FC<ToolEvidenceProps> = ({
       layout
     >
       {/* Card Header */}
-      <div className="card-header">
+      <div className="card-header" onClick={() => setIsExpanded(!isExpanded)} style={{ cursor: 'pointer' }}>
         <div className="header-left">
           <div className={`type-icon ${typeColors[type]}-glow`}>
             {icon || typeIcons[type]}
@@ -161,7 +258,7 @@ export const ToolEvidenceCard: React.FC<ToolEvidenceProps> = ({
                 aria-label={`Open source link: ${url}`}
               >
                 <ExternalLink className="w-3 h-3" />
-                <span className="truncate max-w-[18ch]">{url}</span>
+                <span className="truncate max-w-[18ch]">{source || url}</span>
               </a>
             )}
           </div>
@@ -171,15 +268,76 @@ export const ToolEvidenceCard: React.FC<ToolEvidenceProps> = ({
           {timestamp && (
             <span className="timestamp">{timestamp}</span>
           )}
+          <button className="expand-toggle" aria-label={isExpanded ? 'Collapse' : 'Expand'}>
+            {isExpanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+          </button>
         </div>
       </div>
 
-      {/* Content Section */}
-      <div className="content-section single-line">
-        <div className="snippet-text">
-          {snippet}
+      {/* Score bars */}
+      {(relevanceScore !== undefined || confidence !== undefined) && (
+        <div className="scores-section">
+          {relevanceScore !== undefined && getScoreBar(relevanceScore, 'Relevance', 'score-cyan')}
+          {confidence !== undefined && getScoreBar(confidence, 'Confidence', 'score-amber')}
         </div>
+      )}
+
+      {/* Content Section */}
+      <div className={`content-section ${isExpanded ? '' : 'single-line'}`}>
+        {renderContent()}
       </div>
+
+      {/* Expanded content */}
+      <AnimatePresence>
+        {isExpanded && (
+          <motion.div
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: 'auto' }}
+            exit={{ opacity: 0, height: 0 }}
+            className="expanded-content"
+          >
+            {/* Metadata section */}
+            {metadata && Object.keys(metadata).length > 0 && (
+              <div className="metadata-section">
+                <h5 className="metadata-title">Metadata</h5>
+                <div className="metadata-grid">
+                  {Object.entries(metadata).map(([key, value]) => (
+                    <div key={key} className="metadata-item">
+                      <span className="metadata-key">{key}:</span>
+                      <span className="metadata-value">{String(value)}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Raw JSON toggle for power users */}
+            {isJson && (
+              <div className="raw-json-section">
+                <button
+                  className="raw-json-toggle"
+                  onClick={(e) => { e.stopPropagation(); setShowRawJson(!showRawJson); }}
+                >
+                  <Code className="w-3 h-3" />
+                  {showRawJson ? 'Hide raw JSON' : 'View raw JSON'}
+                </button>
+                <AnimatePresence>
+                  {showRawJson && (
+                    <motion.pre
+                      initial={{ opacity: 0, height: 0 }}
+                      animate={{ opacity: 1, height: 'auto' }}
+                      exit={{ opacity: 0, height: 0 }}
+                      className="raw-json-content"
+                    >
+                      {JSON.stringify(parsed, null, 2)}
+                    </motion.pre>
+                  )}
+                </AnimatePresence>
+              </div>
+            )}
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Card Actions */}
       <div className="card-actions">

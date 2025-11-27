@@ -6,6 +6,7 @@ to alternative models when rate limits are hit.
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Set, TYPE_CHECKING
 
@@ -81,6 +82,7 @@ class SparrowRateLimitMiddleware:
         self._stats = RateLimitStats()
         self._reserved_slots: List[tuple[str, Optional[str]]] = []
         self._current_model: Optional[str] = None  # Tracks active model for fallback
+        self._stats_lock = asyncio.Lock()
 
     @property
     def rate_limiter(self):
@@ -117,7 +119,8 @@ class SparrowRateLimitMiddleware:
             RateLimitExceededException,
         )
 
-        self._stats = RateLimitStats(primary_model=model)
+        async with self._stats_lock:
+            self._stats = RateLimitStats(primary_model=model)
         attempted: Set[str] = set()
         current_model = model
 
@@ -133,12 +136,12 @@ class SparrowRateLimitMiddleware:
                             (current_model, getattr(result, "token_identifier", None))
                         )
                         attempt_info["available"] = True
-                        self._stats.attempts.append(attempt_info)
-                        self._stats.slot_reserved = True
-
-                        if current_model != model:
-                            self._stats.fallback_used = True
-                            self._stats.fallback_model = current_model
+                        async with self._stats_lock:
+                            self._stats.attempts.append(attempt_info)
+                            self._stats.slot_reserved = True
+                            if current_model != model:
+                                self._stats.fallback_used = True
+                                self._stats.fallback_model = current_model
 
                         return current_model, current_model != model
                 else:

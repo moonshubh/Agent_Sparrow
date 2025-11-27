@@ -23,7 +23,11 @@ except ImportError:
 
 from .emitter import StreamEventEmitter
 from .event_types import _safe_json_value
-from .normalizers import extract_grounding_results, extract_snippet_texts
+from .normalizers import (
+    build_tool_evidence_cards,
+    extract_grounding_results,
+    extract_snippet_texts,
+)
 
 if TYPE_CHECKING:
     from langgraph.graph.state import CompiledStateGraph
@@ -259,7 +263,12 @@ class StreamEventHandler:
         # Create summary for tool evidence
         summary = self._summarize_structured_content(output)
 
-        self.emitter.end_tool(tool_call_id, tool_name, output, summary)
+        # Build structured cards for UI display
+        cards = build_tool_evidence_cards(
+            output, tool_name, user_query=self.last_user_query, max_items=3
+        )
+
+        self.emitter.end_tool(tool_call_id, tool_name, output, summary, cards=cards)
 
     async def _on_tool_error(self, event: Dict[str, Any]) -> None:
         """Handle tool error event."""
@@ -312,20 +321,58 @@ class StreamEventHandler:
         if final_output:
             self.final_output = {"output": final_output}
 
+            # End any open text message stream
+            # Check if this is a final text response (not a tool call)
+            has_tool_calls = False
+            if hasattr(final_output, "tool_calls") and final_output.tool_calls:
+                has_tool_calls = True
+            elif isinstance(final_output, dict) and final_output.get("tool_calls"):
+                has_tool_calls = True
+
+            if not has_tool_calls and getattr(self.emitter, '_message_started', False):
+                self.emitter.end_text_message()
+
     async def _on_model_stream(self, event: Dict[str, Any]) -> None:
-        """Handle chat model streaming event."""
+        """Handle chat model streaming event.
+
+        This method processes streaming text from the model and emits both:
+        1. Thinking trace updates (for the sidebar)
+        2. TEXT_MESSAGE_CONTENT events (for the main chat display)
+        """
         run_id = event.get("run_id")
         if not run_id:
             return
 
         stream_data = event.get("data", {})
         chunk = stream_data.get("chunk") or stream_data.get("output")
+
+        # Check if this chunk contains tool calls
+        # If so, we don't emit text content for tool call arguments
+        has_tool_calls = False
+        if hasattr(chunk, "tool_calls") and chunk.tool_calls:
+            has_tool_calls = True
+        elif hasattr(chunk, "tool_call_chunks") and chunk.tool_call_chunks:
+            has_tool_calls = True
+
         chunk_text = self._stringify_message_content(
             getattr(chunk, "content", chunk)
         )
 
+        # Debug logging
+        logger.debug(
+            f"_on_model_stream: chunk_text={chunk_text[:100] if chunk_text else 'empty'!r}, "
+            f"has_tool_calls={has_tool_calls}, chunk_type={type(chunk).__name__}"
+        )
+
         if chunk_text:
+            # Always emit to thinking trace
             self.emitter.stream_thought_chunk(run_id, chunk_text)
+
+            # Also emit as TEXT_MESSAGE_CONTENT for the main chat display
+            # Only emit text content when not streaming tool call arguments
+            if not has_tool_calls:
+                logger.info(f"Emitting TEXT_MESSAGE_CONTENT: {chunk_text[:50]!r}...")
+                self.emitter.emit_text_content(chunk_text)
 
     async def _on_genui_state(self, event: Dict[str, Any]) -> None:
         """Handle GenUI state update event."""
@@ -501,7 +548,7 @@ class StreamEventHandler:
             logger.warning("state_todos_set_failed", error=str(exc))
 
     def _summarize_structured_content(self, content: Any) -> Optional[str]:
-        """Create a summary of structured tool output."""
+        """Create a plain-text summary of structured tool output."""
         import json
         import textwrap
 
@@ -524,7 +571,7 @@ class StreamEventHandler:
         if not entries:
             return None
 
-        summary_lines = ["Here are the most relevant matches:"]
+        lines = ["Top matches:"]
         for idx, entry in enumerate(entries[:3], start=1):
             title = str(
                 entry.get("title")
@@ -539,14 +586,14 @@ class StreamEventHandler:
                 else ""
             )
             url = entry.get("url") or entry.get("link")
-            line = f"{idx}. **{title}**"
+            line = f"{idx}. {title}"
             if snippet_text:
-                line += f" - {snippet_text}"
+                line += f" — {snippet_text}"
             if isinstance(url, str) and url.strip():
                 line += f" ({url.strip()})"
-            summary_lines.append(line)
+            lines.append(line)
 
-        return "\n".join(summary_lines)
+        return "\n".join(lines)
 
     def _extract_structured_entries(self, data: Any) -> List[Dict[str, Any]]:
         """Extract entries from structured data."""

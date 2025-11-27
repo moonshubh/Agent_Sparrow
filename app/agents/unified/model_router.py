@@ -20,7 +20,11 @@ CoordinatorTask = str
 
 
 def _default_model_map() -> Dict[CoordinatorTask, str]:
-    """Build the default task→model mapping from settings."""
+    """Build the default task→model mapping from settings.
+
+    Note: log_analysis uses gemini-2.5-pro for superior reasoning capabilities
+    and detailed analysis quality. This takes longer but provides better results.
+    """
 
     coordinator_model = settings.primary_agent_model or "gemini-2.5-flash"
     lite_model = settings.router_model or "gemini-2.5-flash-lite"
@@ -29,7 +33,7 @@ def _default_model_map() -> Dict[CoordinatorTask, str]:
     return {
         "coordinator": coordinator_model,
         "coordinator_heavy": heavy_model,
-        "log_analysis": heavy_model,
+        "log_analysis": heavy_model,  # Pro model for quality log analysis
         "lightweight": lite_model,
         "embeddings": "models/gemini-embedding-001",
     }

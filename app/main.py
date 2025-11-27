@@ -15,6 +15,10 @@ from langchain_core.messages import HumanMessage
 from app.patches.agui_custom_events import apply_patch as _apply_agui_patch
 _apply_agui_patch()
 
+# Fix circular reference issue in AG-UI state serialization
+from app.patches.agui_json_safe import apply_patch as _apply_json_safe_patch
+_apply_json_safe_patch()
+
 # Rate limiting imports
 from slowapi import Limiter
 from slowapi.util import get_remote_address

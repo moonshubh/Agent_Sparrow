@@ -8,7 +8,7 @@ with field-level reducers following LangGraph best practices for state managemen
 import operator
 from typing import Annotated, Any, Callable, ClassVar, Dict, List, Optional, Set, TypeVar
 
-from langchain_core.messages import BaseMessage
+from langchain_core.messages import BaseMessage, SystemMessage
 from langgraph.graph import add_messages
 from pydantic import BaseModel, Field, ConfigDict, field_validator, model_serializer
 
@@ -124,6 +124,23 @@ class Attachment(BaseModel):
         return value
 
 
+def bounded_add_messages(max_messages: int = 30):
+    """Reducer that preserves memory system messages and keeps the last N others."""
+    def reducer(current: List[BaseMessage], update: List[BaseMessage]) -> List[BaseMessage]:
+        merged = add_messages(current or [], update or [])
+        memory_msgs = [
+            m for m in merged
+            if isinstance(m, SystemMessage) and getattr(m, "name", "") == "server_memory_context"
+        ]
+        non_memory = [
+            m for m in merged
+            if not (isinstance(m, SystemMessage) and getattr(m, "name", "") == "server_memory_context")
+        ]
+        tail = non_memory[-max_messages:]
+        return [*memory_msgs, *tail]
+    return reducer
+
+
 class GraphState(BaseModel):
     """Typed state shared across the unified LangGraph execution.
 
@@ -140,7 +157,7 @@ class GraphState(BaseModel):
     user_id: Optional[str] = Field(default=None, description="Authenticated user id for memory scoping and auditing.")
 
     # Message history with LangGraph reducer for proper handling
-    messages: Annotated[List[BaseMessage], add_messages] = Field(
+    messages: Annotated[List[BaseMessage], bounded_add_messages(30)] = Field(
         default_factory=list,
         description="Ordered conversation history with automatic deduplication.",
     )
@@ -188,6 +205,9 @@ class GraphState(BaseModel):
         default_factory=list,
         description="Optional todo list shared across the run (e.g., from planning middleware).",
     )
+
+    # Step counter for safety caps
+    step: int = Field(default=0, description="Internal step counter for graph execution.")
 
     @field_validator("forwarded_props", "scratchpad", mode="before")
     @classmethod

@@ -50,9 +50,70 @@ from pypdf import PdfReader
 import io
 from app.feedme.parsers.zendesk_pdf_normalizer import normalize_zendesk_print_text
 try:  # Prefer modern google-genai package when available
-    import google.genai as genai  # type: ignore
+    from google import genai  # type: ignore
+    from google.genai import types as genai_types  # type: ignore
+    GENAI_SDK = "google.genai"
 except ImportError:  # pragma: no cover
     import google.generativeai as genai  # type: ignore
+    genai_types = None
+    GENAI_SDK = "google.generativeai"
+
+# Module-level client for google.genai SDK
+_genai_client = None
+
+def _init_genai_client(api_key: str):
+    """Initialize or get the Gemini client."""
+    global _genai_client
+    if GENAI_SDK == "google.genai":
+        if _genai_client is None or getattr(_genai_client, '_api_key', None) != api_key:
+            _genai_client = genai.Client(api_key=api_key)
+            _genai_client._api_key = api_key  # Track for reinitialization
+        return _genai_client
+    else:
+        genai.configure(api_key=api_key)
+        return genai
+
+def _generate_content(api_key: str, model_name: str, prompt: str) -> str:
+    """Generate content using the appropriate SDK method."""
+    if GENAI_SDK == "google.genai":
+        client = _init_genai_client(api_key)
+        resp = client.models.generate_content(model=model_name, contents=prompt)
+        if hasattr(resp, 'text'):
+            return resp.text or ""
+        elif hasattr(resp, 'candidates') and resp.candidates:
+            candidate = resp.candidates[0]
+            if hasattr(candidate, 'content') and candidate.content:
+                if hasattr(candidate.content, 'parts') and candidate.content.parts:
+                    return candidate.content.parts[0].text or ""
+        return ""
+    else:
+        _init_genai_client(api_key)
+        model = genai.GenerativeModel(model_name)
+        resp = model.generate_content(prompt)
+        text = getattr(resp, 'text', None)
+        if text:
+            return text
+        candidates = getattr(resp, 'candidates', None)
+        if candidates and len(candidates) > 0:
+            try:
+                return candidates[0].content.parts[0].text or ""
+            except (AttributeError, IndexError):
+                return ""
+        return ""
+
+def _embed_content(api_key: str, model_name: str, content: str) -> list:
+    """Generate embedding using the appropriate SDK method."""
+    if GENAI_SDK == "google.genai":
+        client = _init_genai_client(api_key)
+        resp = client.models.embed_content(model=model_name, contents=content)
+        # New SDK returns embeddings differently
+        if hasattr(resp, 'embeddings') and resp.embeddings:
+            return resp.embeddings[0].values
+        return []
+    else:
+        _init_genai_client(api_key)
+        emb = genai.embed_content(model=model_name, content=content)
+        return emb['embedding'] if isinstance(emb, dict) else emb.embedding
 
 # Feature flags / behavior toggles
 DELETE_PDF_AFTER_EXTRACT = True  # Immediately remove PDF payload after extraction
@@ -614,7 +675,7 @@ def generate_text_chunks_and_embeddings(self, conversation_id: int, max_chunk_ch
         api_key = user_api_key or current_settings().gemini_api_key
         if not api_key:
             raise ValueError("No Gemini API key available")
-        genai.configure(api_key=api_key)
+        # Initialize Gemini client (handled by _embed_content helper)
         
         # Get embedding rate tracker
         from app.feedme.rate_limiting.gemini_tracker import get_embed_tracker
@@ -656,8 +717,7 @@ def generate_text_chunks_and_embeddings(self, conversation_id: int, max_chunk_ch
                 embed_tracker.throttle_tokens(estimated_tokens)
                 
                 # Generate embedding
-                emb = genai.embed_content(model=model_name, content=chunk)
-                vec = emb['embedding'] if isinstance(emb, dict) else emb.embedding
+                vec = _embed_content(api_key, model_name, chunk)
                 
                 # Verify dimension based on model
                 try:
@@ -729,14 +789,13 @@ def generate_ai_tags(self, conversation_id: int, max_input_chars: int = 4000) ->
         if not api_key:
             logger.error("Gemini API key missing for AI tag generation task")
             raise MissingAPIKeyError("Gemini API key missing for AI tag generation")
-        genai.configure(api_key=api_key)
+        # Gemini client initialization handled by _generate_content helper
 
         model_name = (
             getattr(cached_settings, 'feedme_model_name', None)
             or getattr(fallback_settings, 'feedme_model_name', None)
             or 'gemini-2.5-flash-lite-preview-09-2025'
         )
-        model = genai.GenerativeModel(model_name)
 
         # Chunked map-reduce summarization to capture the entire conversation
         # Map: summarize each chunk into 3-6 bullet points (no PII). Reduce: produce final JSON with tags and a concise multi-sentence comment.
@@ -795,8 +854,7 @@ def generate_ai_tags(self, conversation_id: int, max_input_chars: int = 4000) ->
                     raise RuntimeError("Daily limit reached")
                 if tracker:
                     tracker.throttle()
-                res = model.generate_content(single_prompt)
-                out = getattr(res, 'text', None) or (res.candidates[0].content.parts[0].text if getattr(res, 'candidates', None) else '')
+                out = _generate_content(api_key, model_name, single_prompt)
                 if tracker:
                     tracker.record()
             except Exception as e:
@@ -815,8 +873,7 @@ def generate_ai_tags(self, conversation_id: int, max_input_chars: int = 4000) ->
                         break
                     if tracker:
                         tracker.throttle()
-                    resp = model.generate_content([map_prompt, ck])
-                    txt = getattr(resp, 'text', None) or (resp.candidates[0].content.parts[0].text if getattr(resp, 'candidates', None) else '')
+                    txt = _generate_content(api_key, model_name, map_prompt + ck)
                     if txt and txt.strip():
                         # Normalize to lines starting with '- '
                         lines = [ln.strip() for ln in txt.strip().splitlines() if ln.strip()]
@@ -844,8 +901,7 @@ def generate_ai_tags(self, conversation_id: int, max_input_chars: int = 4000) ->
                     raise RuntimeError("Daily limit reached")
                 if tracker:
                     tracker.throttle()
-                res = model.generate_content(reduce_prompt)
-                out = getattr(res, 'text', None) or (res.candidates[0].content.parts[0].text if getattr(res, 'candidates', None) else '')
+                out = _generate_content(api_key, model_name, reduce_prompt)
                 if tracker:
                     tracker.record()
             except Exception as e:

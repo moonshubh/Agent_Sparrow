@@ -4,6 +4,7 @@ from typing import Optional
 
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import StateGraph, END
+from langchain_core.messages import AIMessage, ToolMessage
 
 from app.core.logging_config import get_logger
 from app.core.settings import settings
@@ -72,11 +73,68 @@ def _export_graph_visualization(graph_app: object) -> None:
 
 
 def _build_tool_node():
-    """Create a fresh ToolNode instance for the unified tool runner."""
+    """Create a parallel tool runner with idempotency and concurrency limits."""
     from app.agents.unified.tools import get_registered_tools
-    from langgraph.prebuilt import ToolNode
 
-    return ToolNode(get_registered_tools())
+    class ParallelToolNode:
+        def __init__(self, max_concurrency: int = 8, call_timeout: float = 45.0):
+            self.tools = {t.name: t for t in get_registered_tools()}
+            self.sem = asyncio.Semaphore(max_concurrency)
+            self.call_timeout = call_timeout
+
+        async def _invoke(self, tool, args, config):
+            return await asyncio.wait_for(tool.ainvoke(args, config=config), timeout=self.call_timeout)
+
+        async def __call__(self, state: GraphState, config=None):
+            if not state.messages:
+                return {}
+            last = state.messages[-1]
+            if not isinstance(last, AIMessage):
+                return {}
+
+            tool_calls = getattr(last, "tool_calls", None) or (
+                (getattr(last, "additional_kwargs", {}) or {}).get("tool_calls")
+            ) or []
+            if not tool_calls:
+                return {}
+
+            executed = set(
+                (((state.scratchpad or {}).get("_system") or {}).get("_executed_tool_calls") or [])
+            )
+            pending = [tc for tc in tool_calls if tc.get("id") and tc.get("id") not in executed]
+            if not pending:
+                return {}
+
+            async def run_one(tc):
+                tool_name = tc.get("name")
+                tool = self.tools.get(tool_name)
+                tool_call_id = tc.get("id")
+                args = tc.get("args") or tc.get("arguments") or {}
+                if tool is None:
+                    return ToolMessage(
+                        tool_call_id=tool_call_id,
+                        content=f"ERROR: unknown tool '{tool_name}'",
+                    )
+                async with self.sem:
+                    try:
+                        output = await self._invoke(tool, args, config)
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as exc:
+                        output = f"ERROR: {type(exc).__name__}: {exc}"
+                return ToolMessage(tool_call_id=tool_call_id, content=str(output))
+
+            results = await asyncio.gather(*(run_one(tc) for tc in pending))
+            new_executed = list(executed | {tc["id"] for tc in pending})
+
+            scratch = dict(state.scratchpad or {})
+            system_bucket = dict((scratch.get("_system") or {}))
+            system_bucket["_executed_tool_calls"] = new_executed
+            scratch["_system"] = system_bucket
+
+            return {"messages": results, "scratchpad": scratch}
+
+    return ParallelToolNode()
 
 
 async def _run_agent_with_retry(state: GraphState, config: Optional[dict] = None) -> dict:

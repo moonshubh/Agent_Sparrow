@@ -2,20 +2,22 @@
 
 import React from 'react';
 import type { Message } from '@ag-ui/core';
+import type { AgentChoice } from '@/features/ag-ui/hooks/useAgentSelection';
 import { EnhancedReasoningPanel } from '@/features/ag-ui/reasoning/EnhancedReasoningPanel';
 import ReactMarkdown from 'react-markdown';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import { cn } from '@/shared/lib/utils';
-import { User } from 'lucide-react';
+import { User, Clock } from 'lucide-react';
 
 interface MessageItemProps {
   message: Message;
   isLast: boolean;
   isStreaming: boolean;
+  agentType?: AgentChoice;
 }
 
-function MessageItem({ message, isLast, isStreaming }: MessageItemProps) {
+function MessageItem({ message, isLast, isStreaming, agentType }: MessageItemProps) {
   const isUser = message.role === 'user';
   const isSystem = message.role === 'system';
   const isTool = message.role === 'tool';
@@ -122,7 +124,14 @@ function MessageItem({ message, isLast, isStreaming }: MessageItemProps) {
                 <span className="animate-bounce animation-delay-200 w-1.5 h-1.5 bg-current rounded-full"></span>
                 <span className="animate-bounce animation-delay-400 w-1.5 h-1.5 bg-current rounded-full"></span>
               </div>
-              <span>Thinking...</span>
+              {agentType === 'log_analysis' ? (
+                <span className="flex items-center gap-1.5">
+                  <Clock className="h-3 w-3" />
+                  Deep analysis in progress (takes longer for thorough results)
+                </span>
+              ) : (
+                <span>Thinking...</span>
+              )}
             </div>
           )}
         </div>
@@ -146,9 +155,10 @@ function MessageItem({ message, isLast, isStreaming }: MessageItemProps) {
 interface MessageListProps {
   messages: Message[];
   isStreaming: boolean;
+  agentType?: AgentChoice;
 }
 
-export function MessageList({ messages, isStreaming }: MessageListProps) {
+export function MessageList({ messages, isStreaming, agentType }: MessageListProps) {
   // Filter out system messages and empty messages
   const visibleMessages = messages.filter(
     m => m.role !== 'system' && m.content !== ''
@@ -166,6 +176,7 @@ export function MessageList({ messages, isStreaming }: MessageListProps) {
           message={message}
           isLast={idx === visibleMessages.length - 1}
           isStreaming={isStreaming}
+          agentType={agentType}
         />
       ))}
     </div>

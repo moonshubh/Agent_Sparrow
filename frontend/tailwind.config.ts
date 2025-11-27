@@ -55,10 +55,10 @@ const config: Config = {
 			// === DARK ACADEMIA COLOR SCALES ===
 			// Terracotta - Primary accent (fireplace warmth)
 			terracotta: {
-				300: 'hsl(var(--terracotta-300, 15 45% 70%))',
-				400: 'hsl(var(--terracotta-400, 15 50% 55%))',
-				500: 'hsl(var(--terracotta-500, 15 55% 45%))',
-				600: 'hsl(var(--terracotta-600, 15 50% 35%))',
+				300: 'hsl(var(--terracotta-300, 200.4 98% 39.4%))',
+				400: 'hsl(var(--terracotta-400, 200.4 98% 45%))',
+				500: 'hsl(var(--terracotta-500, 200.4 98% 38%))',
+				600: 'hsl(var(--terracotta-600, 200.4 98% 28%))',
 			},
 			// Sage - Secondary accent (nature's wisdom)
 			sage: {
@@ -88,8 +88,8 @@ const config: Config = {
 			},
 
 			// Legacy compatibility (warm-shifted)
-			'mb-blue-300': 'hsl(var(--terracotta-300, 15 45% 70%))',
-			'mb-blue-400': 'hsl(var(--terracotta-400, 15 50% 55%))',
+			'mb-blue-300': 'hsl(var(--terracotta-300, 200.4 98% 39.4%))',
+			'mb-blue-400': 'hsl(var(--terracotta-400, 200.4 98% 45%))',
 			'mb-blue-500': 'hsl(var(--primary))',
 
 			// Neutral base
@@ -131,11 +131,11 @@ const config: Config = {
 			input: 'hsl(var(--input))',
 			ring: 'hsl(var(--ring))',
 			chart: {
-				'1': 'hsl(var(--terracotta-500, 15 55% 45%))',
+				'1': 'hsl(var(--terracotta-500, 200.4 98% 38%))',
 				'2': 'hsl(var(--sage-500, 135 25% 40%))',
 				'3': 'hsl(var(--gold-500, 40 65% 45%))',
 				'4': 'hsl(var(--stone-400, 25 6% 50%))',
-				'5': 'hsl(var(--terracotta-300, 15 45% 70%))'
+				'5': 'hsl(var(--terracotta-300, 200.4 98% 39.4%))'
 			},
 			sidebar: {
 				DEFAULT: 'hsl(var(--sidebar-background))',
@@ -184,7 +184,7 @@ const config: Config = {
 			'academia-sm': '0 2px 4px hsla(30, 15%, 5%, 0.12)',
 			'academia-md': '0 4px 8px hsla(30, 15%, 5%, 0.1), 0 2px 4px hsla(30, 15%, 5%, 0.06)',
 			'academia-lg': '0 8px 24px hsla(30, 15%, 5%, 0.12), 0 4px 8px hsla(30, 15%, 5%, 0.08)',
-			'terracotta-glow': '0 0 20px hsla(15, 55%, 45%, 0.25)',
+			'terracotta-glow': '0 0 20px hsla(200.4, 98%, 39.4%, 0.25)',
 			'sage-glow': '0 0 20px hsla(135, 25%, 40%, 0.2)',
 			'gold-glow': '0 0 20px hsla(40, 65%, 45%, 0.25)',
 		},

@@ -3,7 +3,7 @@
  * Shows agent's thought process with phases, tool selection, and confidence scores
  */
 
-import React, { useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   ChevronDown,
@@ -84,7 +84,7 @@ const phaseColors: Record<ReasoningPhase, string> = {
 export const EnhancedReasoningPanel: React.FC<EnhancedReasoningPanelProps> = ({
   phases,
   currentPhase,
-  isExpanded: initialExpanded = false,
+  isExpanded: initialExpanded = true, // Default open to show todos
   onToggle,
   className = '',
   agentLabel,
@@ -100,6 +100,32 @@ export const EnhancedReasoningPanel: React.FC<EnhancedReasoningPanelProps> = ({
 }) => {
   const [isExpanded, setIsExpanded] = useState(initialExpanded);
   const [selectedPhase, setSelectedPhase] = useState<PhaseData | null>(null);
+
+  // Normalize and compute counts from todos to keep a single source of truth
+  const normalizedTodos = useMemo(() => (todos ?? []).map(t => ({
+    ...t,
+    status: (t.status || 'pending').toLowerCase(),
+  })), [todos]);
+  const computedTotal = normalizedTodos.length;
+  const computedInProgress = normalizedTodos.filter(t => t.status === 'in_progress').length;
+  const computedDone = normalizedTodos.filter(t => t.status === 'done').length;
+  const computedPending = Math.max(0, computedTotal - computedInProgress - computedDone);
+
+  // Auto-select Planning when panel first opens or when todos first appear
+  useEffect(() => {
+    if (!isExpanded || selectedPhase) return;
+    const planning = phases.find(p => p.phase === 'planning');
+    if (planning) setSelectedPhase(planning);
+  }, [isExpanded, selectedPhase, phases]);
+
+  // If todos arrive later and no selection yet, focus Planning
+  useEffect(() => {
+    if (!isExpanded || selectedPhase) return;
+    if (normalizedTodos.length > 0) {
+      const planning = phases.find(p => p.phase === 'planning');
+      if (planning) setSelectedPhase(planning);
+    }
+  }, [normalizedTodos.length, isExpanded, selectedPhase, phases]);
 
   const handleToggle = () => {
     setIsExpanded(!isExpanded);
@@ -185,17 +211,15 @@ export const EnhancedReasoningPanel: React.FC<EnhancedReasoningPanelProps> = ({
           }
           variant={activeToolCount && activeToolCount > 0 ? 'running' : 'idle'}
         />
-        {typeof todoCount === 'number' && (
-          <StatusPill
-            label="Todos"
-            value={
-              todoCount === 0
-                ? 'None'
-                : `${todoCount} (${inProgressTodoCount || 0} doing, ${pendingTodoCount || 0} todo)`
-            }
-            variant={todoCount > 0 ? 'running' : 'idle'}
-          />
-        )}
+        <StatusPill
+          label="Todos"
+          value={
+            computedTotal === 0
+              ? 'None'
+              : `${computedTotal} (${computedInProgress} doing, ${computedPending} todo)`
+          }
+          variant={computedTotal > 0 ? 'running' : 'idle'}
+        />
       </div>
 
       {errorMessage && (
@@ -418,7 +442,7 @@ const PhaseDetailView: React.FC<{
 
       {totalTodos > 0 && (
         <div className="todo-section">
-          <h5 className="section-title">Run Tasks</h5>
+          <h5 className="section-title">To-Do</h5>
           <div className="todo-summary">
             <span className="todo-summary-main">
               {completedCount} / {totalTodos} tasks done

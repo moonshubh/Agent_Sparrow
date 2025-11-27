@@ -1446,7 +1446,7 @@ export interface FolderListResponse {
  * Create folder with Supabase sync
  */
 export async function createFolderSupabase(folderData: CreateFolderRequest): Promise<FeedMeFolder> {
-  const response = await fetchWithRetry(`${FEEDME_API_BASE}/folders/create`, {
+  const response = await fetchWithRetry(`${FEEDME_API_BASE}/folders`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -1466,7 +1466,7 @@ export async function createFolderSupabase(folderData: CreateFolderRequest): Pro
  * Update folder with Supabase sync
  */
 export async function updateFolderSupabase(folderId: number, folderData: FolderUpdate): Promise<FeedMeFolder> {
-  const response = await fetchWithRetry(`${FEEDME_API_BASE}/folders/${folderId}/update`, {
+  const response = await fetchWithRetry(`${FEEDME_API_BASE}/folders/${folderId}`, {
     method: 'PUT',
     headers: {
       'Content-Type': 'application/json',
@@ -1486,7 +1486,7 @@ export async function updateFolderSupabase(folderId: number, folderData: FolderU
  * Delete folder with Supabase sync
  */
 export async function deleteFolderSupabase(folderId: number, moveConversationsTo?: number): Promise<{ message: string; folders_affected: number }> {
-  let url = `${FEEDME_API_BASE}/folders/${folderId}/remove`
+  let url = `${FEEDME_API_BASE}/folders/${folderId}`
   if (moveConversationsTo !== undefined) {
     const params = new URLSearchParams({ move_conversations_to: moveConversationsTo.toString() })
     url += `?${params.toString()}`

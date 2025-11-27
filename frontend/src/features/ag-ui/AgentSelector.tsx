@@ -3,9 +3,15 @@
 import React from "react";
 import { AgentChoice } from "@/features/ag-ui/hooks/useAgentSelection";
 import { cn } from "@/shared/lib/utils";
-import { ChevronDown } from "lucide-react";
+import { ChevronDown, Clock } from "lucide-react";
 
-export const agentOptions: { value: AgentChoice; label: string; description: string }[] = [
+export const agentOptions: {
+  value: AgentChoice;
+  label: string;
+  description: string;
+  badge?: string;
+  badgeTooltip?: string;
+}[] = [
   {
     value: "auto",
     label: "Auto Route",
@@ -19,7 +25,9 @@ export const agentOptions: { value: AgentChoice; label: string; description: str
   {
     value: "log_analysis",
     label: "Log Analysis",
-    description: "Attach Mailbird logs for diagnostics",
+    description: "Deep analysis with Gemini Pro reasoning",
+    badge: "Takes longer",
+    badgeTooltip: "Uses advanced reasoning model for thorough analysis",
   },
   {
     value: "research",
@@ -63,7 +71,7 @@ export function AgentSelector({
           >
             {agentOptions.map((option) => (
               <option key={option.value} value={option.value}>
-                {option.label}
+                {option.label}{option.badge ? ` (${option.badge})` : ""}
               </option>
             ))}
           </select>
@@ -99,10 +107,19 @@ export function AgentSelector({
                 disabled && "opacity-60 cursor-not-allowed hover:border-border hover:text-foreground/80"
               )}
               aria-pressed={isActive}
+              title={option.badgeTooltip}
             >
-              <span className="block text-sm font-semibold">
-                {option.label}
-              </span>
+              <div className="flex items-center justify-between gap-2">
+                <span className="block text-sm font-semibold">
+                  {option.label}
+                </span>
+                {option.badge && (
+                  <span className="inline-flex items-center gap-1 rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-medium text-amber-600 dark:text-amber-400">
+                    <Clock className="h-3 w-3" />
+                    {option.badge}
+                  </span>
+                )}
+              </div>
               <span className="mt-1 text-[11px] text-muted-foreground">
                 {option.description}
               </span>

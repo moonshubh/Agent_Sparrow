@@ -258,6 +258,7 @@ class ToolEvidenceUpdateEvent:
     tool_name: str
     output: Any
     summary: Optional[str] = None
+    cards: List[Dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
         """Serialize to JSON-safe dictionary with camelCase keys."""
@@ -265,6 +266,7 @@ class ToolEvidenceUpdateEvent:
             "toolCallId": self.tool_call_id,
             "toolName": self.tool_name,
             "output": _safe_json_value(self.output),
+            "cards": self.cards,
         }
         if self.summary is not None:
             result["summary"] = self.summary

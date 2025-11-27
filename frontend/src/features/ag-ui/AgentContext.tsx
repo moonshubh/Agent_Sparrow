@@ -139,8 +139,15 @@ const formatStructuredLogSegments = (segments: any[]): string => {
 };
 
 const formatIfStructuredLog = (content: any): string | null => {
-  if (typeof content !== 'string') return null;
-  const segments = parseStructuredLogSegments(content);
+  const normalized = typeof content === 'string'
+    ? content
+    : Array.isArray(content)
+      ? content
+          .map((part) => (typeof part === 'string' ? part : (part && typeof part === 'object' && typeof (part as any).text === 'string') ? (part as any).text : ''))
+          .join('')
+      : '';
+  if (!normalized) return null;
+  const segments = parseStructuredLogSegments(normalized);
   if (!segments) return null;
   return formatStructuredLogSegments(segments);
 };
@@ -165,6 +172,17 @@ const normalizeTraceStep = (raw: any): TraceStep => {
 };
 
 const mapTraceList = (rawList: any[]): TraceStep[] => rawList.map(normalizeTraceStep);
+
+const inferLogAnalysisFromMessages = (messages: any[]) => {
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const msg = messages[i];
+    const formatted = formatLogAnalysisResult((msg as any)?.content);
+    if (formatted) {
+      return formatted;
+    }
+  }
+  return null;
+};
 
 export function AgentProvider({
   children,
@@ -284,13 +302,26 @@ export function AgentProvider({
             ...msg,
             id: msg.id || crypto.randomUUID(),
           }));
-          // If running the log analysis agent and the stream ended with a tool result, surface a readable assistant reply.
-          const agentType = (agent?.state as any)?.agent_type || (agent?.state as any)?.agentType;
-          if (agentType === 'log_analysis') {
+          // If running log analysis (explicitly or inferred) and the stream ended with a tool result, surface a readable assistant reply.
+          const explicitAgentType = (agent?.state as any)?.agent_type || (agent?.state as any)?.agentType;
+          const inferredLogAnalysis = explicitAgentType === 'log_analysis'
+            ? null
+            : inferLogAnalysisFromMessages(messagesWithIds);
+          const isLogAnalysis = explicitAgentType === 'log_analysis' || Boolean(inferredLogAnalysis);
+
+          // If we inferred log analysis while in auto mode, tag the agent state so downstream formatting stays consistent.
+          if (!explicitAgentType && inferredLogAnalysis && agent) {
+            agent.setState({
+              ...agent.state,
+              agent_type: 'log_analysis',
+            });
+          }
+
+          if (isLogAnalysis) {
             const hasAssistant = messagesWithIds.some((m) => m.role === 'assistant');
             const last = messagesWithIds[messagesWithIds.length - 1];
             if (!hasAssistant && last && last.role === 'tool') {
-              const formatted = formatLogAnalysisResult(last.content);
+              const formatted = inferredLogAnalysis || formatLogAnalysisResult(last.content);
               if (formatted) {
                 messagesWithIds.push({
                   id: crypto.randomUUID(),
@@ -302,7 +333,7 @@ export function AgentProvider({
           }
 
           // Format or hide raw structured-log dumps for log-analysis runs
-          if (agentType === 'log_analysis') {
+          if (isLogAnalysis) {
             messagesWithIds = messagesWithIds.map((msg) => {
               if (msg.role === 'assistant') {
                 const formatted = formatIfStructuredLog(msg.content);
@@ -334,7 +365,52 @@ export function AgentProvider({
               preview: typeof last?.content === 'string' ? last.content.slice(0, 120) : last?.content,
             });
           }
-          setMessages(messagesWithIds);
+
+          // Preserve/derive an assistant reply for log analysis when the backend sends only tool/user messages.
+          let nextMessages = messagesWithIds;
+          if (isLogAnalysis) {
+            const hasAssistant = nextMessages.some((m) => m.role === 'assistant');
+            if (!hasAssistant) {
+              // Prefer a formatted tool payload from the latest tool message
+              const formattedFromTool = (() => {
+                for (let i = nextMessages.length - 1; i >= 0; i -= 1) {
+                  const msg = nextMessages[i];
+                  if (msg.role === 'tool') {
+                    const formatted =
+                      formatLogAnalysisResult((msg as any).content) ||
+                      formatIfStructuredLog((msg as any).content);
+                    if (formatted) return formatted;
+                  }
+                }
+                return null;
+              })();
+
+              if (formattedFromTool) {
+                nextMessages = [
+                  ...nextMessages,
+                  {
+                    id: crypto.randomUUID(),
+                    role: 'assistant',
+                    content: formattedFromTool,
+                  },
+                ];
+              } else {
+                // Fall back to the last assistant we already showed (e.g., from streaming buffer)
+                const lastAssistant = [...messages].reverse().find((m) => m.role === 'assistant');
+                if (lastAssistant) {
+                  nextMessages = [
+                    ...nextMessages,
+                    {
+                      ...lastAssistant,
+                      id: lastAssistant.id || crypto.randomUUID(),
+                    },
+                  ];
+                }
+              }
+            }
+          }
+
+          setMessages(nextMessages);
         },
 
           // Handle custom events (interrupts, timeline updates, tool evidence)

@@ -224,3 +224,197 @@ def extract_snippet_texts(results: List[Dict[str, Any]]) -> List[str]:
             text = str(item)
         texts.append(text)
     return texts
+
+
+# --- Evidence card builders ---
+
+from datetime import datetime
+from urllib.parse import urlparse
+
+
+def _shorten(text: str, width: int = 220) -> str:
+    """Shorten text to specified width with ellipsis."""
+    if not isinstance(text, str):
+        text = str(text)
+    text = " ".join(text.split())  # collapse whitespace
+    return (text[: width - 1] + "…") if len(text) > width else text
+
+
+def _host(u: Optional[str]) -> Optional[str]:
+    """Extract hostname from URL."""
+    if not u:
+        return None
+    try:
+        return urlparse(u).netloc or None
+    except Exception:
+        return None
+
+
+def _coerce_entries(data: Any) -> List[Dict[str, Any]]:
+    """Coerce various data shapes to a list of entry dicts."""
+    # Accept {results|items|documents|entries|data}: [...]
+    if isinstance(data, list):
+        return [x for x in data if isinstance(x, dict)]
+    if isinstance(data, dict):
+        for k in ("results", "items", "documents", "entries", "data"):
+            v = data.get(k)
+            if isinstance(v, list):
+                return [x for x in v if isinstance(x, dict)]
+        # single flat dict as one entry
+        if all(not isinstance(v, (dict, list)) for v in data.values()):
+            return [data]
+        # nested dicts
+        return [v for v in data.values() if isinstance(v, dict)]
+    return []
+
+
+def _infer_type(tool_name: str, output: Any) -> str:
+    """Infer card type from tool name."""
+    name = (tool_name or "").lower()
+    if "ground" in name or "web" in name or "search" in name:
+        return "research"
+    if "kb" in name or "knowledge" in name or "vector" in name or "rag" in name:
+        return "knowledge"
+    if "log" in name or "trace" in name or "observe" in name or "monitor" in name:
+        return "log_analysis"
+    return "grounding" if isinstance(output, dict) and output.get("results") else "knowledge"
+
+
+def _score(v: Any) -> Optional[int]:
+    """Normalize score to 0-100 int."""
+    try:
+        f = float(v)
+        # normalize 0-1 to 0-100 if needed
+        if 0.0 <= f <= 1.0:
+            f *= 100.0
+        return max(0, min(100, int(round(f))))
+    except Exception:
+        return None
+
+
+def _to_card(
+    entry: Dict[str, Any],
+    card_type: str,
+    *,
+    default_title: str,
+    fallback_url: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Convert a single entry dict to an evidence card."""
+    title = (
+        entry.get("title")
+        or entry.get("name")
+        or entry.get("id")
+        or default_title
+    )
+    url = entry.get("url") or entry.get("link") or fallback_url
+    source = entry.get("source") or entry.get("path") or _host(url)
+    snippet = (
+        entry.get("snippet")
+        or entry.get("summary")
+        or entry.get("content")
+        or entry.get("text")
+        or ""
+    )
+    snippet = _shorten(str(snippet)) if snippet else ""
+    rel = (
+        _score(entry.get("relevance"))
+        or _score(entry.get("score"))
+        or _score(entry.get("rank"))
+    )
+    conf = _score(entry.get("confidence"))
+    ts = entry.get("published_at") or entry.get("date") or entry.get("updated_at") or None
+    if isinstance(ts, (int, float)):
+        try:
+            ts = datetime.utcfromtimestamp(ts).isoformat() + "Z"
+        except Exception:
+            ts = None
+
+    keep_keys = (
+        "host", "collection", "path", "doctype", "author", "tags", "severity",
+        "count", "window", "lang", "provider"
+    )
+    metadata: Dict[str, Any] = {}
+    if url:
+        metadata["host"] = _host(url)
+    for k in keep_keys:
+        if k in entry and entry[k] is not None:
+            metadata[k] = entry[k]
+    for k in ("errors", "warnings", "info", "total"):
+        if k in entry and isinstance(entry[k], (int, float)):
+            metadata[k] = entry[k]
+
+    return {
+        "type": card_type,
+        "title": str(title),
+        "source": source,
+        "url": url,
+        "snippet": snippet or _shorten(str(entry)[:500]),
+        "fullContent": None,
+        "relevanceScore": rel,
+        "confidence": conf,
+        "metadata": metadata or None,
+        "timestamp": ts,
+        "status": "success",
+    }
+
+
+def build_tool_evidence_cards(
+    output: Any,
+    tool_name: str,
+    *,
+    user_query: Optional[str] = None,
+    max_items: int = 3,
+) -> List[Dict[str, Any]]:
+    """Normalize raw tool output into a small list of 'evidence cards' the UI can render.
+
+    Args:
+        output: Raw tool output in any format.
+        tool_name: Name of the tool that produced the output.
+        user_query: Optional user query for context.
+        max_items: Maximum number of cards to return.
+
+    Returns:
+        List of evidence card dicts with keys: type, title, source, url, snippet,
+        fullContent, relevanceScore, confidence, metadata, timestamp, status.
+    """
+    card_type = _infer_type(tool_name, output)
+
+    if isinstance(output, str):
+        return [{
+            "type": card_type,
+            "title": tool_name,
+            "source": None,
+            "url": None,
+            "snippet": _shorten(output, 500),
+            "fullContent": None,
+            "relevanceScore": None,
+            "confidence": None,
+            "metadata": None,
+            "timestamp": None,
+            "status": "success",
+        }]
+
+    entries = _coerce_entries(output)
+    if entries:
+        cards = []
+        for idx, e in enumerate(entries[:max_items], start=1):
+            cards.append(_to_card(e, card_type, default_title=f"Result {idx}"))
+        return cards
+
+    try:
+        preview = json.dumps(output, ensure_ascii=False, default=str)
+    except Exception:
+        preview = str(output)
+    return [{
+        "type": card_type,
+        "title": tool_name,
+        "source": None,
+        "url": None,
+        "snippet": _shorten(preview, 500),
+        "fullContent": None,
+        "relevanceScore": None,
+        "confidence": None,
+        "metadata": None,
+        "timestamp": None,
+        "status": "success",
+    }]

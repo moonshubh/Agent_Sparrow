@@ -1,10 +1,34 @@
+const normalizePayload = (raw: any): any => {
+  if (!raw) return null;
+  if (typeof raw === 'string') return raw;
+  // AG-UI / LangChain messages sometimes wrap text in an array of content parts
+  if (Array.isArray(raw)) {
+    const asText = raw
+      .map((part) => {
+        if (typeof part === 'string') return part;
+        if (part && typeof part === 'object') {
+          if (typeof (part as any).text === 'string') return (part as any).text;
+          return JSON.stringify(part);
+        }
+        return '';
+      })
+      .join('');
+    return asText || null;
+  }
+  if (typeof raw === 'object') return raw;
+  return null;
+};
+
 export function formatLogAnalysisResult(raw: any): string | null {
   if (!raw) return null;
 
-  let data: any = raw;
-  if (typeof raw === 'string') {
+  const normalized = normalizePayload(raw);
+  if (!normalized) return null;
+
+  let data: any = normalized;
+  if (typeof normalized === 'string') {
     try {
-      data = JSON.parse(raw);
+      data = JSON.parse(normalized);
     } catch {
       return null;
     }

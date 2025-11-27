@@ -100,6 +100,7 @@ class SparrowMemoryMiddleware:
         self.timeout = timeout
         self._memory_service = None
         self._stats = MemoryStats()
+        self._stats_lock = asyncio.Lock()
 
     @property
     def memory_service(self):
@@ -159,7 +160,8 @@ class SparrowMemoryMiddleware:
             return messages
 
         # Retrieve memories
-        self._stats.retrieval_attempted = True
+        async with self._stats_lock:
+            self._stats.retrieval_attempted = True
 
         try:
             memories = await asyncio.wait_for(
@@ -172,14 +174,14 @@ class SparrowMemoryMiddleware:
             )
 
             if memories:
-                self._stats.retrieval_success = True
-                self._stats.facts_retrieved = len(memories)
-                # Use dict access (.get) consistently with _build_memory_message
-                self._stats.relevance_scores = [
-                    m.get("score", 0.0)
-                    for m in memories
-                    if isinstance(m, dict) and "score" in m
-                ]
+                async with self._stats_lock:
+                    self._stats.retrieval_success = True
+                    self._stats.facts_retrieved = len(memories)
+                    self._stats.relevance_scores = [
+                        m.get("score", 0.0)
+                        for m in memories
+                        if isinstance(m, dict) and "score" in m
+                    ]
 
                 memory_message = self._build_memory_message(memories)
                 if memory_message:
@@ -187,10 +189,12 @@ class SparrowMemoryMiddleware:
 
         except asyncio.TimeoutError:
             logger.warning("memory_retrieval_timeout", timeout=self.timeout)
-            self._stats.retrieval_error = "timeout"
+            async with self._stats_lock:
+                self._stats.retrieval_error = "timeout"
         except Exception as exc:
             logger.warning("memory_retrieval_failed", error=str(exc))
-            self._stats.retrieval_error = str(exc)
+            async with self._stats_lock:
+                self._stats.retrieval_error = str(exc)
 
         return messages
 
@@ -228,7 +232,8 @@ class SparrowMemoryMiddleware:
         if not facts:
             return response
 
-        self._stats.write_attempted = True
+        async with self._stats_lock:
+            self._stats.write_attempted = True
 
         # Build metadata
         meta: Dict[str, Any] = {"source": "unified_agent"}
@@ -246,29 +251,34 @@ class SparrowMemoryMiddleware:
                 ),
                 timeout=self.timeout,
             )
-            self._stats.write_success = True
-            self._stats.facts_written = len(facts)
+            async with self._stats_lock:
+                self._stats.write_success = True
+                self._stats.facts_written = len(facts)
 
         except asyncio.TimeoutError:
             logger.warning("memory_write_timeout", timeout=self.timeout)
-            self._stats.write_error = "timeout"
+            async with self._stats_lock:
+                self._stats.write_error = "timeout"
         except Exception as exc:
             logger.warning("memory_write_failed", error=str(exc))
-            self._stats.write_error = str(exc)
+            async with self._stats_lock:
+                self._stats.write_error = str(exc)
 
         return response
 
-    def get_stats(self) -> Dict[str, Any]:
+    async def get_stats(self) -> Dict[str, Any]:
         """Get memory operation statistics.
 
         Returns:
             Dict of memory stats for observability.
         """
-        return self._stats.to_dict()
+        async with self._stats_lock:
+            return self._stats.to_dict()
 
-    def reset_stats(self) -> None:
+    async def reset_stats(self) -> None:
         """Reset statistics for a new run."""
-        self._stats = MemoryStats()
+        async with self._stats_lock:
+            self._stats = MemoryStats()
 
     def _extract_user_query(self, messages: List[BaseMessage]) -> str:
         """Extract the last user query from messages."""

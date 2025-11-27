@@ -21,7 +21,7 @@ from loguru import logger
 try:
     from langchain.agents.middleware import TodoListMiddleware
     from langchain.agents.middleware.summarization import SummarizationMiddleware
-    from deepagents.middleware.subagents import SubAgentMiddleware
+    from deepagents.middleware.subagents import SubAgentMiddleware, TASK_SYSTEM_PROMPT
     from deepagents.middleware.patch_tool_calls import PatchToolCallsMiddleware
 
     MIDDLEWARE_AVAILABLE = True
@@ -56,7 +56,8 @@ from app.agents.unified.session_cache import get_session_cache, get_session_data
 
 from .model_router import ModelSelectionResult, model_router
 from .tools import get_registered_tools
-from .subagents import get_subagent_specs
+from .attachment_processor import get_attachment_processor
+from .subagents import get_subagent_specs, get_subagent_by_name
 from .prompts import COORDINATOR_PROMPT, TODO_PROMPT
 
 # Constants
@@ -99,7 +100,26 @@ def _determine_task_type(state: GraphState) -> str:
     forwarded_props = getattr(state, "forwarded_props", {}) or {}
     coordinator_mode = forwarded_props.get("coordinator_mode") or getattr(state, "coordinator_mode", None)
     heavy_mode = isinstance(coordinator_mode, str) and coordinator_mode.lower() in {"heavy", "pro", "coordinator_heavy"}
+    detection = _attachments_indicate_logs(state)
+
+    if detection.get("has_log"):
+        forwarded_props["agent_type"] = "log_analysis"
+        forwarded_props["log_detection"] = detection
+        state.forwarded_props = forwarded_props
+        state.agent_type = "log_analysis"
+        return "log_analysis"
+
     return "coordinator_heavy" if heavy_mode else "coordinator"
+
+
+def _attachments_indicate_logs(state: GraphState) -> Dict[str, Any]:
+    """Centralized log attachment detection."""
+    try:
+        processor = get_attachment_processor()
+        return processor.detect_log_attachments(getattr(state, "attachments", []) or [])
+    except Exception as exc:
+        logger.warning("log_attachment_detection_failed", error=str(exc))
+        return {"has_log": False, "candidates": [], "non_text_skipped": []}
 
 
 def _get_session_cache(session_id: Optional[str]) -> Dict[str, Dict[str, Any]]:
@@ -154,6 +174,24 @@ def _build_chat_model(runtime: AgentRuntimeConfig):
     )
 
 
+def _build_task_system_prompt(state: GraphState) -> Optional[str]:
+    """Augment the SubAgent task system prompt when logs are detected."""
+    base = TASK_SYSTEM_PROMPT if "TASK_SYSTEM_PROMPT" in globals() else None
+    if not base:
+        return None
+
+    forwarded_props = getattr(state, "forwarded_props", {}) or {}
+    if forwarded_props.get("agent_type") == "log_analysis":
+        rule = (
+            "Auto-routing rule: The user provided log file attachments. "
+            "Immediately use the `task` tool with subagent_type=\"log-diagnoser\". "
+            "Pass a clear objective plus the inlined Attachments context, then synthesize a concise user-facing summary when the subagent returns."
+        )
+        return f"{base}\n\n{rule}"
+
+    return base
+
+
 def _build_deep_agent(state: GraphState, runtime: AgentRuntimeConfig):
     """Build the deep agent with middleware stack."""
     chat_model = _build_chat_model(runtime)
@@ -179,6 +217,7 @@ def _build_deep_agent(state: GraphState, runtime: AgentRuntimeConfig):
                 ),
                 PatchToolCallsMiddleware(),
             ],
+            system_prompt=_build_task_system_prompt(state),
             general_purpose_agent=True,
         )
         middleware_stack.append(coordinator_middleware)
@@ -266,6 +305,89 @@ def _build_runnable_config(
 
     base_config["configurable"] = configurable
     return base_config
+
+
+async def _maybe_autoroute_log_analysis(state: GraphState, helper: GemmaHelper) -> Optional[SystemMessage]:
+    """Proactively run the log-diagnoser subagent when log attachments are present."""
+    detection = _attachments_indicate_logs(state)
+    forwarded_props = getattr(state, "forwarded_props", {}) or {}
+    if detection.get("has_log"):
+        forwarded_props["agent_type"] = "log_analysis"
+        forwarded_props["log_detection"] = detection
+        state.forwarded_props = forwarded_props
+        state.agent_type = "log_analysis"
+    else:
+        return None
+
+    spec = get_subagent_by_name("log-diagnoser")
+    if not spec:
+        return None
+
+    processor = get_attachment_processor()
+    inline = None
+    try:
+        inline = await processor.inline_attachments(
+            getattr(state, "attachments", []) or [],
+            summarizer=helper.summarize if helper else None,
+        )
+    except Exception as exc:
+        logger.warning("log_autoroute_inline_failed", error=str(exc))
+
+    if not inline:
+        return None
+
+    subagent = create_agent(
+        spec.get("model"),
+        system_prompt=spec.get("system_prompt"),
+        tools=spec.get("tools"),
+        middleware=spec.get("middleware"),
+    )
+
+    task = (
+        "Analyze the attached logs, identify root causes, timeline, and user impact. "
+        "Return JSON with keys: overall_summary, health_status, priority_concerns, "
+        "identified_issues[{title, severity, details}], proposed_solutions[{title, steps[]}], confidence_level.\n\n"
+        f"{inline}"
+    )
+
+    try:
+        sub_result = await subagent.ainvoke({"messages": [HumanMessage(content=task)]})
+    except Exception as exc:
+        logger.warning("log_autoroute_failed", error=str(exc))
+        return None
+
+    text: Optional[str] = None
+    if isinstance(sub_result, dict):
+        output_field = sub_result.get("output")
+        messages_field = sub_result.get("messages")
+        if isinstance(output_field, BaseMessage):
+            text = _coerce_message_text(output_field)
+        elif isinstance(output_field, str):
+            text = output_field
+        elif isinstance(messages_field, list) and messages_field:
+            last_msg = messages_field[-1]
+            if isinstance(last_msg, BaseMessage):
+                text = _coerce_message_text(last_msg)
+            else:
+                text = str(last_msg)
+    elif isinstance(sub_result, BaseMessage):
+        text = _coerce_message_text(sub_result)
+
+    if not text:
+        return None
+
+    forwarded_props["autorouted"] = True
+    forwarded_props["agent_type"] = "log_analysis"
+    forwarded_props["log_detection"] = detection
+    state.forwarded_props = forwarded_props
+    state.agent_type = "log_analysis"
+
+    return SystemMessage(
+        content=(
+            "Log-diagnoser subagent report (use this for the final reply; do not re-analyze raw logs):\n"
+            f"{text}"
+        )
+    )
 
 
 # -----------------------------------------------------------------------------
@@ -663,6 +785,11 @@ async def run_unified_agent(state: GraphState, config: Optional[RunnableConfig] 
         if isinstance(state.scratchpad, dict):
             state.scratchpad.setdefault("_system", {})["message_preparation"] = prep_stats
 
+        # Auto-delegate to the log diagnoser when attachments indicate logs
+        autoroute_msg = await _maybe_autoroute_log_analysis(state, helper)
+        if autoroute_msg:
+            messages.append(autoroute_msg)
+
         # 7. Extract user query for reranking
         last_user_query = None
         for message in reversed(messages):
@@ -768,7 +895,7 @@ async def run_unified_agent(state: GraphState, config: Optional[RunnableConfig] 
             "error": str(e)
         }
     finally:
-        if limiter and not completed_successfully:
+        if limiter:
             for model_name, token_identifier in reserved_slots:
                 try:
                     await limiter.release_slot(model_name, token_identifier)
@@ -833,7 +960,9 @@ def should_continue(state: GraphState) -> str:
         return "end"
     last_message = state.messages[-1]
     if isinstance(last_message, AIMessage):
-        tool_calls = getattr(last_message, "tool_calls", None)
+        tool_calls = getattr(last_message, "tool_calls", None) or (
+            (getattr(last_message, "additional_kwargs", {}) or {}).get("tool_calls")
+        )
         if tool_calls:
             return "continue"
     return "end"

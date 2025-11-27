@@ -9,7 +9,7 @@ from __future__ import annotations
 import base64
 import re
 import urllib.parse
-from typing import Any, Callable, Coroutine, List, Optional, TYPE_CHECKING
+from typing import Any, Callable, Coroutine, Dict, List, Optional, TYPE_CHECKING
 
 from loguru import logger
 
@@ -40,6 +40,11 @@ TEXT_MIME_TYPES = {
 
 # File extensions that indicate text content even with application/octet-stream MIME
 TEXT_EXTENSIONS = (".log", ".txt", ".csv", ".json", ".xml", ".md", ".yaml", ".yml")
+
+# Log-like patterns
+LOG_LEVEL_RE = re.compile(r"\b(INFO|WARN|WARNING|ERROR|ERR|DEBUG|TRACE|FATAL|CRITICAL)\b")
+ISO_TS_RE = re.compile(r"\b\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(?:[.,]\d+)?(?:Z|[+-]\d{2}:\d{2})?\b")
+STACK_RE = re.compile(r"(Traceback \(most recent call last\):|^\s*at\s+\S+\(.*:\d+\))", re.MULTILINE)
 
 
 class AttachmentProcessor:
@@ -313,6 +318,54 @@ class AttachmentProcessor:
         )
 
         return inline
+
+    def _looks_like_log_text(self, text: str) -> tuple[bool, Dict[str, Any]]:
+        """Heuristically detect log-like content in decoded text."""
+        sample = text[:20000]
+        signals = {
+            "timestamps": len(ISO_TS_RE.findall(sample)),
+            "levels": len(LOG_LEVEL_RE.findall(sample)),
+            "stack": len(STACK_RE.findall(sample)),
+        }
+        strong_signal = signals["levels"] >= 3 or signals["timestamps"] >= 5 or signals["stack"] >= 2
+        multi_signal = sum(1 for val in signals.values() if val > 0) >= 2
+        return strong_signal or multi_signal, {"signals": signals}
+
+    def detect_log_attachments(self, attachments: List["Attachment"]) -> Dict[str, Any]:
+        """Detect whether provided attachments look like logs."""
+        candidates: List[Dict[str, Any]] = []
+        skipped: List[Dict[str, Any]] = []
+
+        for att in attachments or []:
+            mime = self._get_attr(att, "mime_type")
+            name = (self._get_attr(att, "name") or "").lower()
+            data_url = self._get_attr(att, "data_url")
+
+            if not data_url:
+                continue
+
+            if not self.is_text_mime(mime, name):
+                skipped.append({"name": name, "mime": mime, "reason": "non_text_mime"})
+                continue
+
+            looks_like_log = False
+            detail: Dict[str, Any] = {"signals": {}}
+
+            if name.endswith(".log") or (name.endswith(".txt") and "log" in name):
+                looks_like_log = True
+            else:
+                sample = self.decode_data_url(str(data_url), max_chars=8000) or ""
+                if sample:
+                    looks_like_log, detail = self._looks_like_log_text(sample)
+
+            if looks_like_log:
+                candidates.append({"name": name, "mime": mime, **detail})
+
+        return {
+            "has_log": bool(candidates),
+            "candidates": candidates,
+            "non_text_skipped": skipped,
+        }
 
     def extract_log_content(self, text: str) -> str:
         """Extract meaningful content from log text.

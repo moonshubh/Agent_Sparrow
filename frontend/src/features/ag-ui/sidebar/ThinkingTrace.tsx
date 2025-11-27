@@ -132,6 +132,24 @@ export const ThinkingTrace: React.FC<ThinkingTraceProps> = ({
     });
   };
 
+  const getStepContent = (step: TraceStep): string => {
+    const rawContent = typeof step.content === 'string' ? step.content.trim() : '';
+    if (rawContent) return rawContent;
+
+    const meta = step.metadata || {};
+    const finalOutput = (meta.finalOutput as string) || (meta.final_output as string);
+    if (typeof finalOutput === 'string' && finalOutput.trim()) {
+      return finalOutput.trim();
+    }
+
+    const preview = (meta.promptPreview as string) || (meta.prompt_preview as string);
+    if (typeof preview === 'string' && preview.trim()) {
+      return `Preview: ${preview.trim()}`;
+    }
+
+    return 'No transcript yet';
+  };
+
   const collapseButton = (
     <button
       type="button"
@@ -236,7 +254,7 @@ export const ThinkingTrace: React.FC<ThinkingTraceProps> = ({
                           className="overflow-hidden"
                         >
                           <div className="text-xs text-foreground/80 bg-secondary rounded-organic-sm p-3 font-mono whitespace-pre-wrap break-words ml-6 border border-border">
-                            {step.content || 'No transcript yet'}
+                            {getStepContent(step)}
                           </div>
                         </motion.div>
                       )}

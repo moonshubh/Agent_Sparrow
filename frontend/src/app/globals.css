@@ -96,7 +96,7 @@
 
   /* Terracotta glow - warm accent */
   .glow-terracotta {
-    box-shadow: 0 0 20px hsla(15, 55%, 45%, 0.25);
+    box-shadow: 0 0 20px hsla(200.4, 98%, 39.4%, 0.25);
   }
 
   /* Sage glow - nature accent */
@@ -157,9 +157,9 @@
   }
 
   .btn-terracotta:hover {
-    background: hsl(var(--terracotta-400, 15 50% 55%));
+    background: hsl(var(--terracotta-400, 200.4 98% 39.4%));
     transform: translateY(-1px);
-    box-shadow: 0 4px 12px hsla(15, 55%, 45%, 0.2);
+    box-shadow: 0 4px 12px hsla(200.4, 98%, 39.4%, 0.2);
   }
 
   /* Sage secondary button */
@@ -534,7 +534,7 @@
     --popover-foreground: 25 15% 15%;
 
     /* Terracotta Primary */
-    --primary: 15 55% 45%;
+    --primary: 200.4 98% 38%;
     --primary-foreground: 40 20% 97%;
     --secondary: 35 10% 90%;
     --secondary-foreground: 25 15% 20%;
@@ -548,11 +548,11 @@
     --destructive-foreground: 40 20% 97%;
     --border: 30 10% 85%;
     --input: 35 8% 92%;
-    --ring: 15 55% 45%;
+    --ring: 200.4 98% 38%;
 
     /* Chat-specific colors - Light */
     --chat-background: 40 20% 97%;
-    --chat-user-bg: 15 50% 40%;
+    --chat-user-bg: 200.4 98% 28%;
     --chat-user-text: 40 20% 97%;
     --chat-agent-bg: 35 10% 92%;
     --chat-agent-text: 25 15% 15%;
@@ -577,12 +577,12 @@
     /* Sidebar colors - Light */
     --sidebar-background: 35 12% 94%;
     --sidebar-foreground: 25 15% 20%;
-    --sidebar-primary: 15 55% 45%;
+    --sidebar-primary: 200.4 98% 38%;
     --sidebar-primary-foreground: 40 20% 97%;
     --sidebar-accent: 35 10% 88%;
     --sidebar-accent-foreground: 25 15% 20%;
     --sidebar-border: 30 8% 82%;
-    --sidebar-ring: 15 55% 45%;
+    --sidebar-ring: 200.4 98% 38%;
 
     /* Severity colors */
     --critical: 0 50% 50%;
@@ -592,7 +592,7 @@
     /* Legacy compatibility */
     --neutral-base: 25 10% 12%;
     --neutral-card: 25 8% 18%;
-    --mb-blue-300: 15 45% 70%;
+    --mb-blue-300: 200.4 98% 39.4%;
     --brand-surface: 30 6% 14%;
   }
 
@@ -611,7 +611,7 @@
     --popover-foreground: 40 15% 92%;
 
     /* === TERRACOTTA PRIMARY - Fireplace Warmth === */
-    --primary: 15 55% 50%;
+    --primary: 200.4 98% 38%;
     --primary-foreground: 40 20% 97%;
 
     /* === SECONDARY - Warm Stone === */
@@ -631,13 +631,13 @@
     --destructive-foreground: 40 20% 97%;
     --border: 30 5% 18%;
     --input: 30 5% 14%;
-    --ring: 15 55% 50%;
+    --ring: 200.4 98% 38%;
 
     /* === TERRACOTTA SCALE === */
-    --terracotta-600: 15 50% 35%;
-    --terracotta-500: 15 55% 45%;
-    --terracotta-400: 15 50% 55%;
-    --terracotta-300: 15 45% 70%;
+    --terracotta-600: 200.4 98% 28%;
+    --terracotta-500: 200.4 98% 38%;
+    --terracotta-400: 200.4 98% 45%;
+    --terracotta-300: 200.4 98% 39.4%;
 
     /* === SAGE SCALE === */
     --sage-600: 135 20% 30%;
@@ -663,7 +663,7 @@
 
     /* === CHAT COLORS - Dark Academia === */
     --chat-background: 30 8% 8%;
-    --chat-user-bg: 15 50% 38%;
+    --chat-user-bg: 200.4 98% 28%;
     --chat-user-text: 40 20% 97%;
     --chat-agent-bg: 30 5% 12%;
     --chat-agent-text: 40 15% 92%;
@@ -684,12 +684,12 @@
     /* === SIDEBAR - Scholarly Panel === */
     --sidebar-background: 30 6% 11%;
     --sidebar-foreground: 40 12% 88%;
-    --sidebar-primary: 15 55% 50%;
+    --sidebar-primary: 200.4 98% 38%;
     --sidebar-primary-foreground: 40 20% 97%;
     --sidebar-accent: 30 5% 16%;
     --sidebar-accent-foreground: 40 12% 88%;
     --sidebar-border: 30 5% 16%;
-    --sidebar-ring: 15 55% 50%;
+    --sidebar-ring: 200.4 98% 38%;
 
     /* === SEVERITY - Muted Earth Tones === */
     --critical: 0 50% 50%;
@@ -701,7 +701,7 @@
     --neutral-card: 30 6% 14%;
 
     /* === LEGACY COMPATIBILITY === */
-    --mb-blue-300: 15 45% 70%;
+    --mb-blue-300: 200.4 98% 39.4%;
     --brand-surface: 30 6% 12%;
 
     /* === SHADOWS - Warm Undertones === */

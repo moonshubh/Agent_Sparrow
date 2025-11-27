@@ -11,9 +11,19 @@ from __future__ import annotations
 from .memory_middleware import SparrowMemoryMiddleware
 from .rate_limit_middleware import SparrowRateLimitMiddleware
 from .eviction_middleware import ToolResultEvictionMiddleware
+from .agent_mw_adapters import (
+    SafeMiddleware,
+    ToolRetryMiddleware,
+    ToolCircuitBreakerMiddleware,
+)
+from .trace_seed import TraceSeedMiddleware
 
 __all__ = [
     "SparrowMemoryMiddleware",
     "SparrowRateLimitMiddleware",
     "ToolResultEvictionMiddleware",
+    "SafeMiddleware",
+    "ToolRetryMiddleware",
+    "ToolCircuitBreakerMiddleware",
+    "TraceSeedMiddleware",
 ]

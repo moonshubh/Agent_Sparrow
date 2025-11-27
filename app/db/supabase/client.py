@@ -1478,24 +1478,29 @@ class SupabaseClient:
                 if conv.get('approved_by'):
                     approvers.add(conv.get('approved_by'))
             
-            # Get examples approval stats
-            examples_response = await self._exec(lambda: self.client.table('feedme_examples')
-                .select('review_status, reviewed_by')
-                .execute())
-            
-            examples = examples_response.data or []
+            # Get examples approval stats (table may not exist after migration 017)
             example_review_counts = {}
             example_reviewers = set()
-            
-            for ex in examples:
-                review_status = ex.get('review_status', 'pending')
-                example_review_counts[review_status] = example_review_counts.get(review_status, 0) + 1
-                
-                if ex.get('reviewed_by'):
-                    example_reviewers.add(ex.get('reviewed_by'))
+            try:
+                examples_response = await self._exec(lambda: self.client.table('feedme_examples')
+                    .select('review_status, reviewed_by')
+                    .execute())
+
+                examples = examples_response.data or []
+
+                for ex in examples:
+                    review_status = ex.get('review_status', 'pending')
+                    example_review_counts[review_status] = example_review_counts.get(review_status, 0) + 1
+
+                    if ex.get('reviewed_by'):
+                        example_reviewers.add(ex.get('reviewed_by'))
+            except Exception as ex_err:
+                # feedme_examples table may have been dropped in migration 017
+                logger.debug(f"feedme_examples table query skipped: {ex_err}")
             
             return {
                 "conversation_approval": {
+                    "total": len(conversations),
                     "status_breakdown": approval_counts,
                     "unique_approvers": len(approvers),
                     "approvers_list": list(approvers)

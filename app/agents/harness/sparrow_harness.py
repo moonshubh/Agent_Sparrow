@@ -19,6 +19,7 @@ from typing import Any, Dict, List, Optional, Sequence, TYPE_CHECKING
 from langchain_core.tools import BaseTool
 from langchain_core.language_models.chat_models import BaseChatModel
 from loguru import logger
+from langchain.agents.middleware.types import AgentMiddleware
 
 if TYPE_CHECKING:
     from langgraph.checkpoint.base import BaseCheckpointSaver
@@ -101,6 +102,8 @@ class SparrowAgentConfig:
     enable_eviction_middleware: bool = True
     max_tokens_before_summary: int = DEFAULT_MAX_TOKENS_BEFORE_SUMMARY
     messages_to_keep: int = DEFAULT_MESSAGES_TO_KEEP
+    cache: Optional[Any] = None
+    name: Optional[str] = None
 
     # Backend configuration
     checkpointer: Optional["BaseCheckpointSaver"] = None
@@ -137,6 +140,7 @@ def create_sparrow_agent(
     max_tokens_before_summary: int = DEFAULT_MAX_TOKENS_BEFORE_SUMMARY,
     messages_to_keep: int = DEFAULT_MESSAGES_TO_KEEP,
     recursion_limit: int = DEFAULT_RECURSION_LIMIT,
+    cache: Optional[Any] = None,
     interrupt_on: Optional[Dict[str, bool]] = None,
 ) -> "CompiledStateGraph":
     """Factory function for creating Agent Sparrow instances.
@@ -204,6 +208,7 @@ def create_sparrow_agent(
             max_tokens_before_summary=max_tokens_before_summary,
             messages_to_keep=messages_to_keep,
             recursion_limit=recursion_limit,
+            cache=cache,
             interrupt_on=interrupt_on,
         )
 
@@ -221,6 +226,11 @@ def create_sparrow_agent(
         system_prompt=config.build_system_prompt(),
         tools=config.tools,
         middleware=middleware_stack,
+        checkpointer=config.checkpointer,
+        store=config.store,
+        cache=config.cache,
+        debug=False,
+        name=config.name,
     )
 
     # Apply configuration
@@ -233,30 +243,43 @@ def _build_middleware_stack(config: SparrowAgentConfig) -> List[Any]:
     """Build the middleware stack based on configuration.
 
     Order matters:
-    1. Memory middleware (prepends context to messages)
-    2. Rate limit middleware (handles quota and fallback)
-    3. SubAgent middleware (enables subagent delegation)
-    4. Summarization middleware (compacts long conversations)
-    5. Eviction middleware (handles large tool results)
-    6. PatchToolCalls middleware (normalizes tool call format)
+    1. Trace seed (correlation id)
+    2. Memory middleware (prepends context to messages)
+    3. Rate limit middleware (handles quota and fallback)
+    4. Tool resilience (retry + circuit breaker)
+    5. SubAgent middleware (enables subagent delegation)
+    6. Summarization middleware (compacts long conversations)
+    7. Eviction middleware (handles large tool results)
+    8. PatchToolCalls middleware (normalizes tool call format)
     """
     from .middleware import (
+        SafeMiddleware,
         SparrowMemoryMiddleware,
         SparrowRateLimitMiddleware,
         ToolResultEvictionMiddleware,
+        ToolRetryMiddleware,
+        ToolCircuitBreakerMiddleware,
+        TraceSeedMiddleware,
     )
 
     middleware: List[Any] = []
 
-    # 1. Memory middleware
+    # 1. Trace seed
+    middleware.append(TraceSeedMiddleware())
+
+    # 2. Memory middleware
     if config.enable_memory_middleware:
         middleware.append(SparrowMemoryMiddleware(enabled=True))
 
-    # 2. Rate limit middleware
+    # 3. Rate limit middleware
     if config.enable_rate_limit_middleware:
         middleware.append(SparrowRateLimitMiddleware())
 
-    # 3. SubAgent middleware (if subagents configured)
+    # 4. Tool resilience
+    middleware.append(ToolRetryMiddleware())
+    middleware.append(ToolCircuitBreakerMiddleware())
+
+    # 5. SubAgent middleware (if subagents configured)
     if config.subagents:
         # Build subagent middleware for each subagent
         subagent_default_middleware = [
@@ -273,11 +296,12 @@ def _build_middleware_stack(config: SparrowAgentConfig) -> List[Any]:
             default_tools=config.tools,
             subagents=[spec.to_dict() for spec in config.subagents],
             default_middleware=subagent_default_middleware,
+            default_interrupt_on=config.interrupt_on,
             general_purpose_agent=True,
         )
         middleware.append(coordinator_middleware)
 
-    # 4. Summarization middleware
+    # 6. Summarization middleware
     middleware.append(
         SummarizationMiddleware(
             model=config.model,
@@ -286,14 +310,24 @@ def _build_middleware_stack(config: SparrowAgentConfig) -> List[Any]:
         )
     )
 
-    # 5. Eviction middleware
+    # 7. Eviction middleware
     if config.enable_eviction_middleware:
         middleware.append(ToolResultEvictionMiddleware())
 
-    # 6. PatchToolCalls middleware (always last for normalization)
+    # 8. PatchToolCalls middleware (always last for normalization)
     middleware.append(PatchToolCallsMiddleware())
 
-    return middleware
+    # Wrap unsafe middleware with SafeMiddleware to avoid hard failures
+    wrapped: List[Any] = []
+    for mw in middleware:
+        if isinstance(mw, SafeMiddleware):
+            wrapped.append(mw)
+        elif hasattr(mw, "awrap_tool_call") or hasattr(mw, "wrap_model_call"):
+            wrapped.append(SafeMiddleware(mw))
+        else:
+            wrapped.append(mw)
+
+    return wrapped
 
 
 def create_lightweight_agent(

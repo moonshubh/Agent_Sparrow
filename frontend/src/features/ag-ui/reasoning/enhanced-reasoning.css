@@ -44,7 +44,7 @@
   background: linear-gradient(135deg, hsl(var(--terracotta-500)), hsl(var(--terracotta-600)));
   border: 2px solid hsl(var(--terracotta-400));
   color: hsl(var(--cream-50));
-  box-shadow: 0 0 20px hsla(15, 55%, 45%, 0.3);
+  box-shadow: 0 0 20px hsla(215.3, 19.3%, 38%, 0.3);
 }
 
 .header-text {

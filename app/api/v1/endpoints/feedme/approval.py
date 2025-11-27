@@ -181,8 +181,10 @@ async def get_approval_workflow_stats():
         return ApprovalWorkflowStats(
             total_conversations=conversation_approval.get('total', 0),
             pending_approval=status_breakdown.get('pending', 0),
+            awaiting_review=status_breakdown.get('awaiting_review', 0),
             approved=status_breakdown.get('approved', 0),
             rejected=status_breakdown.get('rejected', 0),
+            published=status_breakdown.get('published', 0),
             currently_processing=status_breakdown.get('processing', 0),
             processing_failed=status_breakdown.get('failed', 0),
             avg_quality_score=None,
