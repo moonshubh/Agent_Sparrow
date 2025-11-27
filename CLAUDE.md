@@ -93,7 +93,7 @@ The backend follows a modular agent-based architecture:
 React/Next.js application with native AG-UI protocol integration:
 
 - **Entry Points**:
-  - Main chat: `frontend/src/app/chat/copilot/AgUiChatClient.tsx`
+  - Main chat: `frontend/src/app/chat/page.tsx` → uses `frontend/src/features/ag-ui/AgUiChatClient.tsx`
   - FeedMe v2.0: `frontend/src/app/feedme/` - Document processing UI
 
 - **AG-UI Integration**:
