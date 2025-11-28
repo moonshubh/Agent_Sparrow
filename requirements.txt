@@ -11,11 +11,12 @@ email-validator==2.3.0
 python-dotenv==1.1.1
 
 # Langchain Stack
-langchain>=1.0.2,<1.1.0
-langchain-core>=1.0.0,<1.1.0
+langchain>=1.0.2,<1.2.0
+langchain-core>=1.1.0,<1.2.0  # langchain-xai 1.1.0 requires langchain-core>=1.1.0
 # langchain-community>=0.3.14,<0.4.0  # Removed - conflicts with langchain-core 1.x, not used by unified agent
 langchain-google-genai==2.1.12  # Compatible with langchain-core 1.x
-# langchain-openai>=1.0.0,<1.1.0  # Removed - conflicts with openai 1.58.1, not used by unified agent
+langchain-xai==1.1.0  # XAI/Grok integration - pinned for fast resolution
+langchain-openai>=1.0.0,<2.0.0  # Required by langchain-xai 1.x
 langgraph>=1.0.4,<1.1.0
 langgraph-prebuilt>=1.0.5,<1.1.0
 langgraph-sdk>=0.2.0,<0.3.0  # Required for AG-UI protocol
@@ -57,7 +58,7 @@ asyncpg==0.29.0
 # vecs==0.4.2  # Conflicts with pgvector 0.4.1, requires pgvector==0.1.*
 
 # External Tools
-tavily-python==0.3.0
+tavily-python>=0.5.0
 firecrawl-py==4.3.6
 
 # HTML Parsing (for Zendesk ticket support)
@@ -100,7 +101,7 @@ structlog==25.1.0
 loguru==0.7.2
 
 # Additional Utilities
-tiktoken==0.5.1
+tiktoken>=0.7.0,<1.0.0  # Updated for langchain-openai compatibility
 transformers
 chromadb
 pypika==0.48.9  # Required by chromadb

@@ -58,7 +58,7 @@ from .model_router import ModelSelectionResult, model_router
 from .tools import get_registered_tools
 from .attachment_processor import get_attachment_processor
 from .subagents import get_subagent_specs, get_subagent_by_name
-from .prompts import COORDINATOR_PROMPT, TODO_PROMPT
+from .prompts import get_coordinator_prompt, TODO_PROMPT
 
 # Constants
 MEMORY_AGENT_ID = "sparrow"
@@ -89,8 +89,31 @@ def _resolve_runtime_config(state: GraphState) -> AgentRuntimeConfig:
     task_type = _determine_task_type(state)
 
     user_override = state.model
+
+    # For non-Google providers, preserve the user's model selection without router intervention
+    if provider != "google":
+        resolved_model = user_override or getattr(settings, "xai_default_model", None) or settings.primary_agent_model
+        if not resolved_model:
+            resolved_model = "grok-4-1-fast-reasoning"
+        logger.info(
+            "preserving_non_google_model",
+            provider=provider,
+            model=resolved_model,
+            task_type=task_type,
+        )
+        state.model = resolved_model
+        return AgentRuntimeConfig(provider=provider, model=resolved_model, task_type=task_type)
+
     selected_model = model_router.select_model(task_type, user_override=user_override)
     state.model = selected_model
+
+    logger.debug(
+        "resolved_runtime_config",
+        provider=provider,
+        model=selected_model,
+        task_type=task_type,
+        user_override=user_override,
+    )
 
     return AgentRuntimeConfig(provider=provider, model=selected_model, task_type=task_type)
 
@@ -132,8 +155,44 @@ def _get_session_cache(session_id: Optional[str]) -> Dict[str, Dict[str, Any]]:
 
 
 async def _ensure_model_selection(state: GraphState) -> ModelSelectionResult:
-    """Ensure model is selected with health check."""
+    """Ensure model is selected with health check.
+
+    For non-Google providers (e.g., XAI/Grok), the user's model selection is
+    preserved without going through the Gemini-specific model router.
+    """
     task_type = _determine_task_type(state)
+    provider = (state.provider or settings.primary_agent_provider or "google").lower()
+
+    # For non-Google providers, preserve the user's model selection
+    if provider != "google":
+        if not state.model:
+            state.model = getattr(settings, "xai_default_model", None) or "grok-4-1-fast-reasoning"
+        logger.info(
+            "preserving_non_google_model_selection",
+            provider=provider,
+            model=state.model,
+            task_type=task_type,
+        )
+        # Create a minimal selection result for non-Gemini models
+        from .model_health import ModelHealth
+        health = ModelHealth(
+            model=state.model,
+            available=True,
+            rpm_used=0,
+            rpm_limit=0,
+            rpd_used=0,
+            rpd_limit=0,
+            circuit_state="ok",
+            reason=None,
+        )
+        return ModelSelectionResult(
+            task_type=task_type,
+            model=state.model,
+            health_trace=[health],
+            fallback_occurred=False,
+            fallback_chain=[state.model],
+        )
+
     selection = await model_router.select_model_with_health(task_type, user_override=state.model)
     state.model = selection.model
 
@@ -160,17 +219,17 @@ async def _ensure_model_selection(state: GraphState) -> ModelSelectionResult:
 
 
 def _build_chat_model(runtime: AgentRuntimeConfig):
-    """Build the chat model for the agent."""
-    if runtime.provider != "google":
-        logger.warning(
-            "Unsupported provider '%s' requested; falling back to Google Gemini",
-            runtime.provider,
-        )
-    from langchain_google_genai import ChatGoogleGenerativeAI
-    return ChatGoogleGenerativeAI(
+    """Build the chat model for the agent using the provider factory.
+
+    Supports multiple providers (Google Gemini, XAI/Grok) with automatic
+    fallback to Gemini if the requested provider is unavailable.
+    """
+    from .provider_factory import build_chat_model
+
+    return build_chat_model(
+        provider=runtime.provider,
         model=runtime.model,
-        temperature=0.3,
-        google_api_key=settings.gemini_api_key,
+        temperature=settings.primary_agent_temperature,
     )
 
 
@@ -199,7 +258,12 @@ def _build_deep_agent(state: GraphState, runtime: AgentRuntimeConfig):
     subagents = get_subagent_specs()
 
     todo_prompt = TODO_PROMPT if "TODO_PROMPT" in globals() else ""
-    system_prompt_parts = [COORDINATOR_PROMPT, todo_prompt, BASE_AGENT_PROMPT]
+    # Build coordinator prompt with dynamic model identification
+    coordinator_prompt = get_coordinator_prompt(
+        model=runtime.model,
+        provider=state.provider,
+    )
+    system_prompt_parts = [coordinator_prompt, todo_prompt, BASE_AGENT_PROMPT]
     system_prompt = "\n\n".join(part for part in system_prompt_parts if part)
 
     middleware_stack = []
@@ -739,8 +803,14 @@ async def run_unified_agent(state: GraphState, config: Optional[RunnableConfig] 
         session_id = getattr(state, "session_id", None) or getattr(state, "trace_id", None)
         session_cache = _get_session_cache(session_id)
 
-        # 3. Rate limit preflight check with fallback
+        # 3. Rate limit preflight check with fallback (Gemini only)
+        # Non-Gemini providers (XAI/Grok) bypass the Gemini rate limiter via explicit check below
         async def _reserve_model_slot(model_name: str) -> bool:
+            """Reserve a rate limit slot for Gemini models.
+
+            Note: This function should only be called for Google provider models.
+            Non-Google providers are handled by the explicit provider check below.
+            """
             try:
                 result = await limiter.check_and_consume(model_name)
                 if getattr(result, "allowed", False):
@@ -755,16 +825,27 @@ async def run_unified_agent(state: GraphState, config: Optional[RunnableConfig] 
             except GeminiServiceUnavailableException as exc:
                 logger.warning("gemini_precheck_unavailable", model=model_name, error=str(exc))
                 return False
+            # Note: ValueError is not caught here to avoid swallowing unrelated errors.
+            # Non-Gemini providers are handled by the explicit provider check below.
 
-        slot_ok = await _reserve_model_slot(runtime.model)
-        if not slot_ok:
-            fallback_model = model_router.fallback_chain.get(runtime.model) or "gemini-2.5-flash-lite"
-            if fallback_model != runtime.model and await _reserve_model_slot(fallback_model):
-                logger.info("retrying_with_fallback_model", primary=runtime.model, fallback=fallback_model)
-                runtime = AgentRuntimeConfig(provider=runtime.provider, model=fallback_model, task_type=runtime.task_type)
-                state.model = fallback_model
-            else:
-                raise RateLimitExceededException(f"Gemini rate limit reached for {runtime.model}; try again shortly")
+        # Skip rate limiting for non-Gemini providers
+        if runtime.provider != "google":
+            logger.info(
+                "skipping_gemini_rate_limit_for_provider",
+                provider=runtime.provider,
+                model=runtime.model,
+            )
+            slot_ok = True
+        else:
+            slot_ok = await _reserve_model_slot(runtime.model)
+            if not slot_ok:
+                fallback_model = model_router.fallback_chain.get(runtime.model) or "gemini-2.5-flash-lite"
+                if fallback_model != runtime.model and await _reserve_model_slot(fallback_model):
+                    logger.info("retrying_with_fallback_model", primary=runtime.model, fallback=fallback_model)
+                    runtime = AgentRuntimeConfig(provider=runtime.provider, model=fallback_model, task_type=runtime.task_type)
+                    state.model = fallback_model
+                else:
+                    raise RateLimitExceededException(f"Gemini rate limit reached for {runtime.model}; try again shortly")
 
         # 4. Build agent and config
         agent = _build_deep_agent(state, runtime)
