@@ -258,9 +258,17 @@ export function AgentProvider({
       // No need for placeholder - streaming will handle assistant messages
 
       // Build forwardedProps to influence backend orchestration
+      const stateProvider = (agent.state as any)?.provider;
+      const stateModel = (agent.state as any)?.model;
+      const stateAgentType = (agent.state as any)?.agent_type || (agent.state as any)?.agentType;
       const forwardedProps: Record<string, any> = {
         // Prefer richer answers by default
         force_websearch: true,
+        // Pass through provider/model to avoid backend defaulting to Gemini
+        provider: stateProvider || 'google',
+        model: stateModel || 'gemini-2.5-flash',
+        agent_type: stateAgentType,
+        attachments: attachments && attachments.length > 0 ? attachments : undefined,
       };
 
       // Run agent with streaming updates

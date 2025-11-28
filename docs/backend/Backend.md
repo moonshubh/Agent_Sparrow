@@ -24,10 +24,11 @@ All these experts work together behind the scenes to give you a single, simple a
 
 ## 2. System Overview (For Developers)
 
-Agent Sparrow is a **FastAPI**-based backend that powers the Agent Sparrow frontend. It utilizes **LangGraph** for orchestrating complex agent workflows and **Google Gemini** as the primary LLM provider.
+Agent Sparrow is a **FastAPI**-based backend that powers the Agent Sparrow frontend. It utilizes **LangGraph** for orchestrating complex agent workflows and supports **multi-provider LLMs** (Google Gemini as the default and xAI Grok as an optional provider with reasoning mode).
 
 ### Key Technical Features
 *   **Unified Agent Architecture**: A single entry point (`Unified Agent Sparrow`) that dynamically routes tasks to sub-agents (Research, Log Analysis) or tools.
+*   **Multi-Provider LLMs**: Provider factory builds ChatGoogleGenerativeAI or ChatXAI (Grok 4.1) with reasoning-mode support; defaults remain Gemini.
 *   **LangGraph Orchestration**: Uses a state-machine approach (Graph) to manage conversation flow, memory, and tool usage.
 *   **DeepAgents Middleware**: A custom middleware stack for rate limiting, memory injection, and context management.
 *   **FeedMe Ecosystem**: A comprehensive module for document ingestion, OCR (Optical Character Recognition), and "Intelligence" (summarization, sentiment analysis).
@@ -36,7 +37,7 @@ Agent Sparrow is a **FastAPI**-based backend that powers the Agent Sparrow front
 
 ### Tech Stack
 *   **Framework**: Python 3.10+, FastAPI
-*   **AI Models**: Google Gemini (2.5 Flash, 2.5 Pro)
+*   **AI Models**: Google Gemini (2.5 Flash/Pro) and xAI Grok (4.1 Fast reasoning) via provider factory
 *   **Database**: Supabase (PostgreSQL + pgvector)
 *   **Async Tasks**: Celery + Redis
 *   **Orchestration**: LangGraph v1
@@ -65,8 +66,8 @@ graph TB
         Unified[Unified Agent Sparrow]
         
         subgraph "Sub-Agents"
-            Researcher[Research Agent]
-            LogAnalyst[Log Diagnoser]
+            Researcher[Research Agent (Gemini default)]
+            LogAnalyst[Log Diagnoser (Gemini default)]
         end
     end
 
@@ -92,6 +93,7 @@ graph TB
     Graph --> Unified
     Unified --> Researcher
     Unified --> LogAnalyst
+    Unified --> ProviderFactory[(Provider Factory<br/>Gemini | Grok)]
     
     FeedMeEP --> Ingest
     FeedMeEP --> Intel

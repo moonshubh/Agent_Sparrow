@@ -23,7 +23,11 @@ else:
     project_root = current_file_path.parents[project_root_depth]
 
 ENV_PATH = project_root / ".env"
+ENV_LOCAL_PATH = project_root / ".env.local"
+
+# Load .env first, then .env.local to allow overrides
 load_dotenv(ENV_PATH)
+load_dotenv(ENV_LOCAL_PATH, override=True)  # .env.local overrides .env
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +44,11 @@ class Settings(BaseSettings):
     )
 
     gemini_api_key: Optional[str] = Field(default=None, alias="GEMINI_API_KEY")
+
+    # XAI/Grok Configuration
+    xai_api_key: Optional[str] = Field(default=None, alias="XAI_API_KEY")
+    xai_default_model: str = Field(default="grok-4-1-fast-reasoning", alias="XAI_DEFAULT_MODEL")
+    xai_reasoning_enabled: bool = Field(default=True, alias="XAI_REASONING_ENABLED")
 
     # LangSmith tracing configuration
     langsmith_tracing_enabled: bool = Field(default=False, alias="LANGSMITH_TRACING_ENABLED")

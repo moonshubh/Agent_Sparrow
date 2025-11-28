@@ -411,10 +411,12 @@ def _merge_agui_context(
     settings = get_settings()
 
     def _get_first(*keys: str) -> Optional[Any]:
-        """Helper to extract first non-empty value from properties."""
+        """Helper to extract first non-empty value from properties or state."""
         for key in keys:
             if key in properties and properties[key] not in (None, ""):
                 return properties[key]
+            if key in state and state[key] not in (None, ""):
+                return state[key]
         return None
 
     # Extract core properties
@@ -431,8 +433,12 @@ def _merge_agui_context(
 
     # Apply defaults if provider/model not specified
     if not provider or not model:
-        provider = provider or getattr(settings, "primary_agent_provider", "google")
-        model = model or getattr(settings, "primary_agent_model", "gemini-2.5-flash")
+        provider = (provider or getattr(settings, "primary_agent_provider", "google")).lower()
+        if not model:
+            if provider == "xai":
+                model = getattr(settings, "xai_default_model", None) or "grok-4-1-fast-reasoning"
+            else:
+                model = getattr(settings, "primary_agent_model", "gemini-2.5-flash")
 
     # Backend default for memory toggle when client is silent
     if use_server_memory is None:
@@ -442,7 +448,7 @@ def _merge_agui_context(
             use_server_memory = False
 
     # Validate and sanitize attachments (fails loudly on error)
-    attachments = _sanitize_attachments(properties.get("attachments") or [])
+    attachments = _sanitize_attachments(properties.get("attachments") or state.get("attachments") or [])
 
     # Merge into config.configurable (LangGraph execution context)
     configurable = config.setdefault("configurable", {})

@@ -6,14 +6,19 @@ import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { Button } from "@/shared/ui/button";
 import { ModelSelector } from "./ModelSelector";
+import { ProviderSelector } from "./ProviderSelector";
 import { AgentSelector } from "./AgentSelector";
 import type { AgentChoice } from "@/features/ag-ui/hooks/useAgentSelection";
 import { Activity, PanelsTopLeft } from "lucide-react";
+import type { Provider, ProviderAvailability } from "@/services/api/endpoints/models";
 
 interface ChatHeaderProps {
   agentType: AgentChoice;
   memoryEnabled: boolean;
   onMemoryToggle: (enabled: boolean) => void;
+  provider: Provider;
+  onProviderChange: (provider: Provider) => void;
+  availableProviders: ProviderAvailability;
   model: string;
   onModelChange: (model: string) => void;
   models: string[];
@@ -33,6 +38,9 @@ export function ChatHeader({
   agentType,
   memoryEnabled,
   onMemoryToggle,
+  provider,
+  onProviderChange,
+  availableProviders,
   model,
   onModelChange,
   models,
@@ -124,6 +132,13 @@ export function ChatHeader({
                 <PanelsTopLeft className="w-3.5 h-3.5 text-muted-foreground" />
                 Feed Me
               </button>
+
+              <ProviderSelector
+                provider={provider}
+                onChangeProvider={onProviderChange}
+                availableProviders={availableProviders}
+                align="right"
+              />
 
               <div className="w-[140px]">
                 <ModelSelector

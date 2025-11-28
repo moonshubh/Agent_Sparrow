@@ -413,6 +413,14 @@ class StreamEventHandler:
             if not has_tool_calls and not is_log_run and not looks_like_json:
                 logger.info(f"Emitting TEXT_MESSAGE_CONTENT: {chunk_text[:50]!r}...")
                 self.emitter.emit_text_content(chunk_text)
+        else:
+            # Empty chunk (no text, no tool calls) — log for diagnostics (common with some providers)
+            logger.debug(
+                "empty_stream_chunk",
+                provider=getattr(self.state, "provider", None),
+                model=getattr(self.state, "model", None),
+                has_tool_calls=has_tool_calls,
+            )
 
     async def _on_genui_state(self, event: Dict[str, Any]) -> None:
         """Handle GenUI state update event."""

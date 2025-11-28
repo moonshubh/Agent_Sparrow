@@ -61,16 +61,18 @@ class ModelQuotaTracker:
         }
 
         if base not in mapping:
-            logger.warning("ModelQuotaTracker invoked for unsupported model '%s'", model)
+            # Non-Gemini models (e.g., XAI/Grok) are not rate-limited via this tracker
+            # Return available=True so they can be used without fallback to Gemini
+            logger.debug("Non-Gemini model '%s' requested; skipping quota check", model)
             return ModelHealth(
                 model=model,
-                available=False,
+                available=True,  # Non-Gemini models bypass Gemini rate limiting
                 rpm_used=0,
                 rpm_limit=0,
                 rpd_used=0,
                 rpd_limit=0,
-                circuit_state="unknown",
-                reason="unsupported_model",
+                circuit_state="ok",
+                reason=None,
             )
 
         metadata, circuit = mapping[base]

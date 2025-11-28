@@ -7,6 +7,7 @@ import { ChatInput } from './ChatInput';
 import { ChatHeader } from './ChatHeader';
 import type { AttachmentInput } from '@/services/ag-ui/types';
 import type { AgentChoice } from '@/features/ag-ui/hooks/useAgentSelection';
+import type { Provider, ProviderAvailability } from '@/services/api/endpoints/models';
 import { TimelineOperation } from './timeline/AgenticTimelineView';
 import { ThinkingTrace } from './sidebar/ThinkingTrace';
 import { ToolEvidenceSidebar } from './evidence/ToolEvidenceSidebar';
@@ -16,6 +17,9 @@ interface ChatContainerProps {
   sessionId: string;
   agentType?: AgentChoice;
   onAgentChange?: (agentType: AgentChoice) => void;
+  provider?: Provider;
+  onProviderChange?: (provider: Provider) => void;
+  availableProviders?: ProviderAvailability;
   model?: string;
   onModelChange?: (model: string) => void;
   memoryEnabled?: boolean;
@@ -29,6 +33,9 @@ export function ChatContainer({
   sessionId,
   agentType = 'auto',
   onAgentChange,
+  provider = 'google',
+  onProviderChange,
+  availableProviders = { google: true, xai: false },
   model = 'gemini-2.5-flash',
   onModelChange,
   memoryEnabled = true,
@@ -96,12 +103,12 @@ export function ChatContainer({
     // Use setState to update immutably
     agent.setState({
       ...agent.state,
-      provider: 'google',
+      provider,
       model,
       agent_type: agentType === 'auto' ? undefined : agentType,
       use_server_memory: memoryEnabled,
     });
-  }, [agent, model, agentType, memoryEnabled]);
+  }, [agent, provider, model, agentType, memoryEnabled]);
 
   const handleSendMessage = async (content: string) => {
     await sendMessage(content, attachments);
@@ -227,6 +234,9 @@ export function ChatContainer({
       <ChatHeader
         agentType={agentType}
         onAgentChange={(newType) => onAgentChange?.(newType)}
+        provider={provider}
+        onProviderChange={(p) => onProviderChange?.(p)}
+        availableProviders={availableProviders}
         model={resolvedModel || model}
         onModelChange={(newModel) => onModelChange?.(newModel)}
         memoryEnabled={memoryEnabled}

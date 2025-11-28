@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Agent Sparrow is a multi-agent AI system with a FastAPI backend and Next.js frontend. It uses LangGraph for orchestrated agent workflows, integrates with AG-UI protocol for native streaming conversations, and leverages Supabase for data persistence. The system is heavily integrated with Google Gemini models across all components.
+Agent Sparrow is a multi-agent AI system with a FastAPI backend and Next.js frontend. It uses LangGraph for orchestrated agent workflows, integrates with AG-UI protocol for native streaming conversations, and leverages Supabase for data persistence. It supports multiple LLM providers (Google Gemini by default, xAI Grok when selected) via a provider factory.
 
 ## Common Development Commands
 
@@ -120,36 +120,18 @@ React/Next.js application with native AG-UI protocol integration:
 
 ## Model Configuration
 
-The system is heavily integrated with Google Gemini models:
+Primary defaults remain Gemini-first, but Grok is fully supported:
 
-### Primary Models in Use
+- **Unified Agent (Primary)**: defaults to `gemini-2.5-flash` (or `grok-4-1-fast-reasoning` when provider=`xai`). Prompt displays friendly model/provider names.
+- **Log Diagnoser Subagent**: `gemini-2.5-pro` by default; routed via provider factory (xAI available but not default).
+- **Research Subagent**: `gemini-2.5-flash` by default; routed via provider factory (xAI available but not default).
+- **FeedMe Document Processing**: `gemini-2.5-flash-lite-preview-09-2025` (vision-first; OCR as fallback).
+- **Embeddings**: Gemini Embeddings 001.
 
-- **Unified Agent (Primary)**: Gemini 2.5 Flash Latest Preview (September 2025)
-  - Configured in `app/agents/unified/agent_sparrow.py`
-  - Default model: `gemini-2.5-flash`
-
-- **Log Diagnoser Subagent**: Gemini 2.5 Pro
-  - Configured in `app/agents/unified/subagents.py`
-  - Model: `gemini-2.5-pro`
-
-- **Research Subagent**: Gemini 2.5 Flash Experimental
-  - Configured in `app/agents/unified/subagents.py`
-  - Model: `gemini-2.5-flash`
-
-- **FeedMe Document Processing**: Gemini 2.5 Flash Lite Latest Preview (September 2025)
-  - Primary method: Gemini vision API for PDF-to-Markdown conversion
-  - Configured in `app/feedme/processors/gemini_pdf_processor.py`
-  - Model: `gemini-2.5-flash-lite-preview-09-2025`
-  - OCR is only used as fallback when Gemini processing fails
-
-- **Embeddings**: Gemini Embeddings 001
-  - Used for database-based semantic search and vector operations
-
-### Adapter System
-- Currently configured with Gemini-first adapters in `app/providers/` (Google provider is the only surfaced option in the UI)
-- GPT-5 Mini adapter remains available for backend experimentation but is not exposed in the AG-UI client
-- Future plans may reintroduce multi-provider selection after Gemini parity objectives are met
-- All core functionality remains Gemini-integrated
+Adapter / Provider system:
+- Provider factory (`app/agents/unified/provider_factory.py`) builds Google (ChatGoogleGenerativeAI) and xAI (ChatXAI) with `reasoning_enabled` support.
+- Settings: `PRIMARY_AGENT_PROVIDER`, `PRIMARY_AGENT_MODEL`, `XAI_API_KEY`, `XAI_DEFAULT_MODEL`, `XAI_REASONING_ENABLED`.
+- Coordinator prompt (`app/agents/unified/prompts.py`) auto-injects model display names and adds a Grok-specific depth addendum for richer answers.
 
 ## Environment Setup
 

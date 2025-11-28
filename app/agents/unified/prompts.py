@@ -5,9 +5,38 @@ reference first, then sync changes here to keep runtime behaviour aligned
 with the documented guidance.
 """
 
-COORDINATOR_PROMPT = """
+from typing import Optional
+import re
+
+# Model display names for prompts
+MODEL_DISPLAY_NAMES = {
+    "gemini-2.5-flash": "Gemini 2.5 Flash",
+    "gemini-2.5-pro": "Gemini 2.5 Pro",
+    "gemini-2.5-flash-lite": "Gemini 2.5 Flash Lite",
+    "gemini-2.5-flash-preview-09-2025": "Gemini 2.5 Flash (preview)",
+    "gemini-2.5-pro-preview-09-2025": "Gemini 2.5 Pro (preview)",
+    "gemini-2.5-flash-lite-preview-09-2025": "Gemini 2.5 Flash Lite (preview)",
+    "grok-4-1-fast-reasoning": "Grok 4.1 Fast",
+    "grok-4": "Grok 4",
+}
+
+PROVIDER_DISPLAY_NAMES = {
+    "google": "Google Gemini",
+    "xai": "xAI Grok",
+}
+
+GROK_DEPTH_ADDENDUM = """
+When using Grok models:
+- Provide fuller reasoning and explicit intermediate steps (2-4 bullets) before the final answer.
+- Prefer concise but complete explanations; call tools when evidence is unclear instead of answering shallowly.
+- When summarizing, include why/how conclusions were reached and list key assumptions or caveats.
+- Keep user-facing flow smooth; surface todos as actionable suggestions, not raw lists, unless the user explicitly asks for a to-do list.
+""".strip()
+
+
+COORDINATOR_PROMPT_TEMPLATE = """
 You are Agent Sparrow, the unified coordinator agent for a multi-tool,
-multi-subagent AI system powered by Gemini 2.5.
+multi-subagent AI system powered by {model_name}.
 
 Your responsibilities:
 - Understand the user's goal (even when phrased vaguely) and break it into
@@ -87,6 +116,48 @@ Output style:
   - Evidence from KB / FeedMe / Supabase / web, and
   - Your own reasoning and recommendations.
 """.strip()
+
+
+def get_coordinator_prompt(model: str = None, provider: str = None) -> str:
+    """Generate the coordinator prompt with dynamic model identification.
+
+    Args:
+        model: The model identifier (e.g., "gemini-2.5-flash", "grok-4-1-fast-reasoning")
+        provider: The provider identifier (e.g., "google", "xai")
+
+    Returns:
+        The coordinator system prompt with appropriate model identification.
+    """
+    def _format_model_name(raw: str, prov: Optional[str]) -> str:
+        normalized = (raw or "").strip().lower()
+        if not normalized and prov:
+            return PROVIDER_DISPLAY_NAMES.get(prov.lower(), "advanced AI")
+        if normalized in MODEL_DISPLAY_NAMES:
+            return MODEL_DISPLAY_NAMES[normalized]
+        # Heuristic prettifier for unlisted models
+        if normalized.startswith("gemini"):
+            return normalized.replace("gemini-", "Gemini ").replace("-", " ").strip().title()
+        if normalized.startswith("grok"):
+            return normalized.replace("grok", "Grok ").replace("-", " ").strip().title()
+        if prov:
+            return f"{PROVIDER_DISPLAY_NAMES.get(prov.lower(), prov)} ({raw})"
+        return raw or "advanced AI"
+
+    model_name = _format_model_name(model, provider)
+
+    prompt = COORDINATOR_PROMPT_TEMPLATE.format(model_name=model_name)
+
+    # Provider-specific depth guidance for Grok
+    if provider and provider.lower() == "xai":
+        prompt = f"{prompt}\n\n{GROK_DEPTH_ADDENDUM}"
+    elif model and re.search(r"^grok", model, re.IGNORECASE):
+        prompt = f"{prompt}\n\n{GROK_DEPTH_ADDENDUM}"
+
+    return prompt
+
+
+# Legacy constant for backward compatibility (defaults to generic "advanced AI")
+COORDINATOR_PROMPT = get_coordinator_prompt()
 
 
 LOG_ANALYSIS_PROMPT = """

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_core.language_models import BaseChatModel
 from loguru import logger
 
 from app.core.settings import settings
@@ -55,16 +55,26 @@ LOG_ANALYSIS_MAX_TOKENS_BEFORE_SUMMARY = 150000
 LOG_ANALYSIS_MESSAGES_TO_KEEP = 6
 
 
-def _get_chat_model(model_name: str) -> ChatGoogleGenerativeAI:
-    """Create a pre-initialized ChatGoogleGenerativeAI instance."""
-    return ChatGoogleGenerativeAI(
+def _get_chat_model(model_name: str, provider: str = "google") -> BaseChatModel:
+    """Create a pre-initialized chat model instance using the provider factory.
+
+    Args:
+        model_name: The model identifier.
+        provider: The provider name ("google" or "xai"). Defaults to "google".
+
+    Returns:
+        A configured chat model instance.
+    """
+    from .provider_factory import build_chat_model
+
+    return build_chat_model(
+        provider=provider,
         model=model_name,
         temperature=0.3,
-        google_api_key=settings.gemini_api_key,
     )
 
 
-def _build_research_middleware(model: ChatGoogleGenerativeAI) -> List[Any]:
+def _build_research_middleware(model: BaseChatModel) -> List[Any]:
     """Build middleware stack for research subagent.
 
     Research agent middleware:
@@ -97,7 +107,7 @@ def _build_research_middleware(model: ChatGoogleGenerativeAI) -> List[Any]:
     return middleware
 
 
-def _build_log_analysis_middleware(model: ChatGoogleGenerativeAI) -> List[Any]:
+def _build_log_analysis_middleware(model: BaseChatModel) -> List[Any]:
     """Build middleware stack for log analysis subagent.
 
     Log analysis agent middleware:

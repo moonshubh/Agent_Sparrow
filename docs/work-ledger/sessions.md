@@ -8,6 +8,19 @@
 - Refactored `ToolEvidenceSidebar` to use a single helper for mapping evidence to cards (typed inputs, consistent type/snippet/url derivation, timestamp/status normalization).
 - Improved accessibility: central trigger and color nodes in `SpatialColorPicker` now announce labels/states, folder tiles expose real `aria-expanded`, and attachment sizes avoid `NaN`.
 - Ensured multimodal attachments still inline when no human message is present by creating a fallback Gemini-ready human message in `message_preparation.py`.
+- Hardened multi-provider defaults and prompts: non-Google runs now default to the configured XAI model when unspecified, provider/model metadata flows into the coordinator prompt with friendlier display names (including preview Geminis), and model lists include configured defaults for UI selection.
+- Added Grok-specific prompt addendum for deeper reasoning/step breakdowns and expanded XAI model build logging.
+
+## 2025-11-29 – CodeRabbit issue verification and fixes
+
+- Verified all CodeRabbit findings and applied fixes:
+  - Evidence cards: validators keep typed `cards`/metadata; sidebar mapping deduped into a single helper with typed payloads.
+  - A11y: SpatialColorPicker buttons/central trigger announce labels/states; folder tiles expose dynamic `aria-expanded`.
+  - UI safety: AttachmentPreview guards size math to avoid `NaN`; empty model stream chunks are logged for diagnostics.
+  - Backend resilience: `message_preparation.py` now builds a multimodal human message even when no prior human message exists.
+- Documentation refreshed:
+  - `CLAUDE.md` documents multi-provider (Gemini + Grok) setup, provider factory settings, and Grok depth prompt addendum.
+  - `docs/backend/Backend.md` notes multi-provider support and provider factory placement in the architecture diagram.
 
 ## 2025-11-27 – Log attachment routing fix
 
