@@ -4,10 +4,11 @@ import React, { useState, useRef, KeyboardEvent } from 'react';
 import { Button } from '@/shared/ui/button';
 import { Textarea } from '@/shared/ui/textarea';
 import { cn } from '@/shared/lib/utils';
-import { SendHorizontalIcon, Square, Paperclip, X, Mic, Plus, Sparkles, RefreshCw } from 'lucide-react';
+import { SendHorizontalIcon, Square, Paperclip, Mic, Plus, Sparkles, RefreshCw } from 'lucide-react';
 import type { AttachmentInput } from '@/services/ag-ui/types';
 import { createBinaryContent } from '@/services/ag-ui/types';
 import type { AgentChoice } from '@/features/ag-ui/hooks/useAgentSelection';
+import { AttachmentPreviewList } from './components/AttachmentPreview';
 
 interface ChatInputProps {
   onSend: (message: string) => void;
@@ -141,31 +142,14 @@ export function ChatInput({
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
     >
-      {/* Attachments preview - Paper-like cards */}
+      {/* Attachments preview - Thumbnail cards with hover X */}
       {attachments.length > 0 && (
-        <div className="mb-3 flex flex-wrap gap-2">
-          {attachments.map((attachment, index) => (
-            <div
-              key={index}
-              className="flex items-center gap-2 bg-card rounded-organic px-3 py-2 border border-border shadow-academia-sm"
-            >
-              <Paperclip className="w-4 h-4 text-muted-foreground" />
-              <span className="text-sm text-foreground max-w-[200px] truncate">
-                {attachment.name}
-              </span>
-              <span className="text-xs text-muted-foreground">
-                ({(attachment.size / 1024).toFixed(1)}KB)
-              </span>
-              <button
-                type="button"
-                onClick={() => removeAttachment(index)}
-                className="ml-1 text-muted-foreground hover:text-foreground transition-colors"
-                aria-label={`Remove attachment ${index + 1}`}
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-          ))}
+        <div className="mb-3">
+          <AttachmentPreviewList
+            attachments={attachments}
+            onRemove={removeAttachment}
+            variant="input"
+          />
         </div>
       )}
 

@@ -25,6 +25,7 @@ interface ThinkingTraceProps {
   onCollapseToggle?: () => void;
   onStepFocus?: (stepId?: string) => void;
   className?: string;
+  agentType?: string;
 }
 
 const TypeIcon = ({ type, size = 'w-3 h-3' }: { type: TraceStep['type']; size?: string }) => {
@@ -60,6 +61,34 @@ const formatTimestamp = (timestamp?: string) => {
 
 const clamp = (value: number, min: number, max: number) => Math.min(Math.max(value, min), max);
 
+const summarizeLogJson = (raw: string): string | null => {
+  try {
+    const parsed = JSON.parse(raw);
+    const overall = parsed?.overall_summary || parsed?.summary;
+    const health = parsed?.health_status;
+    const concerns = Array.isArray(parsed?.priority_concerns) ? parsed.priority_concerns.slice(0, 2).join('; ') : null;
+    const firstIssue = Array.isArray(parsed?.identified_issues) && parsed.identified_issues.length
+      ? parsed.identified_issues[0]
+      : null;
+    const issueTitle = firstIssue?.title;
+    const issueSeverity = firstIssue?.severity;
+    const issueDetail = firstIssue?.details || firstIssue?.description;
+
+    const parts: string[] = [];
+    if (overall) parts.push(String(overall));
+    if (health) parts.push(`Health: ${health}`);
+    if (concerns) parts.push(`Concerns: ${concerns}`);
+    if (issueTitle || issueSeverity || issueDetail) {
+      const detail = [issueTitle, issueSeverity && `(${issueSeverity})`, issueDetail].filter(Boolean).join(' ');
+      if (detail) parts.push(detail);
+    }
+    const out = parts.join(' · ');
+    return out || 'Analyzing logs...';
+  } catch {
+    return null;
+  }
+};
+
 export const ThinkingTrace: React.FC<ThinkingTraceProps> = ({
   steps,
   activeStepId,
@@ -67,6 +96,7 @@ export const ThinkingTrace: React.FC<ThinkingTraceProps> = ({
   onCollapseToggle,
   onStepFocus,
   className = '',
+  agentType,
 }) => {
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const [isMiniMode, setIsMiniMode] = useState(false);
@@ -134,11 +164,23 @@ export const ThinkingTrace: React.FC<ThinkingTraceProps> = ({
 
   const getStepContent = (step: TraceStep): string => {
     const rawContent = typeof step.content === 'string' ? step.content.trim() : '';
-    if (rawContent) return rawContent;
+    const isLogRun = agentType === 'log_analysis';
+    const looksLikeJson = rawContent.startsWith('{') || rawContent.startsWith('[');
+    if (rawContent) {
+      if (isLogRun && looksLikeJson) {
+        const parsed = summarizeLogJson(rawContent);
+        if (parsed) return parsed;
+      }
+      return rawContent;
+    }
 
     const meta = step.metadata || {};
     const finalOutput = (meta.finalOutput as string) || (meta.final_output as string);
     if (typeof finalOutput === 'string' && finalOutput.trim()) {
+      if (isLogRun && (finalOutput.trim().startsWith('{') || finalOutput.trim().startsWith('['))) {
+        const parsed = summarizeLogJson(finalOutput.trim());
+        if (parsed) return parsed;
+      }
       return finalOutput.trim();
     }
 

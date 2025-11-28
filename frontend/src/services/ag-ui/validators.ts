@@ -14,6 +14,7 @@ import type {
   TraceStep,
   TimelineOperation,
   TodoItem,
+  ToolEvidenceCard,
 } from './event-types';
 
 // -----------------------------------------------------------------------------
@@ -72,11 +73,25 @@ export const AgentTimelineUpdateEventSchema = z.object({
   currentOperationId: z.string().optional(),
 });
 
+const ToolEvidenceCardSchema: z.ZodSchema<ToolEvidenceCard> = z.object({
+  id: z.string().optional(),
+  type: z.string().optional(),
+  title: z.string().optional(),
+  snippet: z.string().optional(),
+  url: z.string().optional(),
+  fullContent: z.unknown().optional(),
+  status: z.string().optional(),
+  timestamp: z.string().optional(),
+  metadata: z.record(z.unknown()).optional(),
+});
+
 export const ToolEvidenceUpdateEventSchema = z.object({
   toolCallId: z.string(),
   toolName: z.string(),
   output: z.unknown().transform((val) => val ?? null), // Ensure output is always present
   summary: z.string().optional(),
+  cards: z.array(ToolEvidenceCardSchema).optional(),
+  metadata: z.record(z.unknown()).optional(),
 });
 
 export const AgentTodosUpdateEventSchema = z.object({
@@ -170,12 +185,7 @@ export function validateToolEvidence(
   const result = validateOrNull(ToolEvidenceUpdateEventSchema, data, 'tool_evidence_update');
   if (!result) return null;
   // Ensure output is present (transform guarantees this)
-  return {
-    toolCallId: result.toolCallId,
-    toolName: result.toolName,
-    output: result.output,
-    summary: result.summary,
-  };
+  return result;
 }
 
 /**

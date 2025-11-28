@@ -3,7 +3,10 @@
 import React from 'react';
 import type { Message } from '@ag-ui/core';
 import type { AgentChoice } from '@/features/ag-ui/hooks/useAgentSelection';
+import type { AttachmentInput } from '@/services/ag-ui/types';
 import { EnhancedReasoningPanel } from '@/features/ag-ui/reasoning/EnhancedReasoningPanel';
+import { AttachmentPreviewList } from './components/AttachmentPreview';
+import { useAgent } from './AgentContext';
 import ReactMarkdown from 'react-markdown';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
@@ -15,9 +18,10 @@ interface MessageItemProps {
   isLast: boolean;
   isStreaming: boolean;
   agentType?: AgentChoice;
+  attachments?: AttachmentInput[];
 }
 
-function MessageItem({ message, isLast, isStreaming, agentType }: MessageItemProps) {
+function MessageItem({ message, isLast, isStreaming, agentType, attachments = [] }: MessageItemProps) {
   const isUser = message.role === 'user';
   const isSystem = message.role === 'system';
   const isTool = message.role === 'tool';
@@ -28,7 +32,7 @@ function MessageItem({ message, isLast, isStreaming, agentType }: MessageItemPro
   // Tool messages are now surfaced via the agentic timeline / sidebar, not inline
   if (isTool) return null;
 
-  // Extract metadata for reasoning traces
+  // Extract metadata for reasoning traces (attachments now passed as prop from context)
   const metadata = (message as any).metadata || {};
   const thinkingTrace = metadata.thinking_trace || metadata.thinkingTrace;
   const latestThought = metadata.latest_thought;
@@ -67,6 +71,16 @@ function MessageItem({ message, isLast, isStreaming, agentType }: MessageItemPro
           </div>
         )}
 
+        {/* User Attachments - Display stacked thumbnails ABOVE message content */}
+        {isUser && attachments.length > 0 && (
+          <div className="mb-2 flex justify-end">
+            <AttachmentPreviewList
+              attachments={attachments}
+              variant="stacked"
+            />
+          </div>
+        )}
+
         <div
           className={cn(
             'text-academia-base leading-relaxed',
@@ -75,6 +89,7 @@ function MessageItem({ message, isLast, isStreaming, agentType }: MessageItemPro
               : 'bg-transparent text-foreground px-0 py-0' // Completely transparent, no padding for agent
           )}
         >
+
           <div className={cn(
             'prose prose-sm max-w-none prose-invert',
             !isUser && 'prose-headings:text-foreground prose-p:text-foreground/90 prose-strong:text-foreground prose-code:text-terracotta-300'
@@ -159,6 +174,9 @@ interface MessageListProps {
 }
 
 export function MessageList({ messages, isStreaming, agentType }: MessageListProps) {
+  // Get attachments from context (stored separately from messages to avoid backend validation errors)
+  const { messageAttachments } = useAgent();
+
   // Filter out system messages and empty messages
   const visibleMessages = messages.filter(
     m => m.role !== 'system' && m.content !== ''
@@ -177,6 +195,7 @@ export function MessageList({ messages, isStreaming, agentType }: MessageListPro
           isLast={idx === visibleMessages.length - 1}
           isStreaming={isStreaming}
           agentType={agentType}
+          attachments={message.id ? messageAttachments[message.id] : undefined}
         />
       ))}
     </div>

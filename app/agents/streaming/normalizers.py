@@ -379,14 +379,54 @@ def build_tool_evidence_cards(
     """
     card_type = _infer_type(tool_name, output)
 
+    # Try to parse JSON-like strings to get real entries/cards
     if isinstance(output, str):
+        parsed_str: Any = None
+        trimmed = output.strip()
+        if trimmed.startswith(("content=", "data=")):
+            trimmed = trimmed.split("=", 1)[1].strip()
+        if (trimmed.startswith("{") and trimmed.endswith("}")) or (trimmed.startswith("[") and trimmed.endswith("]")):
+            try:
+                parsed_str = json.loads(trimmed)
+            except Exception:
+                # Try a looser parse (handles single quotes from some tool outputs)
+                try:
+                    import ast
+                    parsed_str = ast.literal_eval(trimmed)
+                except Exception:
+                    parsed_str = None
+
+        if parsed_str is not None:
+            entries = _coerce_entries(parsed_str)
+            if entries:
+                cards = []
+                for idx, e in enumerate(entries[:max_items], start=1):
+                    cards.append(_to_card(e, card_type, default_title=f"Result {idx}"))
+                return cards
+            # If no entries but we have a query, produce a friendly summary card
+            if isinstance(parsed_str, dict):
+                query_val = parsed_str.get("query") or parsed_str.get("q") or None
+                return [{
+                    "type": card_type,
+                    "title": tool_name,
+                    "source": None,
+                    "url": None,
+                    "snippet": _shorten(f"Search results for '{query_val}'" if query_val else output, 220),
+                    "fullContent": output,
+                    "relevanceScore": None,
+                    "confidence": None,
+                    "metadata": None,
+                    "timestamp": None,
+                    "status": "success",
+                }]
+
         return [{
             "type": card_type,
             "title": tool_name,
             "source": None,
             "url": None,
-            "snippet": _shorten(output, 500),
-            "fullContent": None,
+            "snippet": _shorten(output, 220),
+            "fullContent": output,
             "relevanceScore": None,
             "confidence": None,
             "metadata": None,

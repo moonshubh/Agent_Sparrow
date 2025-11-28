@@ -244,6 +244,15 @@ class StreamEventHandler:
         tool_input = tool_data.get("input") or tool_data.get("tool_input")
 
         self.emitter.start_tool(tool_call_id, tool_name, tool_input)
+        # Drive todo status progression when tools start (skip write_todos itself)
+        if tool_name != "write_todos" and hasattr(self.emitter, "start_next_todo"):
+            if self.emitter.start_next_todo():
+                todos_dicts = self.emitter.get_todos_as_dicts()
+                self.state.scratchpad["_todos"] = todos_dicts
+                try:
+                    self.state.todos = todos_dicts  # type: ignore[attr-defined]
+                except Exception as exc:  # pragma: no cover - defensive
+                    logger.warning("todo_state_set_failed_on_start", error=str(exc))
 
     async def _on_tool_end(self, event: Dict[str, Any]) -> None:
         """Handle tool end event."""
@@ -269,6 +278,16 @@ class StreamEventHandler:
         )
 
         self.emitter.end_tool(tool_call_id, tool_name, output, summary, cards=cards)
+
+        # Mark active todo as done when a tool finishes (skip write_todos)
+        if tool_name != "write_todos" and hasattr(self.emitter, "complete_active_todo"):
+            if self.emitter.complete_active_todo():
+                todos_dicts = self.emitter.get_todos_as_dicts()
+                self.state.scratchpad["_todos"] = todos_dicts
+                try:
+                    self.state.todos = todos_dicts  # type: ignore[attr-defined]
+                except Exception as exc:  # pragma: no cover - defensive
+                    logger.warning("todo_state_set_failed_on_end", error=str(exc))
 
     async def _on_tool_error(self, event: Dict[str, Any]) -> None:
         """Handle tool error event."""
@@ -332,6 +351,20 @@ class StreamEventHandler:
             if not has_tool_calls and getattr(self.emitter, '_message_started', False):
                 self.emitter.end_text_message()
 
+            # Mark todos complete when the final response is produced
+            if hasattr(self.emitter, "mark_all_todos_done"):
+                self.emitter.mark_all_todos_done()
+                try:
+                    todos_dicts = self.emitter.get_todos_as_dicts()
+                    self.state.scratchpad["_todos"] = todos_dicts
+                    self.state.todos = todos_dicts  # type: ignore[attr-defined]
+                except Exception as exc:  # pragma: no cover - defensive
+                    logger.warning("todo_state_update_failed", error=str(exc))
+
+        # Fallback: ensure we close any open text stream even if output is missing
+        if getattr(self.emitter, '_message_started', False) and not final_output:
+            self.emitter.end_text_message()
+
     async def _on_model_stream(self, event: Dict[str, Any]) -> None:
         """Handle chat model streaming event.
 
@@ -368,9 +401,16 @@ class StreamEventHandler:
             # Always emit to thinking trace
             self.emitter.stream_thought_chunk(run_id, chunk_text)
 
+            # Suppress raw streaming to chat for log-analysis runs; rely on final formatted reply
+            is_log_run = (
+                getattr(self.state, "agent_type", None) == "log_analysis"
+                or (getattr(self.state, "forwarded_props", {}) or {}).get("agent_type") == "log_analysis"
+            )
+            looks_like_json = chunk_text.strip().startswith(("{", "[")) and chunk_text.strip().endswith(("}", "]"))
+
             # Also emit as TEXT_MESSAGE_CONTENT for the main chat display
             # Only emit text content when not streaming tool call arguments
-            if not has_tool_calls:
+            if not has_tool_calls and not is_log_run and not looks_like_json:
                 logger.info(f"Emitting TEXT_MESSAGE_CONTENT: {chunk_text[:50]!r}...")
                 self.emitter.emit_text_content(chunk_text)
 

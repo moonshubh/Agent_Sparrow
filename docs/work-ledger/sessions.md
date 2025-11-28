@@ -2,6 +2,13 @@
 
 *Note: Older session entries were pruned on 2025-11-27 per request. Check git history if you need the previous session details.*
 
+## 2025-11-28 – CodeRabbit review hardening
+
+- Preserved backend-provided evidence cards by widening the validator schema (typed card objects + metadata) and keeping cards in the validated payload.
+- Refactored `ToolEvidenceSidebar` to use a single helper for mapping evidence to cards (typed inputs, consistent type/snippet/url derivation, timestamp/status normalization).
+- Improved accessibility: central trigger and color nodes in `SpatialColorPicker` now announce labels/states, folder tiles expose real `aria-expanded`, and attachment sizes avoid `NaN`.
+- Ensured multimodal attachments still inline when no human message is present by creating a fallback Gemini-ready human message in `message_preparation.py`.
+
 ## 2025-11-27 – Log attachment routing fix
 
 - Added layered log detection heuristics (MIME/extension/timestamp/log-level/stack traces) in `app/agents/unified/attachment_processor.py` and exposed `detect_log_attachments`.
@@ -61,3 +68,10 @@
   - Score bars for relevance and confidence when available
   - Metadata display section in expanded view
 - Added CSS styles for new components: `.kv-grid`, `.kv-row`, `.nice-list`, `.raw-json-section`, `.expand-toggle` in `evidence-cards.css`.
+
+## 2025-11-27 – Thinking trace & evidence refinements (log runs)
+
+- Suppressed raw JSON streaming to the chat bubble for log-analysis runs; thinking trace now summarizes JSON (log runs show “Analyzing logs” or a short summary) instead of raw blobs (`app/agents/streaming/handler.py`, `frontend/src/features/ag-ui/sidebar/ThinkingTrace.tsx`, `ChatContainer.tsx`).
+- Header shows resolved model/task metadata from backend state (`AgentContext.tsx`, `ChatContainer.tsx`, `ChatHeader.tsx`), so log runs display the Pro model when selected.
+- Tool evidence sidebar renders backend cards when present and falls back to any evidence payload even if timeline ops don’t match (`ToolEvidenceSidebar.tsx`, `services/ag-ui/validators.ts`).
+- Backend evidence normalizer now parses string outputs more leniently (handles `content=/data=` prefixes, single-quoted JSON) and shortens snippets; if parsing fails, it emits a friendly summary card instead of raw JSON (`app/agents/streaming/normalizers.py`).

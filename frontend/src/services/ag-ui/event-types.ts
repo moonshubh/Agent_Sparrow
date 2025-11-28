@@ -90,6 +90,18 @@ export interface AgentTimelineUpdateEvent {
 // Tool Evidence Types
 // -----------------------------------------------------------------------------
 
+export interface ToolEvidenceCard {
+  id?: string;
+  type?: string;
+  title?: string;
+  snippet?: string;
+  url?: string;
+  fullContent?: unknown;
+  status?: string;
+  timestamp?: string;
+  metadata?: Record<string, unknown>;
+}
+
 /**
  * Event payload for `tool_evidence_update` custom events.
  * Provides detailed tool output for display in the reasoning panel.
@@ -103,6 +115,10 @@ export interface ToolEvidenceUpdateEvent {
   output: unknown;
   /** Human-readable summary of the output */
   summary?: string;
+  /** Pre-built evidence cards from the backend (optional) */
+  cards?: ToolEvidenceCard[];
+  /** Additional metadata from the tool call (optional) */
+  metadata?: Record<string, unknown>;
 }
 
 // -----------------------------------------------------------------------------

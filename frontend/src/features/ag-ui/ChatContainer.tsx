@@ -54,6 +54,8 @@ export function ChatContainer({
     setActiveTraceStep,
     isTraceCollapsed,
     setTraceCollapsed,
+    resolvedTaskType,
+    resolvedModel,
   } = useAgent();
   const containerRef = useRef<HTMLDivElement>(null);
   const [attachments, setAttachments] = useState<AttachmentInput[]>([]);
@@ -225,7 +227,7 @@ export function ChatContainer({
       <ChatHeader
         agentType={agentType}
         onAgentChange={(newType) => onAgentChange?.(newType)}
-        model={model}
+        model={resolvedModel || model}
         onModelChange={(newModel) => onModelChange?.(newModel)}
         memoryEnabled={memoryEnabled}
         onMemoryToggle={(enabled) => onMemoryToggle?.(enabled)}
@@ -234,6 +236,7 @@ export function ChatContainer({
         recommendedModel={recommendedModel}
         activeTools={activeTools}
         hasActiveConversation={hasConversation}
+        resolvedTaskType={resolvedTaskType}
       />
 
       <div className="flex-1 flex overflow-hidden relative">
@@ -325,6 +328,7 @@ export function ChatContainer({
                   onCollapseToggle={() => setTraceCollapsed(!isTraceCollapsed)}
                   onStepFocus={setActiveTraceStep}
                   className="min-h-[320px]"
+                  agentType={normalizedAgentType}
                 />
               </div>
 

@@ -28,6 +28,9 @@ interface AgentContextValue {
   setActiveTraceStep: (stepId?: string) => void;
   isTraceCollapsed: boolean;
   setTraceCollapsed: (collapsed: boolean) => void;
+  resolvedModel?: string;
+  resolvedTaskType?: string;
+  messageAttachments: Record<string, AttachmentInput[]>;
 }
 
 const AgentContext = createContext<AgentContextValue | null>(null);
@@ -200,6 +203,9 @@ export function AgentProvider({
   const [thinkingTrace, setThinkingTrace] = useState<TraceStep[]>([]);
   const [activeTraceStepId, setActiveTraceStepId] = useState<string | undefined>(undefined);
   const [isTraceCollapsed, setTraceCollapsed] = useState(true);
+  const [resolvedModel, setResolvedModel] = useState<string | undefined>(undefined);
+  const [resolvedTaskType, setResolvedTaskType] = useState<string | undefined>(undefined);
+  const [messageAttachments, setMessageAttachments] = useState<Record<string, AttachmentInput[]>>({});
   const interruptResolverRef = useRef<((value: string) => void) | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
   const toolNameByIdRef = useRef<Record<string, string>>({});
@@ -222,12 +228,20 @@ export function AgentProvider({
       // Create abort controller for this request
       abortControllerRef.current = new AbortController();
 
-      // Add user message to local state immediately
+      // Add user message to local state immediately (without metadata to avoid backend validation errors)
       const userMessage: Message = {
         id: crypto.randomUUID(),
         role: 'user',
         content,
       };
+
+      // Store attachments separately by message ID for UI display (backend doesn't accept metadata)
+      if (attachments && attachments.length > 0) {
+        setMessageAttachments(prev => ({
+          ...prev,
+          [userMessage.id]: attachments,
+        }));
+      }
 
       // Add user message to agent's message list
       agent.addMessage(userMessage);
@@ -505,6 +519,17 @@ export function AgentProvider({
           // Handle state changes (for debugging)
           onStateChanged: ({ state }: { state: any }) => {
             console.debug('[AG-UI] State changed:', state);
+            try {
+              const meta = (state?.config?.configurable?.metadata) || {};
+              if (typeof meta.resolved_model === 'string') {
+                setResolvedModel(meta.resolved_model);
+              }
+              if (typeof meta.resolved_task_type === 'string') {
+                setResolvedTaskType(meta.resolved_task_type);
+              }
+            } catch (err) {
+              console.debug('[AG-UI] meta parse failed:', err);
+            }
           },
 
           // Handle tool calls (for debugging + UI visibility)
@@ -634,6 +659,9 @@ export function AgentProvider({
         setActiveTraceStep,
         isTraceCollapsed,
         setTraceCollapsed: setTraceCollapsedState,
+        resolvedModel,
+        resolvedTaskType,
+        messageAttachments,
       }}
     >
       {children}

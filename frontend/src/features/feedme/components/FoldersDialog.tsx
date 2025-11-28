@@ -15,6 +15,7 @@ import { Separator } from '@/shared/ui/separator'
 import { FolderPlus, Trash2 } from 'lucide-react'
 import FolderBits from './FolderBits'
 import FolderConversationsDialog from './FolderConversationsDialog'
+import { SpatialColorPicker } from './SpatialColorPicker'
 import { useFoldersStore, type Folder } from '@/state/stores/folders-store'
 import { useUIStore } from '@/state/stores/ui-store'
 import { cn } from '@/shared/lib/utils'
@@ -47,7 +48,7 @@ const FoldersDialog = React.memo(function FoldersDialog({ isOpen, onClose, onSub
   const renamingRef = useRef(false)
 
   useEffect(() => {
-    if (isOpen) actions.loadFolders().catch(() => {})
+    if (isOpen) actions.loadFolders().catch(() => { })
   }, [isOpen, actions])
 
   useEffect(() => {
@@ -146,110 +147,110 @@ const FoldersDialog = React.memo(function FoldersDialog({ isOpen, onClose, onSub
           {!isLoading && flatList.length > 0 && (
             <ul className="grid grid-cols-[repeat(auto-fill,minmax(200px,1fr))] gap-6">
               {flatList.map((folder) => {
-                  const isEditing = editingId === folder.id
-                  const folderColor = folder.color && folder.color.trim() ? folder.color : '#0095ff'
-                  const docsCount = typeof folder.conversationCount === 'number'
-                    ? folder.conversationCount
-                    : typeof folder.conversation_count === 'number'
-                      ? folder.conversation_count
-                      : undefined
-                  return (
-                    <li
-                      key={folder.id}
-                      className={cn(
-                        "group relative flex min-h-[240px] flex-col items-center rounded-2xl border border-border/40 bg-background/70 px-4 pb-6 pt-4 shadow-sm transition-all duration-200 hover:border-border cursor-pointer",
-                        clickedFolderId !== folder.id && "hover:-translate-y-1",
-                        clickedFolderId === folder.id && "translate-y-0"
-                      )}
-                      role="button"
-                      tabIndex={0}
-                      aria-label={`Folder ${folder.name} with ${docsCount || 0} conversations. Press Enter to open, or double-click to rename`}
-                      aria-pressed={clickedFolderId === folder.id}
-                      aria-expanded={false}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter' || e.key === ' ') {
-                          if (editingId === folder.id) return
-                          e.preventDefault()
-                          setClickedFolderId(folder.id)
-                          setSelectedFolder(folder)
-                          setConversationsOpen(true)
-                          setTimeout(() => setClickedFolderId(null), ANIMATION_RESET_DELAY)
-                        } else if (e.key === 'F2' && !isEditing) {
-                          e.preventDefault()
-                          startRename(folder)
-                        }
-                      }}
-                      onClick={() => {
-                        if (editingId === folder.id) return // Don't open when editing
+                const isEditing = editingId === folder.id
+                const folderColor = folder.color && folder.color.trim() ? folder.color : '#0095ff'
+                const docsCount = typeof folder.conversationCount === 'number'
+                  ? folder.conversationCount
+                  : typeof folder.conversation_count === 'number'
+                    ? folder.conversation_count
+                    : undefined
+                const isExpanded = (conversationsOpen && selectedFolder?.id === folder.id) || clickedFolderId === folder.id
+                return (
+                  <li
+                    key={folder.id}
+                    className={cn(
+                      "group relative flex min-h-[240px] flex-col items-center rounded-2xl border border-border/40 bg-background/70 px-4 pb-6 pt-4 shadow-sm transition-all duration-200 hover:border-border cursor-pointer",
+                      clickedFolderId !== folder.id && "hover:-translate-y-1",
+                      clickedFolderId === folder.id && "translate-y-0"
+                    )}
+                    role="button"
+                    tabIndex={0}
+                    aria-label={`Folder ${folder.name} with ${docsCount || 0} conversations. Press Enter to open, or double-click to rename`}
+                    aria-expanded={isExpanded}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        if (editingId === folder.id) return
+                        e.preventDefault()
                         setClickedFolderId(folder.id)
                         setSelectedFolder(folder)
                         setConversationsOpen(true)
-                        // Reset clicked state after animation
                         setTimeout(() => setClickedFolderId(null), ANIMATION_RESET_DELAY)
-                      }}
-                    >
-                      <div className="flex w-full justify-end">
-                        <button
-                          type="button"
-                          onClick={event => {
-                            event.stopPropagation()
-                            setDeleteTarget(folder)
-                          }}
-                          className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-background/80 text-muted-foreground opacity-0 transition hover:text-destructive focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40 group-hover:opacity-100"
-                          aria-label={`Delete ${folder.name}`}
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </button>
-                      </div>
+                      } else if (e.key === 'F2' && !isEditing) {
+                        e.preventDefault()
+                        startRename(folder)
+                      }
+                    }}
+                    onClick={() => {
+                      if (editingId === folder.id) return // Don't open when editing
+                      setClickedFolderId(folder.id)
+                      setSelectedFolder(folder)
+                      setConversationsOpen(true)
+                      // Reset clicked state after animation
+                      setTimeout(() => setClickedFolderId(null), ANIMATION_RESET_DELAY)
+                    }}
+                  >
+                    <div className="flex w-full justify-end">
+                      <button
+                        type="button"
+                        onClick={event => {
+                          event.stopPropagation()
+                          setDeleteTarget(folder)
+                        }}
+                        className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-background/80 text-muted-foreground opacity-0 transition hover:text-destructive focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40 group-hover:opacity-100"
+                        aria-label={`Delete ${folder.name}`}
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </button>
+                    </div>
 
-                      <div className="mt-1 flex w-full justify-center">
-                        <div className="relative inline-flex">
-                          {typeof docsCount === 'number' && (
-                            <span className="pointer-events-none absolute bottom-2 right-2 z-10 flex h-4 w-4 items-center justify-center rounded-full bg-background/80 backdrop-blur-sm border border-border/60 text-[9px] font-semibold text-foreground opacity-0 transition-opacity group-hover:opacity-100">
-                              {docsCount}
-                            </span>
-                          )}
-                          <FolderBits color={folderColor} className="folder-icon transition-transform duration-200 group-hover:scale-105" size={1.08} />
-                        </div>
-                      </div>
-
-                      <div className="mt-6 flex w-full flex-col items-center gap-2">
-                        {isEditing ? (
-                          <Input
-                            ref={node => {
-                              if (isEditing) renameInputRef.current = node
-                            }}
-                            value={editingName}
-                            onChange={e => setEditingName(e.target.value)}
-                            onBlur={() => {
-                              void commitRename()
-                            }}
-                            onKeyDown={e => {
-                              if (e.key === 'Enter') {
-                                e.preventDefault()
-                                void commitRename()
-                              } else if (e.key === 'Escape') {
-                                e.preventDefault()
-                                setEditingName(folder.name)
-                                cancelRename()
-                              }
-                            }}
-                            className="h-9 w-full rounded-lg border border-border/70 bg-background/80 text-center text-sm font-medium shadow-sm focus-visible:ring-2 focus-visible:ring-ring/30"
-                            placeholder="Folder name"
-                            aria-label="Folder name input"
-                          />
-                        ) : (
-                          <span
-                            onDoubleClick={() => startRename(folder)}
-                            title="Click to view conversations • Double-click to rename"
-                            className="cursor-text text-sm font-semibold text-foreground/90 transition hover:text-foreground"
-                          >
-                            {folder.name}
+                    <div className="mt-1 flex w-full justify-center">
+                      <div className="relative inline-flex">
+                        {typeof docsCount === 'number' && (
+                          <span className="pointer-events-none absolute bottom-2 right-2 z-10 flex h-4 w-4 items-center justify-center rounded-full bg-background/80 backdrop-blur-sm border border-border/60 text-[9px] font-semibold text-foreground opacity-0 transition-opacity group-hover:opacity-100">
+                            {docsCount}
                           </span>
                         )}
+                        <FolderBits color={folderColor} className="folder-icon transition-transform duration-200 group-hover:scale-105" size={1.08} />
                       </div>
-                    </li>
-                  )
+                    </div>
+
+                    <div className="mt-6 flex w-full flex-col items-center gap-2">
+                      {isEditing ? (
+                        <Input
+                          ref={node => {
+                            if (isEditing) renameInputRef.current = node
+                          }}
+                          value={editingName}
+                          onChange={e => setEditingName(e.target.value)}
+                          onBlur={() => {
+                            void commitRename()
+                          }}
+                          onKeyDown={e => {
+                            if (e.key === 'Enter') {
+                              e.preventDefault()
+                              void commitRename()
+                            } else if (e.key === 'Escape') {
+                              e.preventDefault()
+                              setEditingName(folder.name)
+                              cancelRename()
+                            }
+                          }}
+                          className="h-9 w-full rounded-lg border border-border/70 bg-background/80 text-center text-sm font-medium shadow-sm focus-visible:ring-2 focus-visible:ring-ring/30"
+                          placeholder="Folder name"
+                          aria-label="Folder name input"
+                        />
+                      ) : (
+                        <span
+                          onDoubleClick={() => startRename(folder)}
+                          title="Click to view conversations • Double-click to rename"
+                          className="cursor-text text-sm font-semibold text-foreground/90 transition hover:text-foreground"
+                        >
+                          {folder.name}
+                        </span>
+                      )}
+                    </div>
+                  </li>
+                )
               })}
             </ul>
           )}
@@ -317,7 +318,7 @@ const CreateOrEditFolder = React.memo(function CreateOrEditFolder({ title, open,
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[420px]">
+      <DialogContent className="sm:max-w-[420px] overflow-visible">
         <DialogHeader>
           <DialogTitle>{title}</DialogTitle>
           <DialogDescription>Set a name and color for the folder.</DialogDescription>
@@ -327,21 +328,14 @@ const CreateOrEditFolder = React.memo(function CreateOrEditFolder({ title, open,
             <label className="text-sm">Name</label>
             <Input value={name} onChange={e => setName(e.target.value)} placeholder="Folder name" className="mt-1" />
           </div>
-          <div>
+          <div className="flex items-center gap-4">
             <label className="text-sm">Color</label>
-            <div className="mt-2 flex flex-wrap gap-2">
-              {['#0095ff', '#38b6ff', '#10b981', '#f59e0b', '#ef4444', '#a78bfa', '#f472b6', '#6b7280'].map(c => (
-                <button
-                  key={c}
-                  className="h-6 w-6 rounded-full border"
-                  style={{ backgroundColor: c, borderColor: 'rgba(255,255,255,0.25)' }}
-                  onClick={() => setColor(c)}
-                  aria-label={`Select color ${c}`}
-                  role="radio"
-                  aria-checked={color === c}
-                ></button>
-              ))}
-              <input type="color" value={color} onChange={e => setColor(e.target.value)} className="h-6 w-10 rounded" />
+            <div className="flex items-center">
+              <SpatialColorPicker
+                selectedColor={color}
+                onChange={setColor}
+                colors={['#0095ff', '#38b6ff', '#10b981', '#f59e0b', '#ef4444', '#a78bfa', '#f472b6', '#6b7280']}
+              />
             </div>
           </div>
         </div>

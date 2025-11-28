@@ -751,3 +751,132 @@
     flex-direction: column;
   }
 }
+
+/* -------------------------------------------------------------------------- */
+/*                           New Animations (Bulb & Comet)                    */
+/* -------------------------------------------------------------------------- */
+
+/* 1. Rotating Bulb with Light Emission */
+@keyframes rotate-bulb {
+  0% {
+    transform: rotate(0deg);
+  }
+
+  100% {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes emit-light {
+
+  0%,
+  100% {
+    box-shadow:
+      0 0 10px hsla(45, 100%, 50%, 0.1),
+      0 0 20px hsla(45, 100%, 50%, 0.05);
+  }
+
+  50% {
+    box-shadow:
+      0 0 20px hsla(45, 100%, 50%, 0.2),
+      0 0 30px hsla(45, 100%, 50%, 0.1);
+  }
+}
+
+.thinking-icon-animated {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, hsl(var(--terracotta-500)), hsl(var(--terracotta-600)));
+  border: 2px solid hsl(var(--terracotta-400));
+  color: hsl(var(--cream-50));
+  /* Combine rotation and light emission */
+  animation: emit-light 3s ease-in-out infinite;
+}
+
+/* The icon inside rotates */
+.thinking-icon-animated svg {
+  animation: rotate-bulb 8s linear infinite;
+}
+
+
+/* 2. Comet Border Effect for Status Pills */
+@property --angle {
+  syntax: '<angle>';
+  initial-value: 0deg;
+  inherits: false;
+}
+
+@keyframes rotate-gradient {
+  to {
+    --angle: 360deg;
+  }
+}
+
+.status-pill-running {
+  position: relative;
+  background: hsla(var(--sage-600), 0.15);
+  border: 1px solid transparent;
+  color: hsl(var(--sage-300));
+  /* Very subtle glow */
+  box-shadow: 0 0 5px hsla(var(--sage-500), 0.05);
+  /* Removed overflow: hidden to allow border to show */
+  z-index: 0;
+}
+
+/*
+   Space/Nebula Theme Comet Border (Blue/Purple/Cyan/White)
+   Single distinct, short tail, slow rotation, very thin border.
+*/
+.status-pill-running::before {
+  content: '';
+  position: absolute;
+  inset: -2px;
+  z-index: -1;
+  /* Single tail separated by transparency */
+  background: conic-gradient(from var(--angle),
+      transparent 0%,
+      #0ea5e9 5%,
+      /* Sky Blue */
+      #6366f1 10%,
+      /* Indigo */
+      #ffffff 12%,
+      /* White Highlight (Star) */
+      #8b5cf6 15%,
+      /* Violet */
+      transparent 20%,
+      transparent 100%);
+  /* Slow rotation */
+  animation: rotate-gradient 8s linear infinite;
+  border-radius: 12px;
+  padding: 0.75px;
+  /* Very thin border (0.25x reduction target) */
+
+  /* Masking to create the border effect */
+  -webkit-mask:
+    linear-gradient(#fff 0 0) content-box,
+    linear-gradient(#fff 0 0);
+  mask:
+    linear-gradient(#fff 0 0) content-box,
+    linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+
+  /* Even lower opacity for subtlety */
+  opacity: 0.8;
+}
+
+/* Ensure the background is still visible behind the text but inside the border */
+.status-pill-running::after {
+  content: '';
+  position: absolute;
+  inset: 1.5px;
+  /* Match padding of ::before */
+  background: hsla(var(--sage-600), 0.15);
+  border-radius: 10.5px;
+  z-index: -1;
+}

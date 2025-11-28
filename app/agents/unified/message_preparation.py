@@ -14,6 +14,7 @@ from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 from loguru import logger
 
 from .attachment_processor import AttachmentProcessor, get_attachment_processor
+from .multimodal_processor import MultimodalProcessor, get_multimodal_processor, ProcessedAttachments
 
 if TYPE_CHECKING:
     from app.agents.helpers.gemma_helper import GemmaHelper
@@ -54,6 +55,7 @@ class MessagePreparer:
         helper: Optional["GemmaHelper"] = None,
         session_cache: Optional[Dict[str, Dict[str, Any]]] = None,
         attachment_processor: Optional[AttachmentProcessor] = None,
+        multimodal_processor: Optional[MultimodalProcessor] = None,
     ):
         """Initialize the preparer.
 
@@ -61,10 +63,12 @@ class MessagePreparer:
             helper: GemmaHelper for summarization and rewriting.
             session_cache: Session cache for caching rewrites.
             attachment_processor: Attachment processor instance.
+            multimodal_processor: Multimodal processor for images/PDFs.
         """
         self.helper = helper
         self.session_cache = session_cache or {}
         self.attachment_processor = attachment_processor or get_attachment_processor()
+        self.multimodal_processor = multimodal_processor or get_multimodal_processor()
 
     async def prepare_messages(
         self,
@@ -116,18 +120,49 @@ class MessagePreparer:
             messages = await self._summarize_history(messages)
             stats["history_summarized"] = True
 
-        # 4. Inline attachments
+        # 4. Process attachments (multimodal for images/PDFs, text inline)
         if state.attachments:
-            summarizer = self.helper.summarize if self.helper else None
-            inline_text = await self.attachment_processor.inline_attachments(
-                state.attachments,
-                summarizer=summarizer,
-            )
-            if inline_text:
-                messages.append(
-                    SystemMessage(content=f"Attached logs/content:\n{inline_text}")
+            processed = self.multimodal_processor.process_attachments(state.attachments)
+
+            if processed.has_multimodal:
+                # Build multimodal HumanMessage with images/PDFs
+                human_message_replaced = False
+                for i in range(len(messages) - 1, -1, -1):
+                    if isinstance(messages[i], HumanMessage):
+                        user_text = self._coerce_message_text(messages[i])
+                        messages[i] = self._build_multimodal_human_message(
+                            user_text, processed
+                        )
+                        stats["multimodal_attachments"] = len(processed.multimodal_blocks)
+                        human_message_replaced = True
+                        break
+
+                if not human_message_replaced:
+                    fallback_text = (
+                        self._coerce_message_text(messages[-1])
+                        if messages
+                        else "User provided attachments."
+                    )
+                    messages.append(
+                        self._build_multimodal_human_message(
+                            fallback_text, processed
+                        )
+                    )
+                    stats["multimodal_attachments"] = len(processed.multimodal_blocks)
+
+                stats["attachments_inlined"] = (
+                    len(processed.multimodal_blocks)
+                    + (1 if processed.text_content else 0)
                 )
-                stats["attachments_inlined"] = len(state.attachments)
+            elif processed.text_content:
+                # Text-only: use existing SystemMessage approach
+                messages.append(
+                    SystemMessage(content=f"Attached files:\n{processed.text_content}")
+                )
+                stats["attachments_inlined"] = 1
+
+            if processed.skipped:
+                stats["attachments_skipped"] = len(processed.skipped)
 
         # 5. Compact context if too large
         estimated_tokens = self._estimate_tokens(messages)
@@ -290,10 +325,64 @@ class MessagePreparer:
 
         return str(content) if content is not None else ""
 
+    def _build_multimodal_human_message(
+        self,
+        user_text: str,
+        processed: ProcessedAttachments,
+    ) -> HumanMessage:
+        """Build a multimodal HumanMessage with text and image/PDF content blocks.
+
+        Args:
+            user_text: The original user message text.
+            processed: ProcessedAttachments with multimodal_blocks and text_content.
+
+        Returns:
+            HumanMessage with list-based content for Gemini vision API.
+        """
+        content: List[Dict[str, Any]] = []
+
+        # Combine user text with any text attachments
+        text_parts = [user_text]
+        if processed.text_content:
+            text_parts.append(f"\n\n--- Attached Files ---\n{processed.text_content}")
+
+        combined_text = "".join(text_parts)
+        content.append({"type": "text", "text": combined_text})
+
+        # Add multimodal blocks (images, PDFs)
+        content.extend(processed.multimodal_blocks)
+
+        logger.info(
+            "multimodal_message_built",
+            text_length=len(combined_text),
+            multimodal_blocks=len(processed.multimodal_blocks),
+        )
+
+        return HumanMessage(content=content)
+
     def _estimate_tokens(self, messages: List[BaseMessage]) -> int:
-        """Rough token estimation (~4 chars per token)."""
-        total_chars = sum(len(self._coerce_message_text(m)) for m in messages)
-        return int(total_chars / 4)
+        """Rough token estimation (~4 chars per token, ~1000 tokens per image)."""
+        total_tokens = 0
+
+        for msg in messages:
+            content = getattr(msg, "content", "")
+
+            if isinstance(content, str):
+                total_tokens += len(content) // 4
+            elif isinstance(content, list):
+                for part in content:
+                    if isinstance(part, dict):
+                        if part.get("type") == "text":
+                            total_tokens += len(str(part.get("text", ""))) // 4
+                        elif part.get("type") == "image_url":
+                            # Conservative estimate: ~1000 tokens per image/PDF
+                            total_tokens += 1000
+                    else:
+                        total_tokens += len(str(part)) // 4
+            else:
+                total_tokens += len(str(content)) // 4 if content else 0
+
+        return total_tokens
 
 
 # Module-level instance for convenience

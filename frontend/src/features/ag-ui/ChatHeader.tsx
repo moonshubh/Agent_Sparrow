@@ -22,6 +22,7 @@ interface ChatHeaderProps {
   recommendedModel?: string;
   activeTools?: string[];
   hasActiveConversation?: boolean;
+  resolvedTaskType?: string;
 }
 
 /**
@@ -40,14 +41,15 @@ export function ChatHeader({
   recommendedModel,
   activeTools,
   hasActiveConversation = false,
+  resolvedTaskType,
 }: ChatHeaderProps) {
   const router = useRouter();
   const activeToolCount = activeTools?.length ?? 0;
   const hasActiveTools = activeToolCount > 0;
   const agentBadge =
-    agentType === "log_analysis"
+    resolvedTaskType === "log_analysis" || agentType === "log_analysis"
       ? "Log Analysis"
-      : agentType === "research"
+      : resolvedTaskType === "research" || agentType === "research"
         ? "Research"
         : agentType === "auto"
           ? "Auto Route"

@@ -517,6 +517,43 @@ class StreamEventEmitter:
         """Get todos as list of dicts for state storage."""
         return [todo.to_dict() for todo in self.todo_items]
 
+    def start_next_todo(self) -> bool:
+        """Mark the next pending todo as in_progress."""
+        for todo in self.todo_items:
+            status = (todo.status or "pending").lower()  # type: ignore[attr-defined]
+            if status == "pending":
+                todo.status = "in_progress"  # type: ignore[attr-defined]
+                self._sync_todo_operations()
+                self._emit_todos()
+                return True
+        return False
+
+    def complete_active_todo(self) -> bool:
+        """Mark the first in-progress todo as done."""
+        for todo in self.todo_items:
+            status = (todo.status or "pending").lower()  # type: ignore[attr-defined]
+            if status == "in_progress":
+                todo.status = "done"  # type: ignore[attr-defined]
+                self._sync_todo_operations()
+                self._emit_todos()
+                return True
+        return False
+
+    def mark_all_todos_done(self) -> None:
+        """Mark all todos as done and emit updates."""
+        if not self.todo_items:
+            return
+
+        changed = False
+        for todo in self.todo_items:
+            if (todo.status or "pending").lower() != "done":  # type: ignore[attr-defined]
+                todo.status = "done"  # type: ignore[attr-defined]
+                changed = True
+
+        if changed:
+            self._sync_todo_operations()
+            self._emit_todos()
+
     # -------------------------------------------------------------------------
     # Private helpers
     # -------------------------------------------------------------------------
@@ -579,11 +616,12 @@ class StreamEventEmitter:
         # Create new todo operations
         for idx, todo in enumerate(self.todo_items):
             op_id = f"{self.root_id}-todo-{idx + 1}"
+            status = (todo.status or "pending").lower()  # type: ignore[attr-defined]
             op = TimelineOperation.create_todo(
                 todo_id=op_id,
                 title=todo.title,
                 parent_id=self.root_id,
-                status=todo.status,
+                status=status,
                 todo_data=todo.to_dict(),
             )
             self.operations[op_id] = op

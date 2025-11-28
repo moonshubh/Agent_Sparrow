@@ -157,20 +157,8 @@ export const EnhancedReasoningPanel: React.FC<EnhancedReasoningPanelProps> = ({
       {/* Panel Header */}
       <div className="reasoning-header" onClick={handleToggle}>
         <div className="header-left">
-          <div className="thinking-icon">
-            <motion.div
-              animate={{
-                rotate: [0, 180, 360],
-                scale: [1, 1.1, 1]
-              }}
-              transition={{
-                duration: 3,
-                repeat: Infinity,
-                ease: 'easeInOut'
-              }}
-            >
-              <Lightbulb className="w-5 h-5" />
-            </motion.div>
+          <div className="thinking-icon-animated">
+            <Lightbulb className="w-5 h-5" />
           </div>
           <div className="header-text">
             <h3 className="panel-title">Agent Reasoning</h3>
