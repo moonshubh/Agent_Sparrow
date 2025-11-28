@@ -12,6 +12,7 @@ import { TimelineOperation } from './timeline/AgenticTimelineView';
 import { ThinkingTrace } from './sidebar/ThinkingTrace';
 import { ToolEvidenceSidebar } from './evidence/ToolEvidenceSidebar';
 import { EnhancedReasoningPanel, PhaseData, ReasoningPhase } from './reasoning/EnhancedReasoningPanel';
+import { ArtifactProvider, ArtifactPanel } from './artifacts';
 
 interface ChatContainerProps {
   sessionId: string;
@@ -230,6 +231,7 @@ export function ChatContainer({
   const agentDisplayName = agentLabels[agentType] || 'Primary Support';
 
   return (
+    <ArtifactProvider>
     <main className="h-screen w-screen flex flex-col bg-background text-foreground font-serif overflow-hidden">
       <ChatHeader
         agentType={agentType}
@@ -356,6 +358,10 @@ export function ChatContainer({
           </div>
         )}
       </div>
+
+      {/* Artifact Panel - Modal overlay for viewing artifacts */}
+      <ArtifactPanel />
     </main>
+    </ArtifactProvider>
   );
 }

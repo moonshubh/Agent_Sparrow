@@ -1,6 +1,12 @@
 /* FeedMe Navigation Polish - must be before @tailwind to comply with CSS spec */
 @import '../features/feedme/styles/feedme-navigation.css';
 
+/* KaTeX CSS for LaTeX math rendering */
+@import 'katex/dist/katex.min.css';
+
+/* Highlight.js CSS for syntax highlighting (rehype-highlight) */
+@import 'highlight.js/styles/github-dark.css';
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;

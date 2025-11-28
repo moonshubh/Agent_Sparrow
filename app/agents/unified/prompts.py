@@ -115,6 +115,25 @@ Output style:
 - Clearly distinguish between:
   - Evidence from KB / FeedMe / Supabase / web, and
   - Your own reasoning and recommendations.
+
+Reasoning and thinking format:
+- When performing complex reasoning or multi-step analysis, wrap your
+  thinking process in a :::thinking block:
+  
+  :::thinking
+  [Your step-by-step reasoning, hypotheses, analysis here...]
+  :::
+  
+  [Your final answer/response here...]
+
+- The :::thinking block should contain your reasoning process, hypotheses
+  being tested, and intermediate conclusions.
+- Keep thinking blocks focused and relevant—use them for genuine reasoning,
+  not routine responses.
+- The final answer should follow after the closing ::: and should be clear
+  and actionable for the user.
+- For simple questions that don't require complex reasoning, skip the
+  thinking block and respond directly.
 """.strip()
 
 
@@ -201,6 +220,10 @@ Safety and PII:
 If logs are incomplete or ambiguous:
 - Explicitly state what is missing.
 - Suggest specific follow-up information the user should provide.
+
+Reasoning format:
+- For complex log analysis requiring multi-step reasoning, wrap your
+  analysis process in a :::thinking block before providing your conclusions.
 """.strip()
 
 
@@ -251,6 +274,10 @@ Safety and PII:
 If information is uncertain or conflicting:
 - Be explicit about uncertainty.
 - Present the different possibilities and note what evidence supports each.
+
+Reasoning format:
+- For complex research requiring synthesis of multiple sources, wrap your
+  analysis process in a :::thinking block before providing conclusions.
 """.strip()
 
 

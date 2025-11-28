@@ -1,17 +1,46 @@
 'use client';
 
-import React from 'react';
+import React, { useMemo } from 'react';
 import type { Message } from '@ag-ui/core';
 import type { AgentChoice } from '@/features/ag-ui/hooks/useAgentSelection';
 import type { AttachmentInput } from '@/services/ag-ui/types';
 import { EnhancedReasoningPanel } from '@/features/ag-ui/reasoning/EnhancedReasoningPanel';
 import { AttachmentPreviewList } from './components/AttachmentPreview';
+import { EnhancedMarkdown } from './components/EnhancedMarkdown';
+import { InlineThinking } from './components/InlineThinking';
 import { useAgent } from './AgentContext';
-import ReactMarkdown from 'react-markdown';
-import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
-import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import { cn } from '@/shared/lib/utils';
 import { User, Clock } from 'lucide-react';
+
+/**
+ * Parse thinking content from message text.
+ * Extracts :::thinking blocks and separates them from regular content.
+ * 
+ * Pattern: :::thinking\n{content}\n:::\n{response}
+ * 
+ * @param text - The full message content
+ * @returns Object with thinkingContent and regularContent
+ */
+function parseThinkingContent(text: string | undefined | null): {
+  thinkingContent: string;
+  regularContent: string;
+} {
+  // Handle null/undefined input gracefully
+  if (!text) {
+    return { thinkingContent: '', regularContent: '' };
+  }
+
+  // Match :::thinking ... ::: blocks (with or without newlines)
+  const thinkingMatch = text.match(/:::thinking\s*([\s\S]*?)\s*:::/);
+  
+  if (thinkingMatch) {
+    const thinkingContent = thinkingMatch[1].trim();
+    const regularContent = text.replace(/:::thinking\s*[\s\S]*?\s*:::/, '').trim();
+    return { thinkingContent, regularContent };
+  }
+  
+  return { thinkingContent: '', regularContent: text };
+}
 
 interface MessageItemProps {
   message: Message;
@@ -19,9 +48,11 @@ interface MessageItemProps {
   isStreaming: boolean;
   agentType?: AgentChoice;
   attachments?: AttachmentInput[];
+  /** Message index for deterministic ID generation (Issue #4: hydration stability) */
+  messageIndex: number;
 }
 
-function MessageItem({ message, isLast, isStreaming, agentType, attachments = [] }: MessageItemProps) {
+function MessageItem({ message, isLast, isStreaming, agentType, attachments = [], messageIndex }: MessageItemProps) {
   const isUser = message.role === 'user';
   const isSystem = message.role === 'system';
   const isTool = message.role === 'tool';
@@ -38,14 +69,22 @@ function MessageItem({ message, isLast, isStreaming, agentType, attachments = []
   const latestThought = metadata.latest_thought;
 
   // Format message content
-  const content = typeof message.content === 'string'
+  const rawContent = typeof message.content === 'string'
     ? message.content
     : JSON.stringify(message.content, null, 2);
+
+  // Parse thinking content for assistant messages (:::thinking blocks)
+  const { thinkingContent, regularContent } = useMemo(() => {
+    if (isUser) {
+      return { thinkingContent: '', regularContent: rawContent };
+    }
+    return parseThinkingContent(rawContent);
+  }, [rawContent, isUser]);
 
   return (
     <div
       className={cn(
-        'flex gap-4 mb-6 animate-in fade-in slide-in-from-bottom-2 duration-500',
+        'flex gap-4 mb-6 animate-in fade-in slide-in-from-bottom-2 duration-500 items-start',
         isUser ? 'flex-row-reverse' : 'flex-row'
       )}
     >
@@ -83,52 +122,27 @@ function MessageItem({ message, isLast, isStreaming, agentType, attachments = []
 
         <div
           className={cn(
-            'text-academia-base leading-relaxed',
+            'text-[17px] leading-relaxed',
             isUser
-              ? 'bg-chat-user-bg text-chat-user-text bubble-user px-5 py-3.5 shadow-academia-sm'
+              ? 'bg-chat-user-bg text-chat-user-text bubble-user px-5 py-3.5 shadow-academia-sm text-left'
               : 'bg-transparent text-foreground px-0 py-0' // Completely transparent, no padding for agent
           )}
         >
+          {/* Inline Thinking - Display for assistant messages with :::thinking blocks */}
+          {!isUser && thinkingContent && (
+            <InlineThinking thinkingText={thinkingContent} />
+          )}
 
+          {/* Main message content with enhanced markdown */}
           <div className={cn(
-            'prose prose-sm max-w-none prose-invert',
+            'prose max-w-none prose-invert [&>*]:text-[17px]',
             !isUser && 'prose-headings:text-foreground prose-p:text-foreground/90 prose-strong:text-foreground prose-code:text-terracotta-300'
           )}>
-            <ReactMarkdown
-              components={{
-                code({ node, inline, className, children, ...props }: any) {
-                  const match = /language-(\w+)/.exec(className || '');
-                  return !inline && match ? (
-                    <div className="rounded-organic overflow-hidden my-4 border border-border shadow-academia-sm">
-                      <div className="bg-secondary px-4 py-2 text-xs text-muted-foreground border-b border-border flex justify-between font-mono">
-                        <span>{match[1]}</span>
-                      </div>
-                      <SyntaxHighlighter
-                        {...props}
-                        style={vscDarkPlus}
-                        language={match[1]}
-                        PreTag="div"
-                        customStyle={{ margin: 0, borderRadius: 0, background: 'hsl(var(--code-block-bg))' }}
-                      >
-                        {String(children).replace(/\n$/, '')}
-                      </SyntaxHighlighter>
-                    </div>
-                  ) : (
-                    <code
-                      {...props}
-                      className={cn(
-                        className,
-                        'bg-secondary px-1.5 py-0.5 rounded-organic-sm text-xs font-mono text-terracotta-300',
-                      )}
-                    >
-                      {children}
-                    </code>
-                  );
-                },
-              }}
-            >
-              {content}
-            </ReactMarkdown>
+            <EnhancedMarkdown
+              content={regularContent}
+              isLatestMessage={isLast && isStreaming}
+              messageId={message.id || `msg-${messageIndex}`}
+            />
           </div>
 
           {/* Streaming indicator - Warm gold glow */}
@@ -196,6 +210,7 @@ export function MessageList({ messages, isStreaming, agentType }: MessageListPro
           isStreaming={isStreaming}
           agentType={agentType}
           attachments={message.id ? messageAttachments[message.id] : undefined}
+          messageIndex={idx}
         />
       ))}
     </div>

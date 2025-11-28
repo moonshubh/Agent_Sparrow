@@ -746,3 +746,7 @@ CopilotKit-main/
 
 # Prevent stray npm lockfiles in the pnpm workspace
 frontend/package-lock.json
+
+# Playwright screenshots and reports
+.playwright-mcp/
+playwright-report/
