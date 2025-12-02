@@ -98,6 +98,7 @@
     "remark-directive": "^3.0.0",
     "remark-gfm": "4.0.1",
     "remark-math": "^6.0.0",
+    "remark-supersub": "^1.0.0",
     "rxjs": "^7.8.2",
     "sonner": "^1.7.1",
     "streamdown": "1.4.0",

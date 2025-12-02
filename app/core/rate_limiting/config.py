@@ -21,7 +21,11 @@ def parse_boolean_env(value: str) -> bool:
 @dataclass
 class RateLimitConfig:
     """Configuration for rate limiting system."""
-    
+
+    # Gemini 3.0 Pro limits (preview tier)
+    gemini_3_pro_rpm_limit: int = 5    # Preview: 5 RPM
+    gemini_3_pro_rpd_limit: int = 200  # Preview: 200 RPD
+
     # Gemini 2.5 Flash limits (free tier)
     flash_rpm_limit: int = 10   # Free tier: 10 RPM
     flash_rpd_limit: int = 250  # Free tier: 250 RPD
@@ -29,7 +33,7 @@ class RateLimitConfig:
     # Gemini 2.5 Flash-Lite limits (free tier)
     flash_lite_rpm_limit: int = 15   # Free tier: 15 RPM
     flash_lite_rpd_limit: int = 1000  # Free tier: 1,000 RPD
-    
+
     # Gemini 2.5 Pro limits (free tier)
     pro_rpm_limit: int = 2       # Free tier: 2 RPM
     pro_rpd_limit: int = 50      # Free tier: 50 RPD
@@ -87,14 +91,16 @@ class RateLimitConfig:
     def from_environment(cls) -> "RateLimitConfig":
         """Create configuration from environment variables."""
         import os
-        
+
         return cls(
+            gemini_3_pro_rpm_limit=int(os.getenv("GEMINI_3_PRO_RPM_LIMIT", "20")),
+            gemini_3_pro_rpd_limit=int(os.getenv("GEMINI_3_PRO_RPD_LIMIT", "1000")),
             flash_rpm_limit=int(os.getenv("GEMINI_FLASH_RPM_LIMIT", "10")),
             flash_rpd_limit=int(os.getenv("GEMINI_FLASH_RPD_LIMIT", "250")),
             flash_lite_rpm_limit=int(os.getenv("GEMINI_FLASH_LITE_RPM_LIMIT", "15")),
             flash_lite_rpd_limit=int(os.getenv("GEMINI_FLASH_LITE_RPD_LIMIT", "1000")),
-            pro_rpm_limit=int(os.getenv("GEMINI_PRO_RPM_LIMIT", "2")),
-            pro_rpd_limit=int(os.getenv("GEMINI_PRO_RPD_LIMIT", "50")),
+            pro_rpm_limit=int(os.getenv("GEMINI_PRO_RPM_LIMIT", "10")),
+            pro_rpd_limit=int(os.getenv("GEMINI_PRO_RPD_LIMIT", "400")),
             redis_url=os.getenv("RATE_LIMIT_REDIS_URL", settings.redis_url),
             redis_key_prefix=os.getenv("RATE_LIMIT_REDIS_PREFIX", "mb_sparrow_rl"),
             redis_db=int(os.getenv("RATE_LIMIT_REDIS_DB", "3")),
@@ -113,6 +119,8 @@ class RateLimitConfig:
         """Get effective RPM and RPD limits for a model."""
         normalized = self.normalize_model_name(model)
 
+        if normalized == "gemini-3-pro":
+            return self.gemini_3_pro_rpm_limit, self.gemini_3_pro_rpd_limit
         if normalized == "gemini-2.5-flash":
             return self.flash_rpm_limit, self.flash_rpd_limit
         if normalized == "gemini-2.5-flash-lite":
@@ -141,7 +149,9 @@ class RateLimitConfig:
         if candidate.startswith("models/"):
             candidate = candidate[len("models/"):]
 
+        # Order matters: check more specific patterns first (e.g., flash-lite before flash)
         base_candidates = (
+            "gemini-3-pro",         # Gemini 3.0 Pro (newest)
             "gemini-2.5-flash-lite",
             "gemini-2.5-flash",
             "gemini-2.5-pro",

@@ -261,6 +261,10 @@ class WebSearchInput(BaseModel):
         le=10,
         description="Maximum number of URLs to return.",
     )
+    include_images: bool = Field(
+        default=True,
+        description="Whether to include image results in the response.",
+    )
 
 
 class GroundingSearchInput(BaseModel):
@@ -290,6 +294,40 @@ class SupabaseQueryInput(BaseModel):
     limit: int = Field(default=20, ge=1, le=100, description="Max rows to return.")
     order_by: Optional[str] = Field(default=None, description="Optional column to order by.")
     ascending: bool = Field(default=True, description="Order direction when order_by is set.")
+
+
+# --- Database Retrieval Subagent Input Schemas ---
+
+
+class DbUnifiedSearchInput(BaseModel):
+    """Unified semantic search across all internal sources."""
+
+    query: str = Field(..., description="Natural language search query")
+    sources: List[str] = Field(
+        default=["kb", "macros", "feedme"],
+        description="Sources to search: kb, macros, feedme",
+    )
+    max_results_per_source: int = Field(default=5, ge=1, le=10)
+    min_relevance: float = Field(default=0.3, ge=0.0, le=1.0)
+
+
+class DbGrepSearchInput(BaseModel):
+    """Pattern-based text search (like grep) for precise matching."""
+
+    pattern: str = Field(..., description="Text pattern or regex to search for")
+    sources: List[str] = Field(
+        default=["kb", "macros", "feedme"],
+        description="Sources to search: kb, macros, feedme",
+    )
+    case_sensitive: bool = Field(default=False, description="Case-sensitive matching")
+    max_results: int = Field(default=10, ge=1, le=20)
+
+
+class DbContextSearchInput(BaseModel):
+    """Retrieve full document and surrounding context by ID."""
+
+    source: str = Field(..., description="Source type: kb, macro, or feedme")
+    doc_id: str = Field(..., description="Document ID to retrieve")
 
 
 def _serialize_tool_output(payload: Any) -> str:
@@ -369,8 +407,120 @@ class LogDiagnoserInput(BaseModel):
     )
 
 
-class FirecrawlInput(BaseModel):
+class FirecrawlFetchInput(BaseModel):
+    """Enhanced input schema for Firecrawl fetch with advanced options."""
     url: str = Field(..., description="URL to scrape for detailed content.")
+    formats: Optional[List[str]] = Field(
+        default=None,
+        description="Output formats: markdown, html, screenshot, links, rawHtml. Default: ['markdown']"
+    )
+    actions: Optional[List[Dict[str, Any]]] = Field(
+        default=None,
+        description="Page actions before scraping: [{type: 'click'|'scroll'|'wait'|'write'|'press', ...}]"
+    )
+    wait_for: Optional[int] = Field(
+        default=None,
+        description="Wait time in milliseconds for dynamic content to load."
+    )
+    only_main_content: bool = Field(
+        default=True,
+        description="Extract main content only, filtering out navigation/ads."
+    )
+    json_schema: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="JSON schema for structured extraction (enables JSON mode)."
+    )
+
+
+class FirecrawlMapInput(BaseModel):
+    """Input schema for Firecrawl map (URL discovery)."""
+    url: str = Field(..., description="Base URL to map and discover all pages.")
+    limit: int = Field(
+        default=100,
+        ge=1,
+        le=1000,
+        description="Maximum URLs to discover."
+    )
+    search: Optional[str] = Field(
+        default=None,
+        description="Filter URLs containing this string."
+    )
+    include_subdomains: bool = Field(
+        default=False,
+        description="Include subdomains in results."
+    )
+
+
+class FirecrawlCrawlInput(BaseModel):
+    """Input schema for Firecrawl crawl (multi-page extraction)."""
+    url: str = Field(..., description="Starting URL to crawl.")
+    limit: int = Field(
+        default=10,
+        ge=1,
+        le=50,
+        description="Max pages to crawl. <=10 is sync, >10 is async."
+    )
+    max_depth: int = Field(
+        default=2,
+        ge=1,
+        le=5,
+        description="Maximum link depth to follow."
+    )
+    include_paths: Optional[List[str]] = Field(
+        default=None,
+        description="Only crawl paths matching these patterns (e.g., ['/blog/*'])."
+    )
+    exclude_paths: Optional[List[str]] = Field(
+        default=None,
+        description="Skip paths matching these patterns (e.g., ['/admin/*'])."
+    )
+
+
+class FirecrawlCrawlStatusInput(BaseModel):
+    """Input schema for checking async crawl status."""
+    crawl_id: str = Field(..., description="Crawl job ID from async crawl.")
+
+
+class FirecrawlExtractInput(BaseModel):
+    """Input schema for Firecrawl extract (AI-powered structured extraction)."""
+    urls: List[str] = Field(..., description="URLs to extract data from.")
+    prompt: Optional[str] = Field(
+        default=None,
+        description="Natural language extraction prompt (e.g., 'Extract product prices')."
+    )
+    schema: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="JSON schema for structured extraction."
+    )
+    enable_web_search: bool = Field(
+        default=False,
+        description="Enable web search for additional context."
+    )
+
+    @model_validator(mode="after")
+    def validate_prompt_or_schema(self):
+        if not self.prompt and not self.schema:
+            raise ValueError("Either 'prompt' or 'schema' must be provided for extraction.")
+        return self
+
+
+class FirecrawlSearchInput(BaseModel):
+    """Input schema for Firecrawl enhanced search."""
+    query: str = Field(..., description="Search query string.")
+    limit: int = Field(
+        default=5,
+        ge=1,
+        le=10,
+        description="Maximum number of results."
+    )
+    sources: List[str] = Field(
+        default=["web"],
+        description="Sources to search: web, images, news."
+    )
+    scrape_options: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Options for scraping search results."
+    )
 
 
 @tool("log_diagnoser", args_schema=LogDiagnoserInput)
@@ -445,17 +595,25 @@ async def web_search_tool(
     input: Optional[WebSearchInput] = None,
     query: Optional[str] = None,
     max_results: int = 5,
+    include_images: bool = True,
 ) -> Dict[str, Any]:
     """Search the public web using Tavily for broader context with retry logic.
 
     Supports both structured invocation with a WebSearchInput object and
-    direct kwargs (query, max_results) so that LangChain/DeepAgents tool
+    direct kwargs (query, max_results, include_images) so that LangChain/DeepAgents tool
     calls that pass raw arguments continue to work.
+    
+    Returns a dict containing:
+    - query: The search query
+    - results: List of search result objects
+    - urls: List of result URLs
+    - images: List of image objects with url, alt, source, width, height
+    - attribution: Attribution from the search provider
     """
 
     # Normalize inputs regardless of how the tool is invoked
     if input is None:
-        input = WebSearchInput(query=query or "", max_results=max_results)
+        input = WebSearchInput(query=query or "", max_results=max_results, include_images=include_images)
 
     max_retries = 3
     tavily = _tavily_client()
@@ -463,12 +621,18 @@ async def web_search_tool(
     for attempt in range(max_retries):
         try:
             logger.info(
-                f"web_search_tool_invoked query='{input.query}' max_results={input.max_results} attempt={attempt + 1}"
+                f"web_search_tool_invoked query='{input.query}' max_results={input.max_results} include_images={input.include_images} attempt={attempt + 1}"
             )
-            result = await asyncio.to_thread(tavily.search, input.query, input.max_results)
+            result = await asyncio.to_thread(
+                tavily.search, 
+                input.query, 
+                input.max_results,
+                input.include_images
+            )
             urls = result.get("urls") if isinstance(result, dict) else None
+            images = result.get("images") if isinstance(result, dict) else None
             logger.info(
-                f"web_search_tool_success query='{input.query}' urls={len(urls or [])}"
+                f"web_search_tool_success query='{input.query}' urls={len(urls or [])} images={len(images or [])}"
             )
             return result
         except Exception as e:
@@ -524,27 +688,67 @@ async def grounding_search_tool(
         return await _grounding_fallback(input.query, input.max_results, reason="service_error")
 
 
-@tool("fetch_url", args_schema=FirecrawlInput)
+@tool("fetch_url", args_schema=FirecrawlFetchInput)
 @rate_limited(TOOL_RATE_LIMIT_MODEL, fail_gracefully=True)
 async def firecrawl_fetch_tool(
-    input: Optional[FirecrawlInput] = None,
+    input: Optional[FirecrawlFetchInput] = None,
     url: Optional[str] = None,
+    formats: Optional[List[str]] = None,
+    actions: Optional[List[Dict[str, Any]]] = None,
+    wait_for: Optional[int] = None,
+    only_main_content: bool = True,
+    json_schema: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    """Fetch structured content from a URL via Firecrawl with retry logic."""
+    """Fetch and scrape URL with advanced options (screenshots, actions, JSON mode).
+
+    Supports both structured invocation with a FirecrawlFetchInput object and
+    direct kwargs so that LangChain/DeepAgents tool calls work regardless of
+    how arguments are passed.
+
+    Features:
+    - Multiple output formats: markdown, html, screenshot, links, rawHtml
+    - Page actions: click, scroll, wait, write, press before scraping
+    - JSON mode: Extract structured data with schema
+    - Dynamic content: Wait for JS-rendered content
+    """
 
     if input is None:
-        input = FirecrawlInput(url=url or "")
+        input = FirecrawlFetchInput(
+            url=url or "",
+            formats=formats,
+            actions=actions,
+            wait_for=wait_for,
+            only_main_content=only_main_content,
+            json_schema=json_schema,
+        )
 
     max_retries = 3
     firecrawl = _firecrawl_client()
+
+    # Determine if we need advanced scraping or basic
+    use_advanced = bool(input.formats or input.actions or input.wait_for or input.json_schema)
 
     last_error: Optional[Exception] = None
     for attempt in range(max_retries):
         try:
             logger.info(
-                f"firecrawl_fetch_tool_invoked url='{input.url}' attempt={attempt + 1}"
+                f"firecrawl_fetch_tool_invoked url='{input.url}' advanced={use_advanced} attempt={attempt + 1}"
             )
-            result = await asyncio.to_thread(firecrawl.scrape_url, input.url)
+
+            if use_advanced:
+                result = await asyncio.to_thread(
+                    firecrawl.scrape_with_options,
+                    input.url,
+                    formats=input.formats,
+                    actions=input.actions,
+                    wait_for=input.wait_for,
+                    # avoid onlyMainContent arg for compatibility
+                    json_schema=input.json_schema,
+                )
+            else:
+                # Use fetch as default for grounding to reduce Gemini grounding calls in Zendesk flows
+                result = await asyncio.to_thread(firecrawl.scrape_url, input.url)
+
             logger.info(
                 f"firecrawl_fetch_tool_success url='{input.url}' has_error={'error' in (result or {})}"
             )
@@ -575,16 +779,277 @@ async def firecrawl_fetch_tool(
         ) from http_exc
 
 
+@tool("firecrawl_map", args_schema=FirecrawlMapInput)
+@rate_limited(TOOL_RATE_LIMIT_MODEL, fail_gracefully=True)
+async def firecrawl_map_tool(
+    input: Optional[FirecrawlMapInput] = None,
+    url: Optional[str] = None,
+    limit: int = 100,
+    search: Optional[str] = None,
+    include_subdomains: bool = False,
+) -> Dict[str, Any]:
+    """Discover all URLs on a website quickly.
+
+    Use this tool to:
+    - Map a website's structure before selective scraping
+    - Find all pages matching a pattern (e.g., blog posts, products)
+    - Discover sitemaps and subpages
+
+    Returns a list of discovered URLs.
+    """
+
+    if input is None:
+        input = FirecrawlMapInput(
+            url=url or "",
+            limit=limit,
+            search=search,
+            include_subdomains=include_subdomains,
+        )
+
+    firecrawl = _firecrawl_client()
+
+    try:
+        logger.info(
+            f"firecrawl_map_tool_invoked url='{input.url}' limit={input.limit} search='{input.search}'"
+        )
+        result = await asyncio.to_thread(
+            firecrawl.map_website,
+            input.url,
+            limit=input.limit,
+            search=input.search,
+            include_subdomains=input.include_subdomains,
+        )
+        logger.info(
+            f"firecrawl_map_tool_success url='{input.url}' urls_found={len(result.get('links', result.get('urls', []))) if isinstance(result, dict) else 0}"
+        )
+        if isinstance(result, dict) and result.get("error"):
+            raise RuntimeError(result["error"])
+        return result
+    except Exception as e:
+        logger.error(f"firecrawl_map_tool_error url='{input.url}' error='{str(e)}'")
+        return {"error": str(e)}
+
+
+@tool("firecrawl_crawl", args_schema=FirecrawlCrawlInput)
+@rate_limited(TOOL_RATE_LIMIT_MODEL, fail_gracefully=True)
+async def firecrawl_crawl_tool(
+    input: Optional[FirecrawlCrawlInput] = None,
+    url: Optional[str] = None,
+    limit: int = 10,
+    max_depth: int = 2,
+    include_paths: Optional[List[str]] = None,
+    exclude_paths: Optional[List[str]] = None,
+) -> Dict[str, Any]:
+    """Crawl a website and extract content from multiple pages.
+
+    Behavior:
+    - limit <= 10: Synchronous crawl (waits for completion, returns results)
+    - limit > 10: Async crawl (returns crawl_id for status polling)
+
+    Use firecrawl_crawl_status to check progress of async crawls.
+    """
+
+    if input is None:
+        input = FirecrawlCrawlInput(
+            url=url or "",
+            limit=limit,
+            max_depth=max_depth,
+            include_paths=include_paths,
+            exclude_paths=exclude_paths,
+        )
+
+    firecrawl = _firecrawl_client()
+
+    try:
+        logger.info(
+            f"firecrawl_crawl_tool_invoked url='{input.url}' limit={input.limit} max_depth={input.max_depth}"
+        )
+        result = await asyncio.to_thread(
+            firecrawl.crawl,
+            input.url,
+            limit=input.limit,
+            max_depth=input.max_depth,
+            include_paths=input.include_paths,
+            exclude_paths=input.exclude_paths,
+        )
+        logger.info(
+            f"firecrawl_crawl_tool_success url='{input.url}' status={result.get('status', 'unknown')}"
+        )
+        if isinstance(result, dict) and result.get("error"):
+            raise RuntimeError(result["error"])
+        return result
+    except Exception as e:
+        logger.error(f"firecrawl_crawl_tool_error url='{input.url}' error='{str(e)}'")
+        return {"error": str(e)}
+
+
+@tool("firecrawl_crawl_status", args_schema=FirecrawlCrawlStatusInput)
+@rate_limited(TOOL_RATE_LIMIT_MODEL, fail_gracefully=True)
+async def firecrawl_crawl_status_tool(
+    input: Optional[FirecrawlCrawlStatusInput] = None,
+    crawl_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Check the status and get results of an async crawl job.
+
+    Use this after starting an async crawl (limit > 10) to:
+    - Check if crawl is still running
+    - Get partial or complete results
+    - Monitor progress
+    """
+
+    if input is None:
+        input = FirecrawlCrawlStatusInput(crawl_id=crawl_id or "")
+
+    firecrawl = _firecrawl_client()
+
+    try:
+        logger.info(f"firecrawl_crawl_status_tool_invoked crawl_id='{input.crawl_id}'")
+        result = await asyncio.to_thread(firecrawl.get_crawl_status, input.crawl_id)
+        logger.info(
+            f"firecrawl_crawl_status_tool_success crawl_id='{input.crawl_id}' status={result.get('status', 'unknown') if isinstance(result, dict) else 'unknown'}"
+        )
+        if isinstance(result, dict) and result.get("error"):
+            raise RuntimeError(result["error"])
+        return result
+    except Exception as e:
+        logger.error(f"firecrawl_crawl_status_tool_error crawl_id='{input.crawl_id}' error='{str(e)}'")
+        return {"error": str(e)}
+
+
+@tool("firecrawl_extract", args_schema=FirecrawlExtractInput)
+@rate_limited(TOOL_RATE_LIMIT_MODEL, fail_gracefully=True)
+async def firecrawl_extract_tool(
+    input: Optional[FirecrawlExtractInput] = None,
+    urls: Optional[List[str]] = None,
+    prompt: Optional[str] = None,
+    schema: Optional[Dict[str, Any]] = None,
+    enable_web_search: bool = False,
+) -> Dict[str, Any]:
+    """Extract structured data from web pages using AI.
+
+    Use this tool to:
+    - Extract specific information (prices, contacts, specs)
+    - Convert unstructured content to structured data
+    - Get data in a specific JSON schema format
+
+    Either 'prompt' or 'schema' must be provided.
+    """
+
+    if input is None:
+        input = FirecrawlExtractInput(
+            urls=urls or [],
+            prompt=prompt,
+            schema=schema,
+            enable_web_search=enable_web_search,
+        )
+
+    firecrawl = _firecrawl_client()
+
+    try:
+        logger.info(
+            f"firecrawl_extract_tool_invoked urls={len(input.urls)} has_prompt={bool(input.prompt)} has_schema={bool(input.schema)}"
+        )
+        result = await asyncio.to_thread(
+            firecrawl.extract,
+            input.urls,
+            prompt=input.prompt,
+            schema=input.schema,
+            enable_web_search=input.enable_web_search,
+        )
+        logger.info(f"firecrawl_extract_tool_success urls={len(input.urls)}")
+        if isinstance(result, dict) and result.get("error"):
+            raise RuntimeError(result["error"])
+        return result
+    except Exception as e:
+        logger.error(f"firecrawl_extract_tool_error urls={len(input.urls)} error='{str(e)}'")
+        return {"error": str(e)}
+
+
+@tool("firecrawl_search", args_schema=FirecrawlSearchInput)
+@rate_limited(TOOL_RATE_LIMIT_MODEL, fail_gracefully=True)
+async def firecrawl_search_tool(
+    input: Optional[FirecrawlSearchInput] = None,
+    query: Optional[str] = None,
+    limit: int = 5,
+    sources: Optional[List[str]] = None,
+    scrape_options: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Search the web with multiple sources (web, images, news).
+
+    Use this tool for:
+    - Finding current information across the web
+    - Image search with visual results
+    - News search for recent events
+    - Optionally scrape search result pages for full content
+    """
+
+    if input is None:
+        input = FirecrawlSearchInput(
+            query=query or "",
+            limit=limit,
+            sources=sources or ["web"],
+            scrape_options=scrape_options,
+        )
+
+    firecrawl = _firecrawl_client()
+
+    try:
+        logger.info(
+            f"firecrawl_search_tool_invoked query='{input.query}' limit={input.limit} sources={input.sources}"
+        )
+        result = await asyncio.to_thread(
+            firecrawl.search_web,
+            input.query,
+            limit=input.limit,
+            sources=input.sources,
+            scrape_options=input.scrape_options,
+        )
+        logger.info(
+            f"firecrawl_search_tool_success query='{input.query}' results={len(result.get('data', {}).get('web', [])) if isinstance(result, dict) else 0}"
+        )
+        if isinstance(result, dict) and result.get("error"):
+            raise RuntimeError(result["error"])
+        return result
+    except Exception as e:
+        logger.error(f"firecrawl_search_tool_error query='{input.query}' error='{str(e)}'")
+        return {"error": str(e)}
+
+
 def get_registered_tools() -> List[BaseTool]:
-    """Return the tools bound to the unified agent."""
+    """Return the tools bound to the unified agent.
+
+    Search tool priority order:
+    1. grounding_search_tool (Gemini grounding - fastest, most reliable)
+    2. web_search_tool (Tavily - good general web search with images)
+    3. firecrawl_search_tool (Firecrawl - web/images/news search)
+    4. firecrawl_fetch_tool (Firecrawl - deep URL extraction with advanced options)
+
+    Firecrawl tools:
+    - fetch_url: Single page scrape with screenshots, actions, JSON mode
+    - firecrawl_map: Discover all URLs on a website
+    - firecrawl_crawl: Multi-page extraction (sync/async)
+    - firecrawl_crawl_status: Check async crawl progress
+    - firecrawl_extract: AI-powered structured data extraction
+    - firecrawl_search: Web search with multiple sources
+    """
 
     return [
         kb_search_tool,
         grounding_search_tool,
         web_search_tool,
+        # Firecrawl tools - full web scraping and extraction suite
+        firecrawl_fetch_tool,         # Enhanced single-page scrape (screenshots, actions, JSON)
+        firecrawl_map_tool,           # URL discovery
+        firecrawl_crawl_tool,         # Multi-page extraction
+        firecrawl_crawl_status_tool,  # Async crawl status
+        firecrawl_extract_tool,       # AI structured extraction
+        firecrawl_search_tool,        # Enhanced web search
+        # Other tools
         feedme_search_tool,
         supabase_query_tool,
         log_diagnoser_tool,
+        generate_image_tool,          # Gemini Nano Banana Pro image generation
+        write_article_tool,           # Rich article/report artifact creation
         get_weather,
         generate_task_steps_generative_ui,
         write_todos,
@@ -781,11 +1246,19 @@ async def generate_task_steps_generative_ui(
 
 @tool("write_todos", args_schema=WriteTodosInput)
 def write_todos(todos: List[TodoPayload], **_: Any):
-    """Update the task todo list.
+    """Create or update the task todo list displayed to the user.
 
-    Keep it short (3-6 items), imperative, and update statuses as you progress.
-    This tool is tolerant of slightly malformed tool calls and will do its best
-    to coerce arbitrary items into well-formed todos.
+    Use this tool FREQUENTLY to track your work and show progress to the user.
+    Call it:
+    - BEFORE starting any multi-step task to plan your approach
+    - DURING work to update statuses (pending → in_progress → done)
+    - When completing each step to mark it done
+
+    Each todo should have:
+    - title: Short, imperative task description (5-10 words)
+    - status: 'pending', 'in_progress', or 'done'
+
+    Keep it to 3-6 items. The UI displays these in real-time to the user.
     """
 
     input = WriteTodosInput(todos=todos)
@@ -1015,3 +1488,711 @@ async def supabase_query_tool(
 
     rows = response.data or []
     return [redact_pii_from_dict(row) for row in rows]
+
+
+# --- Database Retrieval Subagent Tools ---
+
+FEEDME_SUMMARIZE_THRESHOLD = 3000  # Chars threshold for FeedMe summarization
+
+
+def _format_result_with_content_type(
+    source: str,
+    title: str,
+    content: str,
+    relevance_score: float,
+    metadata: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Format a result with content_type indicator for long FeedMe content."""
+    content_len = len(content or "")
+    result = {
+        "source": source,
+        "title": title,
+        "content": content,
+        "content_type": "full",
+        "relevance_score": relevance_score,
+        "metadata": metadata,
+    }
+
+    # For FeedMe, indicate if content was summarized
+    if source == "feedme" and content_len > FEEDME_SUMMARIZE_THRESHOLD:
+        result["content_type"] = "summarized"
+        result["original_length"] = content_len
+
+    return result
+
+
+@tool("db_unified_search", args_schema=DbUnifiedSearchInput)
+async def db_unified_search_tool(
+    query: str,
+    sources: Optional[List[str]] = None,
+    max_results_per_source: int = 5,
+    min_relevance: float = 0.3,
+) -> Dict[str, Any]:
+    """Semantic search across all database sources in parallel.
+
+    Returns FULL content for KB/macros. For FeedMe >3000 chars,
+    marks content_type as 'summarized' to indicate the agent should
+    polish it while preserving key details.
+    """
+    if sources is None:
+        sources = ["kb", "macros", "feedme"]
+
+    retrieval_id = f"ret-{uuid.uuid4().hex[:8]}"
+    results: List[Dict[str, Any]] = []
+    sources_searched: List[str] = []
+    no_results_sources: List[str] = []
+
+    client = _supabase_client_cached()
+    if getattr(client, "mock_mode", False):
+        logger.warning("Supabase mock mode active; db_unified_search returning empty")
+        return {
+            "retrieval_id": retrieval_id,
+            "query_understood": query,
+            "sources_searched": sources,
+            "results": [],
+            "result_count": 0,
+            "no_results_sources": sources,
+        }
+
+    effective_query = _rewrite_search_query(query)
+    emb_model = embedding_utils.get_embedding_model()
+    loop = asyncio.get_running_loop()
+    query_vec = await loop.run_in_executor(None, emb_model.embed_query, effective_query)
+
+    # Search KB using search_mailbird_knowledge RPC (sync call wrapped in thread)
+    if "kb" in sources:
+        sources_searched.append("kb")
+        try:
+            def _search_kb():
+                return client.client.rpc(
+                    "search_mailbird_knowledge",
+                    {
+                        "query_embedding": query_vec,
+                        "match_count": max_results_per_source,
+                        "match_threshold": min_relevance,
+                    },
+                ).execute()
+
+            kb_results = await asyncio.to_thread(_search_kb)
+            kb_rows = kb_results.data or []
+            if kb_rows:
+                for row in kb_rows[:max_results_per_source]:
+                    # Use 'content' or 'markdown' field for full content
+                    content = row.get("content") or row.get("markdown") or ""
+                    # Extract title from URL if available
+                    url = row.get("url", "")
+                    title = url.split("/")[-1].replace("-", " ").title() if url else "KB Article"
+                    results.append(_format_result_with_content_type(
+                        source="kb",
+                        title=title,
+                        content=content,  # Full content
+                        relevance_score=float(row.get("similarity", 0.0)),
+                        metadata={"id": row.get("id"), "url": url},
+                    ))
+            else:
+                no_results_sources.append("kb")
+        except Exception as exc:
+            logger.error("DB retrieval KB search failed: %s", exc)
+            no_results_sources.append("kb")
+
+    # Search Macros using search_zendesk_macros RPC (sync call wrapped in thread)
+    # Note: param order is match_threshold, match_count (different from KB)
+    if "macros" in sources:
+        sources_searched.append("macros")
+        try:
+            def _search_macros():
+                return client.client.rpc(
+                    "search_zendesk_macros",
+                    {
+                        "query_embedding": query_vec,
+                        "match_threshold": min_relevance,
+                        "match_count": max_results_per_source,
+                    },
+                ).execute()
+
+            macro_results = await asyncio.to_thread(_search_macros)
+            macro_rows = macro_results.data or []
+            if macro_rows:
+                for row in macro_rows[:max_results_per_source]:
+                    # Full macro content
+                    content = row.get("comment_value", "") or row.get("description", "")
+                    results.append(_format_result_with_content_type(
+                        source="macro",
+                        title=row.get("title", "Macro"),
+                        content=content,
+                        relevance_score=float(row.get("similarity", 0.0)),
+                        metadata={"zendesk_id": row.get("zendesk_id")},
+                    ))
+            else:
+                no_results_sources.append("macros")
+        except Exception as exc:
+            logger.error("DB retrieval macros search failed: %s", exc)
+            no_results_sources.append("macros")
+
+    # Search FeedMe
+    if "feedme" in sources:
+        sources_searched.append("feedme")
+        try:
+            feedme_rows = await client.search_text_chunks(
+                query_vec,
+                match_count=max_results_per_source * 3,
+            )
+            # Aggregate by conversation
+            conv_data: Dict[int, Dict[str, Any]] = {}
+            for row in feedme_rows or []:
+                conv_id = row.get("conversation_id")
+                if conv_id is None:
+                    continue
+                try:
+                    conv_id = int(conv_id)
+                except Exception:
+                    continue
+                if conv_id not in conv_data:
+                    conv_data[conv_id] = {
+                        "content_parts": [],
+                        "max_similarity": 0.0,
+                    }
+                conv_data[conv_id]["content_parts"].append(row.get("content", ""))
+                sim = float(row.get("similarity", 0.0))
+                if sim > conv_data[conv_id]["max_similarity"]:
+                    conv_data[conv_id]["max_similarity"] = sim
+
+            # Get conversation details and build results
+            if conv_data:
+                conv_details = await client.get_conversations_by_ids(list(conv_data.keys()))
+                for conv_id, data in list(conv_data.items())[:max_results_per_source]:
+                    details = (conv_details or {}).get(conv_id, {})
+                    # Combine all content parts for full context
+                    full_content = "\n\n".join(data["content_parts"])
+                    full_content = redact_pii(full_content)
+                    results.append(_format_result_with_content_type(
+                        source="feedme",
+                        title=details.get("title", f"Conversation {conv_id}"),
+                        content=full_content,  # Full or marked for summarization if >3000
+                        relevance_score=data["max_similarity"],
+                        metadata={
+                            "id": conv_id,
+                            "created_at": details.get("created_at"),
+                            "folder_id": details.get("folder_id"),
+                        },
+                    ))
+            else:
+                no_results_sources.append("feedme")
+        except Exception as exc:
+            logger.error("DB retrieval FeedMe search failed: %s", exc)
+            no_results_sources.append("feedme")
+
+    # Sort by relevance
+    results.sort(key=lambda r: r.get("relevance_score", 0), reverse=True)
+
+    return {
+        "retrieval_id": retrieval_id,
+        "query_understood": query,
+        "sources_searched": sources_searched,
+        "results": results,
+        "result_count": len(results),
+        "no_results_sources": no_results_sources,
+    }
+
+
+@tool("db_grep_search", args_schema=DbGrepSearchInput)
+async def db_grep_search_tool(
+    pattern: str,
+    sources: Optional[List[str]] = None,
+    case_sensitive: bool = False,
+    max_results: int = 10,
+) -> Dict[str, Any]:
+    """Pattern-based text search like grep for exact term matching.
+
+    Use this when you need to find:
+    - Exact error messages or codes
+    - Specific configuration values
+    - Technical terms or identifiers
+    - Regex patterns
+    """
+    if sources is None:
+        sources = ["kb", "macros", "feedme"]
+
+    retrieval_id = f"grep-{uuid.uuid4().hex[:8]}"
+    results: List[Dict[str, Any]] = []
+    sources_searched: List[str] = []
+
+    client = _supabase_client_cached()
+    if getattr(client, "mock_mode", False):
+        return {
+            "retrieval_id": retrieval_id,
+            "pattern": pattern,
+            "sources_searched": sources,
+            "results": [],
+            "result_count": 0,
+        }
+
+    # Build search pattern for ILIKE or regex
+    ilike_pattern = f"%{pattern}%"
+
+    # Search KB with text pattern (mailbird_knowledge has: id, url, content, markdown)
+    if "kb" in sources:
+        sources_searched.append("kb")
+        try:
+            query_builder = client.client.table("mailbird_knowledge").select("id, url, content, markdown")
+            if case_sensitive:
+                query_builder = query_builder.like("content", ilike_pattern)
+            else:
+                query_builder = query_builder.ilike("content", ilike_pattern)
+            kb_resp = await asyncio.to_thread(lambda: query_builder.limit(max_results).execute())
+            for row in kb_resp.data or []:
+                content = row.get("content") or row.get("markdown") or ""
+                url = row.get("url", "")
+                # Extract title from URL
+                title = url.split("/")[-1].replace("-", " ").title() if url else "KB Article"
+                results.append({
+                    "source": "kb",
+                    "title": title,
+                    "content": content,
+                    "content_type": "full",
+                    "match_pattern": pattern,
+                    "metadata": {"id": row.get("id"), "url": url},
+                })
+        except Exception as exc:
+            logger.error("DB grep KB search failed: %s", exc)
+
+    # Search Macros with text pattern
+    if "macros" in sources:
+        sources_searched.append("macros")
+        try:
+            query_builder = client.client.table("zendesk_macros").select("zendesk_id, title, comment_value, usage_30d")
+            if case_sensitive:
+                query_builder = query_builder.like("comment_value", ilike_pattern)
+            else:
+                query_builder = query_builder.ilike("comment_value", ilike_pattern)
+            macro_resp = await asyncio.to_thread(lambda: query_builder.limit(max_results).execute())
+            for row in macro_resp.data or []:
+                results.append({
+                    "source": "macro",
+                    "title": row.get("title", "Macro"),
+                    "content": row.get("comment_value", ""),
+                    "content_type": "full",
+                    "match_pattern": pattern,
+                    "metadata": {"zendesk_id": row.get("zendesk_id"), "usage_30d": row.get("usage_30d")},
+                })
+        except Exception as exc:
+            logger.error("DB grep macros search failed: %s", exc)
+
+    # Search FeedMe with text pattern
+    if "feedme" in sources:
+        sources_searched.append("feedme")
+        try:
+            # Search in feedme_text_chunks for pattern
+            query_builder = client.client.table("feedme_text_chunks").select("conversation_id, content")
+            if case_sensitive:
+                query_builder = query_builder.like("content", ilike_pattern)
+            else:
+                query_builder = query_builder.ilike("content", ilike_pattern)
+            feedme_resp = await asyncio.to_thread(lambda: query_builder.limit(max_results * 2).execute())
+
+            # Deduplicate by conversation
+            seen_convs: set = set()
+            for row in feedme_resp.data or []:
+                conv_id = row.get("conversation_id")
+                if conv_id in seen_convs:
+                    continue
+                seen_convs.add(conv_id)
+                content = redact_pii(row.get("content", ""))
+                results.append({
+                    "source": "feedme",
+                    "title": f"Conversation {conv_id}",
+                    "content": content,
+                    "content_type": "full" if len(content) <= FEEDME_SUMMARIZE_THRESHOLD else "summarized",
+                    "match_pattern": pattern,
+                    "metadata": {"id": conv_id},
+                })
+                if len([r for r in results if r["source"] == "feedme"]) >= max_results:
+                    break
+        except Exception as exc:
+            logger.error("DB grep FeedMe search failed: %s", exc)
+
+    return {
+        "retrieval_id": retrieval_id,
+        "pattern": pattern,
+        "case_sensitive": case_sensitive,
+        "sources_searched": sources_searched,
+        "results": results[:max_results],
+        "result_count": len(results[:max_results]),
+    }
+
+
+@tool("db_context_search", args_schema=DbContextSearchInput)
+async def db_context_search_tool(
+    source: str,
+    doc_id: str,
+) -> Dict[str, Any]:
+    """Retrieve full document and surrounding context by ID.
+
+    Use this when you found a relevant snippet and need more context,
+    or when you need the complete document content.
+    """
+    retrieval_id = f"ctx-{uuid.uuid4().hex[:8]}"
+
+    client = _supabase_client_cached()
+    if getattr(client, "mock_mode", False):
+        return {
+            "retrieval_id": retrieval_id,
+            "source": source,
+            "doc_id": doc_id,
+            "found": False,
+            "content": None,
+        }
+
+    result: Dict[str, Any] = {
+        "retrieval_id": retrieval_id,
+        "source": source,
+        "doc_id": doc_id,
+        "found": False,
+        "content": None,
+        "metadata": {},
+    }
+
+    try:
+        if source == "kb":
+            try:
+                numeric_id = int(doc_id)
+            except (TypeError, ValueError):
+                result["error"] = f"Invalid KB doc_id format: {doc_id}"
+                return result
+            resp = await asyncio.to_thread(
+                lambda: client.client.table("mailbird_knowledge")
+                .select("*")
+                .eq("id", numeric_id)
+                .single()
+                .execute()
+            )
+            if resp.data:
+                result["found"] = True
+                result["title"] = resp.data.get("title", "")
+                result["content"] = resp.data.get("content", "")
+                result["metadata"] = {
+                    "url": resp.data.get("url"),
+                    "created_at": resp.data.get("created_at"),
+                    "updated_at": resp.data.get("updated_at"),
+                }
+
+        elif source == "macro":
+            try:
+                zendesk_id = int(doc_id)
+            except (TypeError, ValueError):
+                result["error"] = f"Invalid macro doc_id format: {doc_id}"
+                return result
+            resp = await asyncio.to_thread(
+                lambda: client.client.table("zendesk_macros")
+                .select("*")
+                .eq("zendesk_id", zendesk_id)
+                .single()
+                .execute()
+            )
+            if resp.data:
+                result["found"] = True
+                result["title"] = resp.data.get("title", "")
+                result["content"] = resp.data.get("comment_value", "")
+                result["metadata"] = {
+                    "zendesk_id": resp.data.get("zendesk_id"),
+                    "description": resp.data.get("description"),
+                    "usage_30d": resp.data.get("usage_30d"),
+                    "active": resp.data.get("active"),
+                }
+
+        elif source == "feedme":
+            try:
+                conversation_id = int(doc_id)
+            except (TypeError, ValueError):
+                result["error"] = f"Invalid FeedMe doc_id format: {doc_id}"
+                return result
+            # Get all chunks for the conversation
+            resp = await asyncio.to_thread(
+                lambda: client.client.table("feedme_text_chunks")
+                .select("content, chunk_index")
+                .eq("conversation_id", conversation_id)
+                .order("chunk_index")
+                .execute()
+            )
+            if resp.data:
+                # Combine all chunks
+                full_content = "\n\n".join(
+                    chunk.get("content", "") for chunk in resp.data
+                )
+                full_content = redact_pii(full_content)
+
+                # Get conversation metadata
+                conv_details = await client.get_conversations_by_ids([conversation_id])
+                details = (conv_details or {}).get(conversation_id, {})
+
+                result["found"] = True
+                result["title"] = details.get("title", f"Conversation {doc_id}")
+                result["content"] = full_content
+                result["content_type"] = "full" if len(full_content) <= FEEDME_SUMMARIZE_THRESHOLD else "needs_summarization"
+                result["original_length"] = len(full_content)
+                result["metadata"] = {
+                    "conversation_id": doc_id,
+                    "created_at": details.get("created_at"),
+                    "folder_id": details.get("folder_id"),
+                    "chunk_count": len(resp.data),
+                }
+
+    except Exception as exc:
+        logger.error("DB context search failed for %s/%s: %s", source, doc_id, exc)
+        result["error"] = str(exc)
+
+    return result
+
+
+# --- Image Generation Tool (Gemini Nano Banana Pro) ---
+
+
+class ImageGenerationInput(BaseModel):
+    """Input schema for Gemini Nano Banana Pro image generation."""
+
+    prompt: str = Field(
+        ...,
+        description="Detailed description of the image to generate. Include style, colors, composition.",
+    )
+    aspect_ratio: str = Field(
+        default="16:9",
+        description="Aspect ratio of the image. Options: 1:1, 2:3, 3:2, 4:3, 16:9",
+    )
+    resolution: str = Field(
+        default="2K",
+        description="Resolution of the image. Options: 1K, 2K, 4K",
+    )
+    model: str = Field(
+        default="gemini-2.5-flash-image",
+        description="Model to use. Options: gemini-2.5-flash-image (fast, GA), gemini-3-pro-image-preview (high-quality)",
+    )
+    input_image_base64: Optional[str] = Field(
+        default=None,
+        description="Optional base64-encoded input image for editing mode.",
+    )
+
+
+@tool("generate_image", args_schema=ImageGenerationInput)
+async def generate_image_tool(
+    input: Optional[ImageGenerationInput] = None,
+    prompt: Optional[str] = None,
+    aspect_ratio: str = "16:9",
+    resolution: str = "2K",
+    model: str = "gemini-2.5-flash-image",
+    input_image_base64: Optional[str] = None,
+    state: Annotated[Optional[GraphState], InjectedState] = None,
+    runtime: Optional[ToolRuntime] = None,
+) -> Dict[str, Any]:
+    """Generate images using Gemini Nano Banana Pro (Gemini 3 Pro Image Preview).
+
+    Use this tool to:
+    - Generate images from text descriptions
+    - Create diagrams, infographics, and illustrations
+    - Generate UI mockups and screenshots
+    - Edit existing images with text prompts
+
+    Returns:
+    - success: Whether generation succeeded
+    - image_base64: Base64-encoded image data
+    - description: Text description from the model
+    - error: Error message if failed
+    """
+    # Normalize inputs
+    if input is None:
+        input = ImageGenerationInput(
+            prompt=prompt or "",
+            aspect_ratio=aspect_ratio,
+            resolution=resolution,
+            model=model,
+            input_image_base64=input_image_base64,
+        )
+
+    if runtime and getattr(runtime, "stream_writer", None):
+        runtime.stream_writer.write("Generating image...")
+
+    logger.info(
+        f"generate_image_tool_invoked prompt='{input.prompt[:100]}...' "
+        f"aspect_ratio={input.aspect_ratio} resolution={input.resolution}"
+    )
+
+    try:
+        # Import google genai
+        from google import genai
+        from google.genai import types
+        from app.core.settings import settings
+
+        # Initialize client with API key from settings
+        # google-genai looks for GOOGLE_API_KEY env var by default,
+        # but we use GEMINI_API_KEY, so pass it explicitly
+        api_key = settings.gemini_api_key
+        if not api_key:
+            return {
+                "success": False,
+                "error": "Image generation requires GEMINI_API_KEY to be set.",
+            }
+        client = genai.Client(api_key=api_key)
+
+        # Build contents
+        contents = [input.prompt]
+
+        # Add input image if provided (for editing)
+        if input.input_image_base64:
+            import base64
+            from PIL import Image
+            import io
+
+            image_data = base64.b64decode(input.input_image_base64)
+            img = Image.open(io.BytesIO(image_data))
+            contents.append(img)
+
+        # Generate content with image modality
+        response = client.models.generate_content(
+            model=input.model,
+            contents=contents,
+            config=types.GenerateContentConfig(
+                response_modalities=["TEXT", "IMAGE"],
+            ),
+        )
+
+        # Extract results
+        text_output = None
+        image_base64 = None
+        mime_type = "image/png"
+
+        candidates = response.candidates or []
+        if not candidates or not getattr(candidates[0], "content", None) or not candidates[0].content.parts:
+            return {
+                "success": False,
+                "error": "No content generated by the model",
+            }
+
+        for part in candidates[0].content.parts:
+            if hasattr(part, "text") and part.text:
+                text_output = part.text
+            elif hasattr(part, "inline_data") and part.inline_data:
+                import base64 as b64
+                image_base64 = b64.b64encode(part.inline_data.data).decode("utf-8")
+                mime_type = part.inline_data.mime_type or "image/png"
+
+        if not image_base64:
+            return {
+                "success": False,
+                "error": "No image generated - model returned text only",
+                "text_response": text_output,
+            }
+
+        logger.info(
+            f"generate_image_tool_success prompt='{input.prompt[:50]}...' "
+            f"has_image=True has_text={bool(text_output)}"
+        )
+
+        # Return image_base64 for handler to emit, but mark for eviction
+        # The ToolResultEvictionMiddleware will strip this from conversation history
+        # to prevent context overflow (each 2K image is ~1-3MB of base64)
+        return {
+            "success": True,
+            "image_base64": image_base64,  # Handler reads this to emit to frontend
+            "mime_type": mime_type,
+            "description": text_output,
+            "aspect_ratio": input.aspect_ratio,
+            "resolution": input.resolution,
+            # Marker for middleware/handler to know this result should be compacted
+            "_large_payload": True,
+        }
+
+    except ImportError as e:
+        logger.error(f"generate_image_tool_import_error: {e}")
+        return {
+            "success": False,
+            "error": "Image generation requires google-genai>=1.0.0. Please install it.",
+        }
+    except Exception as e:
+        logger.error(f"generate_image_tool_error: {e}")
+        return {
+            "success": False,
+            "error": str(e),
+        }
+
+
+# -----------------------------------------------------------------------------
+# Article Writing Tool
+# -----------------------------------------------------------------------------
+
+
+class ArticleInput(BaseModel):
+    """Input schema for article writing tool."""
+    title: str = Field(description="Title of the article")
+    content: str = Field(description="Markdown content of the article with sections, images, etc.")
+    images: Optional[List[Dict[str, str]]] = Field(
+        default=None,
+        description="Optional list of images to embed. Each dict should have 'url' and 'alt' keys."
+    )
+
+
+@tool("write_article", args_schema=ArticleInput)
+def write_article_tool(
+    title: str,
+    content: str,
+    images: Optional[List[Dict[str, str]]] = None,
+    runtime: Optional[Any] = None,
+) -> Dict[str, Any]:
+    """Write a SINGLE comprehensive article with ALL content in one document.
+
+    IMPORTANT: Always create ONE complete article containing ALL sections requested.
+    Do NOT call this tool multiple times for different sections - combine everything
+    into a single, well-structured document.
+
+    Use this tool to create professional articles, reports, or documents that the
+    user can view and edit in a dedicated artifact panel.
+
+    Content Formatting Guidelines:
+    - Use # for main title (auto-added from title param)
+    - Use ## for major sections
+    - Use ### for subsections
+    - Use **bold** for key terms and emphasis
+    - Use bullet points (- or *) for lists
+    - Use numbered lists (1. 2. 3.) for sequential steps
+    - Use `code` for technical terms
+    - Use > for blockquotes or callouts
+    - Add blank lines between sections for readability
+
+    Args:
+        title: Main title of the article (displayed as header)
+        content: Complete markdown content with ALL sections, headers, and formatting
+        images: Optional list of images to embed. Each dict: {'url': 'image_url', 'alt': 'description'}
+
+    Returns:
+        Success status with article content (displayed in artifacts panel)
+    """
+    logger.info(f"write_article_tool_invoked title='{title}' content_length={len(content)}")
+
+    if runtime and getattr(runtime, "stream_writer", None):
+        runtime.stream_writer.write(f"Creating article: {title}...")
+
+    try:
+        # Return the content - the handler will emit the artifact
+        # This is consistent with how generate_image_tool works
+        logger.info(f"write_article_tool_success title='{title}'")
+        return {
+            "success": True,
+            "title": title,
+            "content": content,
+            "images": images,
+            "message": f"Article '{title}' created successfully. It is now visible in the artifacts panel.",
+        }
+
+    except Exception as e:
+        logger.error(f"write_article_tool_error: {e}")
+        return {
+            "success": False,
+            "error": str(e),
+        }
+
+
+def get_db_retrieval_tools() -> List[BaseTool]:
+    """Return tools for the database retrieval subagent."""
+    return [
+        db_unified_search_tool,
+        db_grep_search_tool,
+        db_context_search_tool,
+    ]

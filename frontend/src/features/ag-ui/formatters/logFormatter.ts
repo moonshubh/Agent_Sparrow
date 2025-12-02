@@ -34,7 +34,8 @@ export function formatLogAnalysisResult(raw: any): string | null {
     }
   }
 
-  if (typeof data !== 'object') return null;
+  // typeof null === 'object' in JS, so explicit null check needed
+  if (data === null || typeof data !== 'object') return null;
 
   const summary = data.overall_summary || data.summary;
   const health = data.health_status;

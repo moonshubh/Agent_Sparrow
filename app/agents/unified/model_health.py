@@ -55,6 +55,7 @@ class ModelQuotaTracker:
         base = self._normalize_model(model)
 
         mapping = {
+            "gemini-3-pro": (stats.gemini_3_pro_stats, stats.gemini_3_pro_circuit),
             "gemini-2.5-flash": (stats.flash_stats, stats.flash_circuit),
             "gemini-2.5-flash-lite": (stats.flash_lite_stats, stats.flash_lite_circuit),
             "gemini-2.5-pro": (stats.pro_stats, stats.pro_circuit),

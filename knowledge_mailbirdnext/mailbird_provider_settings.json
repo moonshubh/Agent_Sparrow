@@ -1,0 +1,823 @@
+{
+  "version": "1.0.0",
+  "lastUpdated": "2025-11-29",
+  "providers": {
+    "gmail": {
+      "id": "Gmail",
+      "displayName": "Gmail",
+      "identity": "Google",
+      "serverType": "IMAP",
+      "authType": "OAuth2",
+      "requiresOAuth": true,
+      "incoming": {
+        "imap": {
+          "host": "imap.gmail.com",
+          "port": 993,
+          "security": "SSL"
+        },
+        "pop3": {
+          "host": "pop.gmail.com",
+          "port": 995,
+          "security": "SSL"
+        }
+      },
+      "outgoing": {
+        "host": "smtp.gmail.com",
+        "port": 465,
+        "security": "SSL"
+      },
+      "notes": [
+        "OAuth2 is required since May 2022",
+        "App-specific passwords work with 2FA enabled",
+        "Enable IMAP in Gmail settings if not working",
+        "Check 'Less secure apps' is not the issue - use OAuth2"
+      ],
+      "commonErrors": [
+        "GmailRequires2StepAuthentication",
+        "GmailLikelyLessSecureAppsIssue",
+        "GmailWebLoginRequired",
+        "GoogleBandwidthLimitExceeded"
+      ],
+      "troubleshooting": [],
+      "knownIssues": []
+    },
+    "outlook": {
+      "id": "Outlook",
+      "displayName": "Outlook.com / Hotmail",
+      "identity": "Microsoft",
+      "serverType": "IMAP",
+      "authType": "OAuth2",
+      "requiresOAuth": true,
+      "incoming": {
+        "imap": {
+          "host": "outlook.office365.com",
+          "port": 993,
+          "security": "SSL"
+        },
+        "pop3": {
+          "host": "outlook.office365.com",
+          "port": 995,
+          "security": "SSL"
+        }
+      },
+      "outgoing": {
+        "host": "smtp.office365.com",
+        "port": 587,
+        "security": "TLS"
+      },
+      "notes": [
+        "OAuth2 required for new connections",
+        "Works for @outlook.com, @hotmail.com, @live.com",
+        "Microsoft may require recent activity verification"
+      ],
+      "commonErrors": [],
+      "troubleshooting": [],
+      "knownIssues": []
+    },
+    "microsoft365": {
+      "id": "Microsoft365",
+      "displayName": "Microsoft 365",
+      "identity": "Microsoft",
+      "serverType": "Exchange",
+      "authType": "OAuth2",
+      "requiresOAuth": true,
+      "incoming": {
+        "imap": {
+          "host": "outlook.office365.com",
+          "port": 993,
+          "security": "SSL"
+        },
+        "pop3": {
+          "host": "outlook.office365.com",
+          "port": 995,
+          "security": "SSL"
+        }
+      },
+      "outgoing": {
+        "host": "smtp.office365.com",
+        "port": 587,
+        "security": "TLS"
+      },
+      "exchange": {
+        "ewsUrl": "https://outlook.office365.com/EWS/Exchange.asmx"
+      },
+      "notes": [
+        "For business/enterprise accounts",
+        "Exchange mode provides best experience",
+        "Admin may need to enable IMAP/POP3 access",
+        "Check if Modern Authentication is enabled"
+      ],
+      "commonErrors": [],
+      "troubleshooting": [],
+      "knownIssues": []
+    },
+    "yahoo": {
+      "id": "Yahoo",
+      "displayName": "Yahoo Mail",
+      "identity": "YahooAndCo",
+      "serverType": "IMAP",
+      "authType": "OAuth2",
+      "requiresOAuth": true,
+      "incoming": {
+        "imap": {
+          "host": "imap.mail.yahoo.com",
+          "port": 993,
+          "security": "SSL"
+        },
+        "pop3": {
+          "host": "pop.mail.yahoo.com",
+          "port": 995,
+          "security": "SSL"
+        }
+      },
+      "outgoing": {
+        "host": "smtp.mail.yahoo.com",
+        "port": 465,
+        "security": "SSL"
+      },
+      "notes": [
+        "OAuth2 or App Password required",
+        "Generate app password in Yahoo Account Security",
+        "Enable 'Allow apps that use less secure sign-in' for app passwords"
+      ],
+      "commonErrors": [
+        "YahooAndCoLogoutException"
+      ],
+      "knownIssues": [
+        "May randomly log out with 'IMAP4rev1 Server logging out'",
+        "Requires re-authentication occasionally"
+      ],
+      "troubleshooting": []
+    },
+    "icloud": {
+      "id": "ICloud",
+      "displayName": "iCloud Mail",
+      "identity": "Apple",
+      "serverType": "IMAP",
+      "authType": "Basic",
+      "requiresOAuth": false,
+      "requiresAppPassword": true,
+      "incoming": {
+        "imap": {
+          "host": "imap.mail.me.com",
+          "port": 993,
+          "security": "SSL"
+        }
+      },
+      "outgoing": {
+        "host": "smtp.mail.me.com",
+        "port": 587,
+        "security": "TLS"
+      },
+      "notes": [
+        "Requires App-Specific Password (not Apple ID password)",
+        "Generate at appleid.apple.com > Sign-In and Security > App-Specific Passwords",
+        "Works for @icloud.com, @me.com, @mac.com addresses"
+      ],
+      "commonErrors": [
+        "BadCredentials"
+      ],
+      "troubleshooting": [
+        "Ensure 2FA is enabled on Apple ID",
+        "Generate new app-specific password if current one fails",
+        "App password must be entered without spaces"
+      ],
+      "knownIssues": []
+    },
+    "exchange": {
+      "id": "Exchange",
+      "displayName": "Exchange Server (On-Premises)",
+      "identity": "Generic",
+      "serverType": "Exchange",
+      "authType": "Basic",
+      "requiresOAuth": false,
+      "requiresManualConfig": true,
+      "notes": [
+        "Requires manual server configuration",
+        "EWS URL may need to be discovered via Autodiscover",
+        "Contact IT admin for correct server settings",
+        "May require domain\\username format"
+      ],
+      "commonErrors": [
+        "CertificateValidationFailed",
+        "BadCredentials"
+      ],
+      "incoming": {
+        "imap": {
+          "host": "[autodiscover required]",
+          "port": 993,
+          "security": "SSL"
+        }
+      },
+      "outgoing": {
+        "host": "[autodiscover required]",
+        "port": 587,
+        "security": "TLS"
+      },
+      "troubleshooting": [],
+      "knownIssues": []
+    },
+    "other": {
+      "id": "Other",
+      "displayName": "Other Email Provider",
+      "identity": "Generic",
+      "serverType": "IMAP",
+      "authType": "Basic",
+      "requiresOAuth": false,
+      "requiresManualConfig": true,
+      "notes": [
+        "Manual server settings required",
+        "Check provider documentation for correct settings",
+        "Common ports: IMAP 993 (SSL), SMTP 587 (TLS)",
+        "Some providers may require app passwords"
+      ],
+      "incoming": {
+        "imap": {
+          "host": "imap.example.com",
+          "port": 993,
+          "security": "SSL"
+        }
+      },
+      "outgoing": {
+        "host": "smtp.example.com",
+        "port": 587,
+        "security": "TLS"
+      },
+      "commonErrors": [],
+      "troubleshooting": [],
+      "knownIssues": []
+    }
+  },
+  "authenticationErrors": {
+    "Unknown": {
+      "description": "Unknown authentication error",
+      "userAction": "Check credentials and try again. Contact support if issue persists."
+    },
+    "NoAuthenticationMethods": {
+      "description": "No supported authentication methods found",
+      "userAction": "Server may not support required auth. Update Mailbird or contact support."
+    },
+    "BadCredentials": {
+      "description": "Invalid username or password",
+      "userAction": "Verify credentials. Use app password if 2FA enabled. Check for typos."
+    },
+    "GmailRequires2StepAuthentication": {
+      "description": "Gmail requires 2-step verification setup",
+      "userAction": "Enable 2FA on Google account and generate app-specific password, or use OAuth2."
+    },
+    "GmailLikelyLessSecureAppsIssue": {
+      "description": "Google's Less Secure Apps access issue",
+      "userAction": "Use OAuth2 authentication or generate app-specific password."
+    },
+    "GmailWebLoginRequired": {
+      "description": "Google requires web browser verification",
+      "userAction": "Sign in via web browser first, then try Mailbird again."
+    },
+    "Pop3MailboxInUse": {
+      "description": "POP3 mailbox already accessed by another client",
+      "userAction": "Close other email clients accessing this account and wait 10-15 minutes."
+    },
+    "Pop3ExceededLoginLimit": {
+      "description": "Login limit exceeded",
+      "userAction": "Wait before trying again. POP3 has login frequency limits."
+    },
+    "BandwidthLimitExceeded": {
+      "description": "Provider bandwidth limit reached",
+      "userAction": "Wait and try again later. Reduce sync frequency."
+    },
+    "GoogleBandwidthLimitExceeded": {
+      "description": "Google bandwidth limit exceeded",
+      "userAction": "Google limits downloads. Wait 24 hours or reduce sync frequency."
+    },
+    "PossibleAntivirusInterference": {
+      "description": "Antivirus may be interfering with connection",
+      "userAction": "Temporarily disable antivirus/firewall and test. Add Mailbird exception."
+    },
+    "ConnectionTimeout": {
+      "description": "Connection timed out",
+      "userAction": "Check internet. Verify server settings. Check firewall."
+    },
+    "CertificateValidationFailed": {
+      "description": "SSL certificate validation failed",
+      "userAction": "Check system date/time. Update certificates. Try different security protocol."
+    },
+    "RateLimitExceeded": {
+      "description": "Too many requests to server",
+      "userAction": "Wait before retrying. Reduce sync frequency."
+    },
+    "AccountTemporarilyLocked": {
+      "description": "Account temporarily locked by provider",
+      "userAction": "Follow provider's account recovery/unlock procedure."
+    },
+    "ServerCapacityIssue": {
+      "description": "Server capacity or resource issue",
+      "userAction": "Server is overloaded. Try again later."
+    },
+    "YahooAndCoLogoutException": {
+      "description": "Yahoo session unexpectedly logged out",
+      "userAction": "Re-authenticate in Yahoo/OAuth, or generate a new app password; if it recurs, reauthorize the account in Mailbird."
+    }
+  },
+  "oAuth2Errors": {
+    "Unknown": {
+      "description": "Unknown OAuth2 error",
+      "userAction": "Try authorization again. Clear browser cache if issues persist."
+    },
+    "UserCancelledOrTimedOut": {
+      "description": "Authorization cancelled or timed out",
+      "userAction": "Complete authorization within time limit. Don't close browser during auth."
+    },
+    "AccountChanged": {
+      "description": "Different account authorized than expected",
+      "userAction": "Sign out of other accounts in browser, then authorize with correct account."
+    },
+    "TokenRetrieval": {
+      "description": "Failed to retrieve authorization tokens",
+      "userAction": "Try again. Check internet connection. Clear browser cache."
+    },
+    "Connection": {
+      "description": "Connection error during authorization",
+      "userAction": "Check internet connection and try again."
+    },
+    "HttpsRedirect": {
+      "description": "HTTPS redirect issue",
+      "userAction": "Try with different browser. Clear browser cache and cookies."
+    }
+  },
+  "serverTypes": {
+    "IMAP": {
+      "value": 0,
+      "description": "Internet Message Access Protocol",
+      "benefits": [
+        "Syncs across devices",
+        "Messages stay on server",
+        "Folder sync"
+      ],
+      "defaultPort": 993,
+      "defaultSecurity": "SSL"
+    },
+    "POP3": {
+      "value": 1,
+      "description": "Post Office Protocol 3",
+      "benefits": [
+        "Downloads messages locally",
+        "Works offline"
+      ],
+      "drawbacks": [
+        "No sync across devices",
+        "Limited folder support"
+      ],
+      "defaultPort": 995,
+      "defaultSecurity": "SSL"
+    },
+    "Exchange": {
+      "value": 2,
+      "description": "Microsoft Exchange Web Services",
+      "benefits": [
+        "Calendar sync",
+        "Contacts sync",
+        "Best for Microsoft accounts"
+      ],
+      "requirements": [
+        "Exchange server or Microsoft 365"
+      ]
+    },
+    "SMTP": {
+      "value": 3,
+      "description": "Simple Mail Transfer Protocol (sending only)",
+      "defaultPort": 587,
+      "defaultSecurity": "TLS"
+    }
+  },
+  "securityProtocols": {
+    "None": {
+      "value": 0,
+      "description": "No encryption",
+      "secure": false,
+      "ports": {
+        "imap": 143,
+        "pop3": 110,
+        "smtp": 25
+      }
+    },
+    "SSL": {
+      "value": 1,
+      "description": "Implicit SSL/TLS",
+      "secure": true,
+      "ports": {
+        "imap": 993,
+        "pop3": 995,
+        "smtp": 465
+      }
+    },
+    "TLS": {
+      "value": 2,
+      "description": "STARTTLS upgrade",
+      "secure": true,
+      "ports": {
+        "imap": 143,
+        "pop3": 110,
+        "smtp": 587
+      }
+    }
+  },
+  "additionalProviders": {
+    "att": {
+      "displayName": "AT&T Mail",
+      "identity": "YahooAndCo",
+      "notes": "Uses Yahoo infrastructure",
+      "incoming": {
+        "imap": {
+          "host": "imap.mail.att.net",
+          "port": 993,
+          "security": "SSL"
+        }
+      },
+      "outgoing": {
+        "host": "smtp.mail.att.net",
+        "port": 465,
+        "security": "SSL"
+      },
+      "authType": "OAuth2",
+      "commonErrors": [],
+      "troubleshooting": [],
+      "knownIssues": []
+    },
+    "aol": {
+      "displayName": "AOL Mail",
+      "identity": "YahooAndCo",
+      "notes": "Uses Yahoo infrastructure, Verizon also uses this",
+      "incoming": {
+        "imap": {
+          "host": "imap.aol.com",
+          "port": 993,
+          "security": "SSL"
+        }
+      },
+      "outgoing": {
+        "host": "smtp.aol.com",
+        "port": 465,
+        "security": "SSL"
+      },
+      "authType": "OAuth2",
+      "commonErrors": [],
+      "troubleshooting": [],
+      "knownIssues": []
+    },
+    "yandex": {
+      "displayName": "Yandex Mail",
+      "identity": "Yandex",
+      "domains": [
+        ".yandex.by",
+        ".yandex.com",
+        ".yandex.kz",
+        ".yandex.ru",
+        ".yandex.com.tr",
+        ".yandex.ua"
+      ],
+      "incoming": {
+        "imap": {
+          "host": "imap.yandex.com",
+          "port": 993,
+          "security": "SSL"
+        }
+      },
+      "outgoing": {
+        "host": "smtp.yandex.com",
+        "port": 465,
+        "security": "SSL"
+      },
+      "authType": "Basic",
+      "notes": "May require app password if 2FA enabled",
+      "commonErrors": [],
+      "troubleshooting": [],
+      "knownIssues": []
+    },
+    "godaddy": {
+      "displayName": "GoDaddy Email",
+      "identity": "Secureserver",
+      "hostPattern": ".secureserver.net",
+      "notes": "Third party provider used by GoDaddy and Rackspace",
+      "authType": "Basic",
+      "requiresManualConfig": true,
+      "incoming": {
+        "imap": {
+          "host": "imap.secureserver.net",
+          "port": 993,
+          "security": "SSL"
+        }
+      },
+      "outgoing": {
+        "host": "smtp.secureserver.net",
+        "port": 465,
+        "security": "SSL"
+      },
+      "commonErrors": [],
+      "troubleshooting": [],
+      "knownIssues": []
+    },
+    "btinternet": {
+      "displayName": "BT Internet",
+      "identity": "BTInternet",
+      "hostPattern": ".btinternet.com",
+      "authType": "Basic",
+      "incoming": {
+        "imap": {
+          "host": "mail.btinternet.com",
+          "port": 993,
+          "security": "SSL"
+        }
+      },
+      "outgoing": {
+        "host": "mail.btinternet.com",
+        "port": 465,
+        "security": "SSL"
+      },
+      "commonErrors": [],
+      "troubleshooting": [],
+      "knownIssues": []
+    },
+    "protonmail": {
+      "displayName": "ProtonMail Bridge",
+      "notes": "Requires ProtonMail Bridge app running locally",
+      "incoming": {
+        "imap": {
+          "host": "127.0.0.1",
+          "port": 1143,
+          "security": "TLS"
+        }
+      },
+      "outgoing": {
+        "host": "127.0.0.1",
+        "port": 1025,
+        "security": "TLS"
+      },
+      "authType": "Basic",
+      "specialNotes": [
+        "Uses localhost loopback connection",
+        "Keep certificate validation enabled; export Bridge TLS cert and import into your OS/mail trust store",
+        "Use Bridge's certificate export feature and trust it in your keychain to avoid warnings",
+        "If you see certificate errors, re-export the Bridge certificate and re-import it, then restart Mailbird"
+      ],
+      "commonErrors": [],
+      "troubleshooting": [
+        "Import Bridge TLS certificate into OS keychain or client trust store; restart Mailbird after trusting"
+      ],
+      "knownIssues": []
+    }
+  },
+  "accountIdentities": {
+    "Generic": {
+      "value": 0,
+      "description": "Unknown/custom provider"
+    },
+    "Google": {
+      "value": 1,
+      "description": "Gmail accounts"
+    },
+    "Microsoft": {
+      "value": 2,
+      "description": "Outlook/Office 365"
+    },
+    "Yandex": {
+      "value": 4,
+      "description": "Yandex Mail"
+    },
+    "BTInternet": {
+      "value": 5,
+      "description": "BT Internet UK"
+    },
+    "Exchange": {
+      "value": 6,
+      "description": "On-premises Exchange"
+    },
+    "Secureserver": {
+      "value": 7,
+      "description": "GoDaddy/Rackspace"
+    },
+    "YahooAndCo": {
+      "value": 8,
+      "description": "Yahoo/AOL/AT&T/Verizon"
+    },
+    "Apple": {
+      "value": 9,
+      "description": "iCloud Mail"
+    }
+  },
+  "folderIdentities": {
+    "Generic": {
+      "value": 0,
+      "description": "Custom user folder"
+    },
+    "Inbox": {
+      "value": 1,
+      "description": "Main inbox"
+    },
+    "Starred": {
+      "value": 2,
+      "description": "Starred/flagged messages"
+    },
+    "Drafts": {
+      "value": 3,
+      "description": "Draft messages"
+    },
+    "Sent": {
+      "value": 4,
+      "description": "Sent messages"
+    },
+    "AllMail": {
+      "value": 5,
+      "description": "All mail (Gmail)"
+    },
+    "Important": {
+      "value": 6,
+      "description": "Important messages"
+    },
+    "Spam": {
+      "value": 7,
+      "description": "Spam/Junk"
+    },
+    "Trash": {
+      "value": 8,
+      "description": "Deleted items"
+    },
+    "Archived": {
+      "value": 9,
+      "description": "Archived messages"
+    },
+    "Snoozed": {
+      "value": 10,
+      "description": "Snoozed messages"
+    },
+    "Scheduled": {
+      "value": 11,
+      "description": "Scheduled to send",
+      "isVirtual": true
+    },
+    "Search": {
+      "value": 12,
+      "description": "Search results",
+      "isVirtual": true
+    }
+  },
+  "filterConditions": {
+    "From": {
+      "description": "Sender email address matches"
+    },
+    "To": {
+      "description": "Recipient email address matches"
+    },
+    "SubjectContains": {
+      "description": "Subject line contains text"
+    },
+    "HasAttachment": {
+      "description": "Message has attachments"
+    }
+  },
+  "filterActions": {
+    "SkipInbox": {
+      "description": "Archive without showing in inbox"
+    },
+    "CopyToFolder": {
+      "description": "Copy message to specified folder"
+    },
+    "MoveToFolder": {
+      "description": "Move message to specified folder"
+    },
+    "MarkAsStarred": {
+      "description": "Star/flag the message"
+    },
+    "MarkAsImportant": {
+      "description": "Mark as important"
+    },
+    "MarkAsRead": {
+      "description": "Mark as read"
+    },
+    "MarkAsSpam": {
+      "description": "Move to spam folder"
+    },
+    "Delete": {
+      "description": "Delete the message"
+    },
+    "Redirect": {
+      "description": "Forward to another address"
+    }
+  },
+  "snoozeOptions": {
+    "Today": "Later today",
+    "Evening": "This evening",
+    "Tomorrow": "Tomorrow morning",
+    "ThisWeek": "Later this week",
+    "Weekend": "This weekend",
+    "NextWeek": "Next week"
+  },
+  "scheduleSendOptions": {
+    "ThisMorning": "Later this morning",
+    "ThisAfternoon": "Later today afternoon",
+    "TomorrowMorning": "Tomorrow morning",
+    "TomorrowAfternoon": "Tomorrow afternoon",
+    "MondayMorning": "Next Monday morning"
+  },
+  "licenseFeatures": {
+    "MaxEmailTrackingPerMonth": "Monthly email tracking limit",
+    "MaxEmailAccountPerDevice": "Maximum accounts allowed",
+    "ExchangeSupport": "Exchange server support",
+    "BusinessAppIntegrations": "Business app integrations",
+    "PersonalAppIntegrations": "Personal app integrations",
+    "LinkedinLookup": "LinkedIn profile lookup",
+    "TechSupport": "Technical support access",
+    "AdvancedSearch": "Advanced search operators",
+    "Filters": "Email filters",
+    "Snooze": "Snooze emails",
+    "SpeedReader": "Speed reader feature",
+    "SendLater": "Schedule send",
+    "UndoSend": "Undo send (0-30 seconds)",
+    "DarkTheme": "Dark theme",
+    "BrandedSignature": "Branded email signature",
+    "CustomBackground": "Custom background",
+    "AutoTagging": "Automatic tagging",
+    "CustomApp": "Custom app integrations",
+    "EmailTemplates": "Email templates",
+    "BlockSender": "Block sender feature"
+  },
+  "proxyTypes": {
+    "HTTP": "Standard HTTP proxy",
+    "HTTPS": "HTTPS proxy",
+    "SOCKS4": "SOCKS version 4",
+    "SOCKS4a": "SOCKS version 4a with domain support",
+    "SOCKS5": "SOCKS version 5 with authentication"
+  },
+  "searchOperators": {
+    "from:": {
+      "description": "Search by sender",
+      "example": "from:john@example.com"
+    },
+    "to:": {
+      "description": "Search by recipient",
+      "example": "to:support@company.com"
+    },
+    "cc:": {
+      "description": "Search CC field",
+      "example": "cc:manager@company.com"
+    },
+    "bcc:": {
+      "description": "Search BCC field",
+      "example": "bcc:hidden@company.com"
+    },
+    "subject:": {
+      "description": "Search in subject",
+      "example": "subject:meeting"
+    },
+    "has:attachment": {
+      "description": "Has attachments",
+      "example": "has:attachment"
+    },
+    "is:unread": {
+      "description": "Unread messages",
+      "example": "is:unread"
+    },
+    "is:starred": {
+      "description": "Starred messages",
+      "example": "is:starred"
+    },
+    "is:important": {
+      "description": "Important messages",
+      "example": "is:important"
+    },
+    "is:snoozed": {
+      "description": "Snoozed messages",
+      "example": "is:snoozed"
+    },
+    "in:": {
+      "description": "In specific folder",
+      "example": "in:inbox"
+    },
+    "size:": {
+      "description": "By message size",
+      "example": "size:>5mb"
+    },
+    "filename:": {
+      "description": "Attachment filename",
+      "example": "filename:report.pdf"
+    },
+    "date:": {
+      "description": "By date range",
+      "example": "date:2024-01-01..2024-12-31"
+    }
+  },
+  "systemConstraints": {
+    "updateAllMessagesInterval": "1 hour",
+    "requestRetryInterval": "30 seconds",
+    "pop3CheckInterval": "1 minute",
+    "attachmentDownloadCutoff": "7 days",
+    "defaultBodyEncoding": "UTF-8",
+    "messageIdHeader": "X-Mailbird-ID",
+    "messageIdPrefix": "Mailbird-",
+    "messageIdSuffix": "@getmailbird.com"
+  },
+  "supportContacts": {
+    "general": "support@getmailbird.com",
+    "alpha": "alphasupport@getmailbird.com",
+    "feedback": "feedback.mac@getmailbird.com"
+  }
+}

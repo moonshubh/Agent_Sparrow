@@ -100,6 +100,27 @@ export const AgentTodosUpdateEventSchema = z.object({
 
 export const GenuiStateUpdateEventSchema = z.record(z.unknown());
 
+export const ImageArtifactEventSchema = z.object({
+  id: z.string(),
+  type: z.literal('image'),
+  title: z.string(),
+  content: z.string(),
+  messageId: z.string(),
+  imageData: z.string(),
+  mimeType: z.string(),
+  altText: z.string().optional(),
+  aspectRatio: z.string().optional(),
+  resolution: z.string().optional(),
+});
+
+export const ArticleArtifactEventSchema = z.object({
+  id: z.string(),
+  type: z.literal('article'),
+  title: z.string(),
+  content: z.string(),
+  messageId: z.string(),
+});
+
 // -----------------------------------------------------------------------------
 // Validation Utilities
 // -----------------------------------------------------------------------------
@@ -206,6 +227,24 @@ export function validateGenuiState(
   return validateOrNull(GenuiStateUpdateEventSchema, data, 'genui_state_update');
 }
 
+/**
+ * Validate an image artifact event.
+ */
+export function validateImageArtifact(
+  data: unknown
+): z.infer<typeof ImageArtifactEventSchema> | null {
+  return validateOrNull(ImageArtifactEventSchema, data, 'image_artifact');
+}
+
+/**
+ * Validate an article artifact event.
+ */
+export function validateArticleArtifact(
+  data: unknown
+): z.infer<typeof ArticleArtifactEventSchema> | null {
+  return validateOrNull(ArticleArtifactEventSchema, data, 'article_artifact');
+}
+
 // -----------------------------------------------------------------------------
 // Event Router
 // -----------------------------------------------------------------------------
@@ -219,6 +258,8 @@ export const eventValidators = {
   tool_evidence_update: validateToolEvidence,
   agent_todos_update: validateTodosUpdate,
   genui_state_update: validateGenuiState,
+  image_artifact: validateImageArtifact,
+  article_artifact: validateArticleArtifact,
 } as const;
 
 /**

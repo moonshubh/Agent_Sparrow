@@ -7,6 +7,8 @@ import type { DocumentPointer, AttachmentInput, InterruptPayload } from '@/servi
 import type { TimelineOperation } from './timeline/AgenticTimelineView';
 import type { TraceStep } from './types/thinkingTrace';
 import { formatLogAnalysisResult } from './formatters/logFormatter';
+import { getGlobalArtifactStore } from './artifacts/ArtifactContext';
+import type { ImageArtifactEvent } from '@/services/ag-ui/event-types';
 
 interface AgentContextValue {
   agent: AbstractAgent | null;
@@ -318,7 +320,8 @@ export function AgentProvider({
 
           // Handle complete message updates
           onMessagesChanged: ({ messages: agentMessages }: { messages: any[] }) => {
-          console.debug('[AG-UI] onMessagesChanged received:', agentMessages);
+          // Log summary only to avoid RangeError with large content
+          console.debug('[AG-UI] onMessagesChanged received:', agentMessages.length, 'messages');
           // Ensure all messages have IDs
           let messagesWithIds = agentMessages.map(msg => ({
             ...msg,
@@ -508,15 +511,57 @@ export function AgentProvider({
             }
           } else if (event.name === 'agent_todos_update') {
             // Some backends emit `data`, AG-UI maps it to `value`, but be defensive.
-            console.debug('[AG-UI] Todos raw custom event:', event);
             const payload = (event.value ?? event.data ?? {}) as any;
-            console.debug('[AG-UI] Todos normalized payload:', payload);
+            const todoCount = Array.isArray(payload.todos) ? payload.todos.length : 0;
+            console.debug('[AG-UI] Todos update:', todoCount, 'items');
             if (Array.isArray(payload.todos)) {
               setTodos(payload.todos);
             } else {
               const extracted = extractTodosFromPayload(payload);
               if (extracted.length) {
                 setTodos(extracted);
+              }
+            }
+          } else if (event.name === 'image_artifact') {
+            // Handle image artifact from generate_image tool
+            const payload = event.value as ImageArtifactEvent;
+            // Log summary only (avoid logging large base64 imageData)
+            console.debug('[AG-UI] Image artifact event:', payload?.title, 'imageData length:', payload?.imageData?.length);
+            if (payload?.imageData) {
+              const store = getGlobalArtifactStore();
+              if (store) {
+                const state = store.getState();
+                state.addArtifact({
+                  id: payload.id,
+                  type: 'image',
+                  title: payload.title || 'Generated Image',
+                  content: payload.content || '',
+                  messageId: payload.messageId,
+                  imageData: payload.imageData,
+                  mimeType: payload.mimeType || 'image/png',
+                });
+                state.setCurrentArtifact(payload.id);
+                state.setArtifactsVisible(true);
+              }
+            }
+          } else if (event.name === 'article_artifact') {
+            // Handle article artifact for research reports, articles with images
+            const artPayload = event.value as { id: string; title: string; content: string };
+            console.debug('[AG-UI] Article artifact event:', artPayload?.title, 'length:', artPayload?.content?.length);
+            const payload = event.value as { id: string; type: string; title: string; content: string; messageId: string };
+            if (payload?.content) {
+              const store = getGlobalArtifactStore();
+              if (store) {
+                const state = store.getState();
+                state.addArtifact({
+                  id: payload.id,
+                  type: 'article',
+                  title: payload.title || 'Article',
+                  content: payload.content,
+                  messageId: payload.messageId,
+                });
+                state.setCurrentArtifact(payload.id);
+                state.setArtifactsVisible(true);
               }
             }
           }
@@ -526,7 +571,8 @@ export function AgentProvider({
 
           // Handle state changes (for debugging)
           onStateChanged: ({ state }: { state: any }) => {
-            console.debug('[AG-UI] State changed:', state);
+            // Log summary only to avoid RangeError with large state objects
+            console.debug('[AG-UI] State changed:', Object.keys(state || {}).join(', '));
             try {
               const meta = (state?.config?.configurable?.metadata) || {};
               if (typeof meta.resolved_model === 'string') {

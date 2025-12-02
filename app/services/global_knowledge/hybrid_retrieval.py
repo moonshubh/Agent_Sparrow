@@ -84,7 +84,8 @@ class HybridRetrieval:
 
         rows = await self._full_text_rpc(query_text, top_k)
         if not rows:
-            rows = await self._legacy_text_search(query_text, top_k)
+            if getattr(settings, "enable_kb_legacy_fallback", False):
+                rows = await self._legacy_text_search(query_text, top_k)
             if not rows:
                 return []
 
@@ -108,6 +109,7 @@ class HybridRetrieval:
             response = await asyncio.to_thread(_call_rpc)
             return response.data or []
         except APIError as exc:
+            # Graceful downgrade when RPC is missing or misconfigured
             logger.warning(
                 "Full-text RPC search failed with APIError",
                 error=str(exc),
@@ -123,7 +125,25 @@ class HybridRetrieval:
         safe_query = " ".join((query_text or "").split())
         if not safe_query:
             return []
-        safe_query = safe_query[:400]
+        # Trim to avoid huge patterns
+        safe_query = safe_query[:200]
+        tokens = safe_query.split()
+        if not tokens:
+            return []
+        # Use multiple sanitized tokens for better relevance while keeping patterns safe
+        safe_tokens: List[str] = []
+        for token in tokens[:3]:
+            sanitized = token.replace("%", "").replace("_", "")
+            if len(sanitized) >= 2:
+                safe_tokens.append(sanitized)
+
+        if not safe_tokens:
+            return []
+
+        pattern_body = "%".join(safe_tokens)
+        if len(pattern_body) > 200:
+            pattern_body = pattern_body[:200]
+        pattern = f"%{pattern_body}%"
 
         def _run_query():
             builder = (
@@ -131,24 +151,18 @@ class HybridRetrieval:
                 .table("mailbird_knowledge")
                 .select("id,title,url,markdown,content,metadata,tags")
             )
-            # Escape SQL wildcards to prevent injection
-            escaped_pattern = (
-                safe_query
-                .replace(",", " ")
-                .replace("\\", "\\\\")
-                .replace("%", "\\%")
-                .replace("_", "\\_")
-            )
-            pattern = f"%{escaped_pattern}%"
             try:
-                return (
-                    builder
-                    .or_(f"content.ilike.{pattern},markdown.ilike.{pattern}")
-                    .limit(top_k)
-                    .execute()
-                )
-            except Exception:
-                return builder.limit(top_k).execute()
+                from postgrest import or_  # type: ignore
+
+                query_builder = builder.or_(f"content.ilike.{pattern},markdown.ilike.{pattern}")
+            except ImportError:
+                logger.warning("postgrest.or_ unavailable; falling back to content-only search")
+                query_builder = builder.ilike("content", pattern)
+            except APIError as exc:
+                logger.warning("Combined content/markdown search failed, falling back to content: %s", exc)
+                query_builder = builder.ilike("content", pattern)
+
+            return query_builder.limit(top_k).execute()
 
         try:
             response = await asyncio.to_thread(_run_query)

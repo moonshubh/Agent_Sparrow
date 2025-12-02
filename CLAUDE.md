@@ -120,18 +120,168 @@ React/Next.js application with native AG-UI protocol integration:
 
 ## Model Configuration
 
-Primary defaults remain Gemini-first, but Grok is fully supported:
+### Centralized Model Registry (Nov 2025)
 
-- **Unified Agent (Primary)**: defaults to `gemini-2.5-flash` (or `grok-4-1-fast-reasoning` when provider=`xai`). Prompt displays friendly model/provider names.
-- **Log Diagnoser Subagent**: `gemini-2.5-pro` by default; routed via provider factory (xAI available but not default).
-- **Research Subagent**: `gemini-2.5-flash` by default; routed via provider factory (xAI available but not default).
-- **FeedMe Document Processing**: `gemini-2.5-flash-lite-preview-09-2025` (vision-first; OCR as fallback).
-- **Embeddings**: Gemini Embeddings 001.
+All model configurations are managed through a **centralized Model Registry** at `/app/core/config/model_registry.py`. This eliminates hardcoded model names across 15+ files and enables **single-line model updates** that propagate throughout the entire system.
 
-Adapter / Provider system:
+**Full documentation**: See `docs/Model-Registry.md`
+
+### Quick Model Update
+
+To change a model for any role, edit one line in `model_registry.py`:
+
+```python
+@dataclass
+class ModelRegistry:
+    log_analysis: ModelSpec = field(default=GEMINI_3_PRO)  # Change this line
+```
+
+### Available Models
+
+| Model ID | Display Name | Tier | Use Case |
+|----------|--------------|------|----------|
+| `gemini-3-pro-preview` | Gemini 3.0 Pro | PRO | Complex reasoning, log analysis |
+| `gemini-2.5-pro` | Gemini 2.5 Pro | PRO | Heavy tasks |
+| `gemini-2.5-flash` | Gemini 2.5 Flash | STANDARD | General coordinator |
+| `gemini-2.5-flash-lite` | Gemini 2.5 Flash Lite | LITE | Cost-efficient tasks, FeedMe |
+| `grok-4-1-fast-reasoning` | Grok 4.1 Fast | STANDARD | XAI provider default |
+| `grok-4` | Grok 4 | PRO | XAI heavy tasks |
+
+### Default Role Assignments
+
+- **Coordinator (Google)**: `gemini-2.5-flash` - General purpose queries
+- **Coordinator (Heavy)**: `gemini-3-pro-preview` - Complex reasoning tasks
+- **Log Analysis**: `gemini-3-pro-preview` - Detailed log diagnostics
+- **Research**: `gemini-2.5-flash` - Web research subagent
+- **FeedMe**: `gemini-2.5-flash-lite` - Document processing
+- **Embeddings**: `gemini-embedding-001` - Vector embeddings
+
+### Usage in Code
+
+```python
+from app.core.config import get_registry, GEMINI_3_PRO
+
+# Get registry (with env var overrides applied)
+registry = get_registry()
+
+# Access model for a role
+model_id = registry.log_analysis.id  # "gemini-3-pro-preview"
+
+# Get display names for UI
+names = registry.get_display_names()
+
+# Get fallback chain
+fallbacks = registry.get_fallback_chain("google")
+```
+
+### Frontend API Endpoint
+
+The registry is exposed via REST API for frontend consumption:
+
+```http
+GET /api/v1/models/config
+```
+
+Returns models, defaults, fallback chains, and provider availability.
+
+### Environment Variable Overrides
+
+Legacy env vars still work as overrides (backward compatible):
+- `PRIMARY_AGENT_MODEL` → `coordinator_google`
+- `ENHANCED_LOG_MODEL` → `log_analysis`, `coordinator_heavy`
+- `FEEDME_MODEL_NAME` → `feedme`
+- `XAI_DEFAULT_MODEL` → `coordinator_xai`
+
+### Provider System
+
 - Provider factory (`app/agents/unified/provider_factory.py`) builds Google (ChatGoogleGenerativeAI) and xAI (ChatXAI) with `reasoning_enabled` support.
-- Settings: `PRIMARY_AGENT_PROVIDER`, `PRIMARY_AGENT_MODEL`, `XAI_API_KEY`, `XAI_DEFAULT_MODEL`, `XAI_REASONING_ENABLED`.
-- Coordinator prompt (`app/agents/unified/prompts.py`) auto-injects model display names and adds a Grok-specific depth addendum for richer answers.
+- Settings: `PRIMARY_AGENT_PROVIDER`, `XAI_API_KEY`, `XAI_REASONING_ENABLED`.
+- Coordinator prompt (`app/agents/unified/prompts.py`) auto-injects model display names from registry.
+
+## Prompt Architecture (Nov 2025)
+
+All agent prompts use a **tiered architecture** based on Google's 9-step reasoning framework, optimized for Gemini 3.0 Pro and Grok 4.1.
+
+**Full documentation**: See `docs/Unified-Agent-Prompts.md`
+
+### Tiered Prompt System
+
+| Tier | Agents | Reasoning | Temperature |
+|------|--------|-----------|-------------|
+| **Heavy** | Coordinator, Log Analysis | Full 9-step framework | 0.1-0.2 |
+| **Standard** | Research | 4-step workflow | 0.5 |
+| **Lite** | DB Retrieval, FeedMe | Minimal task-focused | 0.1-0.3 |
+
+### Google's 9-Step Reasoning Framework (Heavy Tier)
+
+Heavy tier agents implement Google's reasoning framework:
+1. **Logical Dependencies** - Analyze constraints, prerequisites, order of operations
+2. **Risk Assessment** - LOW for searches, HIGH for state-changing actions
+3. **Abductive Reasoning** - Generate 1-3 hypotheses, prioritize by likelihood
+4. **Adaptability** - Update hypotheses when observations contradict assumptions
+5. **Information Sources** - Check: Memory → KB → FeedMe → Macros → Web → User
+6. **Precision & Grounding** - Quote exact sources, distinguish evidence from reasoning
+7. **Completeness** - Exhaust all relevant options before concluding
+8. **Persistence** - Retry transient errors (max 2x), change strategy on other errors
+9. **Inhibited Response** - Complete reasoning BEFORE taking action
+
+### Temperature Configuration
+
+Role-based temperature in `app/agents/unified/provider_factory.py`:
+
+```python
+TEMPERATURE_CONFIG = {
+    "coordinator": 0.2,       # Deterministic reasoning
+    "coordinator_heavy": 0.2, # Complex reasoning
+    "log_analysis": 0.1,      # High precision for error diagnosis
+    "research": 0.5,          # Creative synthesis of sources
+    "db_retrieval": 0.1,      # Exact pattern matching
+    "feedme": 0.3,            # Balanced
+    "default": 0.3,
+}
+```
+
+### Grok 4.1 Configuration
+
+Grok reasoning is **always enabled** for maximum quality:
+
+```python
+GROK_CONFIG = {
+    "reasoning_enabled": True,   # Always enabled
+    "thinking_budget": "medium", # Balanced latency/quality
+}
+```
+
+When using Grok, prompts automatically include guidance to:
+- NOT output explicit step-by-step reasoning (internal only)
+- Focus user-facing output on clear, actionable answers
+- Let internal reasoning guide tool selection
+
+### Prompt Files
+
+- `app/agents/unified/prompts.py` - All prompt templates, `get_coordinator_prompt()`
+- `app/agents/unified/provider_factory.py` - `TEMPERATURE_CONFIG`, `GROK_CONFIG`, `build_chat_model()`
+
+### Building Models with Role-Based Temperature
+
+```python
+from app.agents.unified.provider_factory import build_chat_model
+
+# Role-based temperature (recommended)
+model = build_chat_model(
+    provider="google",
+    model="gemini-2.5-flash",
+    role="coordinator",  # Uses temperature 0.2
+)
+
+# Grok with always-enabled reasoning
+model = build_chat_model(
+    provider="xai",
+    model="grok-4-1-fast-reasoning",
+    role="log_analysis",
+    # reasoning_enabled=True applied automatically
+)
+```
 
 ## Environment Setup
 
@@ -320,11 +470,19 @@ The codebase has successfully migrated to the native AG-UI client implementation
 - Supports file attachments via BinaryInputContent in RunAgentInput
 
 ### Unified Agent with Subagents
-The unified agent (`app/agents/unified/agent_sparrow.py`) handles all queries with subagents:
-- General queries → Primary unified agent (Gemini 2.5 Flash)
-- Log analysis → Log diagnoser subagent (Gemini 2.5 Pro)
-- Research tasks → Research subagent (Gemini 2.5 Flash)
+The unified agent (`app/agents/unified/agent_sparrow.py`) handles all queries with tiered subagents:
+
+| Subagent | Tier | Model | Temperature | Use Case |
+|----------|------|-------|-------------|----------|
+| **Coordinator** | Heavy | Gemini 2.5 Flash | 0.2 | General queries, orchestration |
+| **Log Diagnoser** | Heavy | Gemini 3.0 Pro | 0.1 | Log/error analysis with 9-step reasoning |
+| **Research** | Standard | Gemini 2.5 Flash | 0.5 | Web research, source synthesis |
+| **DB Retrieval** | Lite | Gemini 2.5 Flash Lite | 0.1 | KB/FeedMe/macro lookups |
+
 - No routing needed - subagents called as tools when appropriate
+- Each subagent uses tier-appropriate prompts (see `docs/Unified-Agent-Prompts.md`)
+- Model assignments configurable via Model Registry (see `docs/Model-Registry.md`)
+- Temperature automatically set based on role via `provider_factory.py`
 
 ### FeedMe Document Processing
 Advanced document pipeline at `/feedme`:

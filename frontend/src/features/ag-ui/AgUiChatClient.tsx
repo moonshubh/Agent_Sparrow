@@ -19,12 +19,14 @@ import { v4 as uuidv4 } from 'uuid';
 const DEFAULT_MODELS: Record<Provider, string> = {
   google: 'gemini-2.5-flash',
   xai: 'grok-4-1-fast-reasoning',
+  openrouter: 'x-ai/grok-4.1-fast:free',
 };
 
 // Model descriptions by provider
 const MODEL_HELPERS: Record<Provider, string> = {
   google: 'Gemini Flash balances speed and cost for orchestrating subagents.',
   xai: 'Grok 4.1 Fast provides advanced reasoning with 2M context window.',
+  openrouter: 'OpenRouter (Grok/Minimax) via your OpenRouter key.',
 };
 
 type SparrowAgent = ReturnType<typeof createSparrowAgent>;
@@ -41,15 +43,18 @@ export default function AgUiChatClient() {
   const [availableProviders, setAvailableProviders] = useState<ProviderAvailability>({
     google: true,
     xai: false,
+    openrouter: false,
   });
   const [providerModels, setProviderModels] = useState<ProviderModels>({
     google: ['gemini-2.5-flash', 'gemini-2.5-pro'],
+    openrouter: ['x-ai/grok-4.1-fast:free', 'minimax/minimax-m2'],
   });
 
   // Model state (per provider)
   const [modelByProvider, setModelByProvider] = useState<Partial<Record<Provider, string>>>({
     google: DEFAULT_MODELS.google,
     xai: DEFAULT_MODELS.xai,
+    openrouter: DEFAULT_MODELS.openrouter,
   });
 
   const [memoryEnabled, setMemoryEnabled] = useState(true);

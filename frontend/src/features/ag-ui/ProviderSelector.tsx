@@ -14,12 +14,7 @@ interface ProviderSelectorProps {
 const PROVIDER_DESCRIPTIONS: Record<Provider, string> = {
   google: 'Google Gemini - Fast and reliable AI models',
   xai: 'xAI Grok - Advanced reasoning with 2M context',
-}
-
-// Provider icons (simple text-based for now)
-const PROVIDER_ICONS: Record<Provider, string> = {
-  google: '✨',
-  xai: '🚀',
+  openrouter: 'OpenRouter - Access Grok, MiniMax via OpenRouter',
 }
 
 export function ProviderSelector({
@@ -45,7 +40,6 @@ export function ProviderSelector({
             <div
               className={`flex items-center gap-1.5 h-9 px-3 rounded-organic border border-border bg-secondary text-sm text-foreground ${align === 'right' ? 'ml-auto' : ''}`}
             >
-              <span>{PROVIDER_ICONS[provider]}</span>
               <span>{PROVIDER_LABELS[provider]}</span>
             </div>
           </TooltipTrigger>
@@ -73,7 +67,7 @@ export function ProviderSelector({
             >
               {enabledProviders.map((p) => (
                 <option key={p} value={p}>
-                  {PROVIDER_ICONS[p]} {PROVIDER_LABELS[p]}
+                  {PROVIDER_LABELS[p]}
                 </option>
               ))}
             </select>

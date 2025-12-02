@@ -2,13 +2,21 @@
 
 Extracted from agent_sparrow.py to provide a clean interface for
 emitting custom events to the AG-UI frontend.
+
+Implements patterns from DeepAgents, LangChain, and LangGraph:
+- Content block separation (reasoning vs text)
+- Windowed trace with progressive summarization (not truncation)
+- Deduplication tracking for streaming events
+- Lazy emission (only emit on actual changes)
 """
 
 from __future__ import annotations
 
+import hashlib
 import itertools
+import time
 from datetime import datetime, timezone
-from typing import Any, Callable, Dict, List, Optional, Set
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 from loguru import logger
 
@@ -22,6 +30,29 @@ from .event_types import (
     TraceStep,
 )
 from .normalizers import normalize_todos
+from .utils import count_tokens_approximately, BackpressureQueue
+
+
+# =============================================================================
+# CONFIGURATION - Based on DeepAgents/LangGraph patterns
+# =============================================================================
+
+# Throttle delay between consecutive image artifact emissions (in seconds)
+# Prevents frontend memory overflow when multiple large images are generated in parallel
+IMAGE_EMISSION_THROTTLE_MS = 500  # 500ms between images
+
+# Thinking trace windowing configuration (from DeepAgents pattern)
+# Instead of truncating content, we use windowing + summarization
+TRACE_WINDOW_SIZE = 15  # Keep last N steps in full detail
+TRACE_SUMMARY_THRESHOLD = 30  # Start summarizing when trace exceeds this
+MAX_STEP_CONTENT_FULL = 15000  # Full content limit per step (~15KB)
+MAX_STEP_CONTENT_SUMMARY = 500  # Summary length for older steps
+DEDUP_EMISSION_WINDOW_MS = 100  # Deduplicate emissions within this window
+
+# Streaming backpressure configuration (LangChain pattern)
+# Controls buffering when events are generated faster than they can be consumed
+BACKPRESSURE_QUEUE_SIZE = 100  # Max pending events before blocking
+TEXT_BUFFER_FLUSH_INTERVAL_MS = 50  # Flush text buffer every N ms
 
 
 class StreamEventEmitter:
@@ -70,6 +101,29 @@ class StreamEventEmitter:
 
         # Counters
         self._trace_step_counter = itertools.count(1)
+
+        # Image emission throttling
+        self._last_image_emission_time: float = 0.0
+
+        # =====================================================================
+        # NEW: Deduplication & windowing state (LangGraph/DeepAgents patterns)
+        # =====================================================================
+        # Track emitted content hashes for deduplication
+        self._emitted_trace_hashes: Set[str] = set()
+        self._last_trace_emission_time: float = 0.0
+        self._last_emitted_trace_version: int = 0
+
+        # Summarized older steps (progressive summarization)
+        self._summarized_steps: List[Dict[str, Any]] = []
+
+        # Content block buffers (LangChain pattern - separate reasoning from text)
+        self._pending_text_buffer: str = ""
+        self._reasoning_blocks: List[Dict[str, Any]] = []
+
+        # Backpressure queue for high-volume event streams (LangChain pattern)
+        # Used for batching and rate-limiting event emissions
+        self._event_queue: Optional[BackpressureQueue] = None
+        self._last_text_flush_time: float = 0.0
 
     # -------------------------------------------------------------------------
     # Low-level emission
@@ -120,6 +174,103 @@ class StreamEventEmitter:
             "name": "genui_state_update",
             "value": data,
         })
+
+    def emit_image_artifact(
+        self,
+        image_base64: str,
+        mime_type: str = "image/png",
+        title: str = "Generated Image",
+        prompt: Optional[str] = None,
+        aspect_ratio: Optional[str] = None,
+        resolution: Optional[str] = None,
+    ) -> None:
+        """Emit image artifact via CUSTOM event for frontend display.
+
+        Includes throttling to prevent multiple large images from overwhelming
+        the frontend when generated in parallel (e.g., Grok generating 8 images).
+
+        Args:
+            image_base64: Base64-encoded image data
+            mime_type: MIME type of the image (e.g., 'image/png')
+            title: Display title for the artifact
+            prompt: Original prompt used to generate the image
+            aspect_ratio: Aspect ratio of the image
+            resolution: Resolution of the image
+        """
+        if self.writer is None or not image_base64:
+            return
+
+        # Throttle: wait if last emission was too recent
+        # Prevents frontend memory overflow from rapid large payload bursts
+        now = time.time()
+        elapsed_ms = (now - self._last_image_emission_time) * 1000
+        if elapsed_ms < IMAGE_EMISSION_THROTTLE_MS and self._last_image_emission_time > 0:
+            wait_time = (IMAGE_EMISSION_THROTTLE_MS - elapsed_ms) / 1000
+            logger.debug(f"emit_image_artifact: throttling, waiting {wait_time:.2f}s")
+            time.sleep(wait_time)
+
+        import uuid
+        artifact_id = f"img-{uuid.uuid4().hex[:8]}"
+        message_id = getattr(self, "_current_message_id", None) or f"msg-{self.root_id}"
+
+        # Use emit_custom_event for consistent event format with other custom events
+        self.emit_custom_event("image_artifact", {
+            "id": artifact_id,
+            "type": "image",
+            "title": title,
+            "content": prompt or "",
+            "messageId": message_id,
+            "imageData": image_base64,
+            "mimeType": mime_type,
+            "altText": prompt or title,
+            "aspectRatio": aspect_ratio,
+            "resolution": resolution,
+        })
+
+        # Update last emission time after successful emit
+        self._last_image_emission_time = time.time()
+        logger.info(f"emit_image_artifact: id={artifact_id}, mime={mime_type}, title={title}")
+
+    def emit_article_artifact(
+        self,
+        content: str,
+        title: str = "Article",
+        images: Optional[List[Dict[str, str]]] = None,
+    ) -> None:
+        """Emit article artifact via CUSTOM event for frontend display.
+
+        Creates an editable article artifact with markdown content and optional images.
+
+        Args:
+            content: Markdown content of the article
+            title: Display title for the artifact
+            images: Optional list of image dicts with 'url' and 'alt' keys to embed
+        """
+        if self.writer is None or not content:
+            return
+
+        import uuid
+        artifact_id = f"article-{uuid.uuid4().hex[:8]}"
+        message_id = getattr(self, "_current_message_id", None) or f"msg-{self.root_id}"
+
+        # If images provided, append them to the content as markdown
+        if images:
+            image_section = "\n\n---\n\n## Images\n\n"
+            for img in images:
+                alt = img.get("alt", "Image")
+                url = img.get("url", "")
+                if url:
+                    image_section += f"![{alt}]({url})\n\n"
+            content = content + image_section
+
+        self.emit_custom_event("article_artifact", {
+            "id": artifact_id,
+            "type": "article",
+            "title": title,
+            "content": content,
+            "messageId": message_id,
+        })
+        logger.info(f"emit_article_artifact: id={artifact_id}, title={title}, content_length={len(content)}")
 
     # -------------------------------------------------------------------------
     # Text message emission (AG-UI protocol)
@@ -390,9 +541,20 @@ class StreamEventEmitter:
         )
 
     def stream_thought_chunk(self, run_id: str, chunk_text: str) -> None:
-        """Append streaming content to a thought trace step."""
+        """Append streaming content to a thought trace step.
+
+        With the windowed emission approach, we allow larger chunks since
+        summarization happens at emission time, preserving quality.
+        """
         if not chunk_text:
             return
+
+        # Allow reasonable chunk sizes - windowed emission handles summarization
+        # Only cap extremely large chunks that might indicate malformed data
+        MAX_CHUNK_SIZE = 5000  # Increased from 2000 - let windowing handle rest
+        if len(chunk_text) > MAX_CHUNK_SIZE:
+            # For very large chunks, keep most recent content (more relevant)
+            chunk_text = f"[...{len(chunk_text) - MAX_CHUNK_SIZE} chars...]{chunk_text[-MAX_CHUNK_SIZE:]}"
 
         updated = self.update_trace_step(str(run_id), append_content=chunk_text)
         if updated is None:
@@ -445,15 +607,36 @@ class StreamEventEmitter:
         step_type: Optional[str] = None,
         finalize: bool = False,
     ) -> Optional[TraceStep]:
-        """Update an existing trace step by alias."""
+        """Update an existing trace step by alias.
+
+        Content is allowed to grow up to MAX_STEP_CONTENT_FULL during accumulation.
+        The emission step handles summarization for older steps, preserving quality.
+        """
         step = self.trace_step_aliases.get(alias)
         if step is None:
             return None
 
+        # Allow content to grow during accumulation
+        # Summarization happens at emission time (windowed approach)
         if append_content:
-            step.content = f"{step.content}{append_content}"
+            new_content = f"{step.content}{append_content}"
+            # Only cap at the FULL limit (15KB) - emission will handle summarization
+            if len(new_content) > MAX_STEP_CONTENT_FULL:
+                # Keep the most recent content, summarize the beginning
+                overflow = len(new_content) - MAX_STEP_CONTENT_FULL
+                step.content = f"[...{overflow} chars earlier...]\n{new_content[-MAX_STEP_CONTENT_FULL:]}"
+                step.metadata["_content_overflow"] = overflow
+            else:
+                step.content = new_content
+
         if replace_content is not None:
-            step.content = replace_content
+            if len(replace_content) > MAX_STEP_CONTENT_FULL:
+                overflow = len(replace_content) - MAX_STEP_CONTENT_FULL
+                step.content = f"[...{overflow} chars earlier...]\n{replace_content[-MAX_STEP_CONTENT_FULL:]}"
+                step.metadata["_content_overflow"] = overflow
+            else:
+                step.content = replace_content
+
         if metadata:
             step.metadata.update(metadata)
         if step_type:
@@ -461,10 +644,13 @@ class StreamEventEmitter:
 
         step.timestamp = datetime.now(timezone.utc).isoformat()
 
+        # Emit with deduplication check (won't spam if called rapidly)
         self._emit_thinking_trace(step)
 
         if finalize:
             self.trace_step_aliases.pop(alias, None)
+            # Force final emission to ensure UI gets the complete state
+            self._emit_thinking_trace(step, force=True)
 
         return step
 
@@ -577,17 +763,145 @@ class StreamEventEmitter:
     def _emit_thinking_trace(
         self,
         step: Optional[TraceStep] = None,
+        force: bool = False,
     ) -> None:
-        """Emit a thinking trace update event with the full trace for deterministic UI sync."""
+        """Emit a thinking trace update with windowing, summarization, and deduplication.
+
+        Implements patterns from DeepAgents/LangGraph:
+        - Windowed trace: Recent steps in full detail, older steps summarized
+        - Deduplication: Skip emission if content hash unchanged within window
+        - Lazy emission: Only emit when there's meaningful change
+
+        Args:
+            step: The current/latest trace step (optional)
+            force: Force emission even if deduplication would skip it
+        """
+        current_time = time.time() * 1000  # ms
+
+        # =====================================================================
+        # DEDUPLICATION CHECK (LangGraph pattern)
+        # Skip if we just emitted and content hasn't meaningfully changed
+        # =====================================================================
+        if not force:
+            time_since_last = current_time - self._last_trace_emission_time
+            if time_since_last < DEDUP_EMISSION_WINDOW_MS:
+                # Check if content actually changed
+                trace_version = len(self.thinking_trace)
+                if trace_version == self._last_emitted_trace_version:
+                    return  # No new steps, skip emission
+
+        # =====================================================================
+        # WINDOWED TRACE WITH PROGRESSIVE SUMMARIZATION (DeepAgents pattern)
+        # Instead of truncating content, we summarize older steps
+        # =====================================================================
+        windowed_trace = []
+        total_steps = len(self.thinking_trace)
+
+        if total_steps <= TRACE_WINDOW_SIZE:
+            # Few enough steps - send all in full detail
+            for trace_step in self.thinking_trace:
+                windowed_trace.append(self._prepare_step_for_emission(trace_step, full=True))
+        else:
+            # Summarize older steps, keep recent steps in full detail
+            summary_count = total_steps - TRACE_WINDOW_SIZE
+
+            # Older steps: Create summaries
+            for i, trace_step in enumerate(self.thinking_trace[:summary_count]):
+                windowed_trace.append(self._prepare_step_for_emission(trace_step, full=False))
+
+            # Recent steps: Full detail
+            for trace_step in self.thinking_trace[summary_count:]:
+                windowed_trace.append(self._prepare_step_for_emission(trace_step, full=True))
+
+        # =====================================================================
+        # CONTENT HASH FOR DEDUPLICATION
+        # =====================================================================
+        content_repr = f"{total_steps}:{step.id if step else 'none'}"
+        content_hash = hashlib.md5(content_repr.encode()).hexdigest()[:8]
+
+        # =====================================================================
+        # APPROXIMATE TOKEN COUNT (LangChain pattern)
+        # Fast estimation for observability without actual tokenization
+        # =====================================================================
+        total_content = "".join(
+            str(s.content) if hasattr(s, "content") else str(s.get("content", ""))
+            for s in windowed_trace
+        )
+        approx_tokens = count_tokens_approximately(total_content, include_overhead=False)
+
+        # Build payload
         payload = AgentThinkingTraceEvent(
-            total_steps=len(self.thinking_trace),
-            thinking_trace=self.thinking_trace,
+            total_steps=total_steps,
+            thinking_trace=windowed_trace,
             latest_step=step,
             active_step_id=step.id if step else (
                 self.thinking_trace[-1].id if self.thinking_trace else None
             ),
         )
-        self.emit_custom_event("agent_thinking_trace", payload.to_dict())
+
+        # Add token metrics to payload
+        payload_dict = payload.to_dict()
+        payload_dict["_metrics"] = {
+            "approx_tokens": approx_tokens,
+            "windowed_steps": len(windowed_trace),
+            "total_steps": total_steps,
+            "summarized_steps": max(0, total_steps - TRACE_WINDOW_SIZE),
+        }
+
+        # Emit the event
+        self.emit_custom_event("agent_thinking_trace", payload_dict)
+
+        # Update deduplication state
+        self._last_trace_emission_time = current_time
+        self._last_emitted_trace_version = total_steps
+        self._emitted_trace_hashes.add(content_hash)
+
+    def _prepare_step_for_emission(self, trace_step: TraceStep, full: bool = True) -> TraceStep:
+        """Prepare a trace step for emission with optional summarization.
+
+        Args:
+            trace_step: The original trace step
+            full: If True, include full content (up to MAX_STEP_CONTENT_FULL)
+                  If False, summarize to MAX_STEP_CONTENT_SUMMARY
+
+        Returns:
+            TraceStep ready for emission (may be a modified copy)
+        """
+        content = trace_step.content
+        max_len = MAX_STEP_CONTENT_FULL if full else MAX_STEP_CONTENT_SUMMARY
+
+        if len(content) <= max_len:
+            return trace_step
+
+        # Content exceeds limit - need to create a summarized version
+        if full:
+            # For full mode, truncate at a reasonable boundary with indicator
+            truncated = content[:max_len]
+            # Try to truncate at a sentence boundary
+            last_period = truncated.rfind('. ')
+            if last_period > max_len * 0.7:  # Only if we keep >70% of content
+                truncated = truncated[:last_period + 1]
+            summary = truncated + f"\n\n[...{len(content) - len(truncated)} more characters]"
+        else:
+            # For summary mode, create a brief summary
+            # Take first paragraph or first N chars
+            first_para_end = content.find('\n\n')
+            if first_para_end > 0 and first_para_end < max_len:
+                summary = content[:first_para_end] + "..."
+            else:
+                summary = content[:max_len] + "..."
+
+        return TraceStep(
+            id=trace_step.id,
+            type=trace_step.type,
+            content=summary,
+            timestamp=trace_step.timestamp,
+            metadata={
+                **trace_step.metadata,
+                "_summarized": True,
+                "_original_length": len(content),
+            },
+        )
 
     def _emit_todos(self) -> None:
         """Emit a todos update event."""

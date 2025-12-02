@@ -25,8 +25,8 @@ logger = logging.getLogger(__name__)
 
 
 class EnhancedKBSearchInput(BaseModel):
-    """Enhanced input schema for knowledge base search with FeedMe integration"""
-    query: str = Field(..., description="The search query to find relevant articles and support examples")
+    """Enhanced input schema for knowledge base search with FeedMe and Zendesk macros integration"""
+    query: str = Field(..., description="The search query to find relevant articles, support examples, and macros")
     context: Optional[Dict[str, Any]] = Field(
         default=None,
         description="Additional context from Primary Agent (emotional state, platform, etc.)"
@@ -38,8 +38,8 @@ class EnhancedKBSearchInput(BaseModel):
         le=10
     )
     search_sources: List[str] = Field(
-        default=["knowledge_base", "feedme"],
-        description="Sources to search: knowledge_base, feedme, or both"
+        default=["knowledge_base", "feedme", "macros"],
+        description="Sources to search: knowledge_base, feedme, macros, or any combination"
     )
     min_confidence: Optional[float] = Field(
         default=None,
@@ -54,6 +54,7 @@ class SearchResultSummary(BaseModel):
     total_results: int
     kb_results: int
     feedme_results: int
+    macro_results: int = 0
     avg_relevance: float
     search_time_ms: int
     sources_used: List[str]
@@ -137,11 +138,13 @@ def _enhanced_mailbird_kb_search_payload(
         all_results = []
         kb_count = 0
         feedme_count = 0
+        macro_count = 0
         fallback_used = False
 
         # Determine search strategy
         use_kb = "knowledge_base" in search_sources
         use_feedme = "feedme" in search_sources and settings.feedme_enabled
+        use_macros = "macros" in search_sources
 
         # Strategy 1: Use FeedMe integration if available and requested
         if use_feedme:
@@ -175,6 +178,21 @@ def _enhanced_mailbird_kb_search_payload(
                 logger.warning(f"Traditional KB search failed: {e}")
                 fallback_used = True
 
+        # Strategy 2.5: Search Zendesk macros for pre-approved responses
+        if use_macros and len(all_results) < max_results:
+            try:
+                macro_results = _search_zendesk_macros(
+                    query=query,
+                    max_results=max_results - len(all_results)
+                )
+                all_results.extend(macro_results)
+                macro_count = len(macro_results)
+                logger.debug(f"Zendesk macros search returned {macro_count} results")
+
+            except Exception as e:
+                logger.warning(f"Zendesk macros search failed: {e}")
+                # Don't set fallback_used - macros are supplementary
+
         # Strategy 3: Combined search fallback - only if we have NO results
         # Don't overwrite partial results from successful searches
         if not all_results:
@@ -186,6 +204,7 @@ def _enhanced_mailbird_kb_search_payload(
                     # Count by source type
                     kb_count = len([r for r in combined_results if r.get('source') == 'knowledge_base'])
                     feedme_count = len([r for r in combined_results if r.get('source') == 'feedme'])
+                    macro_count = len([r for r in combined_results if r.get('source') == 'macro'])
                     fallback_used = True
 
             except Exception as e:
@@ -195,6 +214,7 @@ def _enhanced_mailbird_kb_search_payload(
                     total_results=0,
                     kb_results=0,
                     feedme_results=0,
+                    macro_results=0,
                     avg_relevance=0.0,
                     search_time_ms=int((time.time() - start_time) * 1000),
                     sources_used=search_sources,
@@ -220,6 +240,7 @@ def _enhanced_mailbird_kb_search_payload(
             total_results=len(all_results),
             kb_results=kb_count,
             feedme_results=feedme_count,
+            macro_results=macro_count,
             avg_relevance=avg_relevance,
             search_time_ms=search_time_ms,
             sources_used=search_sources,
@@ -243,6 +264,7 @@ def _enhanced_mailbird_kb_search_payload(
                 total_results=0,
                 kb_results=0,
                 feedme_results=0,
+                macro_results=0,
                 avg_relevance=0.0,
                 search_time_ms=0,
                 sources_used=search_sources,
@@ -358,6 +380,64 @@ def _search_traditional_kb(query: str, max_results: int) -> List[Dict[str, Any]]
         raise
 
 
+def _search_zendesk_macros(query: str, max_results: int) -> List[Dict[str, Any]]:
+    """Search Zendesk macros for pre-defined responses.
+
+    Macros contain pre-written responses for common support scenarios.
+    They are particularly useful for standard procedures and common questions.
+    """
+    try:
+        # Build query embedding (3072-d, gemini-embedding-001)
+        emb_model = get_embedding_model()
+        query_vec = emb_model.embed_query(query)
+
+        def _search_macros_sync(qv: List[float], limit: int):
+            client = SupabaseClient()
+            # Use RPC function for semantic search
+            result = client.client.rpc(
+                'search_zendesk_macros',
+                {
+                    'query_embedding': qv,
+                    'match_threshold': 0.4,  # Higher threshold than KB (0.25) for more precise macro matches
+                    'match_count': limit
+                }
+            ).execute()
+            return result.data if result.data else []
+
+        rows = _search_macros_sync(query_vec, max_results)
+
+        formatted_results: List[Dict[str, Any]] = []
+        for r in rows or []:
+            sim = float(r.get('similarity') or 0.0)
+            formatted_results.append({
+                'source': 'macro',
+                'title': r.get('title') or 'Zendesk Macro',
+                'content': r.get('comment_value') or r.get('description') or '',
+                'relevance_score': sim,
+                'confidence': sim,
+                'metadata': {
+                    'macro_id': r.get('id'),
+                    'zendesk_id': r.get('zendesk_id'),
+                    'description': r.get('description'),
+                    'search_type': 'zendesk_macro'
+                },
+                'context': {},
+                'quality_indicators': {
+                    'high_confidence': sim >= 0.8,
+                    'semantic_match': True,
+                    'source_authority': 'macro',
+                    'pre_approved': True  # Macros are pre-approved responses
+                }
+            })
+
+        return formatted_results
+
+    except Exception as e:
+        logger.warning(f"Error in Zendesk macros search: {e}")
+        # Return empty list instead of raising - macros are supplementary
+        return []
+
+
 def _search_combined_fallback(query: str, max_results: int) -> List[Dict[str, Any]]:
     """Fallback to combined search using embedding_utils"""
     try:
@@ -423,18 +503,22 @@ I couldn't find any relevant information for your query. You may want to:
 *Search performed across {', '.join(summary.sources_used)} in {summary.search_time_ms}ms*"""
 
     # Build formatted response
+    result_breakdown = f"{summary.kb_results} KB, {summary.feedme_results} support examples"
+    if summary.macro_results > 0:
+        result_breakdown += f", {summary.macro_results} macros"
+
     response_parts = [
-        f"# Knowledge Search Results",
-        f"",
+        "# Knowledge Search Results",
+        "",
         f"**Query:** {original_query}",
-        f"**Found:** {summary.total_results} results ({summary.kb_results} KB, {summary.feedme_results} support examples)",
+        f"**Found:** {summary.total_results} results ({result_breakdown})",
         f"**Average Relevance:** {summary.avg_relevance:.2f}",
-        f""
+        ""
     ]
 
     # Format each result
     for i, result in enumerate(results, 1):
-        source_icon = "📖" if result['source'] == 'knowledge_base' else "💬"
+        source_icon = "📖" if result['source'] == 'knowledge_base' else ("🔧" if result['source'] == 'macro' else "💬")
         confidence_icon = "🔥" if result.get('confidence', 0) >= 0.8 else "✅" if result.get('confidence', 0) >= 0.7 else "ℹ️"
 
         response_parts.extend([
@@ -468,6 +552,14 @@ I couldn't find any relevant information for your query. You may want to:
                 response_parts.append(f"**Issue Type:** {metadata['issue_type']}")
             if metadata.get('tags'):
                 response_parts.append(f"**Tags:** {', '.join(metadata['tags'][:3])}")
+            response_parts.append("")
+        elif result['source'] == 'macro':
+            metadata = result.get('metadata', {})
+            if metadata.get('description'):
+                response_parts.append(f"**Macro Description:** {metadata['description']}")
+            qi = result.get('quality_indicators', {})
+            if qi.get('pre_approved'):
+                response_parts.append("*This is a pre-approved response template*")
             response_parts.append("")
 
         response_parts.append("---")

@@ -9,8 +9,9 @@ import { ModelSelector } from "./ModelSelector";
 import { ProviderSelector } from "./ProviderSelector";
 import { AgentSelector } from "./AgentSelector";
 import type { AgentChoice } from "@/features/ag-ui/hooks/useAgentSelection";
-import { Activity, PanelsTopLeft } from "lucide-react";
+import { Activity, PanelsTopLeft, Sparkles } from "lucide-react";
 import type { Provider, ProviderAvailability } from "@/services/api/endpoints/models";
+import { useArtifactStore } from "./artifacts/ArtifactContext";
 
 interface ChatHeaderProps {
   agentType: AgentChoice;
@@ -64,6 +65,20 @@ export function ChatHeader({
           : "Primary Support";
   const handleFeedMe = () => {
     router.push("/feedme");
+  };
+
+  // Artifact store for showing generated images
+  const { artifactsById, setArtifactsVisible, setCurrentArtifact } = useArtifactStore();
+  const artifactCount = Object.keys(artifactsById).length;
+  const hasArtifacts = artifactCount > 0;
+
+  const handleOpenArtifacts = () => {
+    // Open the most recent artifact
+    const artifactIds = Object.keys(artifactsById);
+    if (artifactIds.length > 0) {
+      setCurrentArtifact(artifactIds[artifactIds.length - 1]);
+      setArtifactsVisible(true);
+    }
   };
 
   return (
@@ -123,6 +138,18 @@ export function ChatHeader({
               >
                 Memory {memoryEnabled ? "On" : "Off"}
               </button>
+
+              {/* Artifact indicator button - shows when images/articles are generated */}
+              {hasArtifacts && (
+                <button
+                  onClick={handleOpenArtifacts}
+                  className="text-xs font-medium px-3 py-1.5 rounded-organic border border-terracotta-500/30 bg-terracotta-500/15 text-terracotta-300 hover:bg-terracotta-500/25 transition-all duration-200 flex items-center gap-1.5 whitespace-nowrap shadow-sm"
+                  aria-label={`View ${artifactCount} generated artifact${artifactCount !== 1 ? 's' : ''}`}
+                >
+                  <Sparkles className="w-3.5 h-3.5" />
+                  {artifactCount} Artifact{artifactCount !== 1 ? 's' : ''}
+                </button>
+              )}
 
               <button
                 onClick={handleFeedMe}

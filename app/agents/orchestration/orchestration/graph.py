@@ -1,4 +1,5 @@
 import asyncio
+import uuid
 from pathlib import Path
 from typing import Optional
 
@@ -73,17 +74,27 @@ def _export_graph_visualization(graph_app: object) -> None:
 
 
 def _build_tool_node():
-    """Create a parallel tool runner with idempotency and concurrency limits."""
+    """Create a parallel tool runner with Claude-style reliability patterns.
+
+    Uses ToolExecutor for:
+    - Structured retry with exponential backoff
+    - Per-tool configuration (timeout, retries)
+    - Errors become context for reasoning (not crashes)
+    - Rich execution results for observability
+    - State tracking via LoopStateTracker for observability
+    """
     from app.agents.unified.tools import get_registered_tools
+    from app.agents.tools import ToolExecutor, DEFAULT_TOOL_CONFIGS
+    from app.agents.execution import AgentLoopState, get_or_create_tracker
 
     class ParallelToolNode:
-        def __init__(self, max_concurrency: int = 8, call_timeout: float = 45.0):
+        def __init__(self, max_concurrency: int = 8):
             self.tools = {t.name: t for t in get_registered_tools()}
-            self.sem = asyncio.Semaphore(max_concurrency)
-            self.call_timeout = call_timeout
-
-        async def _invoke(self, tool, args, config):
-            return await asyncio.wait_for(tool.ainvoke(args, config=config), timeout=self.call_timeout)
+            # Use Claude-style ToolExecutor for reliable execution
+            self.executor = ToolExecutor(
+                configs=DEFAULT_TOOL_CONFIGS,
+                max_concurrency=max_concurrency,
+            )
 
         async def __call__(self, state: GraphState, config=None):
             if not state.messages:
@@ -105,31 +116,60 @@ def _build_tool_node():
             if not pending:
                 return {}
 
+            # Track tool execution state for observability
+            fallback_session = f"unknown-{uuid.uuid4().hex[:8]}"
+            session_id = getattr(state, "session_id", None) or getattr(state, "trace_id", None) or fallback_session
+            tracker = get_or_create_tracker(session_id)
+            tool_names = [tc.get("name") for tc in pending]
+            tracker.transition_to(
+                AgentLoopState.EXECUTING_TOOLS,
+                metadata={"tools": tool_names, "count": len(pending)},
+            )
+
             async def run_one(tc):
                 tool_name = tc.get("name")
                 tool = self.tools.get(tool_name)
                 tool_call_id = tc.get("id")
                 args = tc.get("args") or tc.get("arguments") or {}
+
                 if tool is None:
+                    # Unknown tool - return error as context
                     return ToolMessage(
                         tool_call_id=tool_call_id,
-                        content=f"ERROR: unknown tool '{tool_name}'",
+                        content=(
+                            f"Tool '{tool_name}' is not available. "
+                            f"Available tools: {', '.join(sorted(self.tools.keys()))}. "
+                            f"Please try a different approach."
+                        ),
+                        additional_kwargs={"is_error": True, "error_type": "unknown_tool"},
                     )
-                async with self.sem:
-                    try:
-                        output = await self._invoke(tool, args, config)
-                    except asyncio.CancelledError:
-                        raise
-                    except Exception as exc:
-                        output = f"ERROR: {type(exc).__name__}: {exc}"
-                return ToolMessage(tool_call_id=tool_call_id, content=str(output))
+
+                # Use ToolExecutor for Claude-style reliable execution
+                result = await self.executor.execute(
+                    tool=tool,
+                    tool_call_id=tool_call_id,
+                    args=args,
+                    config=config,
+                )
+                return result.to_tool_message()
 
             results = await asyncio.gather(*(run_one(tc) for tc in pending))
             new_executed = list(executed | {tc["id"] for tc in pending})
 
+            # Transition to processing results after tools complete
+            tracker.transition_to(
+                AgentLoopState.PROCESSING_RESULTS,
+                metadata={"completed_tools": len(results)},
+            )
+
+            # Update scratchpad with execution metadata
             scratch = dict(state.scratchpad or {})
             system_bucket = dict((scratch.get("_system") or {}))
             system_bucket["_executed_tool_calls"] = new_executed
+
+            # Add executor stats for observability
+            system_bucket["_tool_executor_stats"] = self.executor.get_stats()
+
             scratch["_system"] = system_bucket
 
             return {"messages": results, "scratchpad": scratch}

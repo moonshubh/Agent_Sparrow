@@ -80,10 +80,27 @@ def make_json_safe_with_cycle_detection(value: Any, _seen: Set[int] | None = Non
 
     # Dict
     if isinstance(value, dict):
-        return {
-            key: make_json_safe_with_cycle_detection(sub_value, _seen)
-            for key, sub_value in value.items()
-        }
+        safe_dict = {}
+        key_counts: dict[str, int] = {}
+        seen_keys: set[tuple[int, str]] = set()
+        for key, sub_value in value.items():
+            # Ensure keys are JSON-serializable
+            if isinstance(key, str):
+                base_key_str = key
+            elif isinstance(key, (int, float, bool)) or key is None:
+                base_key_str = str(key)
+            else:
+                base_key_str = str(key)
+
+            identity = (id(key), base_key_str)
+            count = key_counts.get(base_key_str, 0)
+            if identity not in seen_keys:
+                key_counts[base_key_str] = count + 1
+                seen_keys.add(identity)
+
+            safe_key = base_key_str if count == 0 else f"{base_key_str}__{count}"
+            safe_dict[safe_key] = make_json_safe_with_cycle_detection(sub_value, _seen)
+        return safe_dict
 
     # List / tuple
     if isinstance(value, (list, tuple)):

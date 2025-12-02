@@ -161,6 +161,23 @@ export interface GenuiStateUpdateEvent {
   [key: string]: unknown;
 }
 
+/**
+ * Event payload for `image_artifact` custom events.
+ * Contains image data for frontend artifact display.
+ */
+export interface ImageArtifactEvent {
+  id: string;
+  type: 'image';
+  title: string;
+  content: string;
+  messageId: string;
+  imageData: string;
+  mimeType: string;
+  altText?: string;
+  aspectRatio?: string;
+  resolution?: string;
+}
+
 // -----------------------------------------------------------------------------
 // Union Type for All Custom Events
 // -----------------------------------------------------------------------------
@@ -174,7 +191,8 @@ export type AgentCustomEvent =
   | { name: 'agent_timeline_update'; value: AgentTimelineUpdateEvent }
   | { name: 'tool_evidence_update'; value: ToolEvidenceUpdateEvent }
   | { name: 'agent_todos_update'; value: AgentTodosUpdateEvent }
-  | { name: 'genui_state_update'; value: GenuiStateUpdateEvent };
+  | { name: 'genui_state_update'; value: GenuiStateUpdateEvent }
+  | { name: 'image_artifact'; value: ImageArtifactEvent };
 
 /**
  * Known AG-UI custom event names as const tuple for compile-time type derivation.
@@ -185,6 +203,7 @@ export const KNOWN_EVENT_NAMES = [
   'tool_evidence_update',
   'agent_todos_update',
   'genui_state_update',
+  'image_artifact',
 ] as const;
 
 /**

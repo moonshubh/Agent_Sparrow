@@ -64,18 +64,23 @@ class CircuitBreakerStatus(BaseModel):
     
 class UsageStats(BaseModel):
     """Current usage statistics."""
-    
+
+    # Gemini 3.0 Pro (newest)
+    gemini_3_pro_stats: RateLimitMetadata = Field(description="Gemini 3.0 Pro usage stats")
+    gemini_3_pro_circuit: CircuitBreakerStatus = Field(description="Gemini 3.0 Pro circuit breaker status")
+
+    # Gemini 2.5 models
     flash_stats: RateLimitMetadata = Field(description="Gemini 2.5 Flash usage stats")
     flash_lite_stats: RateLimitMetadata = Field(description="Gemini 2.5 Flash Lite usage stats")
     pro_stats: RateLimitMetadata = Field(description="Gemini 2.5 Pro usage stats")
-    
+
     flash_circuit: CircuitBreakerStatus = Field(description="Flash circuit breaker status")
     flash_lite_circuit: CircuitBreakerStatus = Field(description="Flash Lite circuit breaker status")
     pro_circuit: CircuitBreakerStatus = Field(description="Pro circuit breaker status")
-    
+
     total_requests_today: int = Field(description="Total requests across all models today")
     total_requests_this_minute: int = Field(description="Total requests across all models this minute")
-    
+
     uptime_percentage: float = Field(description="Service uptime percentage")
     last_updated: datetime = Field(default_factory=datetime.utcnow, description="When stats were last updated")
 

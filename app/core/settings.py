@@ -50,6 +50,15 @@ class Settings(BaseSettings):
     xai_default_model: str = Field(default="grok-4-1-fast-reasoning", alias="XAI_DEFAULT_MODEL")
     xai_reasoning_enabled: bool = Field(default=True, alias="XAI_REASONING_ENABLED")
 
+    # OpenRouter Configuration
+    openrouter_api_key: Optional[str] = Field(default=None, alias="OPENROUTER_API_KEY")
+    openrouter_base_url: str = Field(default="https://openrouter.ai/api/v1", alias="OPENROUTER_BASE_URL")
+    openrouter_default_model: str = Field(
+        default="x-ai/grok-4.1-fast:free", alias="OPENROUTER_DEFAULT_MODEL"
+    )
+    openrouter_app_name: str = Field(default="Agent Sparrow", alias="OPENROUTER_APP_NAME")
+    openrouter_referer: Optional[str] = Field(default=None, alias="OPENROUTER_REFERER")
+
     # LangSmith tracing configuration
     langsmith_tracing_enabled: bool = Field(default=False, alias="LANGSMITH_TRACING_ENABLED")
     langsmith_api_key: Optional[str] = Field(default=None, alias="LANGSMITH_API_KEY")
@@ -86,6 +95,9 @@ class Settings(BaseSettings):
     primary_agent_formatting: str = Field(default="natural", alias="PRIMARY_AGENT_FORMATTING")
     primary_agent_quality_level: str = Field(default="balanced", alias="PRIMARY_AGENT_QUALITY_LEVEL")
     primary_agent_prompt_version: str = Field(default="v10", alias="PRIMARY_AGENT_PROMPT_VERSION")
+    # Optional override specifically for Zendesk auto-responses (e.g., OpenRouter Grok)
+    zendesk_agent_provider: Optional[str] = Field(default=None, alias="ZENDESK_AGENT_PROVIDER")
+    zendesk_agent_model: Optional[str] = Field(default=None, alias="ZENDESK_AGENT_MODEL")
     gemma_helper_model: str = Field(default="gemma-3-27b-it", alias="GEMMA_HELPER_MODEL")
     enable_websearch: bool = Field(default=True, alias="ENABLE_WEBSEARCH")
     enable_grounded_responses: bool = Field(default=True, alias="ENABLE_GROUNDED_RESPONSES")

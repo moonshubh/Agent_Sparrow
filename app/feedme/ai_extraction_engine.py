@@ -1,6 +1,7 @@
 """
 FeedMe v2.0 AI Extraction Engine
-Advanced Q&A extraction using Google's Gemma-3-27b-it model for intelligent conversation parsing
+Advanced Q&A extraction using AI models for intelligent conversation parsing.
+Model configuration is sourced from the centralized model registry.
 """
 
 import json
@@ -21,6 +22,7 @@ from bs4 import BeautifulSoup
 from google.api_core.exceptions import ResourceExhausted, InvalidArgument
 
 from app.core.settings import settings
+from app.core.config import get_registry
 from app.feedme.schemas import ProcessingStatus, IssueType, ResolutionType
 
 logger = logging.getLogger(__name__)
@@ -28,12 +30,15 @@ logger = logging.getLogger(__name__)
 # HTML parsing functionality removed - PDF and manual text processing only
 
 
+def _get_feedme_model_name() -> str:
+    """Get FeedMe model name from registry."""
+    return get_registry().feedme.id
+
+
 @dataclass
 class ExtractionConfig:
     """Configuration for AI extraction engine with intelligent rate limiting"""
-    model_name: str = field(
-        default_factory=lambda: getattr(settings, "feedme_model_name", "gemini-2.5-flash-lite-preview-09-2025")
-    )
+    model_name: str = field(default_factory=_get_feedme_model_name)
     temperature: float = 0.3                
     max_output_tokens: int = 8192
     confidence_threshold: float = 0.7

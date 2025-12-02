@@ -23,6 +23,7 @@ try:
     from langchain.agents.middleware.summarization import SummarizationMiddleware
     from deepagents.middleware.subagents import SubAgentMiddleware, TASK_SYSTEM_PROMPT
     from deepagents.middleware.patch_tool_calls import PatchToolCallsMiddleware
+    # Note: ToolResultEvictionMiddleware is used in subagents.py, not here
 
     MIDDLEWARE_AVAILABLE = True
 
@@ -39,6 +40,7 @@ except ImportError as e:
     MIDDLEWARE_AVAILABLE = False
 
 from app.agents.orchestration.orchestration.state import GraphState
+from app.agents.execution import AgentLoopState, LoopStateTracker, get_or_create_tracker
 from app.core.settings import settings
 from app.memory import memory_service
 from app.core.rate_limiting.agent_wrapper import get_rate_limiter
@@ -59,6 +61,7 @@ from .tools import get_registered_tools
 from .attachment_processor import get_attachment_processor
 from .subagents import get_subagent_specs, get_subagent_by_name
 from .prompts import get_coordinator_prompt, TODO_PROMPT
+from app.agents.skills import get_skills_registry
 
 # Constants
 MEMORY_AGENT_ID = "sparrow"
@@ -67,8 +70,17 @@ BASE_AGENT_PROMPT = (
     "In order to complete the objective that the user asks of you, you have access to a number "
     "of standard tools."
 )
-DEFAULT_RECURSION_LIMIT = 120
+DEFAULT_RECURSION_LIMIT = 400
 HELPER_TIMEOUT_SECONDS = 8.0
+
+# Provider-specific token limits for summarization middleware
+# Set conservatively to prevent quota/context overflow
+PROVIDER_TOKEN_LIMITS: Dict[str, int] = {
+    "google": 50000,      # Gemini 3 Pro has 1M/min quota - keep very low
+    "xai": 80000,         # Grok ~400K context → 80K summarization threshold
+    "openrouter": 50000,  # OpenRouter 262K context → 50K summarization threshold
+}
+DEFAULT_TOKEN_LIMIT = 50000  # Conservative default for unknown providers
 
 
 @dataclass
@@ -84,38 +96,44 @@ class AgentRuntimeConfig:
 # -----------------------------------------------------------------------------
 
 def _resolve_runtime_config(state: GraphState) -> AgentRuntimeConfig:
-    """Resolve runtime configuration from state."""
+    """Resolve runtime configuration from state.
+
+    IMPORTANT: This function should be called AFTER _ensure_model_selection()
+    which performs the async health check and sets state.model. This function
+    now uses the already-selected model rather than re-running model selection
+    to avoid inconsistency between async health check and sync router.
+    """
     provider = (state.provider or settings.primary_agent_provider or "google").lower()
     task_type = _determine_task_type(state)
 
-    user_override = state.model
-
-    # For non-Google providers, preserve the user's model selection without router intervention
-    if provider != "google":
-        resolved_model = user_override or getattr(settings, "xai_default_model", None) or settings.primary_agent_model
-        if not resolved_model:
-            resolved_model = "grok-4-1-fast-reasoning"
-        logger.info(
-            "preserving_non_google_model",
+    # Use the model already selected by _ensure_model_selection()
+    # Only fall back to router selection if state.model is not set (defensive)
+    if state.model:
+        resolved_model = state.model
+        logger.debug(
+            "using_preselected_model",
             provider=provider,
             model=resolved_model,
             task_type=task_type,
         )
+    else:
+        # Fallback: model selection wasn't done yet (shouldn't happen in normal flow)
+        logger.warning(
+            "model_selection_fallback_needed",
+            provider=provider,
+            task_type=task_type,
+        )
+        provider_defaults = {
+            "xai": getattr(settings, "xai_default_model", None) or "grok-4-1-fast-reasoning",
+            "openrouter": getattr(settings, "openrouter_default_model", None) or "x-ai/grok-4.1-fast:free",
+        }
+        if provider in provider_defaults:
+            resolved_model = provider_defaults[provider]
+        else:
+            resolved_model = model_router.select_model(task_type, check_availability=False)
         state.model = resolved_model
-        return AgentRuntimeConfig(provider=provider, model=resolved_model, task_type=task_type)
 
-    selected_model = model_router.select_model(task_type, user_override=user_override)
-    state.model = selected_model
-
-    logger.debug(
-        "resolved_runtime_config",
-        provider=provider,
-        model=selected_model,
-        task_type=task_type,
-        user_override=user_override,
-    )
-
-    return AgentRuntimeConfig(provider=provider, model=selected_model, task_type=task_type)
+    return AgentRuntimeConfig(provider=provider, model=resolved_model, task_type=task_type)
 
 
 def _determine_task_type(state: GraphState) -> str:
@@ -166,7 +184,12 @@ async def _ensure_model_selection(state: GraphState) -> ModelSelectionResult:
     # For non-Google providers, preserve the user's model selection
     if provider != "google":
         if not state.model:
-            state.model = getattr(settings, "xai_default_model", None) or "grok-4-1-fast-reasoning"
+            if provider == "xai":
+                state.model = getattr(settings, "xai_default_model", None) or "grok-4-1-fast-reasoning"
+            elif provider == "openrouter":
+                state.model = getattr(settings, "openrouter_default_model", None) or "x-ai/grok-4.1-fast:free"
+            else:
+                state.model = getattr(settings, "primary_agent_model", None) or "gemini-2.5-flash"
         logger.info(
             "preserving_non_google_model_selection",
             provider=provider,
@@ -221,6 +244,11 @@ async def _ensure_model_selection(state: GraphState) -> ModelSelectionResult:
 def _build_chat_model(runtime: AgentRuntimeConfig):
     """Build the chat model for the agent using the provider factory.
 
+    Uses role-based temperature selection from provider_factory.TEMPERATURE_CONFIG:
+    - coordinator: 0.2 (deterministic reasoning)
+    - coordinator_heavy: 0.2 (complex reasoning)
+    - log_analysis: 0.1 (high precision for error diagnosis)
+
     Supports multiple providers (Google Gemini, XAI/Grok) with automatic
     fallback to Gemini if the requested provider is unavailable.
     """
@@ -229,7 +257,7 @@ def _build_chat_model(runtime: AgentRuntimeConfig):
     return build_chat_model(
         provider=runtime.provider,
         model=runtime.model,
-        temperature=settings.primary_agent_temperature,
+        role=runtime.task_type,  # Role-based temperature selection
     )
 
 
@@ -251,11 +279,72 @@ def _build_task_system_prompt(state: GraphState) -> Optional[str]:
     return base
 
 
+def _build_skills_context(state: GraphState, runtime: AgentRuntimeConfig) -> str:
+    """Build skills context with auto-detection from message content.
+
+    This function:
+    1. Always injects writing/empathy skills for user-facing responses
+    2. Auto-detects additional skills based on message keywords (e.g., "pdf", "excel")
+    3. Limits total skills to prevent prompt bloat
+
+    Skills auto-detection triggers on keywords like:
+    - Document types: pdf, docx, xlsx, pptx, csv
+    - Actions: brainstorm, root cause, enhance image, create poster
+    - Tasks: research company, write article, analyze data
+
+    Maximum 3 additional skills are injected beyond writing/empathy.
+    """
+    try:
+        skills_registry = get_skills_registry()
+
+        # Build context for auto-detection
+        forwarded_props = getattr(state, "forwarded_props", {}) or {}
+        scratchpad = getattr(state, "scratchpad", {}) or {}
+        system_bucket = scratchpad.get("_system", {}) if isinstance(scratchpad, dict) else {}
+
+        # Extract last user message for skill detection
+        user_message = ""
+        messages = getattr(state, "messages", []) or []
+        for msg in reversed(messages):
+            if hasattr(msg, "type") and msg.type == "human":
+                user_message = getattr(msg, "content", "") or ""
+                if isinstance(user_message, list):
+                    # Handle multimodal messages
+                    user_message = " ".join(
+                        part.get("text", "") for part in user_message
+                        if isinstance(part, dict) and part.get("type") == "text"
+                    )
+                break
+
+        skill_context = {
+            "message": user_message,  # For auto-detection
+            "is_final_response": True,  # Default to user-facing for coordinator
+            "task_type": system_bucket.get("task_type") or forwarded_props.get("task_type"),
+            "is_internal_call": forwarded_props.get("is_internal_call", False),
+        }
+
+        # Use enhanced auto-detection
+        skills_content = skills_registry.get_context_skills_content(skill_context)
+
+        if skills_content:
+            logger.debug(
+                "skills_context_activated",
+                message_preview=user_message[:100] if user_message else "",
+            )
+
+        return skills_content
+
+    except Exception as e:
+        logger.warning("skills_context_build_failed", error=str(e))
+
+    return ""
+
+
 def _build_deep_agent(state: GraphState, runtime: AgentRuntimeConfig):
     """Build the deep agent with middleware stack."""
     chat_model = _build_chat_model(runtime)
     tools = get_registered_tools()
-    subagents = get_subagent_specs()
+    subagents = get_subagent_specs(provider=runtime.provider)
 
     todo_prompt = TODO_PROMPT if "TODO_PROMPT" in globals() else ""
     # Build coordinator prompt with dynamic model identification
@@ -263,11 +352,24 @@ def _build_deep_agent(state: GraphState, runtime: AgentRuntimeConfig):
         model=runtime.model,
         provider=state.provider,
     )
-    system_prompt_parts = [coordinator_prompt, todo_prompt, BASE_AGENT_PROMPT]
+
+    # Build skills context for auto-detected writing/empathy skills
+    skills_context = _build_skills_context(state, runtime)
+
+    system_prompt_parts = [coordinator_prompt, skills_context, todo_prompt, BASE_AGENT_PROMPT]
     system_prompt = "\n\n".join(part for part in system_prompt_parts if part)
 
     middleware_stack = []
     if MIDDLEWARE_AVAILABLE:
+        # Get provider-specific token limit for summarization
+        provider_lower = (runtime.provider or "google").lower()
+        token_limit = PROVIDER_TOKEN_LIMITS.get(provider_lower, DEFAULT_TOKEN_LIMIT)
+        logger.debug(
+            "summarization_config",
+            provider=provider_lower,
+            max_tokens=token_limit,
+        )
+
         coordinator_middleware = SubAgentMiddleware(
             default_model=chat_model,
             default_tools=tools,
@@ -276,9 +378,13 @@ def _build_deep_agent(state: GraphState, runtime: AgentRuntimeConfig):
                 SubAgentTodoListMiddleware(),
                 SubAgentSummarizationMiddleware(
                     model=chat_model,
-                    max_tokens_before_summary=170000,
+                    max_tokens_before_summary=token_limit,
                     messages_to_keep=6,
                 ),
+                # NOTE: ToolResultEvictionMiddleware is NOT added here because:
+                # 1. It's already in subagents.py for research subagent
+                # 2. Image compaction is handled by handler._compact_image_output()
+                # Adding it here causes "duplicate middleware instances" error
                 PatchToolCallsMiddleware(),
             ],
             system_prompt=_build_task_system_prompt(state),
@@ -383,7 +489,8 @@ async def _maybe_autoroute_log_analysis(state: GraphState, helper: GemmaHelper) 
     else:
         return None
 
-    spec = get_subagent_by_name("log-diagnoser")
+    provider = (state.provider or settings.primary_agent_provider or "google").lower()
+    spec = get_subagent_by_name("log-diagnoser", provider=provider)
     if not spec:
         return None
 
@@ -785,12 +892,18 @@ async def run_unified_agent(state: GraphState, config: Optional[RunnableConfig] 
     4. Agent streaming with AG-UI event emission
     5. Memory recording from response
 
+    State transitions are tracked via LoopStateTracker for observability.
+
     Returns:
         Updated state dict with messages, scratchpad, and forwarded_props.
     """
     reserved_slots: List[tuple[str, Optional[str]]] = []
     limiter = None
-    completed_successfully = False
+
+    # Initialize state tracker for observability
+    session_id = getattr(state, "session_id", None) or getattr(state, "trace_id", None) or "unknown"
+    tracker = get_or_create_tracker(session_id)
+    tracker.transition_to(AgentLoopState.PROCESSING_INPUT, metadata={"session_id": session_id})
 
     try:
         # 1. Model selection with health check
@@ -850,7 +963,12 @@ async def run_unified_agent(state: GraphState, config: Optional[RunnableConfig] 
         # 4. Build agent and config
         agent = _build_deep_agent(state, runtime)
         run_config = _build_runnable_config(state, config, runtime)
-        writer = get_stream_writer()
+        # In non-graph contexts (e.g., Zendesk batch jobs), LangGraph may not set a stream writer.
+        # Fallback to no-op writer to avoid "get_config outside of a runnable context" errors.
+        try:
+            writer = get_stream_writer()
+        except Exception:
+            writer = None
 
         # 5. Retrieve memory context
         memory_context = await _retrieve_memory_context(state)
@@ -888,7 +1006,12 @@ async def run_unified_agent(state: GraphState, config: Optional[RunnableConfig] 
             task_type=runtime.task_type,
         )
 
-        # 9. Stream with handler
+        # 9. Transition to awaiting model and stream with handler
+        tracker.transition_to(
+            AgentLoopState.AWAITING_MODEL,
+            metadata={"model": runtime.model, "provider": runtime.provider},
+        )
+
         handler = StreamEventHandler(
             agent=agent,
             emitter=emitter,
@@ -902,6 +1025,9 @@ async def run_unified_agent(state: GraphState, config: Optional[RunnableConfig] 
 
         final_output = await handler.stream_and_process()
 
+        # Transition to streaming response
+        tracker.transition_to(AgentLoopState.STREAMING_RESPONSE)
+
         # 10. Fallback if streaming returned nothing
         if final_output is None:
             final_output = await agent.ainvoke(
@@ -914,7 +1040,6 @@ async def run_unified_agent(state: GraphState, config: Optional[RunnableConfig] 
 
         if messages_payload is None:
             logger.error("Unified agent response missing messages; returning original state")
-            completed_successfully = True
             return {"messages": state.messages}
 
         updated_messages = _strip_memory_messages(messages_payload)
@@ -947,7 +1072,16 @@ async def run_unified_agent(state: GraphState, config: Optional[RunnableConfig] 
         if last_ai_message is not None:
             await _record_memory(state, last_ai_message)
 
-        completed_successfully = True
+        # Mark completion and store tracker summary for LangSmith
+        tracker.complete()
+
+        # Add loop state summary to scratchpad for observability
+        loop_summary = tracker.get_summary()
+        if isinstance(scratchpad, dict):
+            system_bucket = scratchpad.setdefault("_system", {})
+            system_bucket["loop_state"] = loop_summary
+            scratchpad["_system"] = system_bucket
+
         return {
             "messages": updated_messages,
             "scratchpad": scratchpad,
@@ -956,22 +1090,38 @@ async def run_unified_agent(state: GraphState, config: Optional[RunnableConfig] 
         }
 
     except RateLimitExceededException as e:
+        tracker.set_error(f"Rate limit exceeded: {str(e)[:100]}")
         logger.error("gemini_rate_limited", model=getattr(runtime, "model", "unknown"), error=str(e))
         rate_limit_msg = AIMessage(content=(
             "I'm temporarily paused because the Gemini API rate limit was hit. "
             "Please wait a few seconds and try again; I'll reuse cached prep and keep the same model when capacity is free."
         ))
+
+        # Add error state to scratchpad
+        scratchpad = dict(state.scratchpad or {})
+        system_bucket = scratchpad.setdefault("_system", {})
+        system_bucket["loop_state"] = tracker.get_summary()
+        scratchpad["_system"] = system_bucket
+
         return {
             "messages": [*state.messages, rate_limit_msg],
-            "scratchpad": state.scratchpad or {},
+            "scratchpad": scratchpad,
             "forwarded_props": state.forwarded_props or {},
             "attachments": getattr(state, "attachments", []),
         }
     except Exception as e:
+        tracker.set_error(f"Critical error: {str(e)[:100]}")
         logger.error(f"Critical error in unified agent execution: {e}")
+
+        # Add error state to scratchpad
+        scratchpad = dict(state.scratchpad or {})
+        system_bucket = scratchpad.setdefault("_system", {})
+        system_bucket["loop_state"] = tracker.get_summary()
+        scratchpad["_system"] = system_bucket
+
         return {
             "messages": state.messages,
-            "scratchpad": state.scratchpad or {},
+            "scratchpad": scratchpad,
             "forwarded_props": state.forwarded_props or {},
             "error": str(e)
         }

@@ -12,7 +12,7 @@ from typing import Any, Dict, List, Optional, Set
 
 from loguru import logger
 
-from app.core.settings import settings
+from app.core.config import get_registry
 from .model_health import ModelHealth, quota_tracker
 
 
@@ -20,38 +20,38 @@ CoordinatorTask = str
 
 
 def _default_model_map() -> Dict[CoordinatorTask, str]:
-    """Build the default task→model mapping from settings.
-
-    Note: log_analysis uses gemini-2.5-pro for superior reasoning capabilities
-    and detailed analysis quality. This takes longer but provides better results.
-    """
-
-    coordinator_model = settings.primary_agent_model or "gemini-2.5-flash"
-    lite_model = settings.router_model or "gemini-2.5-flash-lite"
-    heavy_model = settings.enhanced_log_model or "gemini-2.5-pro"
+    """Build the default task→model mapping from registry."""
+    registry = get_registry()
+    required_attrs = [
+        "coordinator_google",
+        "coordinator_heavy",
+        "log_analysis",
+        "db_retrieval",
+        "embedding",
+        "coordinator_openrouter",
+    ]
+    for attr in required_attrs:
+        if not hasattr(registry, attr) or not getattr(registry, attr, None):
+            raise ValueError(f"Registry missing required attribute: {attr}")
 
     return {
-        "coordinator": coordinator_model,
-        "coordinator_heavy": heavy_model,
-        "log_analysis": heavy_model,  # Pro model for quality log analysis
-        "lightweight": lite_model,
-        "embeddings": "models/gemini-embedding-001",
+        "coordinator": registry.coordinator_google.id,
+        "coordinator_heavy": registry.coordinator_heavy.id,
+        "log_analysis": registry.log_analysis.id,
+        "lightweight": registry.db_retrieval.id,
+        "db_retrieval": registry.db_retrieval.id,
+        "embeddings": registry.embedding.id,
     }
 
 
 def _default_fallbacks() -> Dict[str, Optional[str]]:
-    """Return the fallback chain for model selection.
+    """Return the fallback chain for model selection from registry.
 
-    The chain is strictly linear with no cycles:
-    gemini-2.5-pro -> gemini-2.5-flash -> gemini-2.5-flash-lite -> None (terminal)
-
-    When gemini-2.5-flash-lite is exhausted, there are no more fallbacks.
+    The chain is defined in the registry and typically goes:
+    gemini-3-pro-preview -> gemini-2.5-pro -> gemini-2.5-flash -> gemini-2.5-flash-lite -> None
     """
-    return {
-        "gemini-2.5-pro": "gemini-2.5-flash",
-        "gemini-2.5-flash": "gemini-2.5-flash-lite",
-        "gemini-2.5-flash-lite": None,  # Terminal - no more fallbacks
-    }
+    registry = get_registry()
+    return registry.get_fallback_chain("google")
 
 
 @dataclass
@@ -111,7 +111,8 @@ class ModelRouter:
         model = self.default_models.get(normalized_task) or self.default_models.get("coordinator")
         if not model:
             logger.warning("Model router missing default for task '%s'; falling back to coordinator", normalized_task)
-            model = "gemini-2.5-flash"
+            registry = get_registry()
+            model = registry.coordinator_google.id
 
         if not check_availability:
             return model
@@ -212,7 +213,8 @@ class ModelRouter:
             fallback_occurred = True
 
         # Either no candidate or last one is exhausted – return the last attempt for transparency.
-        final_model = candidate or self.default_models.get("coordinator") or "gemini-2.5-flash"
+        registry = get_registry()
+        final_model = candidate or self.default_models.get("coordinator") or registry.coordinator_google.id
         if final_model not in fallback_chain:
             fallback_chain.append(final_model)
 

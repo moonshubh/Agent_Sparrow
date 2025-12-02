@@ -3,8 +3,8 @@ from __future__ import annotations
 """
 Gemini PDF → Markdown processor (LLM vision, no OCR)
 
-Renders PDF pages to images, sends small batches of pages to
-`gemini-2.5-flash-lite-preview-09-2025` and requests strict Markdown output.
+Renders PDF pages to images, sends small batches of pages to the FeedMe model
+configured in the centralized model registry, and requests strict Markdown output.
 Concatenates chunk outputs into a final Markdown transcript.
 
 Budget controls:
@@ -39,6 +39,7 @@ except ImportError:  # pragma: no cover
         )
 
 from app.core.settings import settings
+from app.core.config import get_registry
 from app.feedme.rate_limiting.gemini_tracker import get_tracker
 
 logger = logging.getLogger(__name__)
@@ -93,9 +94,14 @@ def _final_merge_prompt() -> str:
 
 
 def _ensure_model(api_key: str) -> str:
-    """Initialize the Gemini client and return the model name."""
+    """Initialize the Gemini client and return the model name from registry."""
     global _genai_client, _genai_client_api_key
-    model_name = getattr(settings, "feedme_model_name", None) or "gemini-2.5-flash-lite-preview-09-2025"
+    registry = get_registry()
+    if not hasattr(registry, "feedme") or not getattr(registry, "feedme", None):
+        raise ValueError("Registry missing 'feedme' configuration")
+    model_name = getattr(registry.feedme, "id", None)
+    if not model_name:
+        raise ValueError("Registry feedme.id is empty")
 
     if GENAI_SDK == "google.genai":
         # New SDK (google-genai 1.0+) uses Client pattern

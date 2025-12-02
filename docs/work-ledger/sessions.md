@@ -88,3 +88,10 @@
 - Header shows resolved model/task metadata from backend state (`AgentContext.tsx`, `ChatContainer.tsx`, `ChatHeader.tsx`), so log runs display the Pro model when selected.
 - Tool evidence sidebar renders backend cards when present and falls back to any evidence payload even if timeline ops don’t match (`ToolEvidenceSidebar.tsx`, `services/ag-ui/validators.ts`).
 - Backend evidence normalizer now parses string outputs more leniently (handles `content=/data=` prefixes, single-quoted JSON) and shortens snippets; if parsing fails, it emits a friendly summary card instead of raw JSON (`app/agents/streaming/normalizers.py`).
+
+## 2025-11-29 – OpenRouter integration and model wiring
+
+- Added OpenRouter provider support with Grok 4.1 Fast (free) and MiniMax M2 models to the registry, provider factory, subagents, and API model config. Fallback chain set to Grok free → MiniMax. (`app/core/config/model_registry.py`, `app/agents/unified/provider_factory.py`, `app/agents/unified/subagents.py`, `app/api/v1/endpoints/models_endpoints.py`, `.env`).
+- Enabled OpenRouter selection in frontend header: provider selector now shows OpenRouter; model selector surfaces Grok free and MiniMax with defaults/fallbacks. (`frontend/src/services/api/endpoints/models.ts`, `ProviderSelector.tsx`, `AgUiChatClient.tsx`, `ChatContainer.tsx`).
+- Confirmed OpenRouter tool-calls work for both Grok free and MiniMax with bound tools; registry/subagent model selection resolves correctly for `provider="openrouter"`. Tools validated via direct LangChain calls.
+- Resolved `openai` dependency conflict by relaxing pin to `>=1.109.1,<3.0.0` and reinstalling deps; restarted backend/frontend/celery with new config.
