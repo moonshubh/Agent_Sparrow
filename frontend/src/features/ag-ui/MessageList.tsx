@@ -153,7 +153,7 @@ function parseToolOutput(output: unknown): Record<string, unknown> {
     });
   }
   if ((text.startsWith('{') && text.endsWith('}')) ||
-      (text.startsWith('[') && text.endsWith(']'))) {
+    (text.startsWith('[') && text.endsWith(']'))) {
     try {
       const parsed = JSON.parse(text);
       if (process.env.NODE_ENV === 'development') {
@@ -290,8 +290,8 @@ function extractImagesFromToolEvidence(toolEvidence: Record<string, any>): Searc
     // Check if it's a web search or grounding search result
     const toolName = (evidence.toolName || evidence.tool_name || '') as string;
     const isSearchTool = toolName.toLowerCase().includes('search') ||
-                         toolName.toLowerCase().includes('grounding') ||
-                         toolName.toLowerCase().includes('web');
+      toolName.toLowerCase().includes('grounding') ||
+      toolName.toLowerCase().includes('web');
 
     if (!isSearchTool) continue;
 
@@ -340,8 +340,8 @@ function extractImagesFromToolEvidence(toolEvidence: Record<string, any>): Searc
       for (const result of results) {
         if (result && typeof result === 'object') {
           const thumbnail = (result as Record<string, unknown>).thumbnail ||
-                           (result as Record<string, unknown>).image ||
-                           (result as Record<string, unknown>).img;
+            (result as Record<string, unknown>).image ||
+            (result as Record<string, unknown>).img;
           if (thumbnail) {
             addImage(extractImageObject(thumbnail, (result as Record<string, unknown>).title as string || `Result image from ${toolName}`));
           }
@@ -377,6 +377,8 @@ function parseThinkingContent(text: string | undefined | null): {
   }
 
   // Match ALL :::thinking ... ::: blocks (global flag for multiple matches)
+  // FIXED: Require closing ::: markers - don't use $ fallback which captures too much during streaming
+  // During streaming, if a block isn't closed yet, we wait rather than capturing everything
   const thinkingPattern = /:::(?:thinking|think)\s*([\s\S]*?)\s*:::/gi;
   const allThinkingContent: string[] = [];
   let match: RegExpExecArray | null;
@@ -429,226 +431,48 @@ function extractThinkingFallback(metadata: Record<string, any> = {}): string {
   return '';
 }
 
-/**
- * Classify whether a sentence is "reasoning/self-talk" vs "user-facing answer".
- *
- * Based on Anthropic's extended thinking patterns and best practices:
- * - Reasoning: Model talks about its own actions, plans, tool results, uncertainty
- * - Answer: Direct information addressing the user's question
- *
- * @param sentence - A single sentence or short paragraph
- * @returns true if this is reasoning content that should be hidden
- */
-function isReasoningSentence(sentence: string): boolean {
-  const s = sentence.trim();
-  if (!s || s.length < 5) return false;
-
-  // Normalize for pattern matching
-  const lower = s.toLowerCase();
-
-  // === STRONG REASONING INDICATORS (high confidence) ===
-
-  // Self-referential planning: "I will...", "I need to...", "I should...", "Let me..."
-  if (/^(?:i(?:'ll| will| need to| should| am going to| have to)|let me)\b/i.test(s)) {
-    return true;
-  }
-
-  // Tool/search references: "The KB search...", "Using kb_search...", "The search returned..."
-  if (/^(?:the |my |using )?(?:kb|knowledge base|web|grounding|feedme|database|db)[_\s]?search/i.test(s)) {
-    return true;
-  }
-
-  // Result descriptions: "This returned...", "No results...", "The results show..."
-  if (/^(?:this |the |no )(?:search |query |tool )?(?:returned|yielded|found|results?|indicates?|suggests?|shows?)/i.test(s)) {
-    return true;
-  }
-
-  // Planning transitions: "First,...", "Then,...", "Next,...", "After that,..."
-  if (/^(?:first|then|next|after that|now|finally|therefore|so|thus),?\s/i.test(s)) {
-    // But not if it's instructional (e.g., "First, click on Settings")
-    if (!/^(?:first|then|next),?\s+(?:click|tap|go to|open|select|enter|type|press)/i.test(s)) {
-      // Check if it contains self-reference
-      if (/\bi(?:'ll| will| need| should| am)\b/i.test(s)) {
-        return true;
-      }
-    }
-  }
-
-  // Explicit tool naming: "I'll use the `tool_name` tool..."
-  if (/`\w+(?:_\w+)*`\s*(?:tool)?/i.test(s) && /\bi(?:'ll| will| should| need)\b/i.test(s)) {
-    return true;
-  }
-
-  // Uncertainty/hedging about internal state: "It seems...", "It appears...", "This might..."
-  if (/^(?:it (?:seems|appears|looks like)|this (?:might|could|may|seems to))/i.test(s)) {
-    return true;
-  }
-
-  // Analysis statements: "Based on the search...", "According to the results..."
-  if (/^(?:based on (?:the |my )?(?:search|results?|findings?)|according to (?:the |my )?(?:search|results?))/i.test(s)) {
-    return true;
-  }
-
-  // Hypothesis statements: "My hypothesis is...", "I believe this indicates..."
-  if (/^(?:my hypothesis|i (?:believe|think|suspect) (?:this|that|the))/i.test(s)) {
-    return true;
-  }
-
-  // Observation about lack of results: "I couldn't find...", "There doesn't seem to be..."
-  if (/^(?:i (?:couldn't|could not|didn't|did not) find|there (?:doesn't|does not|didn't) seem)/i.test(s)) {
-    return true;
-  }
-
-  // Step enumeration with self-reference: "Step 1: I will..."
-  if (/^step\s*\d+[:\s]/i.test(s) && /\bi(?:'ll| will| should| need)\b/i.test(s)) {
-    return true;
-  }
-
-  // === CONTENT-BASED CHECKS ===
-
-  // Contains tool names with reasoning verbs
-  const toolNames = ['kb_search', 'web_search', 'grounding_search', 'feedme_search', 'supabase_query', 'log_diagnoser', 'db_unified_search', 'db_grep_search', 'db_context_search'];
-  for (const tool of toolNames) {
-    if (lower.includes(tool) && /\b(?:use|using|call|calling|invoke|try|search|query)\b/i.test(s)) {
-      return true;
-    }
-  }
-
-  // "did not yield", "did not return", "yielded no results"
-  if (/(?:did not|didn't) (?:yield|return|find|produce)|yielded no|returned no|found no/i.test(s)) {
-    return true;
-  }
-
-  return false;
-}
+// NOTE: The following functions were removed as they are no longer needed after
+// the backend fix that properly separates thinking content from message content:
+// - isReasoningSentence() - Heuristic pattern matching was over-filtering
+// - splitIntoSemanticUnits() - Only used by separateReasoningFromAnswer
+// - separateReasoningFromAnswer() - No longer called; backend handles separation
+// The backend now emits thinking content via trace events only, not in messages.
 
 /**
- * Split content into semantic units (sentences/short paragraphs) for classification.
- * Preserves markdown structure like headers, lists, and code blocks.
- */
-function splitIntoSemanticUnits(text: string): string[] {
-  const units: string[] = [];
-  const lines = text.split('\n');
-
-  let currentBlock = '';
-  let inCodeBlock = false;
-
-  for (const line of lines) {
-    // Track code blocks
-    if (line.trim().startsWith('```')) {
-      if (inCodeBlock) {
-        // Closing code block
-        currentBlock += line + '\n';
-        units.push(currentBlock.trim());
-        currentBlock = '';
-        inCodeBlock = false;
-      } else {
-        // Opening code block - flush current and start new
-        if (currentBlock.trim()) {
-          units.push(currentBlock.trim());
-        }
-        currentBlock = line + '\n';
-        inCodeBlock = true;
-      }
-      continue;
-    }
-
-    if (inCodeBlock) {
-      currentBlock += line + '\n';
-      continue;
-    }
-
-    // Headers, list items, and blank lines are natural boundaries
-    const isHeader = /^#{1,6}\s/.test(line);
-    const isListItem = /^[\s]*[-*•]\s/.test(line) || /^[\s]*\d+\.\s/.test(line);
-    const isBlankLine = line.trim() === '';
-
-    if (isHeader || isListItem) {
-      if (currentBlock.trim()) {
-        units.push(currentBlock.trim());
-      }
-      currentBlock = line + '\n';
-    } else if (isBlankLine) {
-      if (currentBlock.trim()) {
-        units.push(currentBlock.trim());
-      }
-      currentBlock = '';
-    } else {
-      currentBlock += line + '\n';
-    }
-  }
-
-  // Flush remaining
-  if (currentBlock.trim()) {
-    units.push(currentBlock.trim());
-  }
-
-  return units;
-}
-
-/**
- * Separate reasoning content from user-facing answer content.
+ * Final sanitization pass to catch any escaped thinking markers.
+ * Applied after reasoning separation to ensure no thinking content leaks.
  *
- * Returns { reasoning, answer } where:
- * - reasoning: Content that should go to the Thoughts panel
- * - answer: Content that should be displayed to the user
+ * Based on LibreChat PR #10278 patterns.
  */
-function separateReasoningFromAnswer(text: string): { reasoning: string; answer: string } {
-  const units = splitIntoSemanticUnits(text);
-  const reasoningUnits: string[] = [];
-  const answerUnits: string[] = [];
+function finalSanitizeThinkingMarkers(text: string): string {
+  if (!text) return '';
 
-  for (const unit of units) {
-    const trimmedUnit = unit.trim();
+  // FIXED: Replaced invalid lookbehind with simpler approach
+  // First, protect code blocks by temporarily replacing them
+  const codeBlocks: string[] = [];
+  let cleaned = text.replace(/```[\s\S]*?```/g, (match) => {
+    const placeholder = `__CODE_BLOCK_${codeBlocks.length}__`;
+    codeBlocks.push(match);
+    return placeholder;
+  });
 
-    // Any explicit code or artifact markers stay in the answer
-    if (
-      trimmedUnit.startsWith('```') ||
-      trimmedUnit.includes('```') ||
-      trimmedUnit.includes('::artifact') ||
-      trimmedUnit.toLowerCase().includes('```mermaid')
-    ) {
-      answerUnits.push(unit);
-      continue;
-    }
+  // Now safely remove thinking markers (code blocks are protected)
+  cleaned = cleaned
+    // Remove any remaining :::thinking or :::think markers
+    .replace(/:::(?:thinking|think)\s*/gi, '')
+    // Remove orphaned closing ::: markers at line boundaries
+    .replace(/(?:^|\n)\s*:::\s*(?=\n|$)/g, '\n')
+    // Remove "Model reasoning" prefix anywhere
+    .replace(/\bModel reasoning\b\s*/gi, '')
+    // Clean up resulting whitespace
+    .replace(/\n{3,}/g, '\n\n');
 
-    // Headers: check if the header itself is reasoning
-    if (/^#{1,6}\s/.test(unit)) {
-      // If header contains reasoning indicators, skip it
-      if (isReasoningSentence(unit.replace(/^#{1,6}\s*/, ''))) {
-        reasoningUnits.push(unit);
-      } else {
-        answerUnits.push(unit);
-      }
-      continue;
-    }
+  // Restore code blocks
+  codeBlocks.forEach((block, i) => {
+    cleaned = cleaned.replace(`__CODE_BLOCK_${i}__`, block);
+  });
 
-    // For regular paragraphs, check each sentence
-    // A paragraph is reasoning if >50% of its sentences are reasoning
-    const sentences = unit.split(/(?<=[.!?])\s+/).filter(s => s.trim().length > 0);
-    if (sentences.length === 0) continue;
-
-    let reasoningCount = 0;
-    for (const sentence of sentences) {
-      if (isReasoningSentence(sentence)) {
-        reasoningCount++;
-      }
-    }
-
-    const reasoningRatio = reasoningCount / sentences.length;
-
-    // If mostly reasoning (>50%), send to thinking panel
-    if (reasoningRatio > 0.5) {
-      reasoningUnits.push(unit);
-    } else {
-      answerUnits.push(unit);
-    }
-  }
-
-  return {
-    reasoning: reasoningUnits.join('\n\n'),
-    answer: answerUnits.join('\n\n'),
-  };
+  return cleaned.trim();
 }
 
 /**
@@ -662,18 +486,10 @@ function separateReasoningFromAnswer(text: string): { reasoning: string; answer:
 function sanitizeAssistantContentForDisplay(text: string): string {
   const original = text || '';
   let cleaned = original;
-  let removedToolPayload = false;
-
-  // If the message includes explicit artifact signals (mermaid code blocks or ::artifact),
-  // avoid aggressive reasoning separation so artifacts remain intact.
-  const hasArtifactSignals = /```mermaid|::artifact/i.test(original);
 
   // Strip only tool_call payload fences; keep other code (e.g., mermaid) intact.
   const toolFencePattern = /```(?:jsonc?|json5|js)?[\s\S]*?"tool_calls?"[\s\S]*?```/gi;
-  if (toolFencePattern.test(cleaned)) {
-    cleaned = cleaned.replace(toolFencePattern, '');
-    removedToolPayload = true;
-  }
+  cleaned = cleaned.replace(toolFencePattern, '');
 
   // Remove explicit tool call lines
   const toolCallPatterns = [
@@ -687,60 +503,35 @@ function sanitizeAssistantContentForDisplay(text: string): string {
     cleaned = cleaned.replace(pattern, '');
   });
 
-  // Remove any remaining thinking block markers
-  cleaned = cleaned
-    .replace(/:::(?:thinking|think)\s*[\s\S]*?\s*:::/gi, '')
-    .replace(/:::(?:thinking|think)\s*/gi, '')
-    .replace(/(?:^|\n)\s*:::\s*(?=\n|$)/g, '\n');
+  // Remove any remaining thinking block markers using the robust parser
+  // This handles unclosed blocks during streaming to prevent leaks
+  const { regularContent } = parseThinkingContent(cleaned);
+  cleaned = regularContent;
 
-  // Skip aggressive reasoning stripping when artifacts are present
-  if (!hasArtifactSignals) {
-    // Apply smart reasoning separation
-    const { answer } = separateReasoningFromAnswer(cleaned);
+  // NOTE: separateReasoningFromAnswer() removed - backend now properly separates
+  // thinking content and no longer embeds it in messages. The heuristic-based
+  // reasoning extraction was over-filtering legitimate content.
 
-    // Use the answer portion (reasoning is discarded from display)
-    cleaned = answer;
-  }
+  // Apply final sanitization to catch any escaped thinking markers
+  cleaned = finalSanitizeThinkingMarkers(cleaned);
 
   // Collapse extra whitespace
   cleaned = cleaned.replace(/\n{3,}/g, '\n\n').trim();
 
-  const originalLen = original.trim().length;
   const cleanedLen = cleaned.trim().length;
 
-  // Never return empty if we stripped too much - fall back to original
-  if (cleanedLen === 0) return original;
-
-  // Safety: if we removed tool payloads and nuked most content, fall back
-  if (removedToolPayload && originalLen > 0 && cleanedLen < originalLen * 0.25) {
-    return original;
+  // If all content was reasoning, return empty string
+  // The InlineThinking panel will handle reasoning-only responses
+  if (cleanedLen === 0) {
+    return '';
   }
 
   return cleaned;
 }
 
-/**
- * Extract reasoning content from text for the thinking panel.
- * This is the complement of sanitizeAssistantContentForDisplay.
- */
-function extractReasoningForThinkingPanel(text: string): string {
-  if (!text) return '';
-
-  let cleaned = text;
-
-  // Remove tool_calls code blocks (these are noise, not reasoning)
-  cleaned = cleaned.replace(/```(?:jsonc?|json5|js)?[\s\S]*?"tool_calls?"[\s\S]*?```/gi, '');
-
-  // Remove thinking markers (will be re-wrapped by InlineThinking)
-  cleaned = cleaned
-    .replace(/:::(?:thinking|think)\s*/gi, '')
-    .replace(/(?:^|\n)\s*:::\s*(?=\n|$)/g, '\n');
-
-  // Extract reasoning portion
-  const { reasoning } = separateReasoningFromAnswer(cleaned);
-
-  return reasoning.trim();
-}
+// NOTE: extractReasoningForThinkingPanel() removed - backend now properly separates
+// thinking content via trace events. This function was calling separateReasoningFromAnswer()
+// which is also removed.
 
 interface MessageItemProps {
   message: Message;
@@ -797,11 +588,8 @@ function MessageItem({
     return parseThinkingContent(rawContent);
   }, [rawContent, isUser]);
 
-  // Extract reasoning from the regular content using smart classification
-  const extractedReasoning = useMemo(() => {
-    if (isUser) return '';
-    return extractReasoningForThinkingPanel(regularContent);
-  }, [isUser, regularContent]);
+  // NOTE: extractReasoningForThinkingPanel() removed - backend now properly separates
+  // thinking content via trace events. Heuristic extraction was over-filtering.
 
   const thinkingToRender = useMemo(() => {
     if (isUser) return '';
@@ -810,26 +598,21 @@ function MessageItem({
       return '';
     }
 
-    // Collect all thinking sources and combine them
+    // Collect thinking sources (simplified - backend now handles separation)
     const thinkingSources: string[] = [];
 
-    // 1. Global thinking text from the trace (highest priority)
+    // 1. Global thinking text from the trace (primary source)
     const globalText = globalThinkingText?.trim() || '';
     if (globalText) {
       thinkingSources.push(globalText);
     }
 
-    // 2. Explicit :::thinking blocks from the message
+    // 2. Explicit :::thinking blocks from the message (fallback)
     if (thinkingContent?.trim()) {
       thinkingSources.push(thinkingContent.trim());
     }
 
-    // 3. Extracted reasoning from smart classification (catches leaked reasoning)
-    if (extractedReasoning) {
-      thinkingSources.push(extractedReasoning);
-    }
-
-    // 4. Fallback to metadata
+    // 3. Fallback to metadata if no trace available
     if (thinkingSources.length === 0) {
       const fallback = extractThinkingFallback(metadata);
       if (fallback) {
@@ -837,15 +620,16 @@ function MessageItem({
       }
     }
 
-    // Deduplicate and combine (in case some content overlaps)
-    const combined = thinkingSources.join('\n\n---\n\n');
-    return combined.trim();
+    // Combine sources (avoid duplicating if only one source)
+    if (thinkingSources.length <= 1) {
+      return thinkingSources[0] || '';
+    }
+    return thinkingSources.join('\n\n---\n\n').trim();
   }, [
     isUser,
     showGlobalThinking,
     globalThinkingText,
     thinkingContent,
-    extractedReasoning,
     metadata,
   ]);
 
@@ -856,12 +640,17 @@ function MessageItem({
 
   const shouldRegisterArtifacts = !(isLast && isStreaming);
 
-  // If the model failed to emit a final answer (only thinking), fallback to showing the thinking as content.
+  // Determine actual content to display
   const contentForDisplay = useMemo(() => {
     const trimmed = sanitizedContent.trim();
-    if (trimmed) return trimmed;
-    return sanitizedContent;
+    return trimmed;
   }, [sanitizedContent]);
+
+  // Check if this is a thinking-only message (no user-facing content)
+  // In this case, show only the InlineThinking panel, no message bubble
+  const hasOnlyThinking = useMemo(() => {
+    return !isUser && !contentForDisplay && thinkingToRender.trim().length > 0;
+  }, [isUser, contentForDisplay, thinkingToRender]);
 
   return (
     <div
@@ -910,38 +699,43 @@ function MessageItem({
               : 'text-[16.5px] bg-transparent text-foreground px-0 py-0' // Slightly larger type for assistant answers
           )}
         >
-          {/* Inline Thinking - Display for assistant messages with :::thinking blocks */}
+          {/* Inline Thinking - Display for assistant messages with thinking content */}
           {!isUser && thinkingToRender && (
-            <InlineThinking thinkingText={thinkingToRender} />
+            <InlineThinking
+              thinkingText={thinkingToRender}
+              isStreaming={isLast && isStreaming}
+            />
           )}
 
-          {/* Main message content with enhanced markdown */}
-          <div
-            className={cn(
-              'prose prose-sm max-w-none prose-invert',
-              isUser
-                ? [
+          {/* Main message content with enhanced markdown - only show if there's actual content */}
+          {(contentForDisplay || isUser) && (
+            <div
+              className={cn(
+                'prose prose-sm max-w-none prose-invert',
+                isUser
+                  ? [
                     'text-[16.5px] leading-relaxed',
                     'prose-p:text-[16.5px] prose-li:text-[16.5px] prose-blockquote:text-[16.5px] prose-table:text-[16.5px]',
                     'prose-th:text-[16.5px] prose-td:text-[16.5px]',
                     'prose-code:text-[14px] prose-pre:text-[13px]',
                   ]
-                : [
+                  : [
                     'prose-headings:text-foreground prose-p:text-foreground/90 prose-strong:text-foreground prose-code:text-terracotta-300',
                     'text-[16.5px] leading-relaxed',
                     'prose-p:text-[16.5px] prose-li:text-[16.5px] prose-blockquote:text-[16.5px] prose-table:text-[16.5px]',
                     'prose-th:text-[16.5px] prose-td:text-[16.5px]',
                     'prose-code:text-[14px] prose-pre:text-[13px]',
                   ]
-            )}
-          >
-            <EnhancedMarkdown
-              content={contentForDisplay}
-              isLatestMessage={isLast && isStreaming}
-              messageId={message.id || `msg-${messageIndex}`}
-              registerArtifacts={shouldRegisterArtifacts}
-            />
-          </div>
+              )}
+            >
+              <EnhancedMarkdown
+                content={contentForDisplay}
+                isLatestMessage={isLast && isStreaming}
+                messageId={message.id || `msg-${messageIndex}`}
+                registerArtifacts={shouldRegisterArtifacts}
+              />
+            </div>
+          )}
 
           {/* Inline search images - Show after message content for assistant messages */}
           {!isUser && searchImages.length > 0 && !isStreaming && (
@@ -1032,7 +826,7 @@ export function MessageList({ messages, isStreaming, agentType, thinkingText }: 
       {visibleMessages.map((message, idx) => {
         const isLastMessage = idx === visibleMessages.length - 1;
         const isAssistant = message.role === 'assistant';
-        
+
         return (
           <MessageItem
             key={message.id ?? idx}

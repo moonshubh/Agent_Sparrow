@@ -1,22 +1,62 @@
 /* Shared shimmer text animation for sidebar components */
 .shimmer-text {
-  background: linear-gradient(
-    90deg,
-    currentColor 0%,
-    rgba(255, 255, 255, 0.6) 50%,
-    currentColor 100%
-  );
+  /* Base gradient - Gold/Orange */
+  background: linear-gradient(90deg,
+      #f59e0b 0%,
+      /* Amber-500 */
+      #fbbf24 50%,
+      /* Amber-400 */
+      #f59e0b 100%
+      /* Amber-500 */
+    );
   background-size: 200% 100%;
+
+  /* Essential for text gradient */
+  color: transparent;
   -webkit-background-clip: text;
   background-clip: text;
-  animation: shimmer 2s infinite linear;
+
+  /* Animation: Shimmer + Color Cycle */
+  animation:
+    shimmer 3s infinite linear,
+    color-cycle 12s infinite steps(4);
+  /* Cycle 4 colors, 3s each */
 }
 
 @keyframes shimmer {
   0% {
     background-position: 200% 0;
   }
+
   100% {
     background-position: -200% 0;
   }
+}
+
+@keyframes color-cycle {
+  0% {
+    filter: hue-rotate(0deg);
+  }
+
+  /* Amber/Gold */
+  25% {
+    filter: hue-rotate(180deg);
+  }
+
+  /* Blue */
+  50% {
+    filter: hue-rotate(270deg);
+  }
+
+  /* Purple */
+  75% {
+    filter: hue-rotate(90deg);
+  }
+
+  /* Green */
+  100% {
+    filter: hue-rotate(0deg);
+  }
+
+  /* Back to Amber */
 }

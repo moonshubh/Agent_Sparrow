@@ -27,7 +27,7 @@ export function createSparrowAgent(config: AgentConfig) {
   }
 
   const agent = new HttpAgent({
-    url: `${API_URL}/api/v1/copilot/stream`,
+    url: `${API_URL}/api/v1/agui/stream`,
     headers,
     threadId: config.sessionId,
   });

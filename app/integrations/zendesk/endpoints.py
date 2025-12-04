@@ -18,6 +18,10 @@ router = APIRouter(prefix="/integrations/zendesk", tags=["Zendesk"])
 
 logger = logging.getLogger(__name__)
 
+# Default model for Zendesk - centralized to ensure consistency
+ZENDESK_DEFAULT_MODEL = "gemini-3-pro-preview"
+ZENDESK_DEFAULT_PROVIDER = "google"
+
 # Basic PII redactors for emails and phone numbers
 _EMAIL_RE = re.compile(r'([A-Za-z0-9._%+-]{1,})@([A-Za-z0-9.-]{1,})')
 _PHONE_RE = re.compile(r'(?<!\d)(\+?\d{1,3}[-.\s]?)?(?:\(?\d{3}\)?[-.\s]?){2}\d{4}(?!\d)')
@@ -167,9 +171,11 @@ async def _get_feature_enabled() -> bool:
 
 
 async def _get_feature_state_snapshot() -> Dict[str, Any]:
-    """Return current feature flag state (enabled/dry_run)."""
+    """Return current feature flag state (enabled/dry_run/provider/model)."""
     enabled = await _get_feature_enabled()
     dry_run = bool(getattr(settings, "zendesk_dry_run", True))
+    provider = getattr(settings, "zendesk_agent_provider", None) or ZENDESK_DEFAULT_PROVIDER
+    model = getattr(settings, "zendesk_agent_model", None) or ZENDESK_DEFAULT_MODEL
     try:
         supa = get_supabase_client()
         resp = await supa._exec(
@@ -180,11 +186,17 @@ async def _get_feature_state_snapshot() -> Dict[str, Any]:
             .execute()
         )
         data = getattr(resp, "data", None)
-        if data and isinstance(data.get("value"), dict) and "dry_run" in data["value"]:
-            dry_run = bool(data["value"].get("dry_run", dry_run))
+        if data and isinstance(data.get("value"), dict):
+            val = data["value"]
+            if "dry_run" in val:
+                dry_run = bool(val.get("dry_run", dry_run))
+            if "provider" in val:
+                provider = str(val.get("provider", provider))
+            if "model" in val:
+                model = str(val.get("model", model))
     except Exception:
         pass
-    return {"enabled": enabled, "dry_run": dry_run}
+    return {"enabled": enabled, "dry_run": dry_run, "provider": provider, "model": model}
 
 
 @router.get("/health")
@@ -223,6 +235,8 @@ async def health(request: Request) -> Dict[str, Any]:
     return {
         "enabled": feature_state["enabled"],
         "dry_run": feature_state["dry_run"],
+        "provider": feature_state.get("provider", ZENDESK_DEFAULT_PROVIDER),
+        "model": feature_state.get("model", ZENDESK_DEFAULT_MODEL),
         "brand_id": getattr(settings, "zendesk_brand_id", None),
         "usage": usage,
         "queue": q_counts,
@@ -233,6 +247,57 @@ async def health(request: Request) -> Dict[str, Any]:
 class FeatureToggleRequest(BaseModel):
     enabled: bool
     dry_run: bool | None = None
+    provider: str | None = None  # google, xai, openrouter
+    model: str | None = None  # model ID
+
+
+# Available models for Zendesk - all support vision/multimodal (images, PDFs, logs)
+ZENDESK_MODEL_OPTIONS = {
+    "google": [
+        # All Gemini models support vision natively
+        {"id": "gemini-3-pro-preview", "name": "Gemini 3.0 Pro (Vision)"},
+        {"id": "gemini-2.5-flash", "name": "Gemini 2.5 Flash (Vision)"},
+        {"id": "gemini-2.5-flash-lite", "name": "Gemini 2.5 Flash Lite"},
+    ],
+    "xai": [
+        # Grok models support vision via xAI API
+        {"id": "grok-4-1-fast-reasoning", "name": "Grok 4.1 Fast (Vision)"},
+        {"id": "grok-4", "name": "Grok 4 (Vision)"},
+        {"id": "grok-2-vision-1212", "name": "Grok 2 Vision"},
+    ],
+    "openrouter": [
+        # Vision-capable models via OpenRouter
+        {"id": "x-ai/grok-4.1-fast:free", "name": "Grok 4.1 Fast (Free)"},
+        {"id": "google/gemini-2.5-flash-preview", "name": "Gemini 2.5 Flash (Vision)"},
+        {"id": "anthropic/claude-3.5-sonnet", "name": "Claude 3.5 Sonnet (Vision)"},
+        {"id": "openai/gpt-4o", "name": "GPT-4o (Vision)"},
+    ],
+}
+
+
+@router.get("/models")
+async def get_available_models(request: Request) -> Dict[str, Any]:
+    """Return available model options for Zendesk."""
+    expected = getattr(settings, "internal_api_token", None)
+    provided = request.headers.get("X-Internal-Token")
+    if not expected or not provided or not hmac.compare_digest(provided, expected):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="unauthorized")
+
+    # Check which providers have API keys configured
+    available_providers = []
+    if getattr(settings, "gemini_api_key", None):
+        available_providers.append("google")
+    if getattr(settings, "xai_api_key", None):
+        available_providers.append("xai")
+    if getattr(settings, "openrouter_api_key", None):
+        available_providers.append("openrouter")
+
+    return {
+        "models": ZENDESK_MODEL_OPTIONS,
+        "available_providers": available_providers,
+        "default_provider": ZENDESK_DEFAULT_PROVIDER,
+        "default_model": ZENDESK_DEFAULT_MODEL,
+    }
 
 
 @router.post("/feature")
@@ -246,9 +311,27 @@ async def set_feature(request: Request, payload: FeatureToggleRequest) -> Dict[s
     if not provided or not hmac.compare_digest(provided, expected):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid internal token")
 
-    value: Dict[str, Any] = {"enabled": bool(payload.enabled)}
+    # Read existing value to preserve fields not being updated
+    try:
+        supa = get_supabase_client()
+        resp = await supa._exec(
+            lambda: supa.client.table("feature_flags")
+            .select("value")
+            .eq("key", "zendesk_enabled")
+            .maybe_single()
+            .execute()
+        )
+        existing = (getattr(resp, "data", None) or {}).get("value") or {}
+    except Exception:
+        existing = {}
+
+    value: Dict[str, Any] = {**existing, "enabled": bool(payload.enabled)}
     if payload.dry_run is not None:
         value["dry_run"] = bool(payload.dry_run)
+    if payload.provider is not None:
+        value["provider"] = str(payload.provider)
+    if payload.model is not None:
+        value["model"] = str(payload.model)
 
     try:
         supa = get_supabase_client()

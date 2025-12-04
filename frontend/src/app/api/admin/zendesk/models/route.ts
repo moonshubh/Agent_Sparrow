@@ -1,4 +1,4 @@
-import { NextRequest } from "next/server";
+import { requireAdminApiConfig } from "../_shared/admin-api-config";
 import { verifyZendeskAdminAccess } from "@/services/security/zendesk-admin-auth";
 
 const jsonHeaders = { "Content-Type": "application/json" };
@@ -8,24 +8,30 @@ function buildAuthError(reason: "not_authenticated" | "forbidden" | "unsupported
   return new Response(JSON.stringify({ error: reason }), { status, headers: jsonHeaders });
 }
 
-export async function POST(_req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
+export async function GET() {
   const auth = await verifyZendeskAdminAccess();
   if (!auth.ok) {
     return buildAuthError(auth.reason ?? "not_authenticated");
   }
 
-  const apiBase = process.env.API_BASE;
-  const token = process.env.INTERNAL_API_TOKEN;
-  if (!apiBase || !token) {
+  let config;
+  try {
+    config = requireAdminApiConfig();
+  } catch (error) {
     return new Response(JSON.stringify({ error: "server_config_missing" }), { status: 500, headers: jsonHeaders });
   }
-  const { id } = await ctx.params;
-  const url = `${apiBase}/api/v1/integrations/zendesk/admin/queue/${encodeURIComponent(id)}/retry`;
-  const res = await fetch(url, {
-    method: "POST",
-    headers: { "X-Internal-Token": token },
-    cache: "no-store",
-  });
+
+  const url = `${config.apiBase}/api/v1/integrations/zendesk/models`;
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      method: "GET",
+      headers: { "X-Internal-Token": config.token },
+      cache: "no-store",
+    });
+  } catch (error) {
+    return new Response(JSON.stringify({ error: "upstream_unreachable" }), { status: 502, headers: jsonHeaders });
+  }
   const text = await res.text();
   return new Response(text, { status: res.status, headers: { "Content-Type": res.headers.get("content-type") || "application/json" } });
 }

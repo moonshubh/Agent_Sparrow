@@ -165,7 +165,9 @@ async def internal_kb_search_endpoint(
     logger.info(f"Performing internal KB search for: '{search_params.query}'")
     try:
         similar_docs = embedding_utils.find_similar_documents(query=search_params.query, top_k=search_params.top_k)
-        return InternalSearchResults(query=search_params.query, results=similar_docs)
+        # Convert SearchResult Pydantic models to dicts for InternalSearchResults
+        results_as_dicts = [doc.model_dump() if hasattr(doc, 'model_dump') else doc for doc in similar_docs]
+        return InternalSearchResults(query=search_params.query, results=results_as_dicts)
     except Exception as e:
         logger.exception(f"Error during internal KB search for query '{search_params.query}': {e}")
         # Check if it's a DB connection issue or embedding model issue from underlying function

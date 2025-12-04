@@ -11,6 +11,8 @@ interface InlineThinkingProps {
   defaultExpanded?: boolean;
   /** Additional CSS classes for the container */
   className?: string;
+  /** Whether the message is still streaming (shows "Thinking..." label) */
+  isStreaming?: boolean;
 }
 
 /**
@@ -27,12 +29,15 @@ const ThinkingButton = memo(function ThinkingButton({
   content,
   showCopyButton = true,
   contentId,
+  isStreaming = false,
 }: {
   isExpanded: boolean;
   onClick: (e: React.MouseEvent<HTMLButtonElement>) => void;
   content?: string;
   showCopyButton?: boolean;
   contentId: string;
+  /** Shows "Thinking..." label during streaming, "Thoughts" after complete (LibreChat pattern) */
+  isStreaming?: boolean;
 }) {
   const [isCopied, setIsCopied] = useState(false);
 
@@ -109,7 +114,17 @@ const ThinkingButton = memo(function ThinkingButton({
             )}
           />
         </span>
-        <span>Thoughts</span>
+        {/* LibreChat pattern: "Thinking..." during streaming, "Thoughts" after complete */}
+        <span className="flex items-center gap-2">
+          {isStreaming ? 'Thinking' : 'Thoughts'}
+          {isStreaming && (
+            <span className="inline-flex gap-0.5">
+              <span className="thinking-dot animate-pulse" style={{ animationDelay: '0ms' }}>.</span>
+              <span className="thinking-dot animate-pulse" style={{ animationDelay: '150ms' }}>.</span>
+              <span className="thinking-dot animate-pulse" style={{ animationDelay: '300ms' }}>.</span>
+            </span>
+          )}
+        </span>
       </button>
 
       {/* Copy button - visible on hover when expanded */}
@@ -170,6 +185,7 @@ export const InlineThinking = memo(function InlineThinking({
   thinkingText,
   defaultExpanded = false,
   className,
+  isStreaming = false,
 }: InlineThinkingProps) {
   const [isExpanded, setIsExpanded] = useState(defaultExpanded);
 
@@ -217,6 +233,7 @@ export const InlineThinking = memo(function InlineThinking({
           onClick={handleToggle}
           content={textContent}
           contentId={contentId}
+          isStreaming={isStreaming}
         />
       </div>
 

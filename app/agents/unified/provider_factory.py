@@ -62,6 +62,18 @@ GROK_CONFIG = {
     "thinking_budget": "medium",  # Balanced latency/quality (low/medium/high)
 }
 
+# =============================================================================
+# TIMEOUT CONFIGURATION - Prevent 504 Deadline Exceeded errors
+# =============================================================================
+
+# Request timeout in seconds for LLM API calls
+# Google API can hang indefinitely without a timeout, causing 504 errors
+# Default: 300 seconds (5 minutes) - balanced between complex reasoning and responsiveness
+REQUEST_TIMEOUT_SECONDS = 300
+
+# Transport timeout for opening connections (httpx/aiohttp)
+CONNECT_TIMEOUT_SECONDS = 30
+
 
 def get_temperature_for_role(role: str) -> float:
     """Get the configured temperature for a specific agent role.
@@ -187,6 +199,7 @@ def _build_google_model(model: str, temperature: float) -> BaseChatModel:
         "temperature": temperature,
         "google_api_key": settings.gemini_api_key,
         "include_thoughts": False,  # Attempt to prevent thinking (may not work with chains)
+        "timeout": REQUEST_TIMEOUT_SECONDS,  # Prevent 504 Deadline Exceeded errors
     }
 
     return ChatGoogleGenerativeAI(**kwargs)

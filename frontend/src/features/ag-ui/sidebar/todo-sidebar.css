@@ -13,9 +13,12 @@
 }
 
 @keyframes tool-pulse {
-  0%, 100% {
+
+  0%,
+  100% {
     opacity: 1;
   }
+
   50% {
     opacity: 0.7;
   }
@@ -37,4 +40,51 @@
 
 .custom-scrollbar::-webkit-scrollbar-thumb:hover {
   background: hsl(var(--muted-foreground) / 0.3);
+}
+
+/* Icon glow animation */
+.icon-glow {
+  filter: drop-shadow(0 0 2px hsl(45 93% 47% / 0.5));
+  /* Amber-500 equivalent */
+  animation: icon-pulse 2s ease-in-out infinite;
+}
+
+@keyframes icon-pulse {
+
+  0%,
+  100% {
+    filter: drop-shadow(0 0 2px hsl(45 93% 47% / 0.5));
+    opacity: 1;
+  }
+
+  50% {
+    filter: drop-shadow(0 0 6px hsl(45 93% 47% / 0.8));
+    opacity: 0.8;
+  }
+}
+
+/* Slow pulse for idle icons */
+.animate-pulse-slow {
+  animation: pulse-slow 3s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+@keyframes pulse-slow {
+
+  0%,
+  100% {
+    opacity: 1;
+  }
+
+  50% {
+    opacity: .5;
+  }
+}
+
+/* Bulb animation */
+.bulb-glow {
+  filter: drop-shadow(0 0 4px hsl(45 93% 47% / 0.6));
+}
+
+.animate-spin-slow {
+  animation: spin 8s linear infinite;
 }

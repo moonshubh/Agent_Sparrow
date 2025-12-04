@@ -43,12 +43,12 @@ function preprocessLaTeX(content: string): string {
   // 1. Ensure block math has proper newlines
   // 2. Handle inline math with single $ (convert to $$)
   let processed = content;
-  
+
   // Fix block math that might not have proper delimiters
   processed = processed.replace(/\$\$([^$]+)\$\$/g, (_, math) => {
     return `$$${math.trim()}$$`;
   });
-  
+
   return processed;
 }
 
@@ -243,28 +243,28 @@ export const EnhancedMarkdown = memo(function EnhancedMarkdown({
 
         // Regular code block (non-artifact)
         return (
-          <div className="relative group my-2 rounded-lg overflow-hidden border border-border shadow-academia-sm">
+          <div className="relative group my-4 rounded-xl overflow-hidden border border-border/60 shadow-academia-sm bg-[hsl(var(--code-block-bg))]">
             {/* Language header */}
             {language && (
-              <div className="flex items-center justify-between bg-secondary px-4 py-2 border-b border-border">
-                <span className="text-xs text-muted-foreground font-mono uppercase">
+              <div className="flex items-center justify-between bg-secondary/30 px-4 py-2 border-b border-border/40">
+                <span className="text-[10px] font-semibold text-muted-foreground font-mono uppercase tracking-wider">
                   {language}
                 </span>
                 <CopyCodeButton text={codeString} size="sm" />
               </div>
             )}
-            
+
             {/* Code content */}
             <div className="relative">
               {!language && (
-                <div className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                <div className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity z-10">
                   <CopyCodeButton text={codeString} size="sm" />
                 </div>
               )}
-              <pre className="overflow-x-auto p-3 bg-[hsl(var(--code-block-bg))]">
+              <pre className="overflow-x-auto p-4">
                 <code
                   {...props}
-                  className={cn('text-[11px] font-mono', codeClassName)}
+                  className={cn('text-[12px] font-mono leading-relaxed', codeClassName)}
                 >
                   {children}
                 </code>

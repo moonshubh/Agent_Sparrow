@@ -15,7 +15,8 @@ import { ToolEvidenceSidebar } from './evidence/ToolEvidenceSidebar';
 import { TodoSidebar } from './sidebar/TodoSidebar';
 import { EnhancedReasoningPanel, PhaseData } from './reasoning/EnhancedReasoningPanel';
 import { ArtifactProvider, ArtifactPanel } from './artifacts';
-import { Bug, ChevronDown } from 'lucide-react';
+import { Bug, ChevronDown, PanelRightClose, PanelRightOpen } from 'lucide-react';
+import { cn } from '@/shared/lib/utils';
 
 interface ChatContainerProps {
   sessionId: string;
@@ -70,6 +71,10 @@ export function ChatContainer({
   } = useAgent();
   const containerRef = useRef<HTMLDivElement>(null);
   const [attachments, setAttachments] = useState<AttachmentInput[]>([]);
+
+  // Sidebar collapse state
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
+
   // Dev mode shows full reasoning panel, thinking trace, and tool evidence
   // Default mode shows simplified todo sidebar only
   const [isDevMode, setIsDevMode] = useState(false);
@@ -257,164 +262,132 @@ export function ChatContainer({
 
   return (
     <ArtifactProvider>
-    <main className="h-screen w-screen flex flex-col bg-background text-foreground font-serif overflow-hidden">
-      <ChatHeader
-        agentType={agentType}
-        onAgentChange={(newType) => onAgentChange?.(newType)}
-        provider={provider}
-        onProviderChange={(p) => onProviderChange?.(p)}
-        availableProviders={availableProviders}
-        model={resolvedModel || model}
-        onModelChange={(newModel) => onModelChange?.(newModel)}
-        memoryEnabled={memoryEnabled}
-        onMemoryToggle={(enabled) => onMemoryToggle?.(enabled)}
-        models={models}
-        modelHelperText={modelHelperText}
-        recommendedModel={recommendedModel}
-        activeTools={activeTools}
-        hasActiveConversation={hasConversation}
-        resolvedTaskType={resolvedTaskType}
-      />
+      <main className="h-screen w-screen flex flex-col bg-background text-foreground font-serif overflow-hidden">
+        <ChatHeader
+          agentType={agentType}
+          onAgentChange={(newType) => onAgentChange?.(newType)}
+          provider={provider}
+          onProviderChange={(p) => onProviderChange?.(p)}
+          availableProviders={availableProviders}
+          model={resolvedModel || model}
+          onModelChange={(newModel) => onModelChange?.(newModel)}
+          memoryEnabled={memoryEnabled}
+          onMemoryToggle={(enabled) => onMemoryToggle?.(enabled)}
+          models={models}
+          modelHelperText={modelHelperText}
+          recommendedModel={recommendedModel}
+          activeTools={activeTools}
+          hasActiveConversation={hasConversation}
+          resolvedTaskType={resolvedTaskType}
+        />
 
-      <div className="flex-1 flex overflow-hidden relative">
-        {/* Main Chat Area - Left/Center */}
-        <div
-          ref={containerRef}
-          className="flex-1 flex flex-col min-w-0 overflow-y-auto scroll-smooth"
-        >
-          <div className="flex-1 p-6 max-w-4xl mx-auto w-full space-y-6 flex flex-col">
-            {isEmptyState ? (
-              <div className="flex-1 flex flex-col items-center justify-center pb-32 animate-in fade-in duration-700">
-                {/* Centered Input for Empty State */}
-                <ChatInput
-                  onSend={handleSendMessage}
-                  onAbort={abortRun}
-                  disabled={isStreaming}
-                  attachments={attachments}
-                  onAttachmentsChange={setAttachments}
-                  sessionId={sessionId}
-                  agentType={normalizedAgentType}
-                  variant="centered"
-                />
+        <div className="flex-1 flex overflow-hidden relative">
+          {/* Main Chat Area - Left/Center */}
+          <div
+            ref={containerRef}
+            className="flex-1 flex flex-col min-w-0 overflow-y-auto scroll-smooth"
+          >
+            <div className="flex-1 p-6 max-w-4xl mx-auto w-full space-y-6 flex flex-col">
+              {isEmptyState ? (
+                <div className="flex-1 flex flex-col items-center justify-center pb-32 animate-in fade-in duration-700">
+                  {/* Centered Input for Empty State */}
+                  <ChatInput
+                    onSend={handleSendMessage}
+                    onAbort={abortRun}
+                    disabled={isStreaming}
+                    attachments={attachments}
+                    onAttachmentsChange={setAttachments}
+                    sessionId={sessionId}
+                    agentType={normalizedAgentType}
+                    variant="centered"
+                  />
+                </div>
+              ) : (
+                <>
+                  <MessageList
+                    messages={messages}
+                    isStreaming={isStreaming}
+                    agentType={agentType}
+                    thinkingText={aggregatedThinkingText}
+                  />
+
+                  {error && (
+                    <div className="p-4 bg-red-500/10 border border-red-500/20 rounded-lg">
+                      <p className="text-red-400 font-medium">Error</p>
+                      <p className="text-red-300 text-sm mt-1">{error.message}</p>
+                    </div>
+                  )}
+
+                  {/* Spacer for bottom input */}
+                  <div className="h-24" />
+                </>
+              )}
+            </div>
+
+            {/* Input Area - Fixed at bottom (Only when not empty) */}
+            {!isEmptyState && (
+              <div className="sticky bottom-0 p-6 bg-gradient-to-t from-background via-background to-transparent z-10 animate-in slide-in-from-bottom-10 duration-500">
+                <div className="max-w-4xl mx-auto">
+                  <ChatInput
+                    onSend={handleSendMessage}
+                    onAbort={abortRun}
+                    disabled={isStreaming}
+                    attachments={attachments}
+                    onAttachmentsChange={setAttachments}
+                    sessionId={sessionId}
+                    agentType={normalizedAgentType}
+                    variant="default"
+                  />
+                </div>
               </div>
-            ) : (
-              <>
-                <MessageList
-                  messages={messages}
-                  isStreaming={isStreaming}
-                  agentType={agentType}
-                  thinkingText={aggregatedThinkingText}
-                />
-
-                {error && (
-                  <div className="p-4 bg-red-500/10 border border-red-500/20 rounded-lg">
-                    <p className="text-red-400 font-medium">Error</p>
-                    <p className="text-red-300 text-sm mt-1">{error.message}</p>
-                  </div>
-                )}
-
-                {/* Spacer for bottom input */}
-                <div className="h-24" />
-              </>
             )}
           </div>
 
-          {/* Input Area - Fixed at bottom (Only when not empty) */}
-          {!isEmptyState && (
-            <div className="sticky bottom-0 p-6 bg-gradient-to-t from-background via-background to-transparent z-10 animate-in slide-in-from-bottom-10 duration-500">
-              <div className="max-w-4xl mx-auto">
-                <ChatInput
-                  onSend={handleSendMessage}
-                  onAbort={abortRun}
-                  disabled={isStreaming}
-                  attachments={attachments}
-                  onAttachmentsChange={setAttachments}
-                  sessionId={sessionId}
-                  agentType={normalizedAgentType}
-                  variant="default"
-                />
-              </div>
-            </div>
-          )}
-        </div>
+          {/* Agent Sidebar - Right - Resizable with collapse */}
+          {hasAgentActivity && (
+            <>
+              {/* Floating Expand Button (when collapsed) */}
+              {isSidebarCollapsed && (
+                <button
+                  onClick={() => setIsSidebarCollapsed(false)}
+                  className={cn(
+                    'absolute right-4 top-20 z-20 p-1.5 rounded-lg transition-all duration-200',
+                    'bg-secondary/80 hover:bg-secondary border border-border/50',
+                    'text-muted-foreground hover:text-foreground',
+                    'shadow-sm hover:shadow-md'
+                  )}
+                  title="Expand sidebar"
+                >
+                  <PanelRightOpen className="w-4 h-4" />
+                </button>
+              )}
 
-        {/* Agent Sidebar - Right - Resizable with collapse */}
-        {hasAgentActivity && (
-          <ResizableSidebar
-            defaultWidth={360}
-            minWidth={280}
-            maxWidth={500}
-            storageKey="agent-sparrow-sidebar"
-            className="border-l border-border bg-sidebar paper-texture"
-          >
-            {/* Dev Mode Toggle */}
-            <div className="flex items-center justify-between px-4 py-2 border-b border-border bg-secondary/30">
-              <span className="text-xs font-medium text-muted-foreground">
-                {isDevMode ? 'Developer View' : 'Tasks'}
-              </span>
-              <button
-                onClick={() => setIsDevMode(!isDevMode)}
-                className={`flex items-center gap-1.5 px-2 py-1 rounded-md text-xs font-medium transition-colors ${
-                  isDevMode
-                    ? 'bg-terracotta-400/20 text-terracotta-400 hover:bg-terracotta-400/30'
-                    : 'bg-secondary hover:bg-secondary/80 text-muted-foreground'
-                }`}
-                title={isDevMode ? 'Switch to simplified view' : 'Switch to developer view'}
+              <ResizableSidebar
+                defaultWidth={360}
+                minWidth={280}
+                maxWidth={500}
+                storageKey="agent-sparrow-sidebar"
+                className="border-l border-border bg-sidebar paper-texture"
+                collapsed={isSidebarCollapsed}
+                onCollapse={setIsSidebarCollapsed}
+                hideTrigger={true}
               >
-                <Bug className="w-3.5 h-3.5" />
-                {isDevMode ? 'Dev' : 'Dev Mode'}
-              </button>
-            </div>
+                {/* Sidebar Header with Collapse Button */}
+                <div className="flex items-center justify-between px-4 py-2 border-b border-border bg-secondary/30">
+                  <span className="text-xs font-medium text-muted-foreground">
+                    Tasks
+                  </span>
+                  <button
+                    onClick={() => setIsSidebarCollapsed(true)}
+                    className="p-1 rounded-md hover:bg-secondary/50 text-muted-foreground transition-colors"
+                    title="Collapse sidebar"
+                  >
+                    <PanelRightClose className="w-4 h-4" />
+                  </button>
+                </div>
 
-            <div className="flex-1 overflow-y-auto p-4 space-y-4 custom-scrollbar relative z-10">
-              {isDevMode ? (
-                <>
-                  {/* Full Reasoning Panel (Dev Mode) */}
-                  <div className="animate-in fade-in slide-in-from-right-4 duration-500">
-                    <EnhancedReasoningPanel
-                      phases={phases}
-                      currentPhase={currentPhase}
-                      isExpanded={true}
-                      agentLabel={agentDisplayName}
-                      runStatus={runStatus}
-                      statusMessage={statusMessage}
-                      activeOperationName={focusLabel}
-                      activeToolCount={activeTools.length}
-                      errorMessage={error?.message}
-                      todoCount={todos.length}
-                      inProgressTodoCount={inProgressTodos.length}
-                      pendingTodoCount={pendingTodos.length}
-                      todos={todos as any}
-                    />
-                  </div>
-
-                  {/* Timeline View (Dev Mode) */}
-                  <div className="animate-in fade-in slide-in-from-right-4 duration-500 delay-100">
-                    <ThinkingTrace
-                      steps={thinkingTrace}
-                      activeStepId={activeTraceStepId}
-                      collapsed={isTraceCollapsed}
-                      onCollapseToggle={() => setTraceCollapsed(!isTraceCollapsed)}
-                      onStepFocus={setActiveTraceStep}
-                      className="min-h-[280px]"
-                      agentType={normalizedAgentType}
-                    />
-                  </div>
-
-                  {/* Evidence Sidebar (Dev Mode) */}
-                  <div className="animate-in fade-in slide-in-from-right-4 duration-500 delay-200">
-                    <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3 px-1">
-                      Tool Evidence
-                    </h3>
-                    <ToolEvidenceSidebar
-                      operations={timelineOperations}
-                      toolEvidence={toolEvidence}
-                    />
-                  </div>
-                </>
-              ) : (
-                <>
-                  {/* Simplified Todo Sidebar (Default View) - Now includes status pills */}
+                <div className="flex-1 overflow-y-auto p-4 space-y-4 custom-scrollbar relative z-10">
+                  {/* Simplified Todo Sidebar (Default View) */}
                   <div className="animate-in fade-in slide-in-from-right-4 duration-500">
                     <TodoSidebar
                       todos={todos as any}
@@ -428,31 +401,15 @@ export function ChatContainer({
                       toolEvidence={toolEvidence}
                     />
                   </div>
+                </div>
+              </ResizableSidebar>
+            </>
+          )}
+        </div>
 
-                  {/* Condensed Evidence Preview (only show count) */}
-                  {Object.keys(toolEvidence).length > 0 && (
-                    <div className="animate-in fade-in slide-in-from-right-4 duration-500 delay-100">
-                      <button
-                        onClick={() => setIsDevMode(true)}
-                        className="w-full flex items-center justify-between px-3 py-2 rounded-lg bg-secondary/30 border border-border hover:bg-secondary/50 transition-colors text-left"
-                      >
-                        <span className="text-xs text-muted-foreground">
-                          {Object.keys(toolEvidence).length} tool result{Object.keys(toolEvidence).length !== 1 ? 's' : ''} available
-                        </span>
-                        <ChevronDown className="w-3.5 h-3.5 text-muted-foreground" />
-                      </button>
-                    </div>
-                  )}
-                </>
-              )}
-            </div>
-          </ResizableSidebar>
-        )}
-      </div>
-
-      {/* Artifact Panel - Modal overlay for viewing artifacts */}
-      <ArtifactPanel />
-    </main>
+        {/* Artifact Panel - Modal overlay for viewing artifacts */}
+        <ArtifactPanel />
+      </main>
     </ArtifactProvider>
   );
 }

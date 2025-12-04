@@ -73,12 +73,23 @@ class Attachment(BaseModel):
     """Represents an attachment provided via the AG-UI or SSE frontends."""
 
     ALLOWED_MIME_TYPES: ClassVar[Set[str]] = {
+        # Text formats (full log file support)
         "text/plain",
         "text/markdown",
+        "text/csv",
+        "text/html",
+        "text/xml",
+        # Structured data
+        "application/json",
+        "application/xml",
+        # Documents
         "application/pdf",
+        # Images (vision API support for Gemini, Grok, OpenRouter)
         "image/png",
         "image/jpeg",
         "image/gif",
+        "image/webp",
+        # Fallback
         "application/octet-stream",
     }
     MAX_ATTACHMENT_SIZE_BYTES: ClassVar[int] = 10 * 1024 * 1024  # 10 MiB

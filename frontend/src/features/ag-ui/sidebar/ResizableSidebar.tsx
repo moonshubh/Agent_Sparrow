@@ -14,6 +14,12 @@ interface ResizableSidebarProps {
   className?: string;
   /** Callback when sidebar visibility changes */
   onVisibilityChange?: (visible: boolean) => void;
+  /** Controlled collapse state */
+  collapsed?: boolean;
+  /** Callback for collapse toggle */
+  onCollapse?: (collapsed: boolean) => void;
+  /** Whether to hide the built-in collapse trigger */
+  hideTrigger?: boolean;
 }
 
 /**
@@ -33,6 +39,9 @@ export const ResizableSidebar = memo(function ResizableSidebar({
   storageKey = 'agent-sparrow-sidebar-width',
   className,
   onVisibilityChange,
+  collapsed,
+  onCollapse,
+  hideTrigger = false,
 }: ResizableSidebarProps) {
   // Load persisted state
   const [width, setWidth] = useState(() => {
@@ -52,7 +61,7 @@ export const ResizableSidebar = memo(function ResizableSidebar({
     return defaultWidth;
   });
 
-  const [isCollapsed, setIsCollapsed] = useState(() => {
+  const [internalCollapsed, setInternalCollapsed] = useState(() => {
     if (typeof window === 'undefined') return false;
     try {
       const stored = localStorage.getItem(storageKey);
@@ -67,6 +76,8 @@ export const ResizableSidebar = memo(function ResizableSidebar({
     }
     return false;
   });
+
+  const isCollapsed = collapsed !== undefined ? collapsed : internalCollapsed;
 
   const [isDragging, setIsDragging] = useState(false);
   const sidebarRef = useRef<HTMLDivElement>(null);
@@ -127,33 +138,37 @@ export const ResizableSidebar = memo(function ResizableSidebar({
   }, [isDragging, handleMouseMove, handleMouseUp]);
 
   const toggleCollapse = useCallback(() => {
-    setIsCollapsed((prev: boolean) => !prev);
-  }, []);
+    const newState = !isCollapsed;
+    setInternalCollapsed(newState);
+    onCollapse?.(newState);
+  }, [isCollapsed, onCollapse]);
 
   return (
-    <div className="relative flex">
-      {/* Collapse/Expand Button - Always visible */}
-      <button
-        onClick={toggleCollapse}
-        className={cn(
-          'absolute z-20 p-1.5 rounded-lg transition-all duration-200',
-          'bg-secondary/80 hover:bg-secondary border border-border/50',
-          'text-muted-foreground hover:text-foreground',
-          'shadow-sm hover:shadow-md',
-          isCollapsed
-            ? 'left-[-44px] top-4'
-            : 'left-2 top-4'
-        )}
-        aria-label={isCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-        aria-expanded={!isCollapsed}
-        title={isCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-      >
-        {isCollapsed ? (
-          <PanelRightOpen className="w-4 h-4" />
-        ) : (
-          <PanelRightClose className="w-4 h-4" />
-        )}
-      </button>
+    <div className={cn("relative flex", isCollapsed && "w-0 pointer-events-none")}>
+      {/* Collapse/Expand Button - Conditionally visible */}
+      {!hideTrigger && (
+        <button
+          onClick={toggleCollapse}
+          className={cn(
+            'absolute z-20 p-1.5 rounded-lg transition-all duration-200',
+            'bg-secondary/80 hover:bg-secondary border border-border/50',
+            'text-muted-foreground hover:text-foreground',
+            'shadow-sm hover:shadow-md',
+            isCollapsed
+              ? 'left-[-44px] top-4'
+              : 'left-2 top-4'
+          )}
+          aria-label={isCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+          aria-expanded={!isCollapsed}
+          title={isCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+        >
+          {isCollapsed ? (
+            <PanelRightOpen className="w-4 h-4" />
+          ) : (
+            <PanelRightClose className="w-4 h-4" />
+          )}
+        </button>
+      )}
 
       <AnimatePresence mode="wait">
         {!isCollapsed && (

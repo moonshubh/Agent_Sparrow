@@ -38,9 +38,9 @@ TEXT_EXTENSIONS = (".log", ".txt", ".csv", ".json", ".xml", ".md", ".yaml", ".ym
 # Size limits
 MAX_IMAGE_SIZE = 10 * 1024 * 1024  # 10MB
 MAX_PDF_SIZE = 10 * 1024 * 1024  # 10MB
-MAX_ATTACHMENTS = 5
-MAX_BASE64_CHARS = 2_500_000
-MAX_TEXT_CHARS = 120_000
+MAX_ATTACHMENTS = 10  # Increased for tickets with multiple attachments
+MAX_BASE64_CHARS = 5_000_000  # ~3.75MB raw data when base64 encoded
+MAX_TEXT_CHARS = 3_500_000  # ~3.5MB for log files - Gemini, Grok support large context
 
 # Base64 pattern for validation
 BASE64_PATTERN = re.compile(r"^[A-Za-z0-9+/]+={0,2}$")

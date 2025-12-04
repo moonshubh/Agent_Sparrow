@@ -55,7 +55,12 @@ export function ZendeskPanel() {
   return (
     <div className="space-y-4">
       <ZendeskStats health={health} />
-      <FeatureToggles initialEnabled={!!health.enabled} initialDryRun={!!health.dry_run} />
+      <FeatureToggles
+        initialEnabled={!!health.enabled}
+        initialDryRun={!!health.dry_run}
+        initialProvider={health.provider}
+        initialModel={health.model}
+      />
     </div>
   )
 }

@@ -1050,6 +1050,7 @@ def get_registered_tools() -> List[BaseTool]:
         log_diagnoser_tool,
         generate_image_tool,          # Gemini Nano Banana Pro image generation
         write_article_tool,           # Rich article/report artifact creation
+        read_skill_tool,              # Progressive skill disclosure - load full skill on demand
         get_weather,
         generate_task_steps_generative_ui,
         write_todos,
@@ -2183,6 +2184,76 @@ def write_article_tool(
 
     except Exception as e:
         logger.error(f"write_article_tool_error: {e}")
+        return {
+            "success": False,
+            "error": str(e),
+        }
+
+
+# =============================================================================
+# SKILL TOOLS (Progressive Disclosure)
+# =============================================================================
+
+
+class ReadSkillInput(BaseModel):
+    """Input schema for read_skill tool."""
+
+    skill_name: str = Field(
+        description="Name of the skill to load (e.g., 'research', 'writing', 'pdf')"
+    )
+
+    model_config = ConfigDict(extra="forbid")
+
+
+@tool("read_skill", args_schema=ReadSkillInput)
+def read_skill_tool(
+    skill_name: str,
+) -> Dict[str, Any]:
+    """
+    Read the full instructions for a specific skill.
+
+    Use this tool when you need detailed guidance for a complex task.
+    The system prompt shows available skills - call this to get full instructions.
+
+    Progressive disclosure pattern:
+    1. System prompt contains skill index (names + brief descriptions)
+    2. Call read_skill when you need detailed instructions for a task
+    3. Returns full SKILL.md content with step-by-step guidance
+
+    Args:
+        skill_name: Name of the skill (e.g., 'research', 'writing', 'pdf', 'canvas-design')
+
+    Returns:
+        Dict with skill content and metadata, or error if skill not found.
+    """
+    try:
+        from app.agents.skills import get_skills_registry
+
+        registry = get_skills_registry()
+        skill = registry.load_skill(skill_name)
+
+        if not skill:
+            # List available skills for user guidance
+            available = registry.discover_skills()
+            available_names = [s.name for s in available]
+            return {
+                "success": False,
+                "error": f"Skill '{skill_name}' not found",
+                "available_skills": available_names,
+                "hint": f"Try one of: {', '.join(available_names[:5])}...",
+            }
+
+        return {
+            "success": True,
+            "skill_name": skill.metadata.name,
+            "description": skill.metadata.description,
+            "content": skill.content,
+            "has_references": len(skill.references) > 0,
+            "reference_names": list(skill.references.keys()) if skill.references else [],
+        }
+
+    except Exception as e:
+        logger.error(f"read_skill_tool_error: {e}")
         return {
             "success": False,
             "error": str(e),

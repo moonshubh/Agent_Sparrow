@@ -38,7 +38,7 @@ from app.api.v1.endpoints import search_tools_endpoints # Added for search tools
 from app.api.v1.endpoints import (
     logs_endpoints,  # Log analysis (JSON + SSE + sessions)
     research_endpoints,  # Research (JSON + SSE)
-    copilot_endpoints,  # AG-UI streaming endpoint (primary streaming path)
+    agui_endpoints,  # AG-UI streaming endpoint (primary streaming path)
     models_endpoints,  # Models listing for frontend selector
     metadata_endpoints,  # Phase 6: Memory stats, quota status, trace metadata
 )
@@ -143,7 +143,7 @@ if ENABLE_OTEL:
 
 @app.middleware("http")
 async def _debug_log_agui_requests(request: Request, call_next):
-    if request.url.path.startswith("/api/v1/copilot"):
+    if request.url.path.startswith("/api/v1/agui"):
         body_bytes = await request.body()
         try:
             body_preview = body_bytes.decode("utf-8")
@@ -154,7 +154,7 @@ async def _debug_log_agui_requests(request: Request, call_next):
     return response
 
 # AG-UI streaming endpoint
-# LangGraph stream endpoint via router: /api/v1/copilot/stream (legacy path retained)
+# LangGraph stream endpoint via router: /api/v1/agui/stream
 # GraphQL shim removed - use stream endpoint for all chat interactions
 
 # Add SlowAPI middleware for rate limiting
@@ -207,7 +207,7 @@ app.include_router(tavily_selftest.router, prefix="/api/v1", tags=["Search Tools
 # Register Agent Interaction routers (modularized)
 app.include_router(logs_endpoints.router, prefix="/api/v1", tags=["Agent Interaction"]) 
 app.include_router(research_endpoints.router, prefix="/api/v1", tags=["Agent Interaction"]) 
-app.include_router(copilot_endpoints.router, prefix="/api/v1", tags=["AG-UI"])  # /api/v1/copilot/stream
+app.include_router(agui_endpoints.router, prefix="/api/v1", tags=["AG-UI"])  # /api/v1/agui/stream
 app.include_router(models_endpoints.router, prefix="/api/v1", tags=["Models"])  # /api/v1/models
 app.include_router(agents_endpoints.router, prefix="/api/v1", tags=["Agents"])  # /api/v1/agents
 app.include_router(metadata_endpoints.router, prefix="/api/v1", tags=["Metadata"])  # /api/v1/metadata - Phase 6

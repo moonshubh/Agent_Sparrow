@@ -260,7 +260,14 @@ class SparrowCompositeBackend:
             self._persistent = SupabaseStoreBackend(supabase_client)
 
         # Configure routes
+        # Persistent routes (survive across sessions):
+        # - /memories/, /knowledge/: existing memory and KB storage
+        # - /progress/, /goals/, /handoff/: deep agent workspace (NEW)
+        #
+        # Ephemeral routes (cleared per-session):
+        # - /scratch/, /large_results/: temporary working data
         self._routes: List[RouteConfig] = [
+            # === Persistent Storage Routes (Supabase-backed) ===
             RouteConfig(
                 prefix="/memories/",
                 backend=self._persistent or self._ephemeral,
@@ -271,6 +278,23 @@ class SparrowCompositeBackend:
                 backend=self._persistent or self._ephemeral,
                 description="Knowledge base storage",
             ),
+            # Deep Agent workspace routes (context engineering)
+            RouteConfig(
+                prefix="/progress/",
+                backend=self._persistent or self._ephemeral,
+                description="Session progress notes (persists across messages)",
+            ),
+            RouteConfig(
+                prefix="/goals/",
+                backend=self._persistent or self._ephemeral,
+                description="Active goals and feature tracking (JSON)",
+            ),
+            RouteConfig(
+                prefix="/handoff/",
+                backend=self._persistent or self._ephemeral,
+                description="Session handoff context for resumption",
+            ),
+            # === Ephemeral Storage Routes (in-memory) ===
             RouteConfig(
                 prefix="/scratch/",
                 backend=self._ephemeral,

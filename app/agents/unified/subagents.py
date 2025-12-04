@@ -110,9 +110,9 @@ def _build_research_middleware(model: BaseChatModel) -> List[Any]:
         )
     )
 
-    # Evict large search results to prevent context overflow
-    if CUSTOM_MIDDLEWARE_AVAILABLE:
-        middleware.append(ToolResultEvictionMiddleware(char_threshold=60000))
+    # NOTE: ToolResultEvictionMiddleware is NOT added here because it's already
+    # included in SubAgentMiddleware's default_middleware in agent_sparrow.py.
+    # Adding it here would cause "duplicate middleware instances" error.
 
     # NOTE: PatchToolCallsMiddleware is NOT added here because it's already
     # included in SubAgentMiddleware's default_middleware in agent_sparrow.py.

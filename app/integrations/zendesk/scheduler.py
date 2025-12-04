@@ -16,9 +16,14 @@ from app.agents.unified.agent_sparrow import run_unified_agent
 from app.agents.orchestration.orchestration.state import GraphState
 from app.agents.unified.tools import kb_search_tool
 import re
-from app.integrations.zendesk.attachments import fetch_ticket_attachments, summarize_attachments
+from app.integrations.zendesk.attachments import fetch_ticket_attachments, summarize_attachments, convert_to_unified_attachments
 
 logger = logging.getLogger(__name__)
+
+# Recursion limit for Zendesk ticket processing
+# Keep low to prevent runaway agent loops (default is 400, which can take hours with Gemini Pro)
+# 30 is enough for: KB search + FeedMe + web research + subagent calls + final response
+ZENDESK_RECURSION_LIMIT = 30
 
 
 class RPMLimiter:
@@ -104,6 +109,8 @@ async def _get_feature_state() -> Dict[str, Any]:
     """Read feature flag state from Supabase, fallback to env flags."""
     enabled = bool(getattr(settings, "zendesk_enabled", False))
     dry_run = bool(getattr(settings, "zendesk_dry_run", True))
+    provider = getattr(settings, "zendesk_agent_provider", None) or "google"
+    model = getattr(settings, "zendesk_agent_model", None) or "gemini-3-pro-preview"
     last_run_at = None
     try:
         supa = get_supabase_client()
@@ -116,9 +123,14 @@ async def _get_feature_state() -> Dict[str, Any]:
         )
         data = getattr(resp, "data", None)
         if data and isinstance(data.get("value"), dict):
-            enabled = bool(data["value"].get("enabled", enabled))
-            if "dry_run" in data["value"]:
-                dry_run = bool(data["value"].get("dry_run", dry_run))
+            val = data["value"]
+            enabled = bool(val.get("enabled", enabled))
+            if "dry_run" in val:
+                dry_run = bool(val.get("dry_run", dry_run))
+            if "provider" in val:
+                provider = str(val.get("provider", provider))
+            if "model" in val:
+                model = str(val.get("model", model))
         # Also track scheduler state under key 'zendesk_scheduler'
         resp2 = await supa._exec(
             lambda: supa.client.table("feature_flags")
@@ -132,7 +144,7 @@ async def _get_feature_state() -> Dict[str, Any]:
             last_run_at = data2["value"].get("last_run_at")
     except Exception as e:
         logger.debug("feature flag read failed: %s", e)
-    return {"enabled": enabled, "dry_run": dry_run, "last_run_at": last_run_at}
+    return {"enabled": enabled, "dry_run": dry_run, "provider": provider, "model": model, "last_run_at": last_run_at}
 
 
 async def _set_last_run(ts: datetime) -> None:
@@ -246,7 +258,7 @@ async def _inc_daily_usage(n: int) -> None:
     )
 
 
-async def _generate_reply(ticket_id: int | str, subject: str | None, description: str | None) -> str:
+async def _generate_reply(ticket_id: int | str, subject: str | None, description: str | None, provider: str | None = None, model: str | None = None) -> str:
     """Run Primary Agent with the same pipeline as chat to produce a high-quality reply.
 
     Uses raw subject/description (no meta-prompt), optional latest public comment context,
@@ -301,7 +313,22 @@ async def _generate_reply(ticket_id: int | str, subject: str | None, description
             )
         text_out = ""
         if final_msg and getattr(final_msg, "content", None):
-            text_out = str(final_msg.content).strip()
+            content = final_msg.content
+            # Handle list content blocks (e.g., [{'type': 'text', 'text': '...'}])
+            if isinstance(content, list):
+                text_parts = []
+                for block in content:
+                    if isinstance(block, dict):
+                        # Extract text from content block
+                        if block.get("type") == "text" and "text" in block:
+                            text_parts.append(str(block["text"]))
+                        elif "text" in block:
+                            text_parts.append(str(block["text"]))
+                    elif isinstance(block, str):
+                        text_parts.append(block)
+                text_out = "\n".join(text_parts).strip()
+            else:
+                text_out = str(content).strip()
         # Strip any accidental planning/thinking markers from model output
         text_out = re.sub(r"(?im)^:::thinking\s*\n?", "", text_out)
         text_out = re.sub(r"(?im)^thinking\s*\n?", "", text_out)
@@ -403,15 +430,17 @@ async def _generate_reply(ticket_id: int | str, subject: str | None, description
                     html_parts.append(f"<p {p_style}>{content}</p>")
                 buf = []
 
-            def open_list(list_type: str):
+            def open_list(list_type: str, start: int | None = None):
                 style = ul_style if list_type == "ul" else ol_style
-                html_parts.append(f"<{list_type} {style}>")
+                start_attr = f' start="{start}"' if start and list_type == "ol" else ""
+                html_parts.append(f"<{list_type} {style}{start_attr}>")
 
             def close_list(list_type: str):
                 html_parts.append(f"</{list_type}>")
 
             in_ol = False
             in_ul = False
+            ordered_counter = 0
             last_li_index: int | None = None
 
             def ensure_lists_closed():
@@ -483,9 +512,10 @@ async def _generate_reply(ticket_id: int | str, subject: str | None, description
                     flush_paragraph()
                     if not in_ol:
                         ensure_lists_closed()
-                        open_list("ol")
+                        open_list("ol", start=ordered_counter + 1)
                         in_ol = True
                     html_parts.append(f"<li {li_style}>{oi}</li>")
+                    ordered_counter += 1
                     last_li_index = len(html_parts) - 1
                     continue
 
@@ -581,11 +611,16 @@ async def _generate_reply(ticket_id: int | str, subject: str | None, description
         parts_in.append(str(description))
 
     attachments: List[Dict[str, Any]] = []
+    unified_attachments = []  # For multimodal processing (images, PDFs)
     try:
         attachments = fetch_ticket_attachments(ticket_id)
         att_summary = summarize_attachments(attachments)
         if att_summary:
             parts_in.append(f"Attachments summary for agent:\n{att_summary}")
+        # Convert to unified agent format for multimodal processing
+        unified_attachments = convert_to_unified_attachments(attachments)
+        if unified_attachments:
+            logger.info(f"ticket_{ticket_id}_multimodal_attachments count={len(unified_attachments)}")
     except Exception as e:
         logger.debug(f"attachment_fetch_failed ticket={ticket_id}: {e}")
 
@@ -614,21 +649,30 @@ async def _generate_reply(ticket_id: int | str, subject: str | None, description
                 logger.debug(f"KB preflight check failed: {e}, defaulting to web search")
                 kb_ok = False
 
-            provider = getattr(settings, "zendesk_agent_provider", None) or getattr(settings, "primary_agent_provider", "google")
-            model = getattr(settings, "zendesk_agent_model", None) or getattr(settings, "primary_agent_model", "gemini-2.5-flash")
+            # Use provided provider/model from DB config, fallback to settings
+            use_provider = provider or getattr(settings, "zendesk_agent_provider", None) or getattr(settings, "primary_agent_provider", "google")
+            use_model = model or getattr(settings, "zendesk_agent_model", None) or "gemini-3-pro-preview"
 
             state = GraphState(
                 messages=[HumanMessage(content=user_query)],
                 session_id=session_id,
-                provider=provider,
-                model=model,
+                provider=use_provider,
+                model=use_model,
+                attachments=unified_attachments,  # Pass multimodal attachments for vision processing
                 forwarded_props={
                     "force_websearch": not kb_ok,
                     "websearch_max_results": None,
+                    "is_final_response": True,      # Triggers writing/empathy skills
+                    "task_type": "support",          # Support ticket context
+                    "is_zendesk_ticket": True,       # Explicit Zendesk marker
                 },
             )
 
-            result = await run_unified_agent(state)
+            # Pass config with lower recursion limit to prevent runaway agent loops
+            result = await run_unified_agent(
+                state,
+                config={"recursion_limit": ZENDESK_RECURSION_LIMIT},
+            )
     finally:
         try:
             if attachments:
@@ -640,7 +684,7 @@ async def _generate_reply(ticket_id: int | str, subject: str | None, description
     return _normalize_result_to_text(result, state) or "Thank you for reaching out. We’re reviewing your request and will follow up shortly."
 
 
-async def _process_window(window_start: datetime, window_end: datetime, dry_run: bool) -> Dict[str, Any]:
+async def _process_window(window_start: datetime, window_end: datetime, dry_run: bool, provider: str | None = None, model: str | None = None) -> Dict[str, Any]:
     supa = get_supabase_client()
     # Pull due tickets (pending or retry where next_attempt_at <= now)
     resp = await supa._exec(
@@ -747,7 +791,7 @@ async def _process_window(window_start: datetime, window_end: datetime, dry_run:
                 continue
 
             # Generate suggested reply after successful claim
-            reply = await _generate_reply(tid, row.get("subject"), row.get("description"))
+            reply = await _generate_reply(tid, row.get("subject"), row.get("description"), provider=provider, model=model)
             # Try HTML if enabled; fallback signature without use_html for test stubs
             try:
                 await asyncio.to_thread(zc.add_internal_note, tid, reply, add_tag="mb_auto_triaged", use_html=getattr(settings, "zendesk_use_html", True))
@@ -831,7 +875,13 @@ async def start_background_scheduler() -> None:
 
             now = datetime.now(timezone.utc).replace(microsecond=0)
             window_start = now - timedelta(seconds=interval_sec)
-            result = await _process_window(window_start, now, bool(state.get("dry_run", True)))
+            result = await _process_window(
+                window_start,
+                now,
+                bool(state.get("dry_run", True)),
+                provider=state.get("provider"),
+                model=state.get("model"),
+            )
             logger.info("Zendesk window processed: %s", result)
             await _set_last_run(now)
             # Mark last success timestamp

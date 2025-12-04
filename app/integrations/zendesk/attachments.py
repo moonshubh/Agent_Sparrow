@@ -41,8 +41,8 @@ def _auth() -> tuple[str, str]:
 
 def fetch_ticket_attachments(
     ticket_id: int | str,
-    allowed_extensions: Iterable[str] = (".log", ".txt", ".png", ".jpg", ".jpeg", ".pdf"),
-    max_bytes: int = 5 * 1024 * 1024,  # 5 MB guardrail per file
+    allowed_extensions: Iterable[str] = (".log", ".txt", ".png", ".jpg", ".jpeg", ".pdf", ".gif"),
+    max_bytes: int = 10 * 1024 * 1024,  # 10 MB guardrail per file (support large logs)
 ) -> List[AttachmentInfo]:
     """
     Fetch allowed attachments for a ticket and download them to a temp folder.
@@ -135,3 +135,107 @@ def cleanup_attachments(att_list: List[AttachmentInfo]) -> None:
             shutil.rmtree(parent, ignore_errors=True)
         except Exception:
             pass
+
+
+# MIME type mapping for unified agent's multimodal processor
+MIME_TYPE_MAP = {
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".gif": "image/gif",
+    ".webp": "image/webp",
+    ".pdf": "application/pdf",
+    ".txt": "text/plain",
+    ".log": "text/plain",
+    ".csv": "text/csv",
+    ".json": "application/json",
+    ".xml": "application/xml",
+}
+
+
+def convert_to_unified_attachments(
+    att_list: List[AttachmentInfo],
+    max_bytes: int = 10 * 1024 * 1024,  # 10 MB limit to prevent memory issues
+) -> List["Attachment"]:
+    """Convert Zendesk attachments to unified agent Attachment model for multimodal processing.
+
+    This enables images and PDFs to be processed by vision APIs (Gemini, Grok, OpenRouter),
+    and log files to be fully inlined in context (up to 10MB).
+
+    Args:
+        att_list: List of AttachmentInfo objects from Zendesk
+        max_bytes: Maximum file size to read (default 10MB)
+
+    Returns:
+        List of Attachment objects suitable for GraphState.attachments
+    """
+    import base64
+    from app.agents.orchestration.orchestration.state import Attachment
+
+    results: List[Attachment] = []
+
+    # Supported types for multimodal processing
+    # Images: Gemini, Grok 2 Vision, and many OpenRouter models support these
+    # Text: Full log files inlined in context (Gemini/Grok have 1M+ token context)
+    ALLOWED_TYPES = {
+        # Images (vision)
+        "image/png", "image/jpeg", "image/gif", "image/webp",
+        # Documents (PDF vision)
+        "application/pdf",
+        # Text files (full content inline)
+        "text/plain", "text/csv", "text/html", "text/markdown",
+        "application/json", "application/xml",
+        # Fallback for .log files detected by extension
+        "application/octet-stream",
+    }
+
+    for att in att_list:
+        if not att.local_path or not os.path.exists(att.local_path):
+            continue
+
+        # Check file size before reading to prevent memory issues
+        if att.size and att.size > max_bytes:
+            logger.warning(f"Skipping oversized attachment {att.file_name}: {att.size} bytes > {max_bytes} limit")
+            continue
+
+        # Get proper MIME type
+        ext = os.path.splitext(att.file_name.lower())[1]
+        mime_type = att.content_type or MIME_TYPE_MAP.get(ext, "application/octet-stream")
+
+        # Handle .log files that might come as octet-stream
+        if mime_type == "application/octet-stream" and ext in (".log", ".txt"):
+            mime_type = "text/plain"
+
+        if mime_type not in ALLOWED_TYPES:
+            logger.debug(f"Skipping attachment {att.file_name} with unsupported MIME type: {mime_type}")
+            continue
+
+        try:
+            with open(att.local_path, "rb") as f:
+                content = f.read(max_bytes + 1)  # Read one extra byte to detect oversized files
+
+            # Check actual file size (in case att.size was not set)
+            if len(content) > max_bytes:
+                logger.warning(f"Skipping oversized attachment {att.file_name}: file exceeds {max_bytes} byte limit")
+                continue
+
+            file_size = len(content)
+
+            # Encode as base64 data URL
+            b64_content = base64.b64encode(content).decode("utf-8")
+            data_url = f"data:{mime_type};base64,{b64_content}"
+
+            results.append(Attachment(
+                name=att.file_name,
+                mime_type=mime_type,
+                data_url=data_url,
+                size=att.size or file_size,
+            ))
+            size_mb = file_size / (1024 * 1024)
+            logger.info(f"Converted attachment for multimodal: {att.file_name} ({mime_type}, {size_mb:.2f}MB)")
+
+        except Exception as e:
+            logger.warning(f"Failed to convert attachment {att.file_name}: {e}")
+            continue
+
+    return results

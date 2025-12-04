@@ -126,7 +126,7 @@ export function InterruptHandler() {
               .filter(option => option && option.value !== undefined && option.label)
               .map((option, idx) => (
                 <Button
-                  key={option.id || `${option.label}-${option.value}-${idx}`}
+                  key={`${option.label}-${option.value}-${idx}`}
                   onClick={() => handleResolve(option.value)}
                   variant="outline"
                   className="w-full justify-start"

@@ -69,7 +69,17 @@ echo "Upgrading pip in venv..."
 "$VENV_PY" -m pip install --upgrade pip
 
 echo "Installing Python dependencies into venv..."
-"$VENV_PIP" install -r requirements.txt 2>/dev/null || echo "Note: Some dependency warnings are expected due to google-generativeai compatibility"
+# Use locked requirements file if available (much faster - no resolver backtracking)
+if [ -f "$ROOT_DIR/requirements-lock.txt" ]; then
+    echo "Using locked requirements (fast install)..."
+    "$VENV_PIP" install -r requirements-lock.txt 2>/dev/null || echo "Note: Some dependency warnings are expected"
+else
+    echo "No lock file found, using requirements.txt (may take longer)..."
+    "$VENV_PIP" install -r requirements.txt 2>/dev/null || echo "Note: Some dependency warnings are expected due to google-generativeai compatibility"
+    # Generate lock file for future fast installs
+    echo "Generating requirements-lock.txt for future fast installs..."
+    "$VENV_PIP" freeze > "$ROOT_DIR/requirements-lock.txt" 2>/dev/null || true
+fi
 
 # Function to kill processes on a given port
 kill_process_on_port() {

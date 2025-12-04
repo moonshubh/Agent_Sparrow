@@ -211,6 +211,7 @@ class SkillsRegistry:
                 - is_final_response: Whether this is a final user-facing response
                 - task_type: Type of task (e.g., "kb_creation", "support")
                 - is_internal_call: Whether this is an internal tool/subagent call
+                - is_zendesk_ticket: Whether this is a Zendesk ticket response
 
         Returns:
             True if writing skill should be activated.
@@ -219,11 +220,12 @@ class SkillsRegistry:
         is_user_facing = context.get("is_final_response", False)
         is_kb_article = context.get("task_type") == "kb_creation"
         is_support_response = context.get("task_type") == "support"
+        is_zendesk = context.get("is_zendesk_ticket", False)  # Explicit Zendesk check
 
         # Skip for internal tool calls, subagent research
         is_internal = context.get("is_internal_call", False)
 
-        return (is_user_facing or is_kb_article or is_support_response) and not is_internal
+        return (is_user_facing or is_kb_article or is_support_response or is_zendesk) and not is_internal
 
     def detect_skills_from_message(self, message: str) -> list[str]:
         """

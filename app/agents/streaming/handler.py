@@ -529,10 +529,21 @@ class StreamEventHandler:
         )
 
     async def _on_model_end(self, event: Dict[str, Any]) -> None:
-        """Handle chat model end event."""
+        """Handle chat model end event.
+
+        Also monitors Gemini implicit cache hits for cost optimization tracking.
+        Gemini 2.5 models cache repeated context prefixes at 75% cost savings.
+        """
         data = event.get("data", {})
         run_id = event.get("run_id")
         run_id_str = str(run_id) if run_id is not None else None
+
+        # =====================================================================
+        # GEMINI CACHE HIT MONITORING (Phase 2.2)
+        # Log cache hit metrics for LangSmith observability
+        # Gemini 2.5 returns cached_content_token_count in usage_metadata
+        # =====================================================================
+        self._log_cache_metrics(data)
 
         if run_id and run_id in self.emitter.operations:
             output = data.get("output")
@@ -548,11 +559,19 @@ class StreamEventHandler:
                 # This is a safety net for Gemini models that may include :::thinking in output
                 main_content = ThinkingBlockTracker.sanitize_final_content(main_content)
 
-                # Combine reasoning and main content
-                if reasoning_content:
-                    content = f":::thinking\n{reasoning_content}\n:::\n{main_content}"
-                else:
-                    content = main_content
+                # IMPORTANT: Do NOT embed reasoning into message content!
+                # Reasoning goes ONLY to the thinking trace (handled via stream_thought_chunk)
+                # User-facing message content should be clean of reasoning markers
+                content = main_content
+
+                # If we have extracted reasoning, emit it to the thinking trace as a final summary
+                # This ensures the trace panel gets the full reasoning without polluting the message
+                if reasoning_content and run_id:
+                    self.emitter.add_trace_step(
+                        step_type="thought",
+                        content=f"Model reasoning:\n{reasoning_content}",
+                        metadata={"source": "model_reasoning", "final": True},
+                    )
 
             self.emitter.end_thought(run_id, content)
 
@@ -688,8 +707,11 @@ class StreamEventHandler:
 
             visible_content, is_thinking_chunk = tracker.process_chunk(chunk_text)
 
-            # Always emit to thinking trace
-            self.emitter.stream_thought_chunk(run_id, chunk_text)
+            # Stream ALL content to thinking trace for observability
+            # This allows the trace panel to show the full model output
+            # The TEXT_MESSAGE_CONTENT below only sends visible_content (not thinking)
+            if chunk_text:
+                self.emitter.stream_thought_chunk(run_id, chunk_text)
 
             looks_like_json = normalized.startswith(("{", "[")) and normalized.endswith(("}", "]"))
 
@@ -1211,17 +1233,23 @@ class StreamEventHandler:
         # This handler is for cases where the artifact wasn't emitted during tool execution
         # Check if we have the raw content to emit
         title = raw_output.get("title", "Article")
-        content = raw_output.get("content")
+        content = raw_output.get("content", "")
         images = raw_output.get("images")
 
-        if content:
+        # Emit if we have content OR images (not just content)
+        # This ensures image-only articles are properly displayed
+        if content or images:
             self.emitter.emit_article_artifact(
-                content=content,
+                content=content or "",
                 title=title,
                 images=images,
             )
-            logger.info("article_artifact_emitted: title=%s, content_length=%d",
-                       title, len(content))
+            logger.info(
+                "article_artifact_emitted: title=%s, content_length=%d, images=%d",
+                title, len(content or ""), len(images or [])
+            )
+        else:
+            logger.warning("article_artifact_skipped: no content or images")
 
     def _summarize_structured_content(self, content: Any) -> Optional[str]:
         """Create a plain-text summary of structured tool output."""
@@ -1372,3 +1400,92 @@ class StreamEventHandler:
         except Exception as e:
             logger.warning(f"evicted_result_storage_failed: {e}")
             return False
+
+    def _log_cache_metrics(self, data: Dict[str, Any]) -> None:
+        """Log Gemini implicit cache hit metrics for observability.
+
+        Gemini 2.5 models support implicit context caching:
+        - First request with a unique prefix pays full price
+        - Subsequent requests with same prefix get ~75% cost savings
+        - Cache is automatic - no explicit configuration needed
+
+        Metrics are logged for LangSmith dashboard monitoring.
+
+        Args:
+            data: The model end event data containing output and usage info.
+        """
+        try:
+            output = data.get("output")
+            if not output:
+                return
+
+            # Extract usage_metadata from response
+            # LangChain wraps this in different locations depending on the provider
+            usage_metadata = None
+
+            # Try response_metadata.usage_metadata (LangChain standard)
+            response_metadata = getattr(output, "response_metadata", None) or {}
+            if isinstance(response_metadata, dict):
+                usage_metadata = response_metadata.get("usage_metadata")
+
+            # Try additional_kwargs.usage_metadata (some providers)
+            if not usage_metadata:
+                additional_kwargs = getattr(output, "additional_kwargs", None) or {}
+                if isinstance(additional_kwargs, dict):
+                    usage_metadata = additional_kwargs.get("usage_metadata")
+
+            # Try llm_output.usage_metadata (older pattern)
+            if not usage_metadata and isinstance(data, dict):
+                llm_output = data.get("llm_output") or {}
+                if isinstance(llm_output, dict):
+                    usage_metadata = llm_output.get("usage_metadata")
+
+            if not usage_metadata or not isinstance(usage_metadata, dict):
+                return
+
+            # Extract cache metrics (Gemini 2.5 format)
+            cached_tokens = usage_metadata.get("cached_content_token_count", 0)
+            prompt_tokens = usage_metadata.get("prompt_token_count", 0)
+            total_tokens = usage_metadata.get("total_token_count", 0)
+            candidates_tokens = usage_metadata.get("candidates_token_count", 0)
+
+            # Only log if we have meaningful cache data
+            if cached_tokens > 0 and prompt_tokens > 0:
+                cache_ratio = cached_tokens / prompt_tokens
+                estimated_savings = cached_tokens * 0.75  # 75% savings on cached tokens
+
+                logger.info(
+                    "gemini_cache_metrics",
+                    cache_hit_ratio=f"{cache_ratio:.1%}",
+                    cached_tokens=cached_tokens,
+                    prompt_tokens=prompt_tokens,
+                    total_tokens=total_tokens,
+                    candidates_tokens=candidates_tokens,
+                    estimated_token_savings=int(estimated_savings),
+                    model=getattr(self.state, "model", "unknown"),
+                    provider=getattr(self.state, "provider", "unknown"),
+                )
+
+                # Store in scratchpad for LangSmith metadata
+                if hasattr(self.state, "scratchpad") and isinstance(self.state.scratchpad, dict):
+                    system_bucket = self.state.scratchpad.setdefault("_system", {})
+                    system_bucket["cache_metrics"] = {
+                        "cache_hit_ratio": round(cache_ratio, 3),
+                        "cached_tokens": cached_tokens,
+                        "prompt_tokens": prompt_tokens,
+                        "total_tokens": total_tokens,
+                        "estimated_savings_pct": round(cache_ratio * 75, 1),
+                    }
+
+            elif prompt_tokens > 0:
+                # No cache hit - log for comparison
+                logger.debug(
+                    "gemini_cache_miss",
+                    prompt_tokens=prompt_tokens,
+                    total_tokens=total_tokens,
+                    model=getattr(self.state, "model", "unknown"),
+                )
+
+        except Exception as e:
+            # Cache metrics are optional - don't fail on errors
+            logger.debug(f"cache_metrics_extraction_failed: {e}")

@@ -13,7 +13,9 @@ import {
   AlertCircle,
   Lightbulb,
   Wrench,
-  Check
+  Check,
+  Settings2,
+  ClipboardList
 } from 'lucide-react';
 import { cn } from '@/shared/lib/utils';
 import type { ToolEvidenceUpdateEvent } from '@/services/ag-ui/event-types';
@@ -197,7 +199,7 @@ export const TodoSidebar: React.FC<TodoSidebarProps> = ({
     const inProgress = normalizedTodos.filter(t => t.status === 'in_progress').length;
     const pending = total - done - inProgress;
     const progressPercent = total > 0 ? Math.round((done / total) * 100) : 0;
-    
+
     return { total, done, inProgress, pending, progressPercent };
   }, [normalizedTodos]);
 
@@ -260,8 +262,8 @@ export const TodoSidebar: React.FC<TodoSidebarProps> = ({
       <div className="bg-card border border-border rounded-xl overflow-hidden shadow-sm">
         {/* Header */}
         <div className="flex items-center gap-2 px-4 py-3 bg-secondary/30 border-b border-border">
-          <div className="p-1.5 rounded-lg bg-terracotta-400/10">
-            <Lightbulb className="w-4 h-4 text-terracotta-400" />
+          <div className="p-1.5 rounded-lg bg-yellow-500/10">
+            <Lightbulb className="w-4 h-4 text-yellow-500 animate-spin-slow bulb-glow" />
           </div>
           <div>
             <h3 className="text-sm font-semibold text-foreground">Agent Status</h3>
@@ -287,16 +289,16 @@ export const TodoSidebar: React.FC<TodoSidebarProps> = ({
           />
           <StatusPill
             label="TOOLS"
-            value={activeTools.length > 0 
-              ? `${activeTools.length} running` 
+            value={activeTools.length > 0
+              ? `${activeTools.length} running`
               : 'No tools running'
             }
             variant={activeTools.length > 0 ? 'running' : 'idle'}
           />
           <StatusPill
             label="TODOS"
-            value={stats.total === 0 
-              ? 'None' 
+            value={stats.total === 0
+              ? 'None'
               : `${stats.total} (${stats.inProgress} doing, ${stats.pending} pending)`
             }
             variant={stats.inProgress > 0 ? 'running' : 'idle'}
@@ -322,9 +324,9 @@ export const TodoSidebar: React.FC<TodoSidebarProps> = ({
             onClick={() => setIsToolsExpanded(!isToolsExpanded)}
           >
             <div className="flex items-center gap-2">
-              <Wrench className="w-4 h-4 text-terracotta-400" />
+              <Settings2 className="w-4 h-4 text-amber-500 icon-glow" />
               <span className="text-sm font-medium text-foreground">Tool Calls</span>
-              <span className="px-1.5 py-0.5 text-[10px] rounded-full bg-terracotta-400/20 text-terracotta-400">
+              <span className="px-1.5 py-0.5 text-[10px] rounded-full bg-amber-500/20 text-amber-500">
                 {toolCallItems.length}
               </span>
             </div>
@@ -403,7 +405,7 @@ export const TodoSidebar: React.FC<TodoSidebarProps> = ({
               <div className="p-2 space-y-1 max-h-[300px] overflow-y-auto custom-scrollbar">
                 {sortedTodos.length === 0 ? (
                   <div className="flex flex-col items-center justify-center py-6 text-center">
-                    <Sparkles className="w-5 h-5 text-muted-foreground mb-2" />
+                    <ClipboardList className="w-5 h-5 text-muted-foreground mb-2 animate-pulse-slow" />
                     <p className="text-xs text-muted-foreground">No tasks yet</p>
                   </div>
                 ) : (
@@ -653,7 +655,7 @@ const ToolCallRow: React.FC<{ tool: ToolCallItem }> = ({ tool }) => {
         <div
           ref={contentRef}
           className={cn(
-            'mt-1 ml-6 rounded-lg border bg-secondary/30 p-2 text-xs',
+            'mt-2 rounded-lg border bg-secondary/30 p-2 text-xs',
             showDetails ? 'border-border' : 'border-transparent'
           )}
           style={{

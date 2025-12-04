@@ -329,7 +329,7 @@ class Settings(BaseSettings):
     zendesk_poll_interval_sec: int = Field(default=60, alias="ZENDESK_POLL_INTERVAL_SEC")
     zendesk_rpm_limit: int = Field(default=300, alias="ZENDESK_RPM_LIMIT")
     zendesk_monthly_api_budget: int = Field(default=350, alias="ZENDESK_MONTHLY_API_BUDGET")
-    zendesk_gemini_daily_limit: int = Field(default=1000, alias="ZENDESK_GEMINI_DAILY_LIMIT")
+    zendesk_gemini_daily_limit: int = Field(default=380, alias="ZENDESK_GEMINI_DAILY_LIMIT")
     zendesk_max_retries: int = Field(default=5, alias="ZENDESK_MAX_RETRIES")
     zendesk_queue_retention_days: int = Field(default=30, alias="ZENDESK_QUEUE_RETENTION_DAYS")
     # Debug: enable limited verification logs for Zendesk HMAC (do NOT enable in prod)

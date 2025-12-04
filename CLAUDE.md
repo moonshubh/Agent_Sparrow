@@ -62,7 +62,7 @@ npm run test:security:full  # With rate limiting tests
 The backend follows a modular agent-based architecture:
 
 - **Entry Point**: `app/main.py` - FastAPI application with unified streaming endpoint:
-  - `/api/v1/copilot/stream` - AG-UI adapter streaming endpoint using DeepAgents v0.2.5
+  - `/api/v1/agui/stream` - AG-UI adapter streaming endpoint using DeepAgents v0.2.5
 
 - **Unified Agent System** (`app/agents/`):
   - **Main Agent**: `unified/agent_sparrow.py` - DeepAgents implementation with middleware stack
@@ -358,7 +358,7 @@ All metrics are captured as LangSmith metadata and tags:
 - Success rates: URLs found, extraction successes
 - Fallback reasons tracked in metadata
 
-#### 4. **AG-UI Stream Context** (`app/api/v1/endpoints/copilot_endpoints.py`)
+#### 4. **AG-UI Stream Context** (`app/api/v1/endpoints/agui_endpoints.py`)
 - Enhanced metadata: agent_config, feature_flags, search_config
 - Tags: `agui-stream`, `memory_enabled`, `attachments:true`
 - Session/trace IDs for correlation
@@ -393,7 +393,7 @@ The codebase has successfully migrated to the native AG-UI client implementation
 - ✅ Direct SSE streaming without GraphQL translation
 - ✅ AG-UI protocol fully integrated (RunAgentInput/SSE events)
 - ✅ DeepAgents v0.2.5 middleware stack operational
-- ✅ Frontend using `/api/v1/copilot/stream` endpoint with native protocol
+- ✅ Frontend using `/api/v1/agui/stream` endpoint with native protocol
 - ✅ Human-in-the-loop interrupts via CUSTOM events
 - ✅ Legacy troubleshooting and reasoning pipelines removed (~12,000 lines)
 - See `docs/reference/` for historical architecture documentation
@@ -443,6 +443,150 @@ The codebase has successfully migrated to the native AG-UI client implementation
 ### Message Preparation
 - **LangChain Compatibility**: Uses `.type` attribute (not `.role`) for message types
 
+## Context Engineering (Dec 2025)
+
+Agent Sparrow implements **Deep Agent** patterns from LangChain and Anthropic's "Effective Harnesses for Long-Running Agents" for session continuity and progress tracking.
+
+### Architecture Overview
+
+The context engineering system provides:
+- **Session handoff** - Capture context before summarization for seamless continuity
+- **Progress tracking** - Persistent notes survive across messages and sessions
+- **Goal management** - Track feature completion with pass/fail/pending status
+- **Virtual file system** - Organized workspace with ephemeral and persistent storage
+
+### Key Components
+
+| Component | Location | Purpose |
+|-----------|----------|---------|
+| `SparrowWorkspaceStore` | `app/agents/harness/store/workspace_store.py` | LangGraph BaseStore backed by Supabase `store` table |
+| `SessionInitMiddleware` | `app/agents/harness/middleware/session_init_middleware.py` | Loads handoff context on first message |
+| `HandoffCaptureMiddleware` | `app/agents/harness/middleware/handoff_capture_middleware.py` | Captures context at 60% of context window |
+| `SparrowCompositeBackend` | `app/agents/harness/backends/composite.py` | Routes storage to ephemeral vs persistent backends |
+
+### Workspace Routes
+
+```python
+# Ephemeral (cleared per session)
+/scratch/          # Working notes, intermediate results
+
+# Persistent (survives across sessions)
+/progress/         # Session progress notes (markdown)
+/goals/            # Active goals with pass/fail status (JSON)
+/handoff/          # Session handoff context for resumption (JSON)
+```
+
+### Usage Example
+
+```python
+from app.agents.harness.store import SparrowWorkspaceStore
+from app.agents.harness.middleware import (
+    SessionInitMiddleware,
+    HandoffCaptureMiddleware,
+)
+
+# Create workspace store for session
+store = SparrowWorkspaceStore(session_id="session-123")
+
+# Middleware stack
+middleware = [
+    SessionInitMiddleware(store),           # Load context on first message
+    # ... other middleware ...
+    HandoffCaptureMiddleware(
+        store,
+        context_window=128000,              # Model's context window
+        capture_threshold_fraction=0.6,     # Capture before 70% summarization
+    ),
+]
+
+# Convenience methods
+await store.set_progress_notes("## Current Status\n- Working on feature X")
+await store.set_active_goals({
+    "description": "Implement user auth",
+    "features": [
+        {"name": "Login form", "status": "pass"},
+        {"name": "Session tokens", "status": "pending"},
+    ]
+})
+handoff = await store.get_handoff_context()  # Returns previous session context
+```
+
+### Handoff Context Structure
+
+When context approaches 60% of the model's context window, `HandoffCaptureMiddleware` automatically captures:
+
+```json
+{
+  "summary": "User Request: ... Key Findings: ...",
+  "active_todos": [{"content": "Task 1", "status": "in_progress"}],
+  "next_steps": ["Step 1", "Step 2"],
+  "key_decisions": ["I've decided to use X pattern"],
+  "message_count": 42,
+  "estimated_tokens": 76800,
+  "capture_number": 1,
+  "timestamp": "2025-12-03T05:43:42.631685+00:00"
+}
+```
+
+### Session Initialization
+
+On the first message of a new session, `SessionInitMiddleware` injects system messages:
+
+1. **[Session Handoff Context]** - Previous session summary, next steps, pending todos
+2. **[Active Goals]** - Current goals with pass/fail/pending status
+3. **[Session Progress Notes]** - Markdown progress notes (if < 2000 chars)
+
+### Prompt Integration
+
+The coordinator prompt includes workspace instructions in `<workspace_files>` section:
+
+```xml
+<workspace_files>
+You have access to a virtual file system for organizing complex tasks:
+
+**Working Files (ephemeral - cleared per session):**
+- `/scratch/notes.md` - Working notes for current task
+
+**Persistent Files (survive across messages and sessions):**
+- `/progress/session_notes.md` - Progress notes auto-captured during long tasks
+- `/goals/active.json` - Current goals and their status (pass/fail/pending)
+- `/handoff/summary.json` - Session handoff context loaded at start
+</workspace_files>
+```
+
+### Database Storage
+
+Workspace files are stored in the Supabase `store` table:
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `prefix` | VARCHAR | Namespace path (e.g., `workspace:handoff:session-123`) |
+| `key` | VARCHAR | File key (e.g., `summary.json`) |
+| `value` | JSONB | File content |
+| `created_at` | TIMESTAMPTZ | Creation timestamp |
+| `updated_at` | TIMESTAMPTZ | Last update timestamp |
+
+### Testing
+
+Run context engineering tests:
+
+```bash
+# Test workspace store and middleware
+python -c "
+import asyncio
+from app.agents.harness.store import SparrowWorkspaceStore
+from app.agents.harness.middleware import SessionInitMiddleware, HandoffCaptureMiddleware
+
+async def test():
+    store = SparrowWorkspaceStore('test-session')
+    await store.set_progress_notes('Test notes')
+    notes = await store.get_progress_notes()
+    print(f'Progress notes: {notes}')
+
+asyncio.run(test())
+"
+```
+
 ## Deployment Considerations
 
 ### Production Startup
@@ -464,7 +608,7 @@ The codebase has successfully migrated to the native AG-UI client implementation
 ## Key Integration Points
 
 ### AG-UI Streaming
-- Preferred endpoint: `POST /api/v1/copilot/stream`
+- Preferred endpoint: `POST /api/v1/agui/stream`
 - Native SSE event streaming with AG-UI protocol
 - Handles interrupts via CUSTOM events
 - Supports file attachments via BinaryInputContent in RunAgentInput
@@ -506,7 +650,7 @@ tail -f system_logs/celery/celery_worker.log
 ### Frontend Debugging
 - Browser DevTools Network tab for API calls
 - React Developer Tools for component state
-- Check `/api/v1/copilot/stream` responses for streaming issues
+- Check `/api/v1/agui/stream` responses for streaming issues
 
 ### Common Issues
 1. **Redis not running**: FeedMe features won't work

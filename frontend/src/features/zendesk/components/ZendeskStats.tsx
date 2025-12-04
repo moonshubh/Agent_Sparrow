@@ -6,6 +6,8 @@ import { motion, useInView } from "motion/react"
 export type ZendeskHealth = {
   enabled?: boolean
   dry_run?: boolean
+  provider?: string
+  model?: string
   usage?: { calls_used?: number; budget?: number } | null
   daily?: { gemini_calls_used?: number; gemini_daily_limit?: number } | null
   queue?: { pending?: number; retry?: number; processing?: number; failed?: number } | null

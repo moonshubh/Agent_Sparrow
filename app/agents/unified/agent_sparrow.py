@@ -23,21 +23,31 @@ try:
     from langchain.agents.middleware.summarization import SummarizationMiddleware
     from deepagents.middleware.subagents import SubAgentMiddleware, TASK_SYSTEM_PROMPT
     from deepagents.middleware.patch_tool_calls import PatchToolCallsMiddleware
-    # Note: ToolResultEvictionMiddleware is used in subagents.py, not here
+    from app.agents.harness.middleware import ToolResultEvictionMiddleware
+
+    # Import new context management middleware
+    from app.agents.unified.context_middleware import (
+        FractionBasedSummarizationMiddleware,
+        ContextEditingMiddleware,
+        ModelRetryMiddleware,
+        get_model_context_window,
+    )
 
     MIDDLEWARE_AVAILABLE = True
+    CONTEXT_MIDDLEWARE_AVAILABLE = True
 
     class SubAgentTodoListMiddleware(TodoListMiddleware):
         """Distinct marker to avoid duplicate detection."""
         pass
 
     class SubAgentSummarizationMiddleware(SummarizationMiddleware):
-        """Subagent-specific summarization variant."""
+        """Subagent-specific summarization variant (legacy fallback)."""
         pass
 
 except ImportError as e:
     logger.warning(f"Middleware not available ({e}) - agent will run without middleware")
     MIDDLEWARE_AVAILABLE = False
+    CONTEXT_MIDDLEWARE_AVAILABLE = False
 
 from app.agents.orchestration.orchestration.state import GraphState
 from app.agents.execution import AgentLoopState, LoopStateTracker, get_or_create_tracker
@@ -81,6 +91,74 @@ PROVIDER_TOKEN_LIMITS: Dict[str, int] = {
     "openrouter": 50000,  # OpenRouter 262K context → 50K summarization threshold
 }
 DEFAULT_TOKEN_LIMIT = 50000  # Conservative default for unknown providers
+
+# -----------------------------------------------------------------------------
+# Fast Task Classification (keyword-based, <5ms vs ~200ms for attachment scan)
+# -----------------------------------------------------------------------------
+# Patterns are checked in order; first match wins
+TASK_TYPE_PATTERNS: Dict[str, List[str]] = {
+    "log_analysis": [
+        # File extensions and explicit log mentions
+        r"\.log\b", r"\.txt\b.*log", r"log\s*file",
+        # Error/debug indicators
+        r"\berror\b", r"\bexception\b", r"traceback", r"stack\s*trace",
+        r"\bcrash", r"\bfail(?:ed|ure)?\b", r"\bdebug\b",
+        # Email client specific (Mailbird context)
+        r"\bimap\b", r"\bsmtp\b", r"\bpop3?\b", r"oauth.*fail",
+        r"connection.*(?:timeout|refused|lost)", r"ssl.*(?:error|fail)",
+        r"sync.*(?:error|fail)", r"authentication.*fail",
+        # Log-like patterns
+        r"\d{4}-\d{2}-\d{2}.*(?:error|warn|info)", r"\[error\]", r"\[warn",
+    ],
+    "coordinator_heavy": [
+        # Explicit complexity requests
+        r"detailed\s*analysis", r"step[\s-]*by[\s-]*step", r"comprehensive",
+        r"thorough(?:ly)?", r"in[\s-]*depth", r"deep\s*dive",
+        # Multi-part tasks
+        r"compare.*and.*contrast", r"pros?\s*(?:and|&)\s*cons?",
+        r"analyze.*multiple", r"evaluate.*options",
+    ],
+}
+
+# Pre-compile patterns for performance
+_COMPILED_TASK_PATTERNS: Dict[str, List[re.Pattern]] = {
+    task: [re.compile(p, re.IGNORECASE) for p in patterns]
+    for task, patterns in TASK_TYPE_PATTERNS.items()
+}
+
+
+def _fast_classify_task(message: str) -> Optional[str]:
+    """Fast O(n) keyword classification - no LLM/attachment scan needed.
+
+    Runs in <5ms for typical messages. Returns None if no pattern matches,
+    allowing fallback to attachment-based detection.
+    """
+    if not message:
+        return None
+
+    for task_type, patterns in _COMPILED_TASK_PATTERNS.items():
+        for pattern in patterns:
+            if pattern.search(message):
+                logger.debug("fast_task_classification", task_type=task_type, pattern=pattern.pattern[:30])
+                return task_type
+
+    return None
+
+
+def _extract_last_user_message(state: GraphState) -> str:
+    """Extract the last user message text for classification."""
+    messages = getattr(state, "messages", []) or []
+    for msg in reversed(messages):
+        if hasattr(msg, "type") and msg.type == "human":
+            content = getattr(msg, "content", "") or ""
+            if isinstance(content, list):
+                # Handle multimodal messages
+                return " ".join(
+                    part.get("text", "") for part in content
+                    if isinstance(part, dict) and part.get("type") == "text"
+                )
+            return content
+    return ""
 
 
 @dataclass
@@ -137,20 +215,57 @@ def _resolve_runtime_config(state: GraphState) -> AgentRuntimeConfig:
 
 
 def _determine_task_type(state: GraphState) -> str:
-    """Determine task type from state."""
+    """Determine task type from state using fast keyword classification.
+
+    Routing priority:
+    1. Explicit coordinator_mode from forwarded_props (heavy/pro → coordinator_heavy)
+    2. Fast keyword classification from message content (<5ms)
+    3. Attachment-based log detection (only if keywords didn't match, ~200ms)
+    4. Default to "coordinator" (light mode)
+    """
     forwarded_props = getattr(state, "forwarded_props", {}) or {}
     coordinator_mode = forwarded_props.get("coordinator_mode") or getattr(state, "coordinator_mode", None)
     heavy_mode = isinstance(coordinator_mode, str) and coordinator_mode.lower() in {"heavy", "pro", "coordinator_heavy"}
-    detection = _attachments_indicate_logs(state)
 
-    if detection.get("has_log"):
+    # 1. Priority #1: Explicit coordinator_mode takes precedence
+    if heavy_mode:
+        logger.info("task_type_explicit_mode", task_type="coordinator_heavy", trigger="coordinator_mode")
+        forwarded_props["task_detection_method"] = "explicit_mode"
+        state.forwarded_props = forwarded_props
+        return "coordinator_heavy"
+
+    # 2. Fast path: keyword classification from user message (~5ms)
+    user_message = _extract_last_user_message(state)
+    fast_task = _fast_classify_task(user_message)
+
+    if fast_task == "log_analysis":
+        logger.info("task_type_fast_path", task_type="log_analysis", trigger="keyword_match")
         forwarded_props["agent_type"] = "log_analysis"
-        forwarded_props["log_detection"] = detection
+        forwarded_props["task_detection_method"] = "keyword"
         state.forwarded_props = forwarded_props
         state.agent_type = "log_analysis"
         return "log_analysis"
 
-    return "coordinator_heavy" if heavy_mode else "coordinator"
+    if fast_task == "coordinator_heavy":
+        logger.info("task_type_fast_path", task_type="coordinator_heavy", trigger="keyword_match")
+        return "coordinator_heavy"
+
+    # 3. Slow path: attachment-based detection (only if no keyword match, ~200ms)
+    # Skip if no attachments to avoid unnecessary processing
+    attachments = getattr(state, "attachments", []) or []
+    if attachments:
+        detection = _attachments_indicate_logs(state)
+        if detection.get("has_log"):
+            logger.info("task_type_slow_path", task_type="log_analysis", trigger="attachment_scan")
+            forwarded_props["agent_type"] = "log_analysis"
+            forwarded_props["log_detection"] = detection
+            forwarded_props["task_detection_method"] = "attachment"
+            state.forwarded_props = forwarded_props
+            state.agent_type = "log_analysis"
+            return "log_analysis"
+
+    # 4. Default: light coordinator
+    return "coordinator"
 
 
 def _attachments_indicate_logs(state: GraphState) -> Dict[str, Any]:
@@ -361,32 +476,86 @@ def _build_deep_agent(state: GraphState, runtime: AgentRuntimeConfig):
 
     middleware_stack = []
     if MIDDLEWARE_AVAILABLE:
-        # Get provider-specific token limit for summarization
-        provider_lower = (runtime.provider or "google").lower()
-        token_limit = PROVIDER_TOKEN_LIMITS.get(provider_lower, DEFAULT_TOKEN_LIMIT)
-        logger.debug(
-            "summarization_config",
-            provider=provider_lower,
-            max_tokens=token_limit,
+        # Get model context window for fraction-based summarization
+        # Pass provider for better fallback on unknown models (xAI, OpenRouter, etc.)
+        model_context_window = (
+            get_model_context_window(runtime.model, runtime.provider)
+            if CONTEXT_MIDDLEWARE_AVAILABLE
+            else 128000
+        )
+
+        # Build default middleware for subagents
+        # Order matters: retry → summarization → context editing → eviction → patch
+        default_middleware = [SubAgentTodoListMiddleware()]
+
+        # Add model retry middleware for context overflow resilience
+        if CONTEXT_MIDDLEWARE_AVAILABLE:
+            default_middleware.append(
+                ModelRetryMiddleware(
+                    max_retries=2,
+                    on_failure="continue",  # Return graceful error, don't crash
+                    base_delay=1.0,
+                )
+            )
+
+        # Add fraction-based summarization (triggers at 70% of context window)
+        if CONTEXT_MIDDLEWARE_AVAILABLE:
+            default_middleware.append(
+                FractionBasedSummarizationMiddleware(
+                    model=chat_model,
+                    trigger_fraction=0.7,  # 70% of context window
+                    messages_to_keep=6,
+                    model_name=runtime.model,
+                )
+            )
+        else:
+            # Fallback to legacy fixed-threshold summarization
+            provider_lower = (runtime.provider or "google").lower()
+            token_limit = PROVIDER_TOKEN_LIMITS.get(provider_lower, DEFAULT_TOKEN_LIMIT)
+            default_middleware.append(
+                SubAgentSummarizationMiddleware(
+                    model=chat_model,
+                    max_tokens_before_summary=token_limit,
+                    messages_to_keep=6,
+                )
+            )
+
+        # Add context editing middleware to clear old tool results
+        if CONTEXT_MIDDLEWARE_AVAILABLE:
+            # Calculate trigger threshold: 60% of context window (before summarization kicks in)
+            context_edit_threshold = int(model_context_window * 0.6)
+            default_middleware.append(
+                ContextEditingMiddleware(
+                    trigger_tokens=context_edit_threshold,
+                    keep_recent=3,  # Keep 3 most recent tool results
+                    exclude_tools=["search_knowledge_base", "search_feedme_documents"],
+                    placeholder="[Result cleared to save context - use tool again if needed]",
+                )
+            )
+
+        # Evict large tool results (images, search results) before they go into
+        # LangGraph state. This prevents context overflow - image base64 is 1-3MB.
+        # The handler's _compact_image_output only modifies local variables,
+        # not the actual state, so this middleware is REQUIRED.
+        default_middleware.append(ToolResultEvictionMiddleware(char_threshold=50000))
+
+        # Tool call normalization (must be last)
+        default_middleware.append(PatchToolCallsMiddleware())
+
+        logger.info(
+            "context_middleware_configured",
+            model=runtime.model,
+            context_window=model_context_window,
+            summarization_trigger=f"{0.7 * 100:.0f}% ({int(model_context_window * 0.7):,} tokens)",
+            context_edit_trigger=f"{0.6 * 100:.0f}% ({int(model_context_window * 0.6):,} tokens)" if CONTEXT_MIDDLEWARE_AVAILABLE else "disabled",
+            middleware_count=len(default_middleware),
         )
 
         coordinator_middleware = SubAgentMiddleware(
             default_model=chat_model,
             default_tools=tools,
             subagents=subagents,
-            default_middleware=[
-                SubAgentTodoListMiddleware(),
-                SubAgentSummarizationMiddleware(
-                    model=chat_model,
-                    max_tokens_before_summary=token_limit,
-                    messages_to_keep=6,
-                ),
-                # NOTE: ToolResultEvictionMiddleware is NOT added here because:
-                # 1. It's already in subagents.py for research subagent
-                # 2. Image compaction is handled by handler._compact_image_output()
-                # Adding it here causes "duplicate middleware instances" error
-                PatchToolCallsMiddleware(),
-            ],
+            default_middleware=default_middleware,
             system_prompt=_build_task_system_prompt(state),
             general_purpose_agent=True,
         )

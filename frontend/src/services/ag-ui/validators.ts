@@ -26,7 +26,7 @@ export const TraceStepSchema = z.object({
   timestamp: z.string(),
   type: z.enum(['thought', 'action', 'result']),
   content: z.string(),
-  metadata: z.record(z.unknown()),
+  metadata: z.record(z.string(), z.unknown()),
 });
 
 // -----------------------------------------------------------------------------
@@ -43,7 +43,7 @@ export const TimelineOperationSchema = z.object({
   startTime: z.string().optional(),
   endTime: z.string().optional(),
   duration: z.number().optional(),
-  metadata: z.record(z.unknown()).optional(),
+  metadata: z.record(z.string(), z.unknown()).optional(),
 });
 
 // -----------------------------------------------------------------------------
@@ -54,7 +54,7 @@ export const TodoItemSchema = z.object({
   id: z.string(),
   title: z.string(),
   status: z.enum(['pending', 'in_progress', 'done']),
-  metadata: z.record(z.unknown()).optional(),
+  metadata: z.record(z.string(), z.unknown()).optional(),
 });
 
 // -----------------------------------------------------------------------------
@@ -82,7 +82,7 @@ const ToolEvidenceCardSchema: z.ZodSchema<ToolEvidenceCard> = z.object({
   fullContent: z.unknown().optional(),
   status: z.string().optional(),
   timestamp: z.string().optional(),
-  metadata: z.record(z.unknown()).optional(),
+  metadata: z.record(z.string(), z.unknown()).optional(),
 });
 
 export const ToolEvidenceUpdateEventSchema = z.object({
@@ -91,14 +91,14 @@ export const ToolEvidenceUpdateEventSchema = z.object({
   output: z.unknown().transform((val) => val ?? null), // Ensure output is always present
   summary: z.string().optional(),
   cards: z.array(ToolEvidenceCardSchema).optional(),
-  metadata: z.record(z.unknown()).optional(),
+  metadata: z.record(z.string(), z.unknown()).optional(),
 });
 
 export const AgentTodosUpdateEventSchema = z.object({
   todos: z.array(TodoItemSchema),
 });
 
-export const GenuiStateUpdateEventSchema = z.record(z.unknown());
+export const GenuiStateUpdateEventSchema = z.record(z.string(), z.unknown());
 
 export const ImageArtifactEventSchema = z.object({
   id: z.string(),

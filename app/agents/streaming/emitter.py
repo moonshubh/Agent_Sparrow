@@ -246,7 +246,19 @@ class StreamEventEmitter:
             title: Display title for the artifact
             images: Optional list of image dicts with 'url' and 'alt' keys to embed
         """
-        if self.writer is None or not content:
+        if self.writer is None:
+            return
+
+        # Warn if content is empty but images exist
+        if not content.strip() and images:
+            logger.warning(
+                "emit_article_artifact: empty content with images present. "
+                "Article will contain only embedded images."
+            )
+
+        # Early return only if BOTH content AND images are empty
+        if not content.strip() and not images:
+            logger.warning("emit_article_artifact: no content or images")
             return
 
         import uuid
@@ -255,13 +267,19 @@ class StreamEventEmitter:
 
         # If images provided, append them to the content as markdown
         if images:
-            image_section = "\n\n---\n\n## Images\n\n"
+            # Only add separator if there's existing content
+            if content.strip():
+                image_section = "\n\n---\n\n## Images\n\n"
+            else:
+                # For image-only articles, start with a header
+                image_section = "# Generated Images\n\n"
+
             for img in images:
                 alt = img.get("alt", "Image")
                 url = img.get("url", "")
                 if url:
                     image_section += f"![{alt}]({url})\n\n"
-            content = content + image_section
+            content = content + image_section if content else image_section
 
         self.emit_custom_event("article_artifact", {
             "id": artifact_id,
