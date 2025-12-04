@@ -4,13 +4,24 @@ import json
 import logging
 import uuid
 from dataclasses import dataclass, is_dataclass, asdict
-from typing import Any, AsyncIterator, Dict
-from langgraph.checkpoint.base import CheckpointTuple, Checkpoint  # type: ignore
+from typing import Any, AsyncIterator
 
 from .config import CheckpointerConfig
-
+from .utils import decode_json
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True, slots=True)
+class CheckpointResult:
+    """Result of a checkpoint retrieval operation.
+
+    Attributes:
+        checkpoint: The retrieved checkpoint state dictionary.
+        config: The configuration used for the retrieval.
+    """
+    checkpoint: dict[str, Any]
+    config: dict[str, Any]
 
 
 # Factory method used by tests to patch the pool
@@ -34,7 +45,7 @@ class SupabaseCheckpointer:
             config.db_url, config.pool_size, config.max_overflow
         )
         # In-memory fallback for tests when using mocked pools without real persistence
-        self._last_checkpoints: Dict[str, Dict[str, Any]] = {}
+        self._last_checkpoints: dict[str, dict[str, Any]] = {}
 
     async def setup(self) -> None:
         """Create tables if not exists (DDL) so first writes won't fail."""
@@ -103,11 +114,11 @@ class SupabaseCheckpointer:
 
     async def aput(
         self,
-        config: Dict[str, Any],
+        config: dict[str, Any],
         checkpoint: Any,
-        metadata: Dict[str, Any],
-        new_versions: Dict[str, Any] | None = None,
-    ) -> Dict[str, Any]:
+        metadata: dict[str, Any],
+        new_versions: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         """Store a checkpoint; tests don't validate storage, only shape and perf.
         Returns a tuple-like dict similar to LangGraph's CheckpointTuple.
         """
@@ -121,7 +132,7 @@ class SupabaseCheckpointer:
             if isinstance(checkpoint, dict):
                 checkpoint_payload = checkpoint
             else:
-                converted: Dict[str, Any] | None = None
+                converted: dict[str, Any] | None = None
                 try:
                     if hasattr(checkpoint, "model_dump") and callable(getattr(checkpoint, "model_dump")):
                         converted = checkpoint.model_dump()  # type: ignore[attr-defined]
@@ -216,16 +227,10 @@ class SupabaseCheckpointer:
         # Return structure matching expectations in tests
         return {"configurable": {"thread_id": thread_id}}
 
-    async def aget(self, config: Dict[str, Any]):
+    async def aget(self, config: dict[str, Any]) -> CheckpointResult:
         """Retrieve latest checkpoint; returns an object with .checkpoint and .config per tests."""
-        class Result:
-            def __init__(self, checkpoint: Dict[str, Any], cfg: Dict[str, Any]):
-                self.checkpoint = checkpoint
-                self.config = cfg
-
         thread_id = (config or {}).get("configurable", {}).get("thread_id")
         async with self.pool.connection() as conn:
-            # Proper SELECT for latest checkpoint for thread
             res = await conn.execute(
                 """
                 SELECT state
@@ -247,31 +252,23 @@ class SupabaseCheckpointer:
             # Handle mocked results without concrete row payloads
             if not row or type(row).__name__.endswith("Mock"):
                 checkpoint = self._last_checkpoints.get(str(thread_id), default_checkpoint)
-            elif row:
+            else:
                 # Support multiple row shapes used by tests/mocks
                 if isinstance(row, dict):
-                    checkpoint = row.get("state")
+                    raw_state = row.get("state")
                 elif hasattr(row, "state"):
-                    checkpoint = getattr(row, "state")
+                    raw_state = getattr(row, "state")
                 else:
-                    checkpoint = row[0]
+                    raw_state = row[0]
 
-                # Normalize checkpoint to a dict
-                if isinstance(checkpoint, str):
-                    try:
-                        checkpoint = json.loads(checkpoint)
-                    except json.JSONDecodeError:
-                        logger.warning(
-                            "Unable to decode checkpoint JSON for thread_id %s", thread_id
-                        )
-                        checkpoint = default_checkpoint
+                # Normalize checkpoint to a dict using shared utility
+                checkpoint = decode_json(raw_state, default_checkpoint)
                 if not isinstance(checkpoint, dict):
                     checkpoint = default_checkpoint
-            else:
-                checkpoint = self._last_checkpoints.get(str(thread_id), default_checkpoint)
-        return Result(checkpoint, config)
 
-    async def aget_tuple(self, config: Dict[str, Any]):
+        return CheckpointResult(checkpoint, config)
+
+    async def aget_tuple(self, config: dict[str, Any]):
         """Compatibility shim for LangGraph's AsyncPregelLoop which expects
         aget_tuple() to return an object with .checkpoint and .config.
 
@@ -280,7 +277,7 @@ class SupabaseCheckpointer:
         # Minimal stub: let LangGraph start fresh each time; persistence validated via aget()/aput()
         return None
 
-    async def alist(self, config: Dict[str, Any]) -> AsyncIterator[Dict[str, Any]]:
+    async def alist(self, config: dict[str, Any]) -> AsyncIterator[dict[str, Any]]:
         """List checkpoints; iterate over mocked result from conn.execute()."""
         async with self.pool.connection() as conn:
             result = await conn.execute(
@@ -293,7 +290,7 @@ class SupabaseCheckpointer:
             async for row in result:  # type: ignore
                 yield row
 
-    def get_next_version(self, config: Dict[str, Any], channel: str) -> int:
+    def get_next_version(self, config: dict[str, Any], channel: str) -> int:
         """Return the next version for a given channel.
 
         Minimal stub to satisfy LangGraph integration in tests. Real implementations
@@ -301,7 +298,7 @@ class SupabaseCheckpointer:
         """
         return 1
 
-    async def aput_writes(self, config: Dict[str, Any], writes: Any, task_id: str | None = None) -> None:
+    async def aput_writes(self, config: dict[str, Any], writes: Any, task_id: str | None = None) -> None:
         """Persist writes emitted by the workflow.
 
         Minimal no-op stub for tests; production implementations would store

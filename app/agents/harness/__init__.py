@@ -2,6 +2,19 @@
 
 This package provides the harness adapter for creating Agent Sparrow
 instances with proper middleware composition and backend abstractions.
+
+Subpackages:
+    middleware/     - DeepAgents middleware stack (memory, rate limiting, eviction, state tracking)
+    backends/       - Storage backend implementations (protocol, composite, supabase)
+    store/          - LangGraph BaseStore implementations (workspace, memory)
+    observability/  - State tracking and metrics (LoopStateTracker, AgentLoopState)
+    persistence/    - LangGraph checkpointing (SupabaseCheckpointer, ThreadManager)
+
+Usage:
+    from app.agents.harness import create_sparrow_agent, SparrowAgentConfig
+    from app.agents.harness.middleware import StateTrackingMiddleware
+    from app.agents.harness.observability import AgentLoopState
+    from app.agents.harness.persistence import SupabaseCheckpointer
 """
 
 from __future__ import annotations

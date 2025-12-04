@@ -85,7 +85,8 @@ def _build_tool_node():
     """
     from app.agents.unified.tools import get_registered_tools
     from app.agents.tools import ToolExecutor, DEFAULT_TOOL_CONFIGS
-    from app.agents.execution import AgentLoopState, get_or_create_tracker
+    from app.agents.harness.observability import AgentLoopState
+    from app.agents.harness.middleware import get_state_tracking_middleware
 
     class ParallelToolNode:
         def __init__(self, max_concurrency: int = 8):
@@ -116,10 +117,11 @@ def _build_tool_node():
             if not pending:
                 return {}
 
-            # Track tool execution state for observability
+            # Track tool execution state for observability via middleware
             fallback_session = f"unknown-{uuid.uuid4().hex[:8]}"
             session_id = getattr(state, "session_id", None) or getattr(state, "trace_id", None) or fallback_session
-            tracker = get_or_create_tracker(session_id)
+            state_middleware = get_state_tracking_middleware()
+            tracker = state_middleware.get_tracker(session_id)
             tool_names = [tc.get("name") for tc in pending]
             tracker.transition_to(
                 AgentLoopState.EXECUTING_TOOLS,

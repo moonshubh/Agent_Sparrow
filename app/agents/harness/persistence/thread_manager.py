@@ -3,8 +3,9 @@ from __future__ import annotations
 import json
 import logging
 import uuid
-from typing import Any, Dict, List
+from typing import Any
 
+from .utils import decode_json, ensure_dict, get_row_value, rows_to_dicts
 
 logger = logging.getLogger(__name__)
 
@@ -20,77 +21,11 @@ class ThreadManager:
         self.checkpointer = checkpointer
         self.pool = checkpointer.pool
 
-    @staticmethod
-    def _ensure_dict(value: Any) -> Dict[str, Any]:
-        if value is None:
-            return {}
-        if isinstance(value, dict):
-            return dict(value)
-        if isinstance(value, str):
-            try:
-                return json.loads(value)
-            except json.JSONDecodeError:
-                logger.warning("Failed to decode JSON field: %s", value)
-                return {}
-        # Best-effort conversion for row-like objects; guard against AsyncMock
-        try:
-            if hasattr(value, "items"):
-                return dict(value)  # type: ignore[arg-type]
-        except Exception:
-            return {}
-        return {}
-
-    @staticmethod
-    def _rows_to_dicts(cursor: Any, rows: List[Any]) -> List[Dict[str, Any]]:
-        if not rows:
-            return []
-        first = rows[0]
-        if isinstance(first, dict):
-            return [dict(row) for row in rows]
-
-        columns: List[str] = []
-        if hasattr(cursor, "description") and cursor.description:
-            columns = [getattr(col, "name", col[0]) for col in cursor.description]
-
-        results: List[Dict[str, Any]] = []
-        for row in rows:
-            if isinstance(row, dict):
-                item = dict(row)
-            elif columns:
-                item = {columns[idx]: row[idx] for idx in range(min(len(columns), len(row)))}
-            else:
-                item = {"value": row}
-
-            if "state" in item:
-                item["state"] = ThreadManager._decode_json(item["state"], {})
-            if "metadata" in item:
-                item["metadata"] = ThreadManager._decode_json(item["metadata"], {})
-            results.append(item)
-        return results
-
-    @staticmethod
-    def _get_value(row: Any, key: str, index: int) -> Any:
-        if row is None:
-            return None
-        if isinstance(row, dict):
-            return row.get(key)
-        if hasattr(row, key):
-            return getattr(row, key)
-        return row[index]
-
-    @staticmethod
-    def _decode_json(value: Any, default: Any) -> Any:
-        if value is None:
-            return default
-        if isinstance(value, (dict, list)):
-            return value
-        if isinstance(value, str):
-            try:
-                return json.loads(value)
-            except json.JSONDecodeError:
-                logger.warning("Failed to decode JSON payload: %s", value)
-                return default
-        return default
+    # Preserve static method aliases for backward compatibility with tests
+    _ensure_dict = staticmethod(ensure_dict)
+    _get_value = staticmethod(get_row_value)
+    _decode_json = staticmethod(decode_json)
+    _rows_to_dicts = staticmethod(rows_to_dicts)
 
     async def get_or_create_thread(self, user_id: str, session_id: int) -> str:
         async with self.pool.connection() as conn:
@@ -143,7 +78,7 @@ class ThreadManager:
                     raise RuntimeError("Failed to create thread record")
                 return str(new_id)
 
-    async def switch_thread(self, user_id: str, thread_id: str) -> Dict[str, Any]:
+    async def switch_thread(self, user_id: str, thread_id: str) -> dict[str, Any]:
         async with self.pool.connection() as conn:
             select_query = (
                 """
@@ -159,7 +94,7 @@ class ThreadManager:
                 thread_metadata = self._ensure_dict(self._get_value(row, "metadata", 1))
                 thread_config = self._ensure_dict(self._get_value(row, "config", 2))
                 last_checkpoint_id = self._get_value(row, "last_checkpoint_id", 3)
-                checkpoint_payload: Dict[str, Any]
+                checkpoint_payload: dict[str, Any]
                 if last_checkpoint_id:
                     checkpoint_payload = {"id": str(last_checkpoint_id)}
                 else:
@@ -204,21 +139,24 @@ class ThreadManager:
                     "metadata": {},
                     "config": {},
                 }
-            if not inserted:
-                # The insert failed due to a concurrent write; fetch the row again.
-                cursor = await conn.execute(select_query, (thread_id, user_id))
-                row = await cursor.fetchone()
-                if row:
-                    thread_metadata = self._ensure_dict(self._get_value(row, "metadata", 1))
-                    thread_config = self._ensure_dict(self._get_value(row, "config", 2))
-                    last_checkpoint_id = self._get_value(row, "last_checkpoint_id", 3)
-                    checkpoint_payload = {"id": str(last_checkpoint_id)} if last_checkpoint_id else {"v": 1}
-                    return {
-                        "id": str(self._get_value(row, "id", 0)),
-                        "checkpoint": checkpoint_payload,
-                        "metadata": thread_metadata,
-                        "config": thread_config,
-                    }
+
+            # The insert failed due to a concurrent write (ON CONFLICT DO NOTHING);
+            # fetch the row that was inserted by the concurrent writer.
+            cursor = await conn.execute(select_query, (thread_id, user_id))
+            row = await cursor.fetchone()
+            if row:
+                thread_metadata = self._ensure_dict(self._get_value(row, "metadata", 1))
+                thread_config = self._ensure_dict(self._get_value(row, "config", 2))
+                last_checkpoint_id = self._get_value(row, "last_checkpoint_id", 3)
+                checkpoint_payload = {"id": str(last_checkpoint_id)} if last_checkpoint_id else {"v": 1}
+                return {
+                    "id": str(self._get_value(row, "id", 0)),
+                    "checkpoint": checkpoint_payload,
+                    "metadata": thread_metadata,
+                    "config": thread_config,
+                }
+
+            # Fallback: return default if concurrent row also disappeared
             return {
                 "id": thread_id,
                 "checkpoint": {"v": 1},
@@ -367,7 +305,7 @@ class ThreadManager:
                 )
                 raise
 
-    async def get_thread_history(self, thread_id: str) -> List[Dict[str, Any]]:
+    async def get_thread_history(self, thread_id: str) -> list[dict[str, Any]]:
         async with self.pool.connection() as conn:
             history_query = (
                 """
@@ -377,14 +315,12 @@ class ThreadManager:
                 ORDER BY created_at DESC
                 """
             )
-            cursor = None
-            await conn.execute(history_query, (thread_id,))
+            cursor = await conn.execute(history_query, (thread_id,))
             # Test fixtures stub fetchall() on the connection directly
             try:
                 rows = await conn.fetchall()  # type: ignore[attr-defined]
             except Exception:
-                # Fallback to cursor-like result
-                cursor = await conn.execute(history_query, (thread_id,))
+                # Fallback to cursor's fetchall if conn doesn't support it
                 rows = await cursor.fetchall()
             return self._rows_to_dicts(cursor, rows)
 
@@ -415,7 +351,7 @@ class ThreadManager:
                 RETURNING id
                 """
             )
-            await conn.execute(delete_query, (interval_param,))
+            cursor = await conn.execute(delete_query, (interval_param,))
             # Prefer a single-row count if the mock provides it
             try:
                 row = await conn.fetchone()  # type: ignore[attr-defined]
@@ -425,11 +361,11 @@ class ThreadManager:
                         return int(val)
             except Exception:
                 pass
-            # Otherwise count returned ids
+            # Otherwise count returned ids from the cursor
             try:
                 rows = await conn.fetchall()  # type: ignore[attr-defined]
             except Exception:
-                cursor = await conn.execute(delete_query, (interval_param,))
+                # Fallback to cursor's fetchall if conn doesn't support it
                 rows = await cursor.fetchall()
             deleted_count = len(rows or [])
             return int(deleted_count)

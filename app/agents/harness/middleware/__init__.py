@@ -4,12 +4,18 @@ Middleware components following DeepAgents patterns:
 - SparrowMemoryMiddleware: mem0-based memory integration
 - SparrowRateLimitMiddleware: Gemini quota management and model fallback
 - ToolResultEvictionMiddleware: Large result eviction to prevent context overflow
-- SessionInitMiddleware: Session handoff and goal context injection (NEW)
+- SessionInitMiddleware: Session handoff and goal context injection
+- StateTrackingMiddleware: Automatic agent loop state tracking for observability
 """
 
 from __future__ import annotations
 
 from .memory_middleware import SparrowMemoryMiddleware
+from .state_tracking_middleware import (
+    StateTrackingMiddleware,
+    StateTrackingStats,
+    get_state_tracking_middleware,
+)
 from .rate_limit_middleware import SparrowRateLimitMiddleware
 from .eviction_middleware import ToolResultEvictionMiddleware
 from .agent_mw_adapters import (
@@ -42,4 +48,8 @@ __all__ = [
     "HANDOFF_SYSTEM_NAME",
     "GOALS_SYSTEM_NAME",
     "PROGRESS_SYSTEM_NAME",
+    # State tracking (observability)
+    "StateTrackingMiddleware",
+    "StateTrackingStats",
+    "get_state_tracking_middleware",
 ]

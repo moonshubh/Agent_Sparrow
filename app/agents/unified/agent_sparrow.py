@@ -50,7 +50,8 @@ except ImportError as e:
     CONTEXT_MIDDLEWARE_AVAILABLE = False
 
 from app.agents.orchestration.orchestration.state import GraphState
-from app.agents.execution import AgentLoopState, LoopStateTracker, get_or_create_tracker
+from app.agents.harness.observability import AgentLoopState
+from app.agents.harness.middleware import get_state_tracking_middleware
 from app.core.settings import settings
 from app.memory import memory_service
 from app.core.rate_limiting.agent_wrapper import get_rate_limiter
@@ -1069,9 +1070,10 @@ async def run_unified_agent(state: GraphState, config: Optional[RunnableConfig] 
     reserved_slots: List[tuple[str, Optional[str]]] = []
     limiter = None
 
-    # Initialize state tracker for observability
+    # Initialize state tracker for observability via middleware
     session_id = getattr(state, "session_id", None) or getattr(state, "trace_id", None) or "unknown"
-    tracker = get_or_create_tracker(session_id)
+    state_middleware = get_state_tracking_middleware()
+    tracker = state_middleware.get_tracker(session_id)
     tracker.transition_to(AgentLoopState.PROCESSING_INPUT, metadata={"session_id": session_id})
 
     try:
