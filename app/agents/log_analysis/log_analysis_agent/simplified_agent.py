@@ -4,12 +4,8 @@ Optimized for AI SDK integration with direct, actionable insights.
 """
 
 import os
-import re
-import json
-from typing import Dict, Any, List, Optional, TypeVar, Type
+from typing import Dict, Any, List, Optional
 from uuid import uuid4
-from datetime import datetime
-from functools import wraps
 
 from langchain_google_genai import ChatGoogleGenerativeAI
 from app.core.settings import settings
@@ -24,9 +20,7 @@ from .simplified_schemas import (
     SimplifiedIssue,
     SimplifiedSolution
 )
-
-# Type variable for generic JSON extraction
-T = TypeVar('T', bound=Dict[str, Any])
+from .utils import build_log_sections_from_ranges, extract_json_payload
 
 
 class AgentConfig:
@@ -84,35 +78,6 @@ class SimplifiedLogAnalysisAgent:
         """Async context manager exit - cleanup resources."""
         self._llm = None  # Clear cached LLM
     
-    @staticmethod
-    def _extract_json_from_text(
-        text: str, 
-        pattern: str = r'\{.*\}|\[.*\]',
-        fallback: Optional[T] = None
-    ) -> Optional[T]:
-        """
-        Extract and parse JSON from LLM response text.
-        
-        Args:
-            text: Response text potentially containing JSON.
-            pattern: Regex pattern to find JSON structure.
-            fallback: Default value if extraction fails.
-            
-        Returns:
-            Parsed JSON object or fallback value.
-        """
-        try:
-            # Find JSON structure in text
-            json_match = re.search(pattern, text, re.DOTALL)
-            if json_match:
-                return json.loads(json_match.group())
-        except (json.JSONDecodeError, AttributeError) as e:
-            # Log but don't raise - graceful degradation
-            logger = get_logger("simplified_log_agent")
-            logger.debug(f"JSON extraction failed: {e}")
-        
-        return fallback
-        
     async def _get_llm(self):
         """
         Get configured LLM with proper API key resolution and caching.
@@ -232,34 +197,21 @@ Return as JSON array with format:
         try:
             response = await llm.ainvoke(prompt)
             
-            # Use the robust JSON extraction utility
-            sections_data = self._extract_json_from_text(
+            # Use shared JSON extraction and section builder utilities
+            sections_data = extract_json_payload(
                 response.content,
-                pattern=r'\[.*\]',
-                fallback=[]
+                pattern=r'\[.*?\]',
+                fallback=[],
+                logger_instance=self.logger
             )
             
             if sections_data:
-                # Convert to LogSection objects using list comprehension
-                lines = log_content.splitlines()
-                sections = []
-                
-                for section in sections_data[:self.config.max_sections]:
-                    line_range = section.get('line_range', '1-10')
-                    try:
-                        start, end = map(int, line_range.split('-'))
-                        start = max(0, start - 1)
-                        end = min(len(lines), end)
-                        
-                        sections.append(LogSection(
-                            line_numbers=line_range,
-                            content='\n'.join(lines[start:end]),
-                            relevance_score=0.9
-                        ))
-                    except (ValueError, AttributeError):
-                        self.logger.debug(f"Invalid line range: {line_range}")
-                        continue
-                
+                sections = build_log_sections_from_ranges(
+                    sections_data,
+                    log_content,
+                    max_sections=self.config.max_sections,
+                    logger_instance=self.logger
+                )
                 if sections:
                     return sections
                     
@@ -328,10 +280,11 @@ Format your response as JSON:
             response = await llm.ainvoke(prompt)
             
             # Use robust JSON extraction with appropriate fallback
-            analysis = self._extract_json_from_text(
+            analysis = extract_json_payload(
                 response.content,
-                pattern=r'\{.*\}',
-                fallback=None
+                pattern=r'\{.*?\}',
+                fallback=None,
+                logger_instance=self.logger
             )
             
             if analysis:

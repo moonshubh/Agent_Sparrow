@@ -6,7 +6,6 @@ to cheaply compress or rerank inputs before the primary (Gemini) model runs.
 
 from __future__ import annotations
 
-import asyncio
 from typing import List, Optional
 
 from loguru import logger
@@ -27,7 +26,7 @@ class GemmaHelper:
     def __init__(self, *, max_calls: int = 10) -> None:
         self.max_calls = max_calls
         self._calls = 0
-        self._client = None
+        self._client: Optional[ChatGoogleGenerativeAI] = None
 
     def _get_client(self):
         if self._client is not None:

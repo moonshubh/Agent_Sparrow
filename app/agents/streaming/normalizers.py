@@ -10,6 +10,7 @@ import json
 from typing import Any, Dict, List, Optional
 
 from loguru import logger
+from app.agents.log_analysis.log_analysis_agent.utils import extract_json_payload
 
 
 def normalize_todos(
@@ -70,42 +71,20 @@ def _parse_json_string(raw: str) -> Optional[Any]:
     """
     trimmed = raw.strip()
 
-    # Try direct JSON parse first
-    if trimmed.startswith(("{", "[")) and trimmed.endswith(("}", "]")):
-        try:
-            return json.loads(trimmed)
-        except json.JSONDecodeError:
-            pass
+    # First try shared JSON extractor for both clean and noisy payloads
+    parsed = extract_json_payload(trimmed, logger_instance=logger)
+    if parsed is not None:
+        return parsed
 
-    # Try to extract JSON from noisy strings
-    json_candidate = _extract_json_from_string(trimmed)
-    if json_candidate:
-        try:
-            return json.loads(json_candidate)
-        except json.JSONDecodeError:
-            pass
-
-        # Fall back to ast.literal_eval for Python dict strings
+    # Fall back to ast.literal_eval for pythonic dict/list strings
+    if trimmed.startswith(("{", "[")):
         try:
             import ast
-            return ast.literal_eval(json_candidate)
+            return ast.literal_eval(trimmed)
         except (ValueError, SyntaxError):
             pass
 
     return None
-
-
-def _extract_json_from_string(text: str) -> Optional[str]:
-    """Extract JSON object/array from a potentially noisy string."""
-    brace_idx = text.find("{")
-    bracket_idx = text.find("[")
-    candidates = [i for i in (brace_idx, bracket_idx) if i >= 0]
-
-    if not candidates:
-        return None
-
-    start_idx = min(candidates)
-    return text[start_idx:]
 
 
 def _unwrap_container(raw: Any) -> Any:

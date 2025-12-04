@@ -3,7 +3,7 @@ Simplified schemas for the question-driven log analysis agent.
 Designed for AI SDK integration with focused, direct responses.
 """
 
-from typing import Dict, Any, List, Optional, Literal
+from typing import List, Optional, Literal
 from pydantic import BaseModel, Field, field_validator
 from datetime import datetime
 

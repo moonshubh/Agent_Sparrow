@@ -18,13 +18,15 @@ import json
 import logging
 import threading
 from dataclasses import dataclass, field, asdict
-from datetime import datetime, timedelta
+from datetime import datetime
 from enum import Enum
 from typing import Any, Dict, List, Optional, Set, Tuple
 from pathlib import Path
 import asyncio
 from collections import deque
 import re
+
+from app.agents.log_analysis.log_analysis_agent.utils import extract_json_payload
 
 logger = logging.getLogger(__name__)
 
@@ -161,6 +163,17 @@ class ComplianceManager:
             Tuple of (is_compliant, list of issues)
         """
         issues = []
+
+        # Normalize input to a dict, attempting JSON extraction for string payloads.
+        normalized_data: Dict[str, Any]
+        if isinstance(data, str):
+            parsed = extract_json_payload(data, logger_instance=logger)
+            normalized_data = parsed if isinstance(parsed, dict) else {"raw_input": data}
+        elif isinstance(data, dict):
+            normalized_data = data
+        else:
+            normalized_data = {"raw_input": data}
+        data = normalized_data
 
         # Check for prohibited fields
         prohibited_found = self._check_prohibited_fields(data)
