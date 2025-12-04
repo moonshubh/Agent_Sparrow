@@ -8,7 +8,7 @@ import re
 import yaml
 from pathlib import Path
 from dataclasses import dataclass
-from typing import Optional
+from typing import Optional, Pattern
 import logging
 
 logger = logging.getLogger(__name__)
@@ -74,8 +74,17 @@ class SkillsRegistry:
         self.skills_dir = project_root / ".sparrow" / "skills"
         self._metadata_cache: dict[str, SkillMetadata] = {}
         self._loaded_cache: dict[str, LoadedSkill] = {}
+        self._compiled_triggers: dict[str, list[Pattern[str]]] = self._compile_triggers()
 
         logger.debug(f"SkillsRegistry initialized with skills_dir: {self.skills_dir}")
+
+    @staticmethod
+    def _compile_triggers() -> dict[str, list[Pattern[str]]]:
+        """Compile regex triggers once for reuse."""
+        compiled: dict[str, list[Pattern[str]]] = {}
+        for skill_name, patterns in SKILL_TRIGGERS.items():
+            compiled[skill_name] = [re.compile(pattern, re.IGNORECASE) for pattern in patterns]
+        return compiled
 
     def discover_skills(self) -> list[SkillMetadata]:
         """
@@ -89,7 +98,7 @@ class SkillsRegistry:
             logger.warning(f"Skills directory not found: {self.skills_dir}")
             return skills
 
-        for skill_dir in self.skills_dir.iterdir():
+        for skill_dir in sorted(self.skills_dir.iterdir()):
             if skill_dir.is_dir() and (skill_dir / "SKILL.md").exists():
                 try:
                     metadata = self._load_metadata(skill_dir)
@@ -243,12 +252,11 @@ class SkillsRegistry:
         if not message:
             return []
 
-        message_lower = message.lower()
         detected = []
 
-        for skill_name, patterns in SKILL_TRIGGERS.items():
+        for skill_name, patterns in self._compiled_triggers.items():
             for pattern in patterns:
-                if re.search(pattern, message_lower, re.IGNORECASE):
+                if pattern.search(message):
                     if skill_name not in detected:
                         detected.append(skill_name)
                     break  # One match per skill is enough
