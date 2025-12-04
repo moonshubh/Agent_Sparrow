@@ -7,11 +7,14 @@ and memory recording after response, following DeepAgents middleware patterns.
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 from loguru import logger
+
+# Import shared modules from canonical locations
+from app.agents.harness._utils import IMPORT_FAILED, extract_message_text
+from app.agents.harness._stats import MemoryStats
 
 if TYPE_CHECKING:
     from langgraph.config import RunnableConfig
@@ -21,39 +24,6 @@ MEMORY_AGENT_ID = "sparrow"
 MEMORY_SYSTEM_NAME = "server_memory_context"
 DEFAULT_TOP_K = 5
 DEFAULT_TIMEOUT = 8.0
-
-# Sentinel value to indicate failed import (distinct from None)
-_IMPORT_FAILED = object()
-
-
-@dataclass
-class MemoryStats:
-    """Statistics from memory operations for observability."""
-
-    retrieval_attempted: bool = False
-    retrieval_success: bool = False
-    facts_retrieved: int = 0
-    relevance_scores: List[float] = field(default_factory=list)
-    retrieval_error: Optional[str] = None
-
-    write_attempted: bool = False
-    write_success: bool = False
-    facts_written: int = 0
-    write_error: Optional[str] = None
-
-    def to_dict(self) -> Dict[str, Any]:
-        """Convert to dict for scratchpad storage."""
-        return {
-            "retrieval_attempted": self.retrieval_attempted,
-            "retrieval_success": self.retrieval_success,
-            "facts_retrieved": self.facts_retrieved,
-            "relevance_scores": self.relevance_scores,
-            "retrieval_error": self.retrieval_error,
-            "write_attempted": self.write_attempted,
-            "write_success": self.write_success,
-            "facts_written": self.facts_written,
-            "write_error": self.write_error,
-        }
 
 
 class SparrowMemoryMiddleware:
@@ -110,7 +80,7 @@ class SparrowMemoryMiddleware:
         Returns None if import failed or service unavailable.
         """
         # Return None if we already tried and failed
-        if self._memory_service is _IMPORT_FAILED:
+        if self._memory_service is IMPORT_FAILED:
             return None
 
         # First access - try to import
@@ -121,7 +91,7 @@ class SparrowMemoryMiddleware:
                 self._memory_service = memory_service
             except ImportError:
                 logger.warning("Memory service not available - will not retry import")
-                self._memory_service = _IMPORT_FAILED
+                self._memory_service = IMPORT_FAILED
                 return None
 
         return self._memory_service
@@ -284,16 +254,7 @@ class SparrowMemoryMiddleware:
         """Extract the last user query from messages."""
         for message in reversed(messages):
             if isinstance(message, HumanMessage):
-                content = getattr(message, "content", "")
-                if isinstance(content, str):
-                    return content.strip()
-                if isinstance(content, list):
-                    text_parts = [
-                        str(chunk.get("text", ""))
-                        for chunk in content
-                        if isinstance(chunk, dict) and chunk.get("type") == "text"
-                    ]
-                    return " ".join(text_parts).strip()
+                return extract_message_text(message)
         return ""
 
     def _build_memory_message(

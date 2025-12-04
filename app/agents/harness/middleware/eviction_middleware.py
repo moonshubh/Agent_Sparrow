@@ -13,13 +13,15 @@ import asyncio
 import json
 import os
 import re
-from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from functools import wraps
 from typing import Any, Callable, Dict, List, Optional, TYPE_CHECKING, Union
 
 from langchain_core.messages import ToolMessage
 from loguru import logger
+
+# Import shared stats from canonical location
+from app.agents.harness._stats import EvictionStats
 
 # Import AgentMiddleware interface for DeepAgents compatibility
 try:
@@ -44,82 +46,6 @@ DEFAULT_EVICTION_THRESHOLD = 20000  # tokens (~80k chars at 4 chars/token)
 DEFAULT_CHAR_THRESHOLD = 80000  # characters
 SUMMARY_LENGTH = 500  # characters for the summary in pointer message
 TIMESTAMP_PATTERN = re.compile(r"_\d{14}$")
-
-
-@dataclass
-class EvictionStats:
-    """Statistics from eviction operations."""
-
-    total_tool_results: int = 0
-    results_evicted: int = 0
-    total_chars_evicted: int = 0
-    evicted_paths: List[str] = field(default_factory=list)
-
-    def to_dict(self) -> Dict[str, Any]:
-        """Convert to dict for observability."""
-        return {
-            "total_tool_results": self.total_tool_results,
-            "results_evicted": self.results_evicted,
-            "total_chars_evicted": self.total_chars_evicted,
-            "evicted_paths": self.evicted_paths,
-        }
-
-
-class EvictionBackend:
-    """Simple in-memory backend for storing evicted results.
-
-    In production, this would be replaced with SupabaseStoreBackend
-    or another persistent storage solution.
-    """
-
-    def __init__(self):
-        self._storage: Dict[str, str] = {}
-
-    def write(self, path: str, content: str) -> bool:
-        """Write content to storage.
-
-        Args:
-            path: Storage path.
-            content: Content to store.
-
-        Returns:
-            True if successful.
-        """
-        self._storage[path] = content
-        return True
-
-    def read(self, path: str) -> Optional[str]:
-        """Read content from storage.
-
-        Args:
-            path: Storage path.
-
-        Returns:
-            Content or None if not found.
-        """
-        return self._storage.get(path)
-
-    def delete(self, path: str) -> bool:
-        """Delete content from storage.
-
-        Args:
-            path: Storage path.
-
-        Returns:
-            True if deleted, False if not found.
-        """
-        return self._storage.pop(path, None) is not None
-
-    def list_paths(self, prefix: str = "") -> List[str]:
-        """List all paths with optional prefix filter.
-
-        Args:
-            prefix: Optional path prefix filter.
-
-        Returns:
-            List of matching paths.
-        """
-        return [p for p in self._storage.keys() if p.startswith(prefix)]
 
 
 class ToolResultEvictionMiddleware(AgentMiddleware if AGENT_MIDDLEWARE_AVAILABLE else object):
@@ -148,7 +74,7 @@ class ToolResultEvictionMiddleware(AgentMiddleware if AGENT_MIDDLEWARE_AVAILABLE
     def __init__(
         self,
         char_threshold: int = DEFAULT_CHAR_THRESHOLD,
-        backend: Optional[EvictionBackend] = None,
+        backend: Optional[Any] = None,
     ):
         """Initialize the eviction middleware.
 
@@ -173,7 +99,9 @@ class ToolResultEvictionMiddleware(AgentMiddleware if AGENT_MIDDLEWARE_AVAILABLE
                 return SupabaseStoreBackend(client)
             except Exception as exc:  # pragma: no cover - defensive
                 logger.warning("eviction_backend_supabase_failed", error=str(exc))
-        return EvictionBackend()
+        # Use InMemoryBackend from protocol (eliminates EvictionBackend duplication)
+        from app.agents.harness.backends import InMemoryBackend
+        return InMemoryBackend()
 
     @property
     def name(self) -> str:

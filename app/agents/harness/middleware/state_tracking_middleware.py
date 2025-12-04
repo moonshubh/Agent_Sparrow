@@ -22,13 +22,15 @@ from __future__ import annotations
 
 import asyncio
 import threading
-from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional, TYPE_CHECKING
+from typing import Any, Callable, Dict, Optional, TYPE_CHECKING
 
 from langchain_core.messages import ToolMessage
 from loguru import logger
 
-# Import from new canonical location
+# Import shared stats from canonical location
+from app.agents.harness._stats import StateTrackingStats
+
+# Import from observability module
 from app.agents.harness.observability import (
     AgentLoopState,
     LoopStateTracker,
@@ -44,27 +46,6 @@ try:
 except ImportError:
     _MIDDLEWARE_AVAILABLE = False
     AgentMiddleware = object  # type: ignore[misc, assignment]
-
-
-@dataclass
-class StateTrackingStats:
-    """Statistics for state tracking middleware."""
-
-    transitions_tracked: int = 0
-    model_calls_tracked: int = 0
-    tool_calls_tracked: int = 0
-    completions: int = 0
-    errors: int = 0
-
-    def to_dict(self) -> Dict[str, Any]:
-        """Convert to dictionary for logging."""
-        return {
-            "transitions_tracked": self.transitions_tracked,
-            "model_calls_tracked": self.model_calls_tracked,
-            "tool_calls_tracked": self.tool_calls_tracked,
-            "completions": self.completions,
-            "errors": self.errors,
-        }
 
 
 class StateTrackingMiddleware(AgentMiddleware if _MIDDLEWARE_AVAILABLE else object):  # type: ignore[misc]

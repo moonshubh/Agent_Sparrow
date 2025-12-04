@@ -8,13 +8,93 @@ This protocol enables:
 - Type-safe backend implementations
 - Interchangeable storage backends (Supabase, memory, file system)
 - Consistent API across all storage operations
+
+Data types (FileInfo, WriteResult, EditResult, GrepMatch) are defined here
+as the canonical source, imported by other backend implementations.
 """
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Protocol, runtime_checkable
 
-from .supabase_store import FileInfo, WriteResult, EditResult, GrepMatch
+
+@dataclass
+class FileInfo:
+    """Information about a stored file."""
+
+    path: str
+    size: int
+    created_at: str
+    updated_at: str
+    metadata: Dict[str, Any]
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dict."""
+        return {
+            "path": self.path,
+            "size": self.size,
+            "created_at": self.created_at,
+            "updated_at": self.updated_at,
+            "metadata": self.metadata,
+        }
+
+
+@dataclass
+class WriteResult:
+    """Result of a write operation."""
+
+    success: bool
+    path: str
+    size: int
+    error: Optional[str] = None
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dict."""
+        return {
+            "success": self.success,
+            "path": self.path,
+            "size": self.size,
+            "error": self.error,
+        }
+
+
+@dataclass
+class EditResult:
+    """Result of an edit operation."""
+
+    success: bool
+    replacements: int
+    error: Optional[str] = None
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dict."""
+        return {
+            "success": self.success,
+            "replacements": self.replacements,
+            "error": self.error,
+        }
+
+
+@dataclass
+class GrepMatch:
+    """A match from a grep operation."""
+
+    path: str
+    line_number: int
+    content: str
+    context_before: List[str]
+    context_after: List[str]
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dict."""
+        return {
+            "path": self.path,
+            "line_number": self.line_number,
+            "content": self.content,
+            "context_before": self.context_before,
+            "context_after": self.context_after,
+        }
 
 
 @runtime_checkable
@@ -298,3 +378,32 @@ class InMemoryBackend:
 
         self.write(file_path, new_content)
         return EditResult(success=True, replacements=replacements)
+
+    def exists(self, file_path: str) -> bool:
+        """Check if a file exists.
+
+        Args:
+            file_path: Path to check.
+
+        Returns:
+            True if file exists.
+        """
+        return file_path in self._storage
+
+    def clear(self) -> None:
+        """Clear all stored data.
+
+        Useful for resetting state between test runs or agent sessions.
+        """
+        self._storage.clear()
+
+    def list_paths(self, prefix: str = "/") -> List[str]:
+        """List all paths with the given prefix.
+
+        Args:
+            prefix: Path prefix to filter by.
+
+        Returns:
+            List of matching paths.
+        """
+        return [p for p in self._storage.keys() if p.startswith(prefix)]

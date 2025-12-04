@@ -8,12 +8,13 @@ This backend provides persistent storage for:
 
 from __future__ import annotations
 
-import json
-from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
 from loguru import logger
+
+# Import data types from protocol (canonical source)
+from .protocol import FileInfo, WriteResult, EditResult, GrepMatch
 
 if TYPE_CHECKING:
     from supabase import Client as SupabaseClient
@@ -24,83 +25,8 @@ DEFAULT_TABLE = "agent_files"
 MAX_CONTENT_SIZE = 10_000_000  # 10MB limit
 DEFAULT_READ_LIMIT = 500  # lines
 
-
-@dataclass
-class FileInfo:
-    """Information about a stored file."""
-
-    path: str
-    size: int
-    created_at: str
-    updated_at: str
-    metadata: Dict[str, Any]
-
-    def to_dict(self) -> Dict[str, Any]:
-        """Convert to dict."""
-        return {
-            "path": self.path,
-            "size": self.size,
-            "created_at": self.created_at,
-            "updated_at": self.updated_at,
-            "metadata": self.metadata,
-        }
-
-
-@dataclass
-class WriteResult:
-    """Result of a write operation."""
-
-    success: bool
-    path: str
-    size: int
-    error: Optional[str] = None
-
-    def to_dict(self) -> Dict[str, Any]:
-        """Convert to dict."""
-        return {
-            "success": self.success,
-            "path": self.path,
-            "size": self.size,
-            "error": self.error,
-        }
-
-
-@dataclass
-class EditResult:
-    """Result of an edit operation."""
-
-    success: bool
-    replacements: int
-    error: Optional[str] = None
-
-    def to_dict(self) -> Dict[str, Any]:
-        """Convert to dict."""
-        return {
-            "success": self.success,
-            "replacements": self.replacements,
-            "error": self.error,
-        }
-
-
-@dataclass
-class GrepMatch:
-    """A match from a grep operation."""
-
-    path: str
-    line_number: int
-    content: str
-    context_before: List[str]
-    context_after: List[str]
-
-    def to_dict(self) -> Dict[str, Any]:
-        """Convert to dict."""
-        return {
-            "path": self.path,
-            "line_number": self.line_number,
-            "content": self.content,
-            "context_before": self.context_before,
-            "context_after": self.context_after,
-        }
+# Re-export for backwards compatibility
+__all__ = ["SupabaseStoreBackend", "FileInfo", "WriteResult", "EditResult", "GrepMatch"]
 
 
 class SupabaseStoreBackend:

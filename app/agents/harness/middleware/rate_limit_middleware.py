@@ -7,10 +7,12 @@ to alternative models when rate limits are hit.
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Set, TYPE_CHECKING
 
 from loguru import logger
+
+# Import shared stats from canonical location
+from app.agents.harness._stats import RateLimitStats
 
 if TYPE_CHECKING:
     from langgraph.config import RunnableConfig
@@ -22,29 +24,6 @@ FALLBACK_CHAIN: Dict[str, Optional[str]] = {
     "gemini-2.5-flash": "gemini-2.5-flash-lite",
     "gemini-2.5-flash-lite": None,  # Terminal - no more fallbacks
 }
-
-
-@dataclass
-class RateLimitStats:
-    """Statistics from rate limiting operations."""
-
-    primary_model: str = ""
-    fallback_used: bool = False
-    fallback_model: Optional[str] = None
-    fallback_reason: Optional[str] = None
-    attempts: List[Dict[str, Any]] = field(default_factory=list)
-    slot_reserved: bool = False
-
-    def to_dict(self) -> Dict[str, Any]:
-        """Convert to dict for observability."""
-        return {
-            "primary_model": self.primary_model,
-            "fallback_used": self.fallback_used,
-            "fallback_model": self.fallback_model,
-            "fallback_reason": self.fallback_reason,
-            "attempts": self.attempts,
-            "slot_reserved": self.slot_reserved,
-        }
 
 
 class SparrowRateLimitMiddleware:

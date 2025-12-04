@@ -30,6 +30,9 @@ from typing import Any, Callable, Dict, List, Optional, TYPE_CHECKING
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 from loguru import logger
 
+# Import shared utilities from canonical location
+from app.agents.harness._utils import estimate_tokens, extract_message_text
+
 if TYPE_CHECKING:
     from app.agents.harness.store.workspace_store import SparrowWorkspaceStore
 
@@ -39,27 +42,6 @@ try:
 except ImportError:
     _MIDDLEWARE_AVAILABLE = False
     AgentMiddleware = object  # type: ignore
-
-
-def estimate_tokens(messages: List[BaseMessage]) -> int:
-    """Estimate token count for messages using ~4 chars/token heuristic."""
-    total_chars = 0
-    for msg in messages:
-        content = getattr(msg, "content", "")
-        if isinstance(content, str):
-            total_chars += len(content)
-        elif isinstance(content, list):
-            for part in content:
-                if isinstance(part, dict):
-                    if part.get("type") == "text":
-                        total_chars += len(part.get("text", ""))
-                    elif part.get("type") == "image_url":
-                        total_chars += 3060
-                else:
-                    total_chars += len(str(part))
-        else:
-            total_chars += len(str(content))
-    return total_chars // 4
 
 
 class HandoffCaptureMiddleware(AgentMiddleware if _MIDDLEWARE_AVAILABLE else object):
@@ -467,18 +449,7 @@ class HandoffCaptureMiddleware(AgentMiddleware if _MIDDLEWARE_AVAILABLE else obj
         Returns:
             Text content of the message.
         """
-        content = getattr(msg, "content", "")
-        if isinstance(content, str):
-            return content
-        if isinstance(content, list):
-            parts = []
-            for part in content:
-                if isinstance(part, dict) and part.get("type") == "text":
-                    parts.append(part.get("text", ""))
-                elif isinstance(part, str):
-                    parts.append(part)
-            return " ".join(parts)
-        return str(content) if content else ""
+        return extract_message_text(msg)
 
     def get_stats(self) -> Dict[str, Any]:
         """Get handoff capture statistics."""
