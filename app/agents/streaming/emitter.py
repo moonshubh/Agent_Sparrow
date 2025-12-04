@@ -30,7 +30,7 @@ from .event_types import (
     TraceStep,
 )
 from .normalizers import normalize_todos
-from .utils import count_tokens_approximately, BackpressureQueue
+from .utils import count_tokens_approximately, BackpressureQueue, safe_json_value
 
 
 # =============================================================================
@@ -396,8 +396,7 @@ class StreamEventEmitter:
             "toolName": tool_name,
         }
         if input_data is not None:
-            from .event_types import _safe_json_value
-            trace_meta["input"] = _safe_json_value(input_data)
+            trace_meta["input"] = safe_json_value(input_data)
 
         self.add_trace_step(
             step_type="action",
@@ -416,8 +415,6 @@ class StreamEventEmitter:
         cards: Optional[List[Dict[str, Any]]] = None,
     ) -> None:
         """Record a tool operation completing."""
-        from .event_types import _safe_json_value
-
         tool_op = self.operations.get(tool_call_id)
         if tool_op is None:
             # Create if missing
@@ -432,7 +429,7 @@ class StreamEventEmitter:
         tool_op.complete(success=True)
 
         # Add output preview to metadata
-        safe_output = _safe_json_value(output) if output is not None else None
+        safe_output = safe_json_value(output) if output is not None else None
         if safe_output is not None:
             tool_op.metadata["rawOutputPreview"] = str(safe_output)[:1000]
 
@@ -678,8 +675,6 @@ class StreamEventEmitter:
 
     def update_todos(self, raw_todos: Any) -> List[TodoItem]:
         """Update the todo list from raw tool output."""
-        from .event_types import _safe_json_value
-
         # Debug logging to understand the raw_todos structure
         raw_type = type(raw_todos).__name__
         raw_repr_str = repr(raw_todos)[:500] if raw_todos else "None"
@@ -698,7 +693,7 @@ class StreamEventEmitter:
         logger.info(
             "write_todos_normalized",
             normalized_count=len(normalized),
-            todos=_safe_json_value(normalized),
+            todos=safe_json_value(normalized),
         )
 
         # Convert to TodoItem objects

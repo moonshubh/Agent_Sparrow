@@ -7,6 +7,7 @@ This module provides production-grade utilities for:
 - Checkpoint deduplication (LangGraph pattern)
 - Retry with exponential backoff + jitter (LangGraph pattern)
 - Streaming backpressure (LangChain pattern)
+- Safe JSON conversion helpers shared across streaming modules
 """
 
 from __future__ import annotations
@@ -22,6 +23,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, TypedDict
 
 from loguru import logger
+from app.agents.log_analysis.log_analysis_agent.utils import extract_json_payload
 
 
 # =============================================================================
@@ -154,6 +156,47 @@ Preview (first 10 lines):
     def get_evicted_result(self, tool_call_id: str) -> Optional[EvictedToolResult]:
         """Retrieve metadata about an evicted result."""
         return self._evicted_results.get(tool_call_id)
+
+
+# =============================================================================
+# Shared safe JSON helpers
+# =============================================================================
+
+def safe_metadata(metadata: Dict[str, Any]) -> Dict[str, Any]:
+    """Ensure metadata values are JSON-serializable."""
+    import json
+
+    safe: Dict[str, Any] = {}
+    for key, value in metadata.items():
+        try:
+            json.dumps(value)
+            safe[key] = value
+        except TypeError:
+            safe[key] = str(value)
+    return safe
+
+
+def safe_json_value(value: Any) -> Any:
+    """Convert a value to JSON-safe form, parsing JSON strings when possible."""
+    import json
+
+    try:
+        json.dumps(value, ensure_ascii=False)
+        return value
+    except TypeError:
+        if isinstance(value, str):
+            trimmed = value.strip()
+            if (trimmed.startswith("{") and trimmed.endswith("}")) or (
+                trimmed.startswith("[") and trimmed.endswith("]")
+            ):
+                parsed = extract_json_payload(trimmed) or trimmed
+                try:
+                    json.dumps(parsed, ensure_ascii=False)
+                    return parsed
+                except Exception:
+                    return trimmed
+            return trimmed
+        return str(value)
 
 
 # =============================================================================

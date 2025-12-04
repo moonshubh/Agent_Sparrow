@@ -10,6 +10,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Literal, Optional
 
+from .utils import safe_json_value, safe_metadata
+
 
 @dataclass
 class TraceStep:
@@ -49,7 +51,7 @@ class TraceStep:
             "timestamp": self.timestamp,
             "type": self.type,
             "content": self.content,
-            "metadata": _safe_metadata(self.metadata),
+            "metadata": safe_metadata(self.metadata),
         }
 
 
@@ -178,7 +180,7 @@ class TimelineOperation:
         if self.duration is not None:
             result["duration"] = self.duration
         if self.metadata:
-            result["metadata"] = _safe_metadata(self.metadata)
+            result["metadata"] = safe_metadata(self.metadata)
         return result
 
 
@@ -197,7 +199,7 @@ class TodoItem:
             "id": self.id,
             "title": self.title,
             "status": self.status,
-            "metadata": _safe_metadata(self.metadata),
+            "metadata": safe_metadata(self.metadata),
         }
 
 
@@ -265,7 +267,7 @@ class ToolEvidenceUpdateEvent:
         result: Dict[str, Any] = {
             "toolCallId": self.tool_call_id,
             "toolName": self.tool_name,
-            "output": _safe_json_value(self.output),
+            "output": safe_json_value(self.output),
             "cards": self.cards,
         }
         if self.summary is not None:
@@ -290,37 +292,10 @@ class AgentTodosUpdateEvent:
 # Utility functions
 
 def _safe_metadata(metadata: Dict[str, Any]) -> Dict[str, Any]:
-    """Ensure all metadata values are JSON-serializable."""
-    import json
-
-    safe: Dict[str, Any] = {}
-    for key, value in metadata.items():
-        try:
-            json.dumps(value)
-            safe[key] = value
-        except TypeError:
-            safe[key] = str(value)
-    return safe
+    """Backward-compatible alias for safe_metadata."""
+    return safe_metadata(metadata)
 
 
 def _safe_json_value(value: Any) -> Any:
-    """Convert a value to be JSON-serializable."""
-    import json
-
-    try:
-        json.dumps(value, ensure_ascii=False)
-        return value
-    except TypeError:
-        if isinstance(value, str):
-            trimmed = value.strip()
-            if (trimmed.startswith("{") and trimmed.endswith("}")) or (
-                trimmed.startswith("[") and trimmed.endswith("]")
-            ):
-                try:
-                    parsed = json.loads(trimmed)
-                    json.dumps(parsed, ensure_ascii=False)
-                    return parsed
-                except Exception:
-                    return value
-            return value
-        return str(value)
+    """Backward-compatible alias for safe_json_value."""
+    return safe_json_value(value)

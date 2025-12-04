@@ -22,7 +22,6 @@ except ImportError:
     OTEL_AVAILABLE = False
 
 from .emitter import StreamEventEmitter
-from .event_types import _safe_json_value
 from .normalizers import (
     build_tool_evidence_cards,
     extract_grounding_results,
