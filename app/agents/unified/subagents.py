@@ -6,6 +6,7 @@ with proper middleware composition for each subagent type.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
 from langchain_core.language_models import BaseChatModel
@@ -56,13 +57,17 @@ except ImportError:
     CUSTOM_MIDDLEWARE_AVAILABLE = False
 
 
-# Middleware configuration constants
-RESEARCH_MAX_TOKENS_BEFORE_SUMMARY = 100000
-RESEARCH_MESSAGES_TO_KEEP = 4
-LOG_ANALYSIS_MAX_TOKENS_BEFORE_SUMMARY = 150000
-LOG_ANALYSIS_MESSAGES_TO_KEEP = 6
-DB_RETRIEVAL_MAX_TOKENS_BEFORE_SUMMARY = 80000
-DB_RETRIEVAL_MESSAGES_TO_KEEP = 3
+@dataclass(frozen=True)
+class MiddlewareConfig:
+    """Per-subagent middleware thresholds."""
+
+    max_tokens_before_summary: int
+    messages_to_keep: int
+
+
+RESEARCH_MW_CONFIG = MiddlewareConfig(max_tokens_before_summary=100000, messages_to_keep=4)
+LOG_ANALYSIS_MW_CONFIG = MiddlewareConfig(max_tokens_before_summary=150000, messages_to_keep=6)
+DB_RETRIEVAL_MW_CONFIG = MiddlewareConfig(max_tokens_before_summary=80000, messages_to_keep=3)
 
 
 def _get_chat_model(model_name: str, provider: str = "google", role: str = "default") -> BaseChatModel:
@@ -105,8 +110,8 @@ def _build_research_middleware(model: BaseChatModel) -> List[Any]:
     middleware.append(
         SummarizationMiddleware(
             model=model,
-            max_tokens_before_summary=RESEARCH_MAX_TOKENS_BEFORE_SUMMARY,
-            messages_to_keep=RESEARCH_MESSAGES_TO_KEEP,
+            max_tokens_before_summary=RESEARCH_MW_CONFIG.max_tokens_before_summary,
+            messages_to_keep=RESEARCH_MW_CONFIG.messages_to_keep,
         )
     )
 
@@ -139,8 +144,8 @@ def _build_log_analysis_middleware(model: BaseChatModel) -> List[Any]:
     middleware.append(
         SummarizationMiddleware(
             model=model,
-            max_tokens_before_summary=LOG_ANALYSIS_MAX_TOKENS_BEFORE_SUMMARY,
-            messages_to_keep=LOG_ANALYSIS_MESSAGES_TO_KEEP,
+            max_tokens_before_summary=LOG_ANALYSIS_MW_CONFIG.max_tokens_before_summary,
+            messages_to_keep=LOG_ANALYSIS_MW_CONFIG.messages_to_keep,
         )
     )
 
@@ -168,8 +173,8 @@ def _build_db_retrieval_middleware(model: BaseChatModel) -> List[Any]:
     middleware.append(
         SummarizationMiddleware(
             model=model,
-            max_tokens_before_summary=DB_RETRIEVAL_MAX_TOKENS_BEFORE_SUMMARY,
-            messages_to_keep=DB_RETRIEVAL_MESSAGES_TO_KEEP,
+            max_tokens_before_summary=DB_RETRIEVAL_MW_CONFIG.max_tokens_before_summary,
+            messages_to_keep=DB_RETRIEVAL_MW_CONFIG.messages_to_keep,
         )
     )
 
@@ -261,7 +266,7 @@ def _research_subagent(provider: str = "google") -> Dict[str, Any]:
             kb_search_tool,
             feedme_search_tool,
             supabase_query_tool,
-            grounding_search_tool,
+            # Prefer Tavily first for fast web context, then Firecrawl for deep pages, grounding as last resort
             web_search_tool,
             # Firecrawl tools for advanced web research
             firecrawl_fetch_tool,      # Single-page scrape with screenshots/actions
@@ -269,8 +274,11 @@ def _research_subagent(provider: str = "google") -> Dict[str, Any]:
             firecrawl_crawl_tool,      # Multi-page extraction
             firecrawl_extract_tool,    # AI-powered structured data extraction
             firecrawl_search_tool,     # Enhanced web search (web/images/news)
+            grounding_search_tool,
         ],
         "model": model,
+        "model_name": model_name,
+        "model_provider": provider,
         "middleware": _build_research_middleware(model),
     }
 
@@ -327,6 +335,8 @@ def _log_diagnoser_subagent(provider: str = "google") -> Dict[str, Any]:
             firecrawl_extract_tool,    # Extract structured error/solution data
         ],
         "model": model,
+        "model_name": model_name,
+        "model_provider": provider,
         "middleware": _build_log_analysis_middleware(model),
     }
 
@@ -374,7 +384,14 @@ def _db_retrieval_subagent(provider: str = "google") -> Dict[str, Any]:
         ),
         "system_prompt": DATABASE_RETRIEVAL_PROMPT,
         "tools": get_db_retrieval_tools(),
+        "preferred_tool_priority": [
+            "db_unified_search",  # semantic/hybrid first
+            "db_context_search",  # full doc/context retrieval
+            "db_grep_search",     # exact/pattern matches
+        ],
         "model": model,
+        "model_name": model_name,
+        "model_provider": provider,
         "middleware": _build_db_retrieval_middleware(model),
     }
 

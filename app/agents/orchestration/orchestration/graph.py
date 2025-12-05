@@ -85,7 +85,14 @@ def _build_tool_node():
     """
     from app.agents.unified.tools import get_registered_tools
     from app.agents.tools import ToolExecutor, DEFAULT_TOOL_CONFIGS
-    from app.agents.harness.observability import AgentLoopState
+    from app.agents.harness.observability import (
+        AgentLoopState,
+        record_tool_result,
+        set_current_tool_session,
+        reset_current_tool_session,
+        get_recent_tool_results,
+        publish_tool_batch_to_langsmith,
+    )
     from app.agents.harness.middleware import get_state_tracking_middleware
 
     class ParallelToolNode:
@@ -95,6 +102,7 @@ def _build_tool_node():
             self.executor = ToolExecutor(
                 configs=DEFAULT_TOOL_CONFIGS,
                 max_concurrency=max_concurrency,
+                on_result=record_tool_result,
             )
 
         async def __call__(self, state: GraphState, config=None):
@@ -155,7 +163,11 @@ def _build_tool_node():
                 )
                 return result.to_tool_message()
 
-            results = await asyncio.gather(*(run_one(tc) for tc in pending))
+            token = set_current_tool_session(session_id)
+            try:
+                results = await asyncio.gather(*(run_one(tc) for tc in pending))
+            finally:
+                reset_current_tool_session(token)
             new_executed = list(executed | {tc["id"] for tc in pending})
 
             # Transition to processing results after tools complete
@@ -169,10 +181,14 @@ def _build_tool_node():
             system_bucket = dict((scratch.get("_system") or {}))
             system_bucket["_executed_tool_calls"] = new_executed
 
-            # Add executor stats for observability
+            # Add executor stats for observability and recent tool runs
             system_bucket["_tool_executor_stats"] = self.executor.get_stats()
+            system_bucket["_recent_tool_runs"] = get_recent_tool_results(limit=10)
 
             scratch["_system"] = system_bucket
+
+            # Export recent tool runs to LangSmith as a single batch
+            publish_tool_batch_to_langsmith(session_id, limit=10)
 
             return {"messages": results, "scratchpad": scratch}
 

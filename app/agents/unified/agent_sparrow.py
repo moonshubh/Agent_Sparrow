@@ -60,6 +60,7 @@ from app.core.rate_limiting.exceptions import (
     RateLimitExceededException,
     GeminiServiceUnavailableException,
 )
+from app.agents.unified.cache import configure_llm_cache
 from app.agents.helpers.gemma_helper import GemmaHelper
 
 # Import new streaming modules
@@ -83,6 +84,9 @@ BASE_AGENT_PROMPT = (
 )
 DEFAULT_RECURSION_LIMIT = 400
 HELPER_TIMEOUT_SECONDS = 8.0
+
+# Best-effort LLM cache to reduce repeat costs; safe to ignore failures.
+configure_llm_cache()
 
 # Provider-specific token limits for summarization middleware
 # Set conservatively to prevent quota/context overflow

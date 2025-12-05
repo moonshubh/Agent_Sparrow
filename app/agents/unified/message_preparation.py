@@ -15,6 +15,7 @@ from loguru import logger
 
 from .attachment_processor import AttachmentProcessor, get_attachment_processor
 from .multimodal_processor import MultimodalProcessor, get_multimodal_processor, ProcessedAttachments
+from app.agents.unified.model_context import get_model_context_window
 
 if TYPE_CHECKING:
     from app.agents.helpers.gemma_helper import GemmaHelper
@@ -56,6 +57,7 @@ class MessagePreparer:
         session_cache: Optional[Dict[str, Dict[str, Any]]] = None,
         attachment_processor: Optional[AttachmentProcessor] = None,
         multimodal_processor: Optional[MultimodalProcessor] = None,
+        cache_ttl_seconds: float = 1800.0,
     ):
         """Initialize the preparer.
 
@@ -64,11 +66,13 @@ class MessagePreparer:
             session_cache: Session cache for caching rewrites.
             attachment_processor: Attachment processor instance.
             multimodal_processor: Multimodal processor for images/PDFs.
+            cache_ttl_seconds: TTL for cached rewrites/summaries in seconds.
         """
         self.helper = helper
         self.session_cache = session_cache or {}
         self.attachment_processor = attachment_processor or get_attachment_processor()
         self.multimodal_processor = multimodal_processor or get_multimodal_processor()
+        self._cache_ttl = max(60.0, cache_ttl_seconds)
 
     async def prepare_messages(
         self,
@@ -164,9 +168,12 @@ class MessagePreparer:
             if processed.skipped:
                 stats["attachments_skipped"] = len(processed.skipped)
 
-        # 5. Compact context if too large
+        # 5. Compact context if too large (dynamic threshold based on model context window)
         estimated_tokens = self._estimate_tokens(messages)
-        if estimated_tokens > TOKEN_LIMIT_BEFORE_COMPACT and self.helper:
+        dynamic_threshold = self._context_threshold(state)
+        stats["compact_threshold_tokens"] = dynamic_threshold
+
+        if estimated_tokens > dynamic_threshold and self.helper:
             messages = await self._compact_context(messages)
             stats["context_compacted"] = True
 
@@ -191,7 +198,7 @@ class MessagePreparer:
         """
         # Check cache first
         rewrite_key = f"rewrite:{query.lower().strip()}"
-        cached = self.session_cache.get(rewrite_key, {}).get("value")
+        cached = self._get_cache(rewrite_key)
         if cached:
             return cached
 
@@ -203,7 +210,7 @@ class MessagePreparer:
 
         if rewritten:
             # Cache the result
-            self.session_cache[rewrite_key] = {"value": rewritten, "ts": time.time()}
+            self._set_cache(rewrite_key, rewritten)
 
             # Store in scratchpad
             if scratchpad is not None:
@@ -238,10 +245,16 @@ class MessagePreparer:
         if not history_text:
             return messages
 
-        summary = await self._with_timeout(
-            self.helper.summarize(history_text, budget_tokens=800),
-            "gemma_history_summarize",
-        )
+        cache_key = f"history_summary:{hash(history_text)}"
+        summary = self._get_cache(cache_key)
+
+        if summary is None:
+            summary = await self._with_timeout(
+                self.helper.summarize(history_text, budget_tokens=800),
+                "gemma_history_summarize",
+            )
+            if summary:
+                self._set_cache(cache_key, summary)
 
         if summary:
             return [
@@ -270,10 +283,16 @@ class MessagePreparer:
             for m in messages
         )
 
-        summary = await self._with_timeout(
-            self.helper.summarize(combined, budget_tokens=1200),
-            "gemma_context_compact",
-        )
+        cache_key = f"context_compact:{hash(combined)}"
+        summary = self._get_cache(cache_key)
+
+        if summary is None:
+            summary = await self._with_timeout(
+                self.helper.summarize(combined, budget_tokens=1200),
+                "gemma_context_compact",
+            )
+            if summary:
+                self._set_cache(cache_key, summary)
 
         if summary:
             return [
@@ -383,6 +402,30 @@ class MessagePreparer:
                 total_tokens += len(str(content)) // 4 if content else 0
 
         return total_tokens
+
+    def _context_threshold(self, state: "GraphState") -> int:
+        """Compute a dynamic compaction threshold based on model context window."""
+        context_window = get_model_context_window(
+            getattr(state, "model", None) or "",
+            getattr(state, "provider", None),
+        )
+        # Trigger compaction at 50% of window, but never below static floor.
+        return max(TOKEN_LIMIT_BEFORE_COMPACT, int(context_window * 0.5))
+
+    def _get_cache(self, key: str) -> Optional[Any]:
+        """Fetch from session cache with TTL enforcement."""
+        entry = self.session_cache.get(key)
+        if not entry:
+            return None
+        ts = entry.get("ts")
+        if ts is None or (time.time() - ts) > self._cache_ttl:
+            self.session_cache.pop(key, None)
+            return None
+        return entry.get("value")
+
+    def _set_cache(self, key: str, value: Any) -> None:
+        """Store in session cache with timestamp."""
+        self.session_cache[key] = {"value": value, "ts": time.time()}
 
 
 # Module-level instance for convenience

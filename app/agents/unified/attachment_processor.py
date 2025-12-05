@@ -13,6 +13,7 @@ from typing import Any, Callable, Coroutine, Dict, List, Optional, TYPE_CHECKING
 
 from loguru import logger
 
+from app.agents.unified.attachment_utils import is_text_mime, TEXT_EXTENSIONS, TEXT_MIME_TYPES
 if TYPE_CHECKING:
     from app.agents.orchestration.orchestration.state import Attachment
 
@@ -25,21 +26,6 @@ SUMMARIZATION_THRESHOLD = 4_000  # When to summarize attachments
 
 # Patterns
 BASE64_PATTERN = re.compile(r"^[A-Za-z0-9+/]+={0,2}$")
-
-# Supported MIME types for text extraction
-TEXT_MIME_TYPES = {
-    "text/plain",
-    "text/csv",
-    "text/html",
-    "text/markdown",
-    "text/xml",
-    "application/json",
-    "application/xml",
-    "application/javascript",
-}
-
-# File extensions that indicate text content even with application/octet-stream MIME
-TEXT_EXTENSIONS = (".log", ".txt", ".csv", ".json", ".xml", ".md", ".yaml", ".yml")
 
 # Log-like patterns
 LOG_LEVEL_RE = re.compile(r"\b(INFO|WARN|WARNING|ERROR|ERR|DEBUG|TRACE|FATAL|CRITICAL)\b")
@@ -201,25 +187,7 @@ class AttachmentProcessor:
         Some browsers upload .log files as application/octet-stream,
         so we also check the filename extension.
         """
-        if mime:
-            mime_lower = str(mime).lower()
-            if mime_lower.startswith("text/"):
-                return True
-            if mime_lower in TEXT_MIME_TYPES:
-                return True
-
-            # Special case: octet-stream with text-like extension
-            if mime_lower == "application/octet-stream" and filename:
-                name_lower = str(filename).lower()
-                if any(name_lower.endswith(ext) for ext in TEXT_EXTENSIONS):
-                    logger.info(
-                        "attachment_treated_as_text",
-                        name=filename,
-                        mime=mime,
-                    )
-                    return True
-
-        return False
+        return is_text_mime(mime, filename)
 
     async def inline_attachments(
         self,

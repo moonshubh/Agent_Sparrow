@@ -49,19 +49,35 @@ class ModelQuotaTracker:
         self._cache_ttl = max(1.0, cache_ttl_seconds)
         self._warning_threshold = warning_threshold
         self._lock = asyncio.Lock()
+        # Prefixes for Gemini models we track; configurable to avoid hardcoding as new SKUs appear.
+        self._gemini_prefixes: tuple[str, ...] = (
+            "gemini-3-pro",
+            "gemini-2.5-flash-lite",
+            "gemini-2.5-flash",
+            "gemini-2.5-pro",
+        )
 
     async def get_health(self, model: str) -> ModelHealth:
         stats = await self._get_usage_stats()
         base = self._normalize_model(model)
 
-        mapping = {
-            "gemini-3-pro": (stats.gemini_3_pro_stats, stats.gemini_3_pro_circuit),
-            "gemini-2.5-flash": (stats.flash_stats, stats.flash_circuit),
-            "gemini-2.5-flash-lite": (stats.flash_lite_stats, stats.flash_lite_circuit),
-            "gemini-2.5-pro": (stats.pro_stats, stats.pro_circuit),
-        }
+        mapping = [
+            ("gemini-3-pro", stats.gemini_3_pro_stats, stats.gemini_3_pro_circuit),
+            ("gemini-2.5-flash-lite", stats.flash_lite_stats, stats.flash_lite_circuit),
+            ("gemini-2.5-flash", stats.flash_stats, stats.flash_circuit),
+            ("gemini-2.5-pro", stats.pro_stats, stats.pro_circuit),
+        ]
 
-        if base not in mapping:
+        match = next(
+            (
+                (metadata, circuit)
+                for prefix, metadata, circuit in mapping
+                if base == prefix or base.startswith(prefix)
+            ),
+            None,
+        )
+
+        if match is None:
             # Non-Gemini models (e.g., XAI/Grok) are not rate-limited via this tracker
             # Return available=True so they can be used without fallback to Gemini
             logger.debug("Non-Gemini model '%s' requested; skipping quota check", model)
@@ -76,7 +92,7 @@ class ModelQuotaTracker:
                 reason=None,
             )
 
-        metadata, circuit = mapping[base]
+        metadata, circuit = match
 
         available, reason = self._evaluate_availability(metadata, circuit.state)
         return ModelHealth(

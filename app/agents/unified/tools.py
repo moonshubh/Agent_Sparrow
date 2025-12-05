@@ -8,12 +8,10 @@ from datetime import datetime
 from functools import lru_cache
 import json
 import uuid
-from typing import Any, Dict, List, Optional, Annotated, Union
+from typing import Any, Dict, List, Optional, Annotated, Union, Callable
 
 import httpx
 from bs4 import BeautifulSoup
-
-from loguru import logger
 from langgraph.prebuilt import InjectedState, ToolRuntime
 from langchain_core.tools import BaseTool, tool, InjectedToolArg
 from langchain_core.runnables import RunnableConfig
@@ -43,7 +41,10 @@ from app.db.embedding import utils as embedding_utils
 from app.db.supabase.client import get_supabase_client
 from app.security.pii_redactor import redact_pii, redact_pii_from_dict
 from app.services.global_knowledge.hybrid_retrieval import HybridRetrieval
+import os
 from app.tools.research_tools import FirecrawlTool, TavilySearchTool
+from app.core.logging_config import get_logger
+import redis
 
 
 TOOL_RATE_LIMIT_MODEL = settings.router_model or settings.primary_agent_model or "gemini-2.5-flash-lite"
@@ -82,6 +83,21 @@ def _supabase_client_cached():
 @lru_cache(maxsize=1)
 def _grounding_service() -> GeminiGroundingService:
     return GeminiGroundingService()
+
+
+# Simple in-process tool cache (best-effort, small footprint)
+_TOOL_CACHE: dict[str, str] = {}
+_TOOL_CACHE_MAX = 256
+logger = get_logger(__name__)
+
+# Optional Redis cache for multi-process/tool caching
+_REDIS_CACHE = None
+if settings.redis_url and os.getenv("DISABLE_TOOL_CACHE") not in {"1", "true", "True"}:
+    try:  # pragma: no cover - best effort
+        _REDIS_CACHE = redis.Redis.from_url(settings.redis_url, decode_responses=True)
+        logger.info("tool_cache_redis_enabled", url=settings.redis_url)
+    except Exception as exc:  # pragma: no cover - best effort
+        logger.warning("tool_cache_redis_unavailable", error=str(exc))
 
 
 def _build_kb_filters(context: Optional[Dict[str, Any]]) -> Dict[str, Any]:
@@ -134,7 +150,7 @@ def _rewrite_search_query(raw_query: str, max_chars: int = 400) -> str:
         "exception",
         "failed",
         "unknown host",
-        "hte inconnu",
+        "hote inconnu",  # "hôte inconnu" without accent to match logs safely
         "connection lost",
         "imap.gmail.com",
         "accounts.google.com",
@@ -173,6 +189,35 @@ def _rewrite_search_query(raw_query: str, max_chars: int = 400) -> str:
     return text[:max_chars].rstrip()
 
 
+def _maybe_cached_tool_result(cache_key: str) -> Optional[str]:
+    if not _tool_cache_enabled():
+        return None
+    key = _tool_cache_key(cache_key)
+    # Check Redis first for multi-process coherence
+    if _REDIS_CACHE is not None:
+        try:
+            val = _REDIS_CACHE.get(key)
+            if val:
+                return val
+        except Exception:
+            pass
+    return _TOOL_CACHE.get(key)
+
+
+def _store_tool_result(cache_key: str, value: str) -> None:
+    if not _tool_cache_enabled():
+        return
+    key = _tool_cache_key(cache_key)
+    if len(_TOOL_CACHE) >= _TOOL_CACHE_MAX:
+        _TOOL_CACHE.pop(next(iter(_TOOL_CACHE)), None)
+    _TOOL_CACHE[key] = value
+    if _REDIS_CACHE is not None:
+        try:
+            _REDIS_CACHE.setex(key, 900, value)  # 15-minute TTL for tool cache
+        except Exception:
+            pass
+
+
 async def _http_fetch_fallback(url: str, max_chars: int = 8000) -> Dict[str, Any]:
     """Best-effort HTML fetch when Firecrawl is unavailable."""
 
@@ -182,10 +227,18 @@ async def _http_fetch_fallback(url: str, max_chars: int = 8000) -> Dict[str, Any
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     }
 
+    cache_key = f"fetch:{url}"
+    cached = _maybe_cached_tool_result(cache_key)
+    if cached:
+        try:
+            return json.loads(cached)
+        except Exception:
+            pass
+    _cache_hit_miss(False, cache_key)
+
     async with httpx.AsyncClient(timeout=20, follow_redirects=True) as client:
         resp = await client.get(url, headers=headers)
         resp.raise_for_status()
-        content_type = resp.headers.get("content-type", "")
 
     def _strip_html(html: str) -> str:
         soup = BeautifulSoup(html, "html.parser")
@@ -206,7 +259,7 @@ async def _http_fetch_fallback(url: str, max_chars: int = 8000) -> Dict[str, Any
     except Exception:
         title = None
 
-    return {
+    payload = {
         "url": str(resp.url),
         "status_code": resp.status_code,
         "content_type": content_type,
@@ -214,6 +267,9 @@ async def _http_fetch_fallback(url: str, max_chars: int = 8000) -> Dict[str, Any
         "content": cleaned[:max_chars],
         "source": "httpx_fallback",
     }
+    _store_tool_result(cache_key, _serialize_tool_output(payload))
+    _cache_hit_miss(True, cache_key)
+    return payload
 
 
 async def _grounding_fallback(query: str, max_results: int, reason: str) -> Dict[str, Any]:
@@ -339,6 +395,46 @@ def _serialize_tool_output(payload: Any) -> str:
         return str(payload)
 
 
+def _tool_cache_enabled() -> bool:
+    return os.getenv("DISABLE_TOOL_CACHE") not in {"1", "true", "True"}
+
+
+def _cache_hit_miss(hit: bool, key: str) -> None:
+    logger.info("tool_cache_hit" if hit else "tool_cache_miss", key=key)
+
+
+@lru_cache(maxsize=2048)
+def _tool_cache_key(key: str) -> str:
+    # Wrapper to keep lru_cache hot; key already hashed upstream
+    return key
+
+
+def _trim_content(content: str, max_chars: int = 500) -> str:
+    snippet = (content or "").strip()
+    if len(snippet) <= max_chars:
+        return snippet
+    return snippet[: max_chars - 1].rstrip() + "…"
+
+
+def _dedupe_results(
+    results: list[dict],
+    id_key: str = "id",
+    url_key: str = "url",
+    key_func: Optional[Callable[[dict], Any]] = None,
+) -> list[dict]:
+    """Deduplicate results by id/url or custom key, keeping the first occurrence."""
+    seen = set()
+    deduped: list[dict] = []
+    for item in results:
+        key = key_func(item) if key_func else (item.get(id_key) or item.get(url_key))
+        if key and key in seen:
+            continue
+        if key:
+            seen.add(key)
+        deduped.append(item)
+    return deduped
+
+
 @tool("kb_search", args_schema=EnhancedKBSearchInput)
 async def kb_search_tool(
     query: str,
@@ -368,6 +464,14 @@ async def kb_search_tool(
     retriever = _hybrid_retriever()
     filters = _build_kb_filters(context or {})
     effective_query = _rewrite_search_query(query)
+
+    cache_hit_key = f"kb:{effective_query}:{filters}:{max_results}:{min_confidence}"
+    cached = _maybe_cached_tool_result(cache_hit_key)
+    if cached:
+        _cache_hit_miss(True, cache_hit_key)
+        return cached
+    _cache_hit_miss(False, cache_hit_key)
+
     results = await retriever.search_knowledge_base(
         query=effective_query,
         top_k=max_results,
@@ -382,7 +486,9 @@ async def kb_search_tool(
         "results": results,
         "session_id": session_id,
     }
-    return _serialize_tool_output(payload)
+    serialized = _serialize_tool_output(payload)
+    _store_tool_result(cache_hit_key, serialized)
+    return serialized
 
 
 class LogDiagnoserInput(BaseModel):
@@ -618,6 +724,16 @@ async def web_search_tool(
     max_retries = 3
     tavily = _tavily_client()
 
+    cache_key = f"web_search:{input.query}:{input.max_results}:{input.include_images}"
+    cached = _maybe_cached_tool_result(cache_key)
+    if cached:
+        _cache_hit_miss(True, cache_key)
+        try:
+            return json.loads(cached)
+        except Exception:
+            return cached
+    _cache_hit_miss(False, cache_key)
+
     for attempt in range(max_retries):
         try:
             logger.info(
@@ -634,6 +750,7 @@ async def web_search_tool(
             logger.info(
                 f"web_search_tool_success query='{input.query}' urls={len(urls or [])} images={len(images or [])}"
             )
+            _store_tool_result(cache_key, _serialize_tool_output(result))
             return result
         except Exception as e:
             if attempt == max_retries - 1:
@@ -727,6 +844,15 @@ async def firecrawl_fetch_tool(
 
     # Determine if we need advanced scraping or basic
     use_advanced = bool(input.formats or input.actions or input.wait_for or input.json_schema)
+    cache_key = f"firecrawl_fetch:{input.url}:{input.formats}:{input.actions}:{input.wait_for}:{input.json_schema}"
+    cached = _maybe_cached_tool_result(cache_key)
+    if cached:
+        _cache_hit_miss(True, cache_key)
+        try:
+            return json.loads(cached)
+        except Exception:
+            return cached
+    _cache_hit_miss(False, cache_key)
 
     last_error: Optional[Exception] = None
     for attempt in range(max_retries):
@@ -754,6 +880,8 @@ async def firecrawl_fetch_tool(
             )
             if isinstance(result, dict) and result.get("error"):
                 raise RuntimeError(result["error"])
+            _store_tool_result(cache_key, _serialize_tool_output(result))
+            _cache_hit_miss(True, cache_key)
             return result
         except Exception as e:
             logger.warning(
@@ -858,6 +986,16 @@ async def firecrawl_crawl_tool(
             exclude_paths=exclude_paths,
         )
 
+    cache_key = f"firecrawl_crawl:{input.url}:{input.limit}:{input.max_depth}:{input.include_paths}:{input.exclude_paths}"
+    cached = _maybe_cached_tool_result(cache_key)
+    if cached:
+        _cache_hit_miss(True, cache_key)
+        try:
+            return json.loads(cached)
+        except Exception:
+            return cached
+    _cache_hit_miss(False, cache_key)
+
     firecrawl = _firecrawl_client()
 
     try:
@@ -877,6 +1015,8 @@ async def firecrawl_crawl_tool(
         )
         if isinstance(result, dict) and result.get("error"):
             raise RuntimeError(result["error"])
+        _store_tool_result(cache_key, _serialize_tool_output(result))
+        _cache_hit_miss(True, cache_key)
         return result
     except Exception as e:
         logger.error(f"firecrawl_crawl_tool_error url='{input.url}' error='{str(e)}'")
@@ -1023,6 +1163,8 @@ def get_registered_tools() -> List[BaseTool]:
     2. web_search_tool (Tavily - good general web search with images)
     3. firecrawl_search_tool (Firecrawl - web/images/news search)
     4. firecrawl_fetch_tool (Firecrawl - deep URL extraction with advanced options)
+    Caching:
+    - In-process cache (256 entries) with hit/miss logging; disable via DISABLE_TOOL_CACHE.
 
     Firecrawl tools:
     - fetch_url: Single page scrape with screenshots, actions, JSON mode
@@ -1376,6 +1518,7 @@ async def feedme_search_tool(
                 "confidence": 0.0,
                 "snippets": [],
                 "created_at": None,
+                "last_updated": None,
             },
         )
         try:
@@ -1387,7 +1530,11 @@ async def feedme_search_tool(
         if snippet:
             # Redact PII first, then slice to avoid partial PII at boundary
             redacted_snippet = redact_pii(snippet)
-            entry["snippets"].append(redacted_snippet[:400])
+            entry["snippets"].append(_trim_content(redacted_snippet, max_chars=400))
+        if not entry["created_at"]:
+            entry["created_at"] = row.get("created_at")
+        if not entry["last_updated"]:
+            entry["last_updated"] = row.get("updated_at")
 
     if not aggregated:
         return []
@@ -1432,6 +1579,12 @@ async def feedme_search_tool(
                 "summary": summary,
                 "confidence": payload.get("confidence", 0.0),
                 "created_at": created_at,
+                "snippet": _trim_content(summary or ""),
+                "metadata": {
+                    "id": conv_id,
+                    "folder_id": details.get("folder_id"),
+                    "last_updated": payload.get("last_updated"),
+                },
             }
         )
 
@@ -1502,15 +1655,20 @@ def _format_result_with_content_type(
     content: str,
     relevance_score: float,
     metadata: Dict[str, Any],
+    weight: float = 1.0,
 ) -> Dict[str, Any]:
     """Format a result with content_type indicator for long FeedMe content."""
     content_len = len(content or "")
+    snippet = _trim_content(content)
+    score = relevance_score * weight if relevance_score is not None else None
     result = {
         "source": source,
         "title": title,
+        "snippet": snippet,
         "content": content,
         "content_type": "full",
         "relevance_score": relevance_score,
+        "score": score,
         "metadata": metadata,
     }
 
@@ -1537,6 +1695,7 @@ async def db_unified_search_tool(
     """
     if sources is None:
         sources = ["kb", "macros", "feedme"]
+    weights = getattr(settings, "db_source_weights", {"kb": 1.0, "macro": 0.9, "feedme": 0.8})
 
     retrieval_id = f"ret-{uuid.uuid4().hex[:8]}"
     results: List[Dict[str, Any]] = []
@@ -1588,7 +1747,12 @@ async def db_unified_search_tool(
                         title=title,
                         content=content,  # Full content
                         relevance_score=float(row.get("similarity", 0.0)),
-                        metadata={"id": row.get("id"), "url": url},
+                        metadata={
+                            "id": row.get("id"),
+                            "url": url,
+                            "last_updated": row.get("updated_at"),
+                        },
+                        weight=weights.get("kb", 1.0),
                     ))
             else:
                 no_results_sources.append("kb")
@@ -1622,7 +1786,11 @@ async def db_unified_search_tool(
                         title=row.get("title", "Macro"),
                         content=content,
                         relevance_score=float(row.get("similarity", 0.0)),
-                        metadata={"zendesk_id": row.get("zendesk_id")},
+                        metadata={
+                            "zendesk_id": row.get("zendesk_id"),
+                            "last_updated": row.get("updated_at"),
+                        },
+                        weight=weights.get("macro", 1.0),
                     ))
             else:
                 no_results_sources.append("macros")
@@ -1675,7 +1843,9 @@ async def db_unified_search_tool(
                             "id": conv_id,
                             "created_at": details.get("created_at"),
                             "folder_id": details.get("folder_id"),
+                            "last_updated": details.get("updated_at"),
                         },
+                        weight=weights.get("feedme", 1.0),
                     ))
             else:
                 no_results_sources.append("feedme")
@@ -1683,15 +1853,25 @@ async def db_unified_search_tool(
             logger.error("DB retrieval FeedMe search failed: %s", exc)
             no_results_sources.append("feedme")
 
-    # Sort by relevance
-    results.sort(key=lambda r: r.get("relevance_score", 0), reverse=True)
+    # Deduplicate and sort by weighted score, fallback to relevance_score
+    deduped = _dedupe_results(
+        results,
+        key_func=lambda r: (r.get("metadata") or {}).get("id") or (r.get("metadata") or {}).get("url"),
+    )
+    deduped.sort(
+        key=lambda r: (
+            r.get("score", 0.0),
+            r.get("relevance_score", 0.0),
+        ),
+        reverse=True,
+    )
 
     return {
         "retrieval_id": retrieval_id,
         "query_understood": query,
         "sources_searched": sources_searched,
-        "results": results,
-        "result_count": len(results),
+        "results": deduped,
+        "result_count": len(deduped),
         "no_results_sources": no_results_sources,
     }
 
@@ -1718,6 +1898,11 @@ async def db_grep_search_tool(
     results: List[Dict[str, Any]] = []
     sources_searched: List[str] = []
 
+    # Default per-source caps to avoid noisy scans
+    kb_limit = max(1, min(max_results, getattr(settings, "db_grep_kb_limit", max_results)))
+    macro_limit = max(1, min(max_results, getattr(settings, "db_grep_macro_limit", max_results)))
+    feedme_limit = max(1, min(max_results, getattr(settings, "db_grep_feedme_limit", max_results)))
+
     client = _supabase_client_cached()
     if getattr(client, "mock_mode", False):
         return {
@@ -1731,6 +1916,16 @@ async def db_grep_search_tool(
     # Build search pattern for ILIKE or regex
     ilike_pattern = f"%{pattern}%"
 
+    cache_key = f"db_grep:{pattern}:{sources}:{case_sensitive}:{max_results}"
+    cached = _maybe_cached_tool_result(cache_key)
+    if cached:
+        _cache_hit_miss(True, cache_key)
+        try:
+            return json.loads(cached)
+        except Exception:
+            return cached
+    _cache_hit_miss(False, cache_key)
+
     # Search KB with text pattern (mailbird_knowledge has: id, url, content, markdown)
     if "kb" in sources:
         sources_searched.append("kb")
@@ -1740,19 +1935,26 @@ async def db_grep_search_tool(
                 query_builder = query_builder.like("content", ilike_pattern)
             else:
                 query_builder = query_builder.ilike("content", ilike_pattern)
-            kb_resp = await asyncio.to_thread(lambda: query_builder.limit(max_results).execute())
+            kb_resp = await asyncio.to_thread(lambda: query_builder.limit(kb_limit).execute())
             for row in kb_resp.data or []:
                 content = row.get("content") or row.get("markdown") or ""
                 url = row.get("url", "")
                 # Extract title from URL
                 title = url.split("/")[-1].replace("-", " ").title() if url else "KB Article"
+                snippet = _trim_content(content)
                 results.append({
                     "source": "kb",
                     "title": title,
+                    "snippet": snippet,
                     "content": content,
                     "content_type": "full",
                     "match_pattern": pattern,
-                    "metadata": {"id": row.get("id"), "url": url},
+                    "score": None,
+                    "metadata": {
+                        "id": row.get("id"),
+                        "url": url,
+                        "last_updated": row.get("updated_at"),
+                    },
                 })
         except Exception as exc:
             logger.error("DB grep KB search failed: %s", exc)
@@ -1766,15 +1968,21 @@ async def db_grep_search_tool(
                 query_builder = query_builder.like("comment_value", ilike_pattern)
             else:
                 query_builder = query_builder.ilike("comment_value", ilike_pattern)
-            macro_resp = await asyncio.to_thread(lambda: query_builder.limit(max_results).execute())
+            macro_resp = await asyncio.to_thread(lambda: query_builder.limit(macro_limit).execute())
             for row in macro_resp.data or []:
                 results.append({
                     "source": "macro",
                     "title": row.get("title", "Macro"),
+                    "snippet": _trim_content(row.get("comment_value", "")),
                     "content": row.get("comment_value", ""),
                     "content_type": "full",
                     "match_pattern": pattern,
-                    "metadata": {"zendesk_id": row.get("zendesk_id"), "usage_30d": row.get("usage_30d")},
+                    "score": None,
+                    "metadata": {
+                        "zendesk_id": row.get("zendesk_id"),
+                        "usage_30d": row.get("usage_30d"),
+                        "last_updated": row.get("updated_at"),
+                    },
                 })
         except Exception as exc:
             logger.error("DB grep macros search failed: %s", exc)
@@ -1789,7 +1997,7 @@ async def db_grep_search_tool(
                 query_builder = query_builder.like("content", ilike_pattern)
             else:
                 query_builder = query_builder.ilike("content", ilike_pattern)
-            feedme_resp = await asyncio.to_thread(lambda: query_builder.limit(max_results * 2).execute())
+            feedme_resp = await asyncio.to_thread(lambda: query_builder.limit(feedme_limit * 2).execute())
 
             # Deduplicate by conversation
             seen_convs: set = set()
@@ -1799,27 +2007,39 @@ async def db_grep_search_tool(
                     continue
                 seen_convs.add(conv_id)
                 content = redact_pii(row.get("content", ""))
+                snippet = _trim_content(content)
                 results.append({
                     "source": "feedme",
                     "title": f"Conversation {conv_id}",
+                    "snippet": snippet,
                     "content": content,
                     "content_type": "full" if len(content) <= FEEDME_SUMMARIZE_THRESHOLD else "summarized",
                     "match_pattern": pattern,
-                    "metadata": {"id": conv_id},
+                    "score": None,
+                    "metadata": {"id": conv_id, "last_updated": row.get("updated_at")},
                 })
-                if len([r for r in results if r["source"] == "feedme"]) >= max_results:
+                if len([r for r in results if r["source"] == "feedme"]) >= feedme_limit:
                     break
         except Exception as exc:
             logger.error("DB grep FeedMe search failed: %s", exc)
 
-    return {
+    deduped = _dedupe_results(results[:max_results])
+    payload = {
         "retrieval_id": retrieval_id,
         "pattern": pattern,
         "case_sensitive": case_sensitive,
         "sources_searched": sources_searched,
-        "results": results[:max_results],
-        "result_count": len(results[:max_results]),
+        "results": deduped,
+        "result_count": len(deduped),
+        "source_limits": {
+            "kb": kb_limit if "kb" in sources else 0,
+            "macros": macro_limit if "macros" in sources else 0,
+            "feedme": feedme_limit if "feedme" in sources else 0,
+        },
     }
+    serialized = _serialize_tool_output(payload)
+    _store_tool_result(cache_key, serialized)
+    return payload
 
 
 @tool("db_context_search", args_schema=DbContextSearchInput)
@@ -1850,6 +2070,7 @@ async def db_context_search_tool(
         "doc_id": doc_id,
         "found": False,
         "content": None,
+        "snippet": None,
         "metadata": {},
     }
 
@@ -1870,7 +2091,9 @@ async def db_context_search_tool(
             if resp.data:
                 result["found"] = True
                 result["title"] = resp.data.get("title", "")
-                result["content"] = resp.data.get("content", "")
+                content = resp.data.get("content", "")
+                result["content"] = content
+                result["snippet"] = _trim_content(content)
                 result["metadata"] = {
                     "url": resp.data.get("url"),
                     "created_at": resp.data.get("created_at"),
@@ -1893,7 +2116,9 @@ async def db_context_search_tool(
             if resp.data:
                 result["found"] = True
                 result["title"] = resp.data.get("title", "")
-                result["content"] = resp.data.get("comment_value", "")
+                content = resp.data.get("comment_value", "")
+                result["content"] = content
+                result["snippet"] = _trim_content(content)
                 result["metadata"] = {
                     "zendesk_id": resp.data.get("zendesk_id"),
                     "description": resp.data.get("description"),
@@ -1929,6 +2154,7 @@ async def db_context_search_tool(
                 result["found"] = True
                 result["title"] = details.get("title", f"Conversation {doc_id}")
                 result["content"] = full_content
+                result["snippet"] = _trim_content(full_content)
                 result["content_type"] = "full" if len(full_content) <= FEEDME_SUMMARIZE_THRESHOLD else "needs_summarization"
                 result["original_length"] = len(full_content)
                 result["metadata"] = {
@@ -1936,6 +2162,7 @@ async def db_context_search_tool(
                     "created_at": details.get("created_at"),
                     "folder_id": details.get("folder_id"),
                     "chunk_count": len(resp.data),
+                    "updated_at": details.get("updated_at"),
                 }
 
     except Exception as exc:
@@ -2261,9 +2488,9 @@ def read_skill_tool(
 
 
 def get_db_retrieval_tools() -> List[BaseTool]:
-    """Return tools for the database retrieval subagent."""
+    """Return tools for the database retrieval subagent in priority order."""
     return [
-        db_unified_search_tool,
-        db_grep_search_tool,
-        db_context_search_tool,
+        db_unified_search_tool,  # semantic/hybrid first
+        db_context_search_tool,  # full doc/context retrieval
+        db_grep_search_tool,     # exact/pattern match
     ]

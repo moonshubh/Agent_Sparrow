@@ -17,132 +17,15 @@ from typing import Any, Dict, List, Optional
 
 from loguru import logger
 
-
-# Model context window sizes (in tokens)
-# Kept in sync with context_middleware.py - Updated Nov 2025
-MODEL_CONTEXT_WINDOWS = {
-    # Google Gemini models (Nov 2025) - All have 1M input tokens
-    "gemini-3-pro-preview": 1_048_576,        # Gemini 3 Pro - most intelligent
-    "gemini-3-pro-image-preview": 65_536,     # Gemini 3 Pro Image
-    "gemini-2.5-flash": 1_048_576,            # Stable workhorse
-    "gemini-2.5-flash-lite": 1_048_576,       # Ultra fast, cost-efficient
-    "gemini-2.5-pro": 1_048_576,              # Advanced thinking model
-    "gemini-2.5-flash-preview-09-2025": 1_048_576,
-    "gemini-2.5-flash-lite-preview-09-2025": 1_048_576,
-    "gemini-2.0-flash": 1_048_576,            # Second gen workhorse
-    "gemini-2.0-flash-lite": 1_048_576,       # Second gen fast
-    "gemini-embedding-001": 3_584,
-    "models/gemini-embedding-001": 3_584,
-
-    # XAI Grok models (Nov 2025) - Major updates!
-    "grok-4": 256_000,                        # 256K context
-    "grok-4-fast": 2_000_000,                 # 2M context! (Sept 2025 release)
-    "grok-4-1-fast-reasoning": 2_000_000,     # 2M context with reasoning
-    "grok-3": 131_072,                        # 128K context
-    "grok-3-mini": 131_072,                   # 128K context
-    "grok-3-fast": 131_072,
-
-    # OpenRouter model aliases
-    "x-ai/grok-4.1-fast:free": 2_000_000,
-    "x-ai/grok-4": 256_000,
-    "x-ai/grok-4-fast": 2_000_000,
-    "google/gemini-2.5-flash": 1_048_576,
-    "google/gemini-2.5-pro": 1_048_576,
-    "google/gemini-3-pro-preview": 1_048_576,
-
-    # OpenAI models (Nov 2025) - GPT-4.1 series has 1M context!
-    # GPT-5 series (released Dec 2025) - 400K input window per OpenAI docs
-    "gpt-5.1": 400_000,                       # Latest flagship (400K)
-    "gpt-5": 400_000,                         # Previous flagship (400K)
-    "gpt-5-mini": 400_000,                    # Lightweight GPT-5 (400K)
-    "gpt-5-nano": 400_000,                    # Ultra-lightweight GPT-5 (400K)
-    "gpt-5-pro": 400_000,                     # Pro tier GPT-5 (400K)
-    "gpt-4.1": 1_000_000,                     # 1M context
-    "gpt-4.1-mini": 1_000_000,                # 1M context
-    "gpt-4.1-nano": 1_000_000,                # 1M context
-    "gpt-4o": 128_000,                        # 128K context
-    "gpt-4o-mini": 128_000,
-    "gpt-4-turbo": 128_000,
-    "gpt-4": 8_192,
-    "gpt-3.5-turbo": 16_385,
-
-    # Anthropic Claude models (Nov 2025) - Claude 4 has 1M context!
-    "claude-sonnet-4": 1_000_000,             # 1M context (Aug 2025)
-    "claude-4-sonnet": 1_000_000,             # Alias
-    "claude-sonnet-4.5": 1_000_000,           # Most advanced
-    "claude-4.5-sonnet": 1_000_000,           # Alias
-    "claude-3-opus": 200_000,
-    "claude-3-sonnet": 200_000,
-    "claude-3-haiku": 200_000,
-    "claude-3.5-sonnet": 200_000,
-}
-
-# Provider-specific default context windows (Nov 2025)
-PROVIDER_DEFAULT_CONTEXT = {
-    "google": 1_048_576,   # Gemini 2.5/3 all have 1M
-    "xai": 256_000,        # Grok 4 default (256K)
-    "openai": 1_000_000,   # GPT-4.1+ all have 1M
-    "anthropic": 1_000_000,  # Claude 4 has 1M
-}
-
-DEFAULT_CONTEXT_WINDOW = 128_000  # Conservative default
+# Shared model context metadata
+from app.agents.unified.model_context import (
+    DEFAULT_CONTEXT_WINDOW,
+    MODEL_CONTEXT_WINDOWS,
+    PROVIDER_DEFAULT_CONTEXT,
+    get_model_context_window,
+)
 
 
-def get_model_context_window(model: str, provider: Optional[str] = None) -> int:
-    """Get the context window size for a model.
-
-    Supports multiple lookup strategies:
-    1. Exact model name match
-    2. Partial model name match (for versioned models)
-    3. Provider default fallback
-    4. Global default fallback
-
-    Args:
-        model: Model identifier (e.g., "gemini-2.5-flash", "grok-4-1-fast-reasoning")
-        provider: Optional provider hint (e.g., "google", "xai")
-
-    Returns:
-        Context window size in tokens.
-    """
-    if not model:
-        # Use provider default if available
-        if provider and provider.lower() in PROVIDER_DEFAULT_CONTEXT:
-            return PROVIDER_DEFAULT_CONTEXT[provider.lower()]
-        return DEFAULT_CONTEXT_WINDOW
-
-    model_lower = model.lower()
-
-    # 1. Exact match
-    if model in MODEL_CONTEXT_WINDOWS:
-        return MODEL_CONTEXT_WINDOWS[model]
-
-    # 2. Case-insensitive exact match
-    for known_model, context in MODEL_CONTEXT_WINDOWS.items():
-        if known_model.lower() == model_lower:
-            return context
-
-    # 3. Partial match (for versioned models like "gemini-2.5-flash-001")
-    for known_model, context in MODEL_CONTEXT_WINDOWS.items():
-        if model_lower.startswith(known_model.lower()):
-            return context
-        if known_model.lower().startswith(model_lower):
-            return context
-
-    # 4. Provider-based inference from model name
-    if "gemini" in model_lower:
-        return PROVIDER_DEFAULT_CONTEXT.get("google", DEFAULT_CONTEXT_WINDOW)
-    if "grok" in model_lower:
-        return PROVIDER_DEFAULT_CONTEXT.get("xai", DEFAULT_CONTEXT_WINDOW)
-    if "gpt" in model_lower:
-        return PROVIDER_DEFAULT_CONTEXT.get("openai", DEFAULT_CONTEXT_WINDOW)
-    if "claude" in model_lower:
-        return PROVIDER_DEFAULT_CONTEXT.get("anthropic", DEFAULT_CONTEXT_WINDOW)
-
-    # 5. Use provider default if available
-    if provider and provider.lower() in PROVIDER_DEFAULT_CONTEXT:
-        return PROVIDER_DEFAULT_CONTEXT[provider.lower()]
-
-    return DEFAULT_CONTEXT_WINDOW
 
 
 @dataclass
@@ -297,58 +180,44 @@ class TokenBudget:
         return cls(total=context_window, model_name=model_name)
 
 
-# Pre-configured budgets for common models across all providers (Nov 2025)
-BUDGETS = {
-    # Google Gemini models (all 1M context)
-    "gemini-3-pro-preview": TokenBudget(total=1_048_576, model_name="gemini-3-pro-preview"),
-    "gemini-2.5-flash": TokenBudget(total=1_048_576, model_name="gemini-2.5-flash"),
-    "gemini-2.5-flash-lite": TokenBudget(total=1_048_576, model_name="gemini-2.5-flash-lite"),
-    "gemini-2.5-pro": TokenBudget(total=1_048_576, model_name="gemini-2.5-pro"),
-    "gemini-2.0-flash": TokenBudget(total=1_048_576, model_name="gemini-2.0-flash"),
-    "gemini-2.0-flash-lite": TokenBudget(total=1_048_576, model_name="gemini-2.0-flash-lite"),
-    # XAI Grok models (Nov 2025 - major context updates!)
-    "grok-4-1-fast-reasoning": TokenBudget(total=2_000_000, model_name="grok-4-1-fast-reasoning"),
-    "grok-4-fast": TokenBudget(total=2_000_000, model_name="grok-4-fast"),
-    "grok-4": TokenBudget(total=256_000, model_name="grok-4"),
-    "grok-3": TokenBudget(total=131_072, model_name="grok-3"),
-    "grok-3-fast": TokenBudget(total=131_072, model_name="grok-3-fast"),
-    # OpenAI models (GPT-4.1+ has 1M, GPT-5 series has 400K per OpenAI docs)
-    "gpt-5.1": TokenBudget(total=400_000, model_name="gpt-5.1"),
-    "gpt-5": TokenBudget(total=400_000, model_name="gpt-5"),
-    "gpt-5-mini": TokenBudget(total=400_000, model_name="gpt-5-mini"),
-    "gpt-4.1": TokenBudget(total=1_000_000, model_name="gpt-4.1"),
-    "gpt-4.1-mini": TokenBudget(total=1_000_000, model_name="gpt-4.1-mini"),
-    "gpt-4o": TokenBudget(total=128_000, model_name="gpt-4o"),
-    "gpt-4o-mini": TokenBudget(total=128_000, model_name="gpt-4o-mini"),
-    "gpt-4-turbo": TokenBudget(total=128_000, model_name="gpt-4-turbo"),
-    "gpt-4": TokenBudget(total=8_192, model_name="gpt-4"),
-    # Anthropic Claude models (Nov 2025 - Claude 4 has 1M!)
-    "claude-sonnet-4": TokenBudget(total=1_000_000, model_name="claude-sonnet-4"),
-    "claude-sonnet-4.5": TokenBudget(total=1_000_000, model_name="claude-sonnet-4.5"),
-    "claude-3-opus": TokenBudget(total=200_000, model_name="claude-3-opus"),
-    "claude-3-sonnet": TokenBudget(total=200_000, model_name="claude-3-sonnet"),
-    "claude-3.5-sonnet": TokenBudget(total=200_000, model_name="claude-3.5-sonnet"),
-    "claude-3-haiku": TokenBudget(total=200_000, model_name="claude-3-haiku"),
-}
-
-
-def get_budget_for_model(model_name: str, provider: Optional[str] = None) -> TokenBudget:
-    """Get pre-configured budget for a model, or create one.
-
-    Supports multi-provider model lookup:
-    1. Check pre-configured BUDGETS dict
-    2. Use provider-aware context window lookup for unknown models
-
-    Args:
-        model_name: Model identifier.
-        provider: Optional provider hint (e.g., "google", "xai", "openai", "anthropic").
-
-    Returns:
-        TokenBudget for that model.
-    """
-    if model_name in BUDGETS:
-        return BUDGETS[model_name]
+# Helper to build budgets using shared model context metadata
+def _budget(model_name: str, provider: Optional[str] = None) -> TokenBudget:
     return TokenBudget.for_model(model_name, provider)
+
+
+# Pre-configured budgets for common models across all providers (align with shared metadata)
+BUDGETS = {
+    # Google Gemini models
+    "gemini-3-pro-preview": _budget("gemini-3-pro-preview", provider="google"),
+    "gemini-2.5-flash": _budget("gemini-2.5-flash", provider="google"),
+    "gemini-2.5-flash-lite": _budget("gemini-2.5-flash-lite", provider="google"),
+    "gemini-2.5-pro": _budget("gemini-2.5-pro", provider="google"),
+    "gemini-2.0-flash": _budget("gemini-2.0-flash", provider="google"),
+    "gemini-2.0-flash-lite": _budget("gemini-2.0-flash-lite", provider="google"),
+    # XAI Grok models
+    "grok-4-1-fast-reasoning": _budget("grok-4-1-fast-reasoning", provider="xai"),
+    "grok-4-fast": _budget("grok-4-fast", provider="xai"),
+    "grok-4": _budget("grok-4", provider="xai"),
+    "grok-3": _budget("grok-3", provider="xai"),
+    "grok-3-fast": _budget("grok-3-fast", provider="xai"),
+    # OpenAI models
+    "gpt-5.1": _budget("gpt-5.1", provider="openai"),
+    "gpt-5": _budget("gpt-5", provider="openai"),
+    "gpt-5-mini": _budget("gpt-5-mini", provider="openai"),
+    "gpt-4.1": _budget("gpt-4.1", provider="openai"),
+    "gpt-4.1-mini": _budget("gpt-4.1-mini", provider="openai"),
+    "gpt-4o": _budget("gpt-4o", provider="openai"),
+    "gpt-4o-mini": _budget("gpt-4o-mini", provider="openai"),
+    "gpt-4-turbo": _budget("gpt-4-turbo", provider="openai"),
+    "gpt-4": _budget("gpt-4", provider="openai"),
+    # Anthropic Claude models
+    "claude-sonnet-4": _budget("claude-sonnet-4", provider="anthropic"),
+    "claude-sonnet-4.5": _budget("claude-sonnet-4.5", provider="anthropic"),
+    "claude-3-opus": _budget("claude-3-opus", provider="anthropic"),
+    "claude-3-sonnet": _budget("claude-3-sonnet", provider="anthropic"),
+    "claude-3.5-sonnet": _budget("claude-3.5-sonnet", provider="anthropic"),
+    "claude-3-haiku": _budget("claude-3-haiku", provider="anthropic"),
+}
 
 
 class TokenBudgetTracker:

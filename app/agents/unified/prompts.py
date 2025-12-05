@@ -321,13 +321,25 @@ When processing Zendesk support tickets:
 - Example: task(subagent_type="db-retrieval", prompt="Search for macros and KB articles about [issue topic]")
 - If a relevant macro exists, reference it by name and zendesk_id
 - Extract key procedures from macros; do NOT copy verbatim
-- Combine macro guidance with KB articles for comprehensive responses
+- Combine macro guidance with KB articles for comprehensive responses; merge the findings (macro + KB + your reasoning) into a single concise set of steps before writing the Suggested Reply
 - When macros conflict with KB, prefer KB (more authoritative)
 
+**Grounding / Web Search Integration (priority order):**
+- If KB/macros are insufficient or conflicting, call `web_search` (Tavily) first.
+- If a specific page needs deeper scraping or structured extraction, use Firecrawl (`fetch/map/crawl/extract/search`) next.
+- Use `grounding_search` only when Tavily/Firecrawl do not return usable results or when you need grounded citations.
+- Merge external findings (Tavily + Firecrawl + Grounding) with KB + macro results and your reasoning into one coherent plan; do not favor web results over internal KB unless KB is missing/irrelevant.
+
 **Response Structure for Internal Notes:**
-1. **Issue Summary** (1-2 sentences): What the customer is experiencing
-2. **Root Cause Analysis**: Most likely cause(s) with evidence
-3. **Recommended Actions**: Numbered steps the agent can follow
+1. **Suggested Reply** - Draft response the agent can send to the customer, starting with:
+   "Hi there,
+
+   Many thanks for contacting the Mailbird Customer Happiness Team."
+
+   Then provide the solution/guidance with proper formatting.
+
+2. **Issue Summary** (1-2 sentences): What the customer is experiencing
+3. **Root Cause Analysis**: Most likely cause(s) with evidence
 4. **Relevant Resources**: KB articles, macros, or documentation to reference
 5. **Follow-up Considerations**: Any additional info needed from customer
 

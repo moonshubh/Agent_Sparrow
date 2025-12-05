@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
 from loguru import logger
+from app.agents.unified.attachment_utils import is_text_mime, TEXT_EXTENSIONS, TEXT_MIME_TYPES
 
 if TYPE_CHECKING:
     from app.agents.orchestration.orchestration.state import Attachment
@@ -21,19 +22,6 @@ if TYPE_CHECKING:
 # MIME type categories
 IMAGE_MIME_TYPES = {"image/png", "image/jpeg", "image/gif", "image/webp"}
 PDF_MIME_TYPES = {"application/pdf"}
-TEXT_MIME_TYPES = {
-    "text/plain",
-    "text/csv",
-    "text/html",
-    "text/markdown",
-    "text/xml",
-    "application/json",
-    "application/xml",
-    "application/javascript",
-}
-
-# File extensions that indicate text content even with application/octet-stream
-TEXT_EXTENSIONS = (".log", ".txt", ".csv", ".json", ".xml", ".md", ".yaml", ".yml")
 
 # Size limits
 MAX_IMAGE_SIZE = 10 * 1024 * 1024  # 10MB
@@ -384,20 +372,7 @@ class MultimodalProcessor:
 
     def _is_text_mime(self, mime: Optional[str], filename: Optional[str] = None) -> bool:
         """Check if MIME type indicates text content."""
-        if mime:
-            mime_lower = mime.lower()
-            if mime_lower.startswith("text/"):
-                return True
-            if mime_lower in TEXT_MIME_TYPES:
-                return True
-
-            # Special case: octet-stream with text extension
-            if mime_lower == "application/octet-stream" and filename:
-                name_lower = filename.lower()
-                if any(name_lower.endswith(ext) for ext in TEXT_EXTENSIONS):
-                    return True
-
-        return False
+        return is_text_mime(mime, filename)
 
     def _get_mime(self, attachment: Any) -> str:
         """Get MIME type from attachment."""

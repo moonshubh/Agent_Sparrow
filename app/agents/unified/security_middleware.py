@@ -9,6 +9,7 @@ from langchain.agents.middleware.types import ModelRequest, ModelResponse, ToolC
 from langchain_core.messages import BaseMessage, ToolMessage
 from langgraph.runtime import Runtime
 from langgraph.types import Command, Overwrite
+from loguru import logger
 
 
 try:  # pragma: no cover - dependency wired in Phase 2
@@ -99,6 +100,7 @@ class SecurityRedactionMiddleware(AgentMiddleware[AgentState[Any], Any]):
         if not mutated:
             return None
 
+        logger.info("security_redaction_applied", count=len(sanitized))
         return {"messages": Overwrite(sanitized)}
 
     def _redact_model_response(self, response: ModelResponse) -> ModelResponse:
@@ -110,6 +112,7 @@ class SecurityRedactionMiddleware(AgentMiddleware[AgentState[Any], Any]):
             mutated = mutated or cleaned is not msg
             cleaned_messages.append(cleaned)
         if mutated:
+            logger.info("security_redaction_applied_model_response", count=len(cleaned_messages))
             return ModelResponse(  # type: ignore[call-arg]
                 result=cleaned_messages,
                 structured_response=response.structured_response,
@@ -141,7 +144,6 @@ class SecurityRedactionMiddleware(AgentMiddleware[AgentState[Any], Any]):
         if isinstance(payload, str):
             return redact_pii(payload)
         if isinstance(payload, list):
-            # Check if any item changed before creating new list
             updated_items = []
             changed = False
             for item in payload:
@@ -151,5 +153,7 @@ class SecurityRedactionMiddleware(AgentMiddleware[AgentState[Any], Any]):
                     changed = True
             return updated_items if changed else payload
         if isinstance(payload, dict):
-            return redact_pii_from_dict(payload)
+            redacted = redact_pii_from_dict(payload)
+            return redacted
+        # Fallback: leave other payloads unchanged
         return payload

@@ -140,10 +140,11 @@ def build_chat_model(
         registry = get_registry()
         fallback_model = registry.coordinator_google.id
         logger.warning(
-            "unknown_provider_fallback",
+            "provider_unavailable",
             provider=provider,
-            fallback="google",
-            model=fallback_model,
+            reason="unknown_provider",
+            fallback_provider="google",
+            fallback_model=fallback_model,
         )
         return _build_google_model(fallback_model, temperature)
 
@@ -226,9 +227,11 @@ def _build_xai_model(
 
     if not settings.xai_api_key:
         logger.warning(
-            "xai_api_key_not_configured",
-            fallback="google",
-            model=fallback_model,
+            "provider_unavailable",
+            provider="xai",
+            reason="api_key_missing",
+            fallback_provider="google",
+            fallback_model=fallback_model,
         )
         return _build_google_model(fallback_model, temperature)
 
@@ -236,9 +239,12 @@ def _build_xai_model(
         from langchain_xai import ChatXAI
     except ImportError as e:
         logger.error(
-            "langchain_xai_import_failed",
+            "provider_unavailable",
+            provider="xai",
+            reason="langchain_xai_import_failed",
             error=str(e),
-            fallback="google",
+            fallback_provider="google",
+            fallback_model=fallback_model,
         )
         return _build_google_model(fallback_model, temperature)
 
@@ -277,9 +283,11 @@ def _build_openrouter_model(model: str, temperature: float) -> BaseChatModel:
         registry = get_registry()
         fallback_model = registry.coordinator_google.id
         logger.warning(
-            "openrouter_api_key_not_configured",
-            fallback="google",
-            model=fallback_model,
+            "provider_unavailable",
+            provider="openrouter",
+            reason="api_key_missing",
+            fallback_provider="google",
+            fallback_model=fallback_model,
         )
         return _build_google_model(fallback_model, temperature)
 

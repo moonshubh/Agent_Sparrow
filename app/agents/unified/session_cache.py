@@ -25,6 +25,7 @@ V = TypeVar("V")
 DEFAULT_MAX_SIZE = 1000
 DEFAULT_TTL_SECONDS = 3600  # 1 hour
 SESSION_CACHE_TTL = 600  # 10 minutes for session-specific data
+DEFAULT_PRUNE_INTERVAL_SECONDS = 300
 
 
 @dataclass
@@ -66,6 +67,7 @@ class ThreadSafeCache(Generic[V]):
         self._cache: Dict[str, CacheEntry[V]] = {}
         self._lock = threading.Lock()
         self._stats = CacheStats()
+        self._last_prune = time.time()
 
     def get(self, key: str) -> Optional[V]:
         """Get a value from the cache.
@@ -77,6 +79,7 @@ class ThreadSafeCache(Generic[V]):
             Cached value or None if not found/expired.
         """
         with self._lock:
+            self._maybe_prune_locked()
             entry = self._cache.get(key)
             if entry is None:
                 self._stats.misses += 1
@@ -101,6 +104,7 @@ class ThreadSafeCache(Generic[V]):
             value: Value to cache.
         """
         with self._lock:
+            self._maybe_prune_locked()
             # Evict if at capacity
             if len(self._cache) >= self.maxsize and key not in self._cache:
                 self._evict_oldest()
@@ -135,6 +139,22 @@ class ThreadSafeCache(Generic[V]):
         oldest_key = min(self._cache.keys(), key=lambda k: self._cache[k].timestamp)
         del self._cache[oldest_key]
         self._stats.evictions += 1
+
+    def _maybe_prune_locked(self) -> None:
+        """Prune expired entries periodically to avoid unbounded growth."""
+        now = time.time()
+        if now - self._last_prune < DEFAULT_PRUNE_INTERVAL_SECONDS:
+            return
+        expired = [
+            key
+            for key, entry in self._cache.items()
+            if now - entry.timestamp > self.ttl
+        ]
+        for key in expired:
+            del self._cache[key]
+        if expired:
+            self._stats.expirations += len(expired)
+        self._last_prune = now
 
     def prune_expired(self) -> int:
         """Remove all expired entries.

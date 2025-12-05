@@ -454,6 +454,7 @@ async def _generate_reply(ticket_id: int | str, subject: str | None, description
                 last_li_index = None
 
             heading_names = {
+                # Legacy headings
                 "solution overview",
                 "try now — immediate actions",
                 "try now - immediate actions",
@@ -462,6 +463,12 @@ async def _generate_reply(ticket_id: int | str, subject: str | None, description
                 "additional context",
                 "pro tips",
                 "supportive closing",
+                # Current Zendesk structured headings
+                "suggested reply",
+                "issue summary",
+                "root cause analysis",
+                "relevant resources",
+                "follow-up considerations",
             }
             hidden_headings = {"empathetic opening", "supportive closing"}
 
@@ -494,10 +501,27 @@ async def _generate_reply(ticket_id: int | str, subject: str | None, description
                     return m.group(1) + br_sep + " "
                 return re.sub(r"([.!?])\s+(?=[A-Z0-9\(])", repl, text)
 
+            heading_seen = False
+            suggested_seen = False
+            issue_summary_seen = False
+            rca_seen = False
+            resources_seen = False
+            followup_seen = False
             for raw in lines:
                 line = raw.rstrip()
                 h = is_heading(line)
                 if h is not None:
+                    heading_seen = True
+                    if h.lower().strip() == "suggested reply":
+                        suggested_seen = True
+                    if h.lower().strip() == "issue summary":
+                        issue_summary_seen = True
+                    if h.lower().strip() == "root cause analysis":
+                        rca_seen = True
+                    if h.lower().strip() == "relevant resources":
+                        resources_seen = True
+                    if h.lower().strip() == "follow-up considerations":
+                        followup_seen = True
                     ensure_lists_closed()
                     flush_paragraph()
                     if h.lower() not in hidden_headings:
@@ -549,6 +573,52 @@ async def _generate_reply(ticket_id: int | str, subject: str | None, description
 
             ensure_lists_closed()
             flush_paragraph()
+
+            # Force consistent shell + greeting when headings are missing or Suggested Reply absent
+            heading_tag = getattr(settings, "zendesk_heading_level", "h3").lower()
+            if heading_tag not in {"h2", "h3"}:
+                heading_tag = "h3"
+
+            def ensure_greeting_block(parts: List[str]) -> List[str]:
+                if not parts:
+                    return parts
+                first_block = parts[0]
+                # If first block is heading, greeting will be in following paragraph
+                start_idx = 1 if first_block.lower().startswith(f"<{heading_tag}>") else 0
+                if start_idx < len(parts):
+                    body = parts[start_idx]
+                    if "Hi there, Many thanks for contacting the Mailbird Customer Happiness Team." not in body:
+                        parts.insert(
+                            start_idx,
+                            f"<p {p_style}>Hi there, Many thanks for contacting the Mailbird Customer Happiness Team.</p>",
+                        )
+                else:
+                    parts.append(f"<p {p_style}>Hi there, Many thanks for contacting the Mailbird Customer Happiness Team.</p>")
+                return parts
+
+            if not heading_seen or not suggested_seen:
+                wrapped = []
+                wrapped.append(f"<{heading_tag}>Suggested Reply</{heading_tag}>")
+                if html_parts:
+                    wrapped.extend(html_parts)
+                else:
+                    wrapped.append(f"<p {p_style}>{sentence_breaks(s or '')}</p>")
+                html_parts = ensure_greeting_block(wrapped)
+            else:
+                html_parts = ensure_greeting_block(html_parts)
+
+            # Ensure downstream sections always exist in the note
+            def ensure_section(parts: List[str], title: str) -> List[str]:
+                marker = f"<{heading_tag}>{title}</{heading_tag}>"
+                if not any(p.lower().startswith(marker.lower()) for p in parts):
+                    parts.append(marker)
+                    parts.append(f"<p {p_style}>Pending — fill in key points for {title.lower()}.</p>")
+                return parts
+
+            html_parts = ensure_section(html_parts, "Issue Summary")
+            html_parts = ensure_section(html_parts, "Root Cause Analysis")
+            html_parts = ensure_section(html_parts, "Relevant Resources")
+            html_parts = ensure_section(html_parts, "Follow-up Considerations")
 
             merged: List[str] = []
             seen_pro = False
@@ -609,6 +679,19 @@ async def _generate_reply(ticket_id: int | str, subject: str | None, description
 
     if description:
         parts_in.append(str(description))
+
+    # Deterministic guardrail for PGP/OpenPGP questions to avoid hallucinating support
+    try:
+        text_probe = " ".join(parts_in).lower()
+    except Exception:
+        text_probe = ""
+    if any(k in text_probe for k in ["pgp", "openpgp", "gpg"]):
+        parts_in.append(
+            "Internal KB note: Mailbird does NOT support PGP/OpenPGP encryption today. "
+            "There is no in-app toggle or workaround. "
+            "Advise the customer to upvote the feature request: "
+            "https://mailbird.featureupvote.com/suggestions/74494/pgp-encryption-support."
+        )
 
     attachments: List[Dict[str, Any]] = []
     unified_attachments = []  # For multimodal processing (images, PDFs)

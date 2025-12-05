@@ -23,7 +23,11 @@ class QuotaExceededError(QuotaManagerError):
 
 
 class QuotaManager:
-    """Tracks per-service usage using Redis counters."""
+    """Tracks per-service usage using Redis counters.
+
+    Note: This implementation requires Redis for cross-process safety. In-memory
+    limiters are single-process only; ensure `settings.redis_url` is reachable.
+    """
 
     def __init__(
         self,
@@ -36,27 +40,29 @@ class QuotaManager:
         self.redis = redis_client or redis.Redis.from_url(settings.redis_url, decode_responses=True)
         self.redis_client = self.redis  # Expose as redis_client for compatibility
         self.key_prefix = key_prefix
+        # Prefer config-driven limits; fall back to provided overrides or conservative defaults.
         self.minute_limits = per_minute_limits or {
             "grounding": max(0, settings.grounding_minute_limit),
-            "embeddings": 1000,  # Default embedding limit
+            "embeddings": max(0, getattr(settings, "embeddings_minute_limit", 1000)),
         }
         self.daily_limits = per_day_limits or {
             "grounding": max(0, settings.grounding_daily_limit),
-            "embeddings": 10000,  # Default daily embedding limit
+            "embeddings": max(0, getattr(settings, "embeddings_daily_limit", 10000)),
         }
 
     def check_and_track(self, service: str, increment: int = 1) -> bool:
         """Increment counters and return True if the request is within quota."""
+        if increment <= 0:
+            self.logger.warning("quota_increment_non_positive", service=service, increment=increment)
+            return True
 
-        minute_limit = self.minute_limits.get(service, 0)
-        daily_limit = self.daily_limits.get(service, 0)
+        minute_limit, daily_limit = self._get_limits(service)
 
         if minute_limit <= 0 and daily_limit <= 0:
             return True
 
         now = datetime.utcnow()
-        minute_key = f"{self.key_prefix}:{service}:minute:{now:%Y%m%d%H%M}"
-        daily_key = f"{self.key_prefix}:{service}:day:{now:%Y%m%d}"
+        minute_key, daily_key = self._build_keys(service, now)
 
         try:
             minute_count = self._increment(minute_key, increment, ttl_seconds=120) if minute_limit > 0 else None
@@ -67,25 +73,25 @@ class QuotaManager:
 
         if minute_limit > 0 and (minute_count or 0) > minute_limit:
             self._decrement(minute_key, increment)
+            self.logger.info("quota_exceeded_minute", service=service, limit=minute_limit)
             return False
         if daily_limit > 0 and (daily_count or 0) > daily_limit:
             self._decrement(daily_key, increment)
             if minute_limit > 0:
                 self._decrement(minute_key, increment)
+            self.logger.info("quota_exceeded_daily", service=service, limit=daily_limit)
             return False
         return True
 
     def check_quota(self, service: str) -> bool:
         """Check if a service is within quota without incrementing."""
-        minute_limit = self.minute_limits.get(service, 0)
-        daily_limit = self.daily_limits.get(service, 0)
+        minute_limit, daily_limit = self._get_limits(service)
 
         if minute_limit <= 0 and daily_limit <= 0:
             return True
 
         now = datetime.utcnow()
-        minute_key = f"{self.key_prefix}:{service}:minute:{now:%Y%m%d%H%M}"
-        daily_key = f"{self.key_prefix}:{service}:day:{now:%Y%m%d}"
+        minute_key, daily_key = self._build_keys(service, now)
 
         try:
             if minute_limit > 0:
@@ -106,7 +112,7 @@ class QuotaManager:
     def get_usage(self, service: str) -> int:
         """Get current usage count for a service (daily)."""
         now = datetime.utcnow()
-        daily_key = f"{self.key_prefix}:{service}:day:{now:%Y%m%d}"
+        _, daily_key = self._build_keys(service, now)
 
         try:
             count = self.redis.get(daily_key)
@@ -128,6 +134,18 @@ class QuotaManager:
         usage = self.get_usage(service)
         return min(100.0, (usage / limit) * 100)
 
+    def get_status(self, service: str) -> dict:
+        """Return current usage/limits for observability."""
+        minute_limit, daily_limit = self._get_limits(service)
+        usage = self.get_usage(service)
+        return {
+            "service": service,
+            "minute_limit": minute_limit,
+            "daily_limit": daily_limit,
+            "daily_usage": usage,
+            "daily_usage_pct": self.get_usage_percentage(service),
+        }
+
     def _increment(self, key: str, increment: int, ttl_seconds: int) -> int:
         value = self.redis.incrby(key, increment)
         if value == increment:
@@ -139,3 +157,13 @@ class QuotaManager:
             self.redis.decrby(key, decrement)
         except redis.RedisError:  # pragma: no cover - best effort
             pass
+
+    def _build_keys(self, service: str, now: datetime) -> tuple[str, str]:
+        """Construct minute and daily keys for the service."""
+        minute_key = f"{self.key_prefix}:{service}:minute:{now:%Y%m%d%H%M}"
+        daily_key = f"{self.key_prefix}:{service}:day:{now:%Y%m%d}"
+        return minute_key, daily_key
+
+    def _get_limits(self, service: str) -> tuple[int, int]:
+        """Return (per-minute, per-day) limits for a service."""
+        return self.minute_limits.get(service, 0), self.daily_limits.get(service, 0)

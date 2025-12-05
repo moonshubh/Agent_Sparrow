@@ -11,8 +11,8 @@ Key patterns adopted from Claude Agent SDK:
 import asyncio
 import threading
 import time
-from dataclasses import dataclass, field
-from typing import Any, Callable, Optional
+from dataclasses import dataclass
+from typing import Any, Callable, Mapping, MutableMapping
 
 from langchain_core.messages import ToolMessage
 from langchain_core.tools import BaseTool
@@ -43,8 +43,6 @@ class ToolExecutionConfig:
         ConnectionRefusedError,
         ConnectionResetError,
     )
-    convert_errors_to_context: bool = True
-
     # Tool-specific hints for error messages
     error_recovery_hint: str = "Consider alternative approaches."
 
@@ -68,6 +66,9 @@ class ToolExecutionResult:
     duration_ms: int
     retries_used: int
     is_retryable_error: bool = False
+    args_summary: str | None = None
+    status: str | None = None
+    artifact: Any | None = None
 
     def to_tool_message(self) -> ToolMessage:
         """Convert to LangChain ToolMessage with proper error handling.
@@ -75,19 +76,21 @@ class ToolExecutionResult:
         Claude pattern: errors become context for reasoning, not just error strings.
         The model can see what failed and why, and can try alternative approaches.
         """
+        status = self.status or ("success" if self.success else "error")
+
         if self.success:
             return ToolMessage(
                 content=str(self.result) if self.result is not None else "",
                 tool_call_id=self.tool_call_id,
+                additional_kwargs={
+                    "status": status,
+                    "artifact": self.artifact,
+                    "args_summary": self.args_summary,
+                },
             )
         else:
             # Claude pattern: errors become context for reasoning
-            error_content = (
-                f"Tool '{self.tool_name}' failed after {self.retries_used} retries.\n"
-                f"Error: {self.error}\n"
-                f"Duration: {self.duration_ms}ms\n"
-                f"Consider alternative approaches or different parameters."
-            )
+            error_content = self._format_error_content()
             return ToolMessage(
                 content=error_content,
                 tool_call_id=self.tool_call_id,
@@ -96,10 +99,25 @@ class ToolExecutionResult:
                     "error_type": self.error_type,
                     "retries_used": self.retries_used,
                     "is_retryable": self.is_retryable_error,
+                    "status": status,
+                    "artifact": self.artifact,
+                    "args_summary": self.args_summary,
                 },
             )
 
-    def to_metadata(self) -> dict:
+    def _format_error_content(self) -> str:
+        """Create consistent error context for the model."""
+        parts = [
+            f"Tool '{self.tool_name}' failed after {self.retries_used} retries.",
+            f"Error: {self.error}",
+            f"Duration: {self.duration_ms}ms",
+        ]
+        if self.args_summary:
+            parts.append(f"Args: {self.args_summary}")
+        parts.append("Consider alternative approaches or different parameters.")
+        return "\n".join(parts)
+
+    def to_metadata(self) -> dict[str, Any]:
         """Convert to metadata dict for LangSmith observability."""
         return {
             "tool_name": self.tool_name,
@@ -109,6 +127,7 @@ class ToolExecutionResult:
             "retries_used": self.retries_used,
             "error_type": self.error_type,
             "is_retryable_error": self.is_retryable_error,
+            "status": self.status,
         }
 
 
@@ -179,6 +198,7 @@ class ToolExecutor:
         configs: dict[str, ToolExecutionConfig] | None = None,
         default_config: ToolExecutionConfig | None = None,
         max_concurrency: int = 8,
+        on_result: Callable[[ToolExecutionResult], None] | None = None,
     ):
         """Initialize the executor.
 
@@ -186,12 +206,21 @@ class ToolExecutor:
             configs: Per-tool configuration overrides
             default_config: Default config for tools without specific config
             max_concurrency: Max parallel tool executions
+            on_result: Optional callback fired after each execution (success/fail)
         """
         self.configs = configs or {}
         self.default_config = default_config or ToolExecutionConfig()
-        self._max_concurrency = max_concurrency
+        bounded_concurrency = max(1, min(max_concurrency, 64))
+        if bounded_concurrency != max_concurrency:
+            logger.warning(
+                "tool_executor_concurrency_adjusted",
+                requested=max_concurrency,
+                applied=bounded_concurrency,
+            )
+        self._max_concurrency = bounded_concurrency
         self._sem: asyncio.Semaphore | None = None
         self._sem_loop: asyncio.AbstractEventLoop | None = None
+        self._on_result = on_result
 
         # Execution stats for observability
         self._stats_lock = threading.Lock()
@@ -215,7 +244,7 @@ class ToolExecutor:
         self,
         tool: BaseTool,
         tool_call_id: str,
-        args: dict,
+        args: Mapping[str, Any],
         config: dict | None = None,
     ) -> ToolExecutionResult:
         """Execute a tool with retry, timeout, and error conversion.
@@ -235,6 +264,9 @@ class ToolExecutor:
         retries_used = 0
         last_error: Exception | None = None
         is_retryable = False
+        tool_args = dict(args)
+        args_summary = _summarize_args(tool_args)
+        artifact = None
 
         with self._stats_lock:
             self._total_executions += 1
@@ -243,7 +275,7 @@ class ToolExecutor:
             for attempt in range(tool_config.max_retries + 1):
                 try:
                     async with asyncio.timeout(tool_config.timeout):
-                        result = await tool.ainvoke(args, config=config)
+                        result = await tool.ainvoke(tool_args, config=config)
 
                         duration_ms = int((time.monotonic() - start_time) * 1000)
 
@@ -255,7 +287,8 @@ class ToolExecutor:
                             retries_used=retries_used,
                         )
 
-                        return ToolExecutionResult(
+                        artifact = _extract_artifact(result)
+                        result_obj = ToolExecutionResult(
                             tool_name=tool.name,
                             tool_call_id=tool_call_id,
                             success=True,
@@ -264,7 +297,11 @@ class ToolExecutor:
                             error_type=None,
                             duration_ms=duration_ms,
                             retries_used=retries_used,
+                            args_summary=args_summary,
+                            status="success",
                         )
+                        self._emit_result(result_obj)
+                        return result_obj
 
                 except tool_config.retryable_errors as exc:
                     last_error = exc
@@ -283,6 +320,7 @@ class ToolExecutor:
                             max_attempts=tool_config.max_retries + 1,
                             delay=delay,
                             error=str(exc),
+                            exc_info=exc,
                         )
                         await asyncio.sleep(delay)
                         continue
@@ -317,13 +355,14 @@ class ToolExecutor:
             error_type=error_type,
             error=error_msg,
             is_retryable=is_retryable,
+            exc_info=last_error,
         )
 
         # Add recovery hint if available
         if tool_config.error_recovery_hint:
             error_msg = f"{error_msg}\n{tool_config.error_recovery_hint}"
 
-        return ToolExecutionResult(
+        result_obj = ToolExecutionResult(
             tool_name=tool.name,
             tool_call_id=tool_call_id,
             success=False,
@@ -333,11 +372,15 @@ class ToolExecutor:
             duration_ms=duration_ms,
             retries_used=retries_used,
             is_retryable_error=is_retryable,
+            args_summary=args_summary,
+            status="error",
         )
+        self._emit_result(result_obj)
+        return result_obj
 
     async def execute_batch(
         self,
-        executions: list[tuple[BaseTool, str, dict]],
+        executions: list[tuple[BaseTool, str, Mapping[str, Any]]],
         config: dict | None = None,
     ) -> list[ToolExecutionResult]:
         """Execute multiple tools concurrently.
@@ -378,3 +421,37 @@ class ToolExecutor:
             self._total_executions = 0
             self._total_failures = 0
             self._total_retries = 0
+
+    def _emit_result(self, result: ToolExecutionResult) -> None:
+        """Invoke result callback safely."""
+        if self._on_result is None:
+            return
+        try:
+            self._on_result(result)
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning("tool_executor_callback_failed", error=str(exc))
+
+
+def _summarize_args(args: Mapping[str, Any]) -> str:
+    """Lightweight, non-sensitive args summary for logs/context."""
+    if not args:
+        return "no args"
+    parts = []
+    for index, (key, value) in enumerate(args.items()):
+        if index >= 5:
+            parts.append("...")
+            break
+        parts.append(f"{key}={type(value).__name__}")
+    return ", ".join(parts)
+
+
+def _extract_artifact(result: Any) -> Any | None:
+    """Pull out an artifact payload from a structured result, if present."""
+    if isinstance(result, Mapping):
+        if "artifact" in result:
+            return result.get("artifact")
+        if "artifacts" in result:
+            return result.get("artifacts")
+    if hasattr(result, "artifact"):
+        return getattr(result, "artifact")
+    return None

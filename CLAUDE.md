@@ -398,6 +398,215 @@ The codebase has successfully migrated to the native AG-UI client implementation
 - ✅ Legacy troubleshooting and reasoning pipelines removed (~12,000 lines)
 - See `docs/reference/` for historical architecture documentation
 
+## Coding Standards & Best Practices
+
+This section provides comprehensive coding guidelines for both TypeScript (frontend) and Python (backend) development. See `AGENTS.md` for detailed conventions.
+
+### TypeScript Best Practices
+
+#### Type Safety (Strict Mode Required)
+```typescript
+// tsconfig.json - strict mode is mandatory
+{
+  "compilerOptions": {
+    "strict": true,
+    "noImplicitAny": true,
+    "strictNullChecks": true
+  }
+}
+```
+
+**Key Rules:**
+- **Never use `any`** - Use `unknown` with type guards or union types
+- **Leverage generics** for reusable, type-safe functions
+- **Use utility types**: `Partial<T>`, `Pick<T, K>`, `Omit<T, K>`, `Record<K, V>`
+- **Mark immutable data** with `readonly`
+- **Use `never`** for exhaustive switch statements
+
+```typescript
+// Good: Precise types
+function processMessage<T extends BaseMessage>(msg: T): ProcessedMessage<T> { ... }
+type ChatSummary = Pick<ChatSession, 'id' | 'title' | 'createdAt'>;
+
+// Avoid
+function process(data: any) { ... }  // Bad - disables type checking
+```
+
+#### Code Formatting & Linting
+- **Prettier** for formatting (auto-applied on save)
+- **ESLint** with `@typescript-eslint/recommended` + `prettier` config
+- Run `pnpm lint` before commits
+
+```json
+// .eslintrc.json
+{
+  "extends": ["eslint:recommended", "plugin:@typescript-eslint/recommended", "prettier"],
+  "parser": "@typescript-eslint/parser"
+}
+```
+
+#### React/Next.js Patterns
+- **Functional components only** with hooks
+- **Single responsibility** - one component, one purpose
+- **Colocate related code** - component, tests, types in same folder
+- **Use feature-based structure** in `src/features/`
+- **Query by role/text** in tests (Testing Library best practices)
+
+### Python Best Practices
+
+#### Type Annotations (Required for New Code)
+```python
+# All function signatures must have type hints
+def get_user_by_id(user_id: str, include_profile: bool = False) -> User | None:
+    """Fetch user by ID, optionally including profile data."""
+    ...
+
+# Use modern Python 3.10+ syntax
+def process_items(items: list[str]) -> dict[str, int]:  # Not List[str]
+    ...
+
+# Generic types for reusable functions
+from typing import TypeVar, Sequence
+T = TypeVar('T')
+def first_or_none(items: Sequence[T]) -> T | None:
+    return items[0] if items else None
+```
+
+**Mypy Configuration:**
+```ini
+# mypy.ini or pyproject.toml
+[tool.mypy]
+python_version = "3.11"
+strict = true
+disallow_untyped_defs = true
+warn_return_any = true
+```
+
+#### Code Formatting (Black + Ruff)
+```bash
+# Auto-format with Black
+black .
+
+# Lint with Ruff (10-100x faster than Flake8)
+ruff check . --fix
+ruff format .
+```
+
+```toml
+# pyproject.toml
+[tool.ruff]
+select = ["E", "F", "I", "B", "ANN"]  # Errors, Pyflakes, isort, Bugbear, Annotations
+line-length = 88
+extend-ignore = ["E203"]
+
+[tool.black]
+line-length = 88
+target-version = ["py311"]
+```
+
+#### FastAPI Architecture Patterns
+```python
+# Domain separation: routes call services, services handle logic
+# app/api/v1/endpoints/users.py
+from fastapi import APIRouter, Depends
+from app.schemas.user import UserCreate, UserOut
+from app.services import user_service
+from app.api.deps import get_db
+
+router = APIRouter(prefix="/users", tags=["users"])
+
+@router.post("/", response_model=UserOut)
+async def create_user(user_in: UserCreate, db=Depends(get_db)) -> UserOut:
+    return await user_service.create_user(db, user_in)
+```
+
+**Key Patterns:**
+- **APIRouter per domain** - group related endpoints
+- **Pydantic schemas** for request/response validation
+- **Dependency injection** for DB sessions, auth, config
+- **Service layer** for business logic (separate from routes)
+- **Use `BaseSettings`** for configuration management
+
+### Testing Standards
+
+#### Frontend (Vitest + Testing Library)
+```typescript
+import { render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { describe, it, expect, vi } from 'vitest';
+
+describe('ChatInput', () => {
+  it('submits message on enter key', async () => {
+    const onSubmit = vi.fn();
+    render(<ChatInput onSubmit={onSubmit} />);
+
+    // Query by role (accessibility-focused)
+    const input = screen.getByRole('textbox');
+    await userEvent.type(input, 'Hello{enter}');
+
+    expect(onSubmit).toHaveBeenCalledWith('Hello');
+  });
+});
+```
+
+**Principles:**
+- Test behavior, not implementation
+- Query by role/text (not test IDs)
+- Use `userEvent` for realistic interactions
+- Colocate tests with components
+
+#### Backend (Pytest)
+```python
+import pytest
+from httpx import AsyncClient
+from app.main import app
+
+@pytest.fixture
+async def async_client():
+    async with AsyncClient(app=app, base_url="http://test") as ac:
+        yield ac
+
+@pytest.mark.asyncio
+async def test_create_item(async_client):
+    response = await async_client.post("/items/", json={"name": "Test"})
+    assert response.status_code == 200
+    assert response.json()["name"] == "Test"
+```
+
+**Principles:**
+- Use fixtures for setup/teardown
+- Test both happy path and edge cases
+- Use `pytest.mark.asyncio` for async tests
+- Override dependencies with `app.dependency_overrides`
+
+### Dependency Management
+
+#### Frontend (pnpm)
+- Commit `pnpm-lock.yaml` for reproducibility
+- Use exact versions for critical dependencies
+- Separate dev dependencies properly
+
+#### Backend (pip-tools or Poetry)
+```bash
+# pip-tools workflow
+pip-compile requirements.in -o requirements.txt
+pip install -r requirements.txt
+
+# Poetry workflow
+poetry install
+poetry add <package>
+poetry lock
+```
+
+**Always commit lock files** (`poetry.lock` or compiled `requirements.txt`)
+
+### CI Pipeline Checks
+1. **Lint**: `pnpm lint` + `ruff check .`
+2. **Format**: `prettier --check .` + `ruff format --check .`
+3. **Type Check**: `pnpm typecheck` + `mypy app/`
+4. **Test**: `pnpm test` + `pytest --cov=app`
+5. **Build**: `pnpm build`
+
 ## Code Quality & Architecture (Nov 2025)
 
 **Recent Improvements** (CodeRabbit review, 2025-11-25):
