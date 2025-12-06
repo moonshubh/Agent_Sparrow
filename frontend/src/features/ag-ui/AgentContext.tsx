@@ -9,6 +9,11 @@ import type { TraceStep } from './types/thinkingTrace';
 import { formatLogAnalysisResult } from './formatters/logFormatter';
 import { getGlobalArtifactStore } from './artifacts/ArtifactContext';
 import type { ImageArtifactEvent } from '@/services/ag-ui/event-types';
+import {
+  stripCodeFence,
+  extractTodosFromPayload,
+  formatIfStructuredLog,
+} from './utils';
 
 interface AgentContextValue {
   agent: AbstractAgent | null;
@@ -42,120 +47,7 @@ interface AgentProviderProps {
   agent: AbstractAgent;
 }
 
-const stripCodeFence = (text: string) => {
-  const trimmed = text.trim();
-  const fenceMatch = trimmed.match(/^```[a-zA-Z0-9]*\s*([\s\S]*?)```$/m);
-  return fenceMatch ? fenceMatch[1].trim() : trimmed;
-};
-
-const extractTodosFromPayload = (input: any): any[] => {
-  const queue: any[] = [input];
-  while (queue.length) {
-    const raw = queue.shift();
-    if (!raw) continue;
-
-    if (typeof raw === 'string') {
-      const stripped = stripCodeFence(raw);
-      const direct = stripped.trim();
-      const hasJsonFence = direct.startsWith('{') || direct.startsWith('[');
-      if (hasJsonFence) {
-        try {
-          queue.push(JSON.parse(direct));
-        } catch {
-          // ignore
-        }
-      } else {
-        // Try to extract the first JSON object/array from noisy strings like "content={...}"
-        const braceIdx = direct.indexOf('{');
-        const bracketIdx = direct.indexOf('[');
-        const candidates = [braceIdx, bracketIdx].filter((i) => i >= 0);
-        const startIdx = candidates.length ? Math.min(...candidates) : -1;
-        if (startIdx >= 0) {
-          const candidate = direct.slice(startIdx);
-          try {
-            queue.push(JSON.parse(candidate));
-          } catch {
-            // ignore parse failure and continue
-          }
-        }
-      }
-      continue;
-    }
-
-    if (Array.isArray(raw)) {
-      // If the raw payload is already a list of todo-like objects, return it.
-      return raw;
-    }
-
-    if (typeof raw === 'object') {
-      if (Array.isArray(raw.todos)) return raw.todos;
-      if (Array.isArray((raw as any).result?.todos)) return (raw as any).result.todos;
-      if (Array.isArray((raw as any).items)) return (raw as any).items;
-      if (Array.isArray((raw as any).steps)) return (raw as any).steps;
-      if (Array.isArray((raw as any).value)) return (raw as any).value;
-      // Explore nested containers for todos
-      const nestedKeys = ['output', 'data', 'result', 'payload', 'content'];
-      nestedKeys.forEach((key) => {
-        if (raw && typeof raw === 'object' && key in raw) {
-          queue.push((raw as any)[key]);
-        }
-      });
-    }
-  }
-  return [];
-};
-
-const parseStructuredLogSegments = (content: string): any[] | null => {
-  const trimmed = stripCodeFence(content);
-  if (!(trimmed.startsWith('{') || trimmed.startsWith('['))) {
-    return null;
-  }
-
-  try {
-    const parsed = JSON.parse(trimmed);
-    const segments = Array.isArray(parsed)
-      ? parsed
-      : Array.isArray((parsed as any).sections)
-        ? (parsed as any).sections
-        : Array.isArray((parsed as any).items)
-          ? (parsed as any).items
-          : Array.isArray((parsed as any).segments)
-            ? (parsed as any).segments
-            : null;
-    if (!segments || !Array.isArray(segments)) return null;
-    const normalized = segments.filter((seg) => typeof seg === 'object');
-    return normalized.length ? normalized : null;
-  } catch {
-    return null;
-  }
-};
-
-const formatStructuredLogSegments = (segments: any[]): string => {
-  return segments.map((seg, idx) => {
-    const lineRange = seg.line_range || seg.lines || seg.range || seg.lineRange;
-    const relevance = seg.relevance || seg.summary || seg.description;
-    const keyInfo = seg.key_info || seg.key || seg.detail || seg.info;
-    const parts = [];
-    if (lineRange) parts.push(`Lines ${lineRange}`);
-    if (relevance) parts.push(String(relevance));
-    if (keyInfo) parts.push(`Key: ${keyInfo}`);
-    return `${idx + 1}. ${parts.filter(Boolean).join(' — ')}`;
-  }).join('\n');
-};
-
-const formatIfStructuredLog = (content: any): string | null => {
-  const normalized = typeof content === 'string'
-    ? content
-    : Array.isArray(content)
-      ? content
-          .map((part) => (typeof part === 'string' ? part : (part && typeof part === 'object' && typeof (part as any).text === 'string') ? (part as any).text : ''))
-          .join('')
-      : '';
-  if (!normalized) return null;
-  const segments = parseStructuredLogSegments(normalized);
-  if (!segments) return null;
-  return formatStructuredLogSegments(segments);
-};
+// Utility functions moved to ./utils
 
 const normalizeTraceStep = (raw: any): TraceStep => {
   const id = raw?.id ? String(raw.id) : crypto.randomUUID();

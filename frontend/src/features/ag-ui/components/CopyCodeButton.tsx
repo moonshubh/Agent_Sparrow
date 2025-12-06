@@ -3,6 +3,7 @@
 import React, { useState, useCallback, memo } from 'react';
 import { Copy, Check } from 'lucide-react';
 import { cn } from '@/shared/lib/utils';
+import { copyToClipboard } from '../utils/clipboard';
 
 interface CopyCodeButtonProps {
   /** Text content to copy to clipboard */
@@ -30,12 +31,10 @@ export const CopyCodeButton = memo(function CopyCodeButton({
     e.preventDefault();
     e.stopPropagation();
     
-    try {
-      await navigator.clipboard.writeText(text);
+    const success = await copyToClipboard(text);
+    if (success) {
       setIsCopied(true);
       setTimeout(() => setIsCopied(false), 2500);
-    } catch (err) {
-      console.error('Failed to copy text:', err);
     }
   }, [text]);
 

@@ -26,10 +26,10 @@ const ANIMATION_RESET_DELAY = 300
 interface Props {
   isOpen: boolean
   onClose: () => void
-  onSubDialogClose?: () => void // Callback when sub-dialogs (like FolderConversationsDialog) are closed
+  onFrameAdvance?: () => void // Callback to advance logo frame on folder open/close actions
 }
 
-const FoldersDialog = React.memo(function FoldersDialog({ isOpen, onClose, onSubDialogClose }: Props) {
+const FoldersDialog = React.memo(function FoldersDialog({ isOpen, onClose, onFrameAdvance }: Props) {
   const actions = useFoldersStore(s => s.actions)
   const folderTree = useFoldersStore(s => s.folderTree)
   const isLoading = useFoldersStore(s => s.isLoading)
@@ -174,6 +174,7 @@ const FoldersDialog = React.memo(function FoldersDialog({ isOpen, onClose, onSub
                         setClickedFolderId(folder.id)
                         setSelectedFolder(folder)
                         setConversationsOpen(true)
+                        onFrameAdvance?.() // Trigger keyframe advance when folder is opened via keyboard
                         setTimeout(() => setClickedFolderId(null), ANIMATION_RESET_DELAY)
                       } else if (e.key === 'F2' && !isEditing) {
                         e.preventDefault()
@@ -185,6 +186,7 @@ const FoldersDialog = React.memo(function FoldersDialog({ isOpen, onClose, onSub
                       setClickedFolderId(folder.id)
                       setSelectedFolder(folder)
                       setConversationsOpen(true)
+                      onFrameAdvance?.() // Trigger keyframe advance when folder is opened
                       // Reset clicked state after animation
                       setTimeout(() => setClickedFolderId(null), ANIMATION_RESET_DELAY)
                     }}
@@ -283,7 +285,7 @@ const FoldersDialog = React.memo(function FoldersDialog({ isOpen, onClose, onSub
               setSelectedFolder(null)
               setConversationsOpen(false)
               setClickedFolderId(null)
-              onSubDialogClose?.() // Trigger logo frame advance when folder dialog closes
+              onFrameAdvance?.() // Trigger logo frame advance when folder dialog closes
             }}
             folderId={selectedFolder.id}
             folderName={selectedFolder.name}

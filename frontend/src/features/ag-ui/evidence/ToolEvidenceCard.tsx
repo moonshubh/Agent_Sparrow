@@ -18,6 +18,7 @@ import {
   Code
 } from 'lucide-react';
 import { crystalCardAnimation } from '@/shared/animations/crystalline-animations';
+import { copyToClipboard } from '../utils/clipboard';
 import './evidence-cards.css';
 
 export interface ToolEvidenceProps {
@@ -140,13 +141,9 @@ export const ToolEvidenceCard: React.FC<ToolEvidenceProps> = ({
   }, []);
 
   const handleCopy = async () => {
-    try {
-      if (!navigator.clipboard) {
-        console.error('Clipboard API not available');
-        return;
-      }
-      const textToCopy = fullContent || snippet;
-      await navigator.clipboard.writeText(textToCopy);
+    const textToCopy = fullContent || snippet;
+    const success = await copyToClipboard(textToCopy);
+    if (success) {
       setIsCopied(true);
 
       // Clear any existing timeout
@@ -159,8 +156,6 @@ export const ToolEvidenceCard: React.FC<ToolEvidenceProps> = ({
         setIsCopied(false);
         copyTimeoutRef.current = null;
       }, 2000);
-    } catch (error) {
-      console.error('Failed to copy text:', error);
     }
   };
 

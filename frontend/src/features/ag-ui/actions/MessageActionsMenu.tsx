@@ -15,6 +15,7 @@ import {
   MoreVertical
 } from 'lucide-react';
 import { crystalCardAnimation } from '@/shared/animations/crystalline-animations';
+import { copyToClipboardWithCallback } from '../utils/clipboard';
 import './message-actions-menu.css';
 
 export interface MessageAction {
@@ -65,12 +66,7 @@ export const MessageActionsMenu: React.FC<MessageActionsMenuProps> = ({
   }, []);
 
   const handleCopy = async () => {
-    try {
-      if (!navigator.clipboard) {
-        console.error('Clipboard API not available');
-        return;
-      }
-      await navigator.clipboard.writeText(messageContent);
+    const success = await copyToClipboardWithCallback(messageContent, () => {
       setCopiedAction('copy');
       onCopy?.();
       if (copyTimeoutRef.current) {
@@ -80,19 +76,15 @@ export const MessageActionsMenu: React.FC<MessageActionsMenuProps> = ({
         setCopiedAction(null);
         copyTimeoutRef.current = null;
       }, 2000);
-    } catch (error) {
-      console.error('Failed to copy text:', error);
+    });
+    if (!success) {
+      setCopiedAction(null);
     }
   };
 
   const handleCopyMarkdown = async () => {
-    try {
-      if (!navigator.clipboard) {
-        console.error('Clipboard API not available');
-        return;
-      }
-      const markdown = `**Message (${messageId})**\n\n${messageContent}`;
-      await navigator.clipboard.writeText(markdown);
+    const markdown = `**Message (${messageId})**\n\n${messageContent}`;
+    const success = await copyToClipboardWithCallback(markdown, () => {
       setCopiedAction('markdown');
       onCopyAsMarkdown?.();
       if (copyTimeoutRef.current) {
@@ -102,8 +94,9 @@ export const MessageActionsMenu: React.FC<MessageActionsMenuProps> = ({
         setCopiedAction(null);
         copyTimeoutRef.current = null;
       }, 2000);
-    } catch (error) {
-      console.error('Failed to copy markdown:', error);
+    });
+    if (!success) {
+      setCopiedAction(null);
     }
   };
 
@@ -267,12 +260,7 @@ export const MessageActionsInline: React.FC<MessageActionsMenuProps> = ({
   }, []);
 
   const handleCopy = async () => {
-    try {
-      if (!navigator.clipboard) {
-        console.error('Clipboard API not available');
-        return;
-      }
-      await navigator.clipboard.writeText(messageContent);
+    const success = await copyToClipboardWithCallback(messageContent, () => {
       setCopied(true);
       onCopy?.();
       if (copyTimeoutRef.current) {
@@ -282,8 +270,9 @@ export const MessageActionsInline: React.FC<MessageActionsMenuProps> = ({
         setCopied(false);
         copyTimeoutRef.current = null;
       }, 2000);
-    } catch (error) {
-      console.error('Failed to copy text:', error);
+    });
+    if (!success) {
+      setCopied(false);
     }
   };
 

@@ -62,10 +62,13 @@ export default function EnhancedAnimatedLogo({
 
   useEffect(() => {
     if (triggerAdvance === 0) return
+    
+    // Cycle through all frames sequentially when triggered
+    // Each trigger advances to the next frame, cycling through all 8 frames
     setCurrentFrame((prev) => {
       const next = prev + 1
       if (next >= KEYFRAMES.length) {
-        return loop ? 0 : prev
+        return loop ? 0 : KEYFRAMES.length - 1
       }
       return next
     })

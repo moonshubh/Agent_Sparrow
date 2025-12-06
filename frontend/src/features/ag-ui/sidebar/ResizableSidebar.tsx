@@ -4,6 +4,7 @@ import React, { useState, useCallback, useEffect, useRef, memo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { PanelRightClose, PanelRightOpen } from 'lucide-react';
 import { cn } from '@/shared/lib/utils';
+import { safeGetItem, safeParseJSON, safeSetItem } from '../utils';
 
 interface ResizableSidebarProps {
   children: React.ReactNode;
@@ -43,39 +44,21 @@ export const ResizableSidebar = memo(function ResizableSidebar({
   onCollapse,
   hideTrigger = false,
 }: ResizableSidebarProps) {
-  // Load persisted state
-  const [width, setWidth] = useState(() => {
-    if (typeof window === 'undefined') return defaultWidth;
-    try {
-      const stored = localStorage.getItem(storageKey);
-      if (stored) {
-        const parsed = JSON.parse(stored);
-        if (parsed && typeof parsed === 'object') {
-          const parsedWidth = (parsed as { width?: number }).width;
-          return typeof parsedWidth === 'number' ? parsedWidth : defaultWidth;
-        }
-      }
-    } catch {
-      // Ignore malformed persisted state or storage access errors
-    }
-    return defaultWidth;
-  });
+  const loadPersistedState = useCallback((): { width: number; collapsed: boolean } => {
+    const parsed = safeParseJSON<{ width?: number; collapsed?: boolean }>(
+      safeGetItem(storageKey),
+      {}
+    );
+    return {
+      width: typeof parsed.width === 'number' ? parsed.width : defaultWidth,
+      collapsed: parsed.collapsed === true,
+    };
+  }, [defaultWidth, storageKey]);
 
-  const [internalCollapsed, setInternalCollapsed] = useState(() => {
-    if (typeof window === 'undefined') return false;
-    try {
-      const stored = localStorage.getItem(storageKey);
-      if (stored) {
-        const parsed = JSON.parse(stored);
-        if (parsed && typeof parsed === 'object') {
-          return (parsed as { collapsed?: boolean }).collapsed === true;
-        }
-      }
-    } catch {
-      // Ignore malformed persisted state or storage access errors
-    }
-    return false;
-  });
+  // Load persisted state
+  const [width, setWidth] = useState(() => loadPersistedState().width);
+
+  const [internalCollapsed, setInternalCollapsed] = useState(() => loadPersistedState().collapsed);
 
   const isCollapsed = collapsed !== undefined ? collapsed : internalCollapsed;
 
@@ -88,7 +71,7 @@ export const ResizableSidebar = memo(function ResizableSidebar({
   useEffect(() => {
     const timeout = setTimeout(() => {
       try {
-        localStorage.setItem(storageKey, JSON.stringify({ width, collapsed: isCollapsed }));
+        safeSetItem(storageKey, JSON.stringify({ width, collapsed: isCollapsed }));
       } catch (err) {
         console.warn('Failed to persist sidebar state', { storageKey, width, isCollapsed, error: err });
       }

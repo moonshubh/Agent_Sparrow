@@ -21,6 +21,11 @@ export default function FeedMeRevampedPage() {
   const [frameAdvanceTrigger, setFrameAdvanceTrigger] = useState(0)
   const router = useRouter()
 
+  // Function to advance logo frame on user actions
+  const advanceLogoFrame = () => {
+    setFrameAdvanceTrigger(prev => prev + 1)
+  }
+
   const dockItems = [
     {
       id: 'home',
@@ -28,6 +33,7 @@ export default function FeedMeRevampedPage() {
       iconSrc: '/feedme-dock/Home.png',
       onClick: () => {
         setShowCenter(false)
+        advanceLogoFrame() // Trigger keyframe change on navigation
         router.push('/chat')
       },
     },
@@ -37,6 +43,7 @@ export default function FeedMeRevampedPage() {
       iconSrc: '/feedme-dock/Folders.png',
       onClick: () => {
         setShowCenter(false)
+        advanceLogoFrame() // Trigger keyframe change when opening folders
         setFoldersOpen(true)
       },
     },
@@ -46,6 +53,7 @@ export default function FeedMeRevampedPage() {
       iconSrc: '/feedme-dock/Upload.png',
       onClick: () => {
         setShowCenter(false)
+        advanceLogoFrame() // Trigger keyframe change when opening upload
         setUploadOpen(true)
       },
     },
@@ -55,6 +63,7 @@ export default function FeedMeRevampedPage() {
       iconSrc: '/feedme-dock/Unassigned Conversations.png',
       onClick: () => {
         setShowCenter(false)
+        advanceLogoFrame() // Trigger keyframe change when opening unassigned
         setUnassignedOpen(true)
       },
     },
@@ -64,15 +73,11 @@ export default function FeedMeRevampedPage() {
       iconSrc: '/feedme-dock/Stats.png',
       onClick: () => {
         setShowCenter(false)
+        advanceLogoFrame() // Trigger keyframe change when opening stats
         setStatsOpen(true)
       },
     },
   ]
-
-  // Function to advance logo frame on user actions
-  const advanceLogoFrame = () => {
-    setFrameAdvanceTrigger(prev => prev + 1)
-  }
 
   return (
     <ErrorBoundary>
@@ -110,9 +115,9 @@ export default function FeedMeRevampedPage() {
           onClose={() => {
             setFoldersOpen(false)
             setShowCenter(true)
-            advanceLogoFrame()
+            advanceLogoFrame() // Trigger keyframe when folders dialog closes
           }}
-          onSubDialogClose={advanceLogoFrame}
+          onFrameAdvance={advanceLogoFrame} // Trigger keyframe when folder is opened/closed
         />
         <UploadDialog
           isOpen={uploadOpen}

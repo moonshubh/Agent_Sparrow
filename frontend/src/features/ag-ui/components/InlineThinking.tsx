@@ -3,6 +3,7 @@
 import React, { useState, useCallback, memo, useId, useMemo } from 'react';
 import { Lightbulb, ChevronDown, Clipboard, Check } from 'lucide-react';
 import { cn } from '@/shared/lib/utils';
+import { copyToClipboard } from '../utils/clipboard';
 
 interface InlineThinkingProps {
   /** The thinking/reasoning text content */
@@ -63,17 +64,13 @@ const ThinkingButton = memo(function ThinkingButton({
     };
 
     const copy = async () => {
-      try {
-        if (navigator?.clipboard?.writeText) {
-          await navigator.clipboard.writeText(content);
-          setIsCopied(true);
-          setTimeout(() => setIsCopied(false), 2000);
-          return;
-        }
-      } catch (err) {
-        console.error('Failed to copy thinking content:', err);
+      const success = await copyToClipboard(content);
+      if (success) {
+        setIsCopied(true);
+        setTimeout(() => setIsCopied(false), 2000);
+        return;
       }
-
+      // Fallback for older browsers
       if (copyWithFallback()) {
         setIsCopied(true);
         setTimeout(() => setIsCopied(false), 2000);

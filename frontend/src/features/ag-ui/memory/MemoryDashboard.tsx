@@ -24,6 +24,12 @@ import {
   crystalCardAnimation,
   floatAnimation
 } from '@/shared/animations/crystalline-animations';
+import {
+  getHoursSinceCreation,
+  getNodePosition,
+  getNodeState,
+  getNodeColor
+} from '../utils';
 import './memory-dashboard.css';
 
 export interface MemoryFact {
@@ -46,20 +52,6 @@ export interface MemoryDashboardProps {
   className?: string;
 }
 
-// Helper function to calculate hours since creation
-const getHoursSinceCreation = (createdAt: string): number => {
-  const timestamp = Date.parse(createdAt);
-  if (Number.isNaN(timestamp)) {
-    return 0;
-  }
-  const diff = Date.now() - timestamp;
-  if (diff <= 0) {
-    return 0;
-  }
-  return Math.round(diff / (1000 * 60 * 60));
-};
-
-
 export const MemoryDashboard: React.FC<MemoryDashboardProps> = ({
   sessionId,
   facts,
@@ -73,34 +65,6 @@ export const MemoryDashboard: React.FC<MemoryDashboardProps> = ({
   const [zoom, setZoom] = useState(1);
   const [selectedFact, setSelectedFact] = useState<MemoryFact | null>(null);
   const canvasRef = useRef<HTMLDivElement>(null);
-
-  // Calculate node positions for constellation layout
-  const getNodePosition = (index: number, total: number) => {
-    const radius = 120;
-    const angle = (index / total) * Math.PI * 2;
-    const spiralFactor = 1 + (index / total) * 0.5;
-
-    return {
-      x: Math.cos(angle) * radius * spiralFactor + 200,
-      y: Math.sin(angle) * radius * spiralFactor + 200
-    };
-  };
-
-  // Determine node state (dormant, retrieved, writing)
-  const getNodeState = (factId: string): 'dormant' | 'retrieved' | 'writing' => {
-    if (recentlyWritten.includes(factId)) return 'writing';
-    if (recentlyRetrieved.includes(factId)) return 'retrieved';
-    return 'dormant';
-  };
-
-  // Get color based on recency
-  const getNodeColor = (createdAt: string) => {
-    const hoursSinceCreation = getHoursSinceCreation(createdAt);
-
-    if (hoursSinceCreation < 1) return 'var(--accent-gold-400)'; // Very recent - gold
-    if (hoursSinceCreation < 24) return 'var(--accent-amber-400)'; // Recent - amber
-    return 'var(--crystal-cyan-400)'; // Older - cyan
-  };
 
   const handleFactClick = (fact: MemoryFact) => {
     setSelectedFact(fact);
@@ -244,7 +208,7 @@ export const MemoryDashboard: React.FC<MemoryDashboardProps> = ({
             {/* Fact Nodes */}
             {facts.map((fact, index) => {
               const position = getNodePosition(index, totalFacts);
-              const nodeState = getNodeState(fact.id);
+              const nodeState = getNodeState(fact.id, recentlyRetrieved, recentlyWritten);
               const color = getNodeColor(fact.createdAt);
 
               return (

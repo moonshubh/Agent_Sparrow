@@ -19,6 +19,14 @@ import {
 } from 'lucide-react';
 import { cn } from '@/shared/lib/utils';
 import type { ToolEvidenceUpdateEvent } from '@/services/ag-ui/event-types';
+import {
+  formatToolName,
+  summarizeToolOutput,
+  normalizeTodos,
+  computeTodoStats,
+  sortTodos,
+  buildToolCallItems,
+} from '../utils';
 import './todo-sidebar.css';
 
 /**
@@ -135,31 +143,6 @@ type ToolCallItem = {
   output?: string;
 };
 
-const formatToolName = (name: string): string => {
-  return name
-    .replace(/_/g, ' ')
-    .replace(/([A-Z])/g, ' $1')
-    .trim()
-    .toLowerCase()
-    .replace(/^\w/, (c) => c.toUpperCase());
-};
-
-const summarizeToolOutput = (output: unknown): string => {
-  if (typeof output === 'string') {
-    const trimmed = output.trim();
-    return trimmed.length > 140 ? `${trimmed.slice(0, 140)}…` : trimmed;
-  }
-  if (output && typeof output === 'object') {
-    try {
-      const text = JSON.stringify(output);
-      return text.length > 140 ? `${text.slice(0, 140)}…` : text;
-    } catch {
-      return '';
-    }
-  }
-  return '';
-};
-
 /**
  * TodoSidebar - Lightweight task-focused sidebar
  * 
@@ -184,77 +167,19 @@ export const TodoSidebar: React.FC<TodoSidebarProps> = ({
   const [isToolsExpanded, setIsToolsExpanded] = useState(true);
 
   // Normalize todos
-  const normalizedTodos = useMemo(() => {
-    return todos.map(todo => ({
-      ...todo,
-      title: todo.title || todo.content || 'Task',
-      status: ((todo.status || 'pending').toLowerCase() as TodoItem['status'])
-    }));
-  }, [todos]);
+  const normalizedTodos = useMemo(() => normalizeTodos(todos), [todos]);
 
   // Calculate stats
-  const stats = useMemo(() => {
-    const total = normalizedTodos.length;
-    const done = normalizedTodos.filter(t => t.status === 'done' || t.status === 'completed').length;
-    const inProgress = normalizedTodos.filter(t => t.status === 'in_progress').length;
-    const pending = total - done - inProgress;
-    const progressPercent = total > 0 ? Math.round((done / total) * 100) : 0;
-
-    return { total, done, inProgress, pending, progressPercent };
-  }, [normalizedTodos]);
+  const stats = useMemo(() => computeTodoStats(normalizedTodos), [normalizedTodos]);
 
   // Sort todos: in_progress first, then pending, then done
-  const sortedTodos = useMemo(() => {
-    const statusOrder = { in_progress: 0, pending: 1, done: 2, completed: 2 };
-    return [...normalizedTodos].sort((a, b) => {
-      const orderA = statusOrder[a.status || 'pending'] ?? 1;
-      const orderB = statusOrder[b.status || 'pending'] ?? 1;
-      return orderA - orderB;
-    });
-  }, [normalizedTodos]);
+  const sortedTodos = useMemo(() => sortTodos(normalizedTodos), [normalizedTodos]);
 
   // Build tool call list: running tools + recent completed tool calls from evidence
-  const toolCallItems = useMemo(() => {
-    const items: ToolCallItem[] = [];
-    const seen = new Set<string>();
-
-    activeTools.forEach((name, idx) => {
-      const id = `running-${idx}-${name}`;
-      if (seen.has(id)) return;
-      seen.add(id);
-      items.push({
-        id,
-        name,
-        status: 'running',
-        summary: 'Processing...',
-      });
-    });
-
-    // Recent evidence (most recent first)
-    const entries = Object.entries(toolEvidence || {}).slice(-6).reverse();
-    entries.forEach(([id, evidence]) => {
-      if (!evidence || seen.has(id)) return;
-      seen.add(id);
-      const name = evidence.toolName || id || 'tool';
-      const summary = summarizeToolOutput(evidence.summary ?? evidence.output);
-      // Format output for display (tool evidence doesn't include args)
-      let output: string | undefined;
-      if (evidence.output) {
-        output = typeof evidence.output === 'string'
-          ? evidence.output
-          : JSON.stringify(evidence.output, null, 2);
-      }
-      items.push({
-        id,
-        name,
-        status: 'done',
-        summary,
-        output,
-      });
-    });
-
-    return items;
-  }, [activeTools, toolEvidence]);
+  const toolCallItems = useMemo(
+    () => buildToolCallItems(activeTools, toolEvidence),
+    [activeTools, toolEvidence]
+  );
 
   return (
     <div className={cn('flex flex-col gap-4', className)}>
