@@ -339,6 +339,21 @@ async def _generate_reply(ticket_id: int | str, subject: str | None, description
         # Collapse blank lines created by removals
         text_out = "\n".join([ln for ln in text_out.splitlines() if ln.strip() != ""])
 
+        # De-duplicate repeated greetings/first lines that often occur in model output
+        lines = [ln for ln in text_out.splitlines() if ln.strip()]
+        cleaned_lines: List[str] = []
+        for idx, ln in enumerate(lines):
+            if idx == 0 and len(lines) > 1:
+                nxt = lines[1].strip()
+                cur = ln.strip()
+                # If the next line starts with the current greeting, drop the shorter duplicate
+                if nxt.lower().startswith(cur.lower()):
+                    continue
+            if cleaned_lines and cleaned_lines[-1].strip().lower() == ln.strip().lower():
+                continue
+            cleaned_lines.append(ln)
+        text_out = "\n".join(cleaned_lines)
+
         # Plain‑text normalization for Zendesk display (consistent headings and spacing)
         def _to_plaintext_for_zendesk(s: str) -> str:
             lines = []
@@ -507,10 +522,16 @@ async def _generate_reply(ticket_id: int | str, subject: str | None, description
             rca_seen = False
             resources_seen = False
             followup_seen = False
+            heading_dedup: set[str] = set()
             for raw in lines:
                 line = raw.rstrip()
                 h = is_heading(line)
                 if h is not None:
+                    h_norm = h.strip().lower()
+                    # Skip duplicate headings to avoid repeated sections
+                    if h_norm in heading_dedup:
+                        continue
+                    heading_dedup.add(h_norm)
                     heading_seen = True
                     if h.lower().strip() == "suggested reply":
                         suggested_seen = True
@@ -662,6 +683,26 @@ async def _generate_reply(ticket_id: int | str, subject: str | None, description
     if subject:
         parts_in.append(str(subject))
 
+    # If subject/description are missing, fetch from Zendesk to avoid empty prompts
+    if (not subject or not description) and settings.zendesk_subdomain and settings.zendesk_email and settings.zendesk_api_token:
+        try:
+            zc_fetch = ZendeskClient(
+                subdomain=str(settings.zendesk_subdomain),
+                email=str(settings.zendesk_email),
+                api_token=str(settings.zendesk_api_token),
+                dry_run=True,
+            )
+            ticket_payload = await asyncio.to_thread(zc_fetch.get_ticket, ticket_id)
+            fetched_subject = ticket_payload.get("subject")
+            fetched_description = ticket_payload.get("description")
+            if not subject and fetched_subject:
+                subject = fetched_subject
+                parts_in.append(str(fetched_subject))
+            if not description and fetched_description:
+                description = fetched_description
+        except Exception as exc:  # pragma: no cover - network fallback
+            logger.warning("zendesk_fetch_ticket_failed", ticket_id=ticket_id, error=str(exc))
+
     last_public = None
     try:
         if settings.zendesk_subdomain and settings.zendesk_email and settings.zendesk_api_token:
@@ -709,6 +750,41 @@ async def _generate_reply(ticket_id: int | str, subject: str | None, description
 
     user_query_raw = "\n\n".join([p for p in parts_in if p]) or "(no description)"
     user_query = _redact_pii(user_query_raw) or user_query_raw
+
+    # Observability: log which context sources are available for this run
+    def _context_caps() -> Dict[str, bool]:
+        caps = {
+            "workspace_tools": False,
+            "issue_pattern_memory": False,
+            "playbooks": False,
+        }
+        try:
+            from app.agents.unified.workspace_tools import get_workspace_tools  # type: ignore  # noqa: F401
+            caps["workspace_tools"] = True
+        except Exception:
+            caps["workspace_tools"] = False
+        try:
+            from app.agents.harness.store.issue_resolution_store import IssueResolutionStore  # type: ignore  # noqa: F401
+            caps["issue_pattern_memory"] = True
+        except Exception:
+            caps["issue_pattern_memory"] = False
+        try:
+            from app.agents.unified.playbooks import extractor  # type: ignore  # noqa: F401
+            caps["playbooks"] = True
+        except Exception:
+            caps["playbooks"] = False
+        return caps
+
+    logger.info(
+        "zendesk_context_caps ticket_id=%s caps=%s global_flags=%s",
+        ticket_id,
+        _context_caps(),
+        {
+            "inject": getattr(settings, "global_knowledge_inject", None),
+            "store_adapter": getattr(settings, "global_knowledge_store_adapter", None),
+            "store_writes": getattr(settings, "global_knowledge_store_writes", None),
+        },
+    )
 
     session_id = f"zendesk-{ticket_id}"
     state: GraphState | None = None

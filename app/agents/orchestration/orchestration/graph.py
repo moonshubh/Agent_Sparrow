@@ -84,6 +84,7 @@ def _build_tool_node():
     - State tracking via LoopStateTracker for observability
     """
     from app.agents.unified.tools import get_registered_tools
+    from app.agents.unified.workspace_tools import get_workspace_tools
     from app.agents.tools import ToolExecutor, DEFAULT_TOOL_CONFIGS
     from app.agents.harness.observability import (
         AgentLoopState,
@@ -94,16 +95,40 @@ def _build_tool_node():
         publish_tool_batch_to_langsmith,
     )
     from app.agents.harness.middleware import get_state_tracking_middleware
+    from app.agents.harness.store import SparrowWorkspaceStore
 
     class ParallelToolNode:
         def __init__(self, max_concurrency: int = 8):
-            self.tools = {t.name: t for t in get_registered_tools()}
+            self.base_tool_map = {t.name: t for t in get_registered_tools()}
             # Use Claude-style ToolExecutor for reliable execution
             self.executor = ToolExecutor(
                 configs=DEFAULT_TOOL_CONFIGS,
                 max_concurrency=max_concurrency,
                 on_result=record_tool_result,
             )
+
+        def _workspace_tools_for_state(self, state: GraphState) -> dict:
+            """Build workspace tools bound to the current session/customer."""
+            session_id = getattr(state, "session_id", None) or getattr(state, "trace_id", None)
+            if not session_id:
+                return {}
+
+            forwarded = getattr(state, "forwarded_props", {}) or {}
+            customer_id = None
+            if isinstance(forwarded, dict):
+                customer_id = forwarded.get("customer_id") or forwarded.get("customerId")
+
+            try:
+                store = SparrowWorkspaceStore(session_id=session_id, customer_id=customer_id)
+                return {tool.name: tool for tool in get_workspace_tools(store)}
+            except Exception as exc:  # Defensive: never block tool execution
+                logger.warning(
+                    "workspace_tools_init_failed",
+                    error=str(exc),
+                    session_id=session_id,
+                    customer_id=customer_id,
+                )
+                return {}
 
         async def __call__(self, state: GraphState, config=None):
             if not state.messages:
@@ -117,6 +142,9 @@ def _build_tool_node():
             ) or []
             if not tool_calls:
                 return {}
+
+            tool_map = dict(self.base_tool_map)
+            tool_map.update(self._workspace_tools_for_state(state))
 
             executed = set(
                 (((state.scratchpad or {}).get("_system") or {}).get("_executed_tool_calls") or [])
@@ -138,7 +166,7 @@ def _build_tool_node():
 
             async def run_one(tc):
                 tool_name = tc.get("name")
-                tool = self.tools.get(tool_name)
+                tool = tool_map.get(tool_name)
                 tool_call_id = tc.get("id")
                 args = tc.get("args") or tc.get("arguments") or {}
 
@@ -148,11 +176,11 @@ def _build_tool_node():
                         tool_call_id=tool_call_id,
                         content=(
                             f"Tool '{tool_name}' is not available. "
-                            f"Available tools: {', '.join(sorted(self.tools.keys()))}. "
-                            f"Please try a different approach."
-                        ),
-                        additional_kwargs={"is_error": True, "error_type": "unknown_tool"},
-                    )
+                        f"Available tools: {', '.join(sorted(tool_map.keys()))}. "
+                        f"Please try a different approach."
+                    ),
+                    additional_kwargs={"is_error": True, "error_type": "unknown_tool"},
+                )
 
                 # Use ToolExecutor for Claude-style reliable execution
                 result = await self.executor.execute(

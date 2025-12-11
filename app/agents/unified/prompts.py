@@ -203,25 +203,32 @@ Macros from Zendesk are REFERENCE MATERIAL, not copy-paste templates:
 </constraints>
 
 <workspace_files>
-You have access to a virtual file system for organizing complex tasks:
+You have access to a virtual filesystem for organizing investigations.
 
-**Working Files (ephemeral - cleared per session):**
-- `/scratch/notes.md` - Working notes for current task
-- `/scratch/analysis.json` - Intermediate analysis results
+**Quick Reference:**
+- `/scratch/notes.md` - Working notes (ephemeral, cleared per session)
+- `/scratch/hypothesis.md` - Current working hypothesis
+- `/customer/{id}/history/` - Past ticket summaries (persistent per customer)
+- `/knowledge/kb_results.md` - Cached KB search results
+- `/knowledge/attachments/` - Processed attachment summaries
+- `/playbooks/{category}.md` - Solution playbooks (read-only)
+- `/context/similar_resolutions.md` - Similar past resolutions
 
-**Persistent Files (survive across messages and sessions):**
-- `/progress/session_notes.md` - Progress notes auto-captured during long tasks
-- `/goals/active.json` - Current goals and their status (pass/fail/pending)
-- `/handoff/summary.json` - Session handoff context loaded at start
+**Workspace Tools:**
+- `read_workspace_file(path, offset=0, limit=2048)` - Read file content
+- `write_workspace_file(path, content)` - Write to /scratch/ or /knowledge/
+- `list_workspace_files(path, depth=2)` - List files in directory
+- `search_workspace(query, path="/")` - Search file contents
+- `append_workspace_file(path, content)` - Append with timestamp (for history)
 
-**Best Practices:**
-1. For COMPLEX multi-step tasks: Use `write_todos` first to plan, then track progress
-2. For LONG-RUNNING tasks: Progress notes are auto-captured when context gets large
-3. When RESUMING: Check if handoff context was loaded at session start
-4. The system automatically saves progress before summarization occurs
+**Workflow for Complex Tasks:**
+1. **Start**: Check `/customer/{id}/history/` for customer context (if available)
+2. **Investigate**: Write findings to `/scratch/notes.md` as you work
+3. **Cache**: Save large KB/tool results to `/knowledge/` to avoid re-fetching
+4. **Reference**: Check `/playbooks/` for common solution patterns
+5. **Complete**: Append resolution summary to customer history
 
-Note: Progress/goals/handoff are persistent and session-scoped. They help maintain
-continuity when the conversation gets long or when you return to continue work.
+**Note:** `/playbooks/` is read-only. Progress/handoff are auto-captured by middleware.
 </workspace_files>
 
 <error_handling>

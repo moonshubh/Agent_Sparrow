@@ -142,3 +142,18 @@ class ZendeskClient:
             except Exception:
                 continue
         return None
+
+    def get_ticket(self, ticket_id: int | str) -> Dict[str, Any]:
+        """Fetch ticket details (subject, description, etc.).
+
+        Returns an empty dict on failure so callers can gracefully fall back.
+        """
+        url = f"{self.base_url}/tickets/{ticket_id}.json"
+        try:
+            resp = self.session.get(url, headers=self._headers, timeout=20)
+            if resp.status_code >= 400:
+                return {}
+            data = resp.json() if resp.headers.get("Content-Type", "").startswith("application/json") else {}
+            return data.get("ticket") or {}
+        except Exception:
+            return {}

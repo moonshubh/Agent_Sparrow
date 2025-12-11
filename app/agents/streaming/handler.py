@@ -244,6 +244,10 @@ class StreamEventHandler:
         self.last_user_query = last_user_query
 
         self.final_output: Optional[Dict[str, Any]] = None
+        # Buffer user-visible text for Gemini thinking models so chain-of-thought
+        # stays in the reasoning pane while the main chat only receives the
+        # final, sanitized answer.
+        self._gemini_buffer_runs: Dict[str, List[str]] = {}
 
         # Get tracer if available
         self._tracer = trace.get_tracer(__name__) if OTEL_AVAILABLE else None
@@ -521,6 +525,12 @@ class StreamEventHandler:
         prompt_messages = data.get("messages") or data.get("inputs") or []
         prompt_preview = self._extract_prompt_preview(prompt_messages)
 
+        # Gemini 3 streams chain-of-thought as plain text. Buffer visible chunks
+        # so only the final sanitized answer goes to the main chat.
+        model_name = data.get("model")
+        if isinstance(model_name, str) and "gemini-3" in model_name.lower():
+            self._gemini_buffer_runs[str(run_id)] = []
+
         self.emitter.start_thought(
             run_id=run_id,
             model=data.get("model"),
@@ -571,6 +581,18 @@ class StreamEventHandler:
                         content=f"Model reasoning:\n{reasoning_content}",
                         metadata={"source": "model_reasoning", "final": True},
                     )
+
+            # If we buffered Gemini 3 text, emit a single sanitized message now
+            run_id_str = str(run_id) if run_id is not None else None
+            if run_id_str and run_id_str in self._gemini_buffer_runs:
+                buffered_text = " ".join(self._gemini_buffer_runs.pop(run_id_str) or [])
+                buffered_text = ThinkingBlockTracker.sanitize_final_content(buffered_text)
+                final_visible = content or buffered_text
+
+                if final_visible:
+                    self.emitter.start_text_message()
+                    self.emitter.emit_text_content(final_visible)
+                    self.emitter.end_text_message()
 
             self.emitter.end_thought(run_id, content)
 
@@ -711,6 +733,13 @@ class StreamEventHandler:
             # The TEXT_MESSAGE_CONTENT below only sends visible_content (not thinking)
             if chunk_text:
                 self.emitter.stream_thought_chunk(run_id, chunk_text)
+
+            # Buffer Gemini 3 visible text so chain-of-thought never hits the
+            # main chat stream; we'll emit a single sanitized answer at model_end.
+            if run_id_str in self._gemini_buffer_runs:
+                if visible_content:
+                    self._gemini_buffer_runs[run_id_str].append(visible_content)
+                return
 
             looks_like_json = normalized.startswith(("{", "[")) and normalized.endswith(("}", "]"))
 

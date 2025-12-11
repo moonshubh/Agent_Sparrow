@@ -5,6 +5,12 @@ context window overflow, following DeepAgents patterns.
 
 Implements the LangChain AgentMiddleware interface for compatibility
 with DeepAgents SubAgentMiddleware.
+
+Enhanced in Phase 3 to support:
+- Workspace store integration for session-scoped `/knowledge/tool_results/` storage
+- File size caps with truncation
+- Content type hints for better retrieval
+- Direct `evict_large_result` convenience method
 """
 
 from __future__ import annotations
@@ -39,12 +45,16 @@ except ImportError:
 if TYPE_CHECKING:
     from langgraph.config import RunnableConfig
     from langgraph.runtime import Runtime
+    from app.agents.harness.store.workspace_store import SparrowWorkspaceStore
 
 
 # Eviction configuration
 DEFAULT_EVICTION_THRESHOLD = 20000  # tokens (~80k chars at 4 chars/token)
 DEFAULT_CHAR_THRESHOLD = 80000  # characters
+DEFAULT_MAX_FILE_SIZE_BYTES = 100_000  # 100KB max per evicted file
+MAX_FILE_SIZE_BYTES = 500_000  # 500KB absolute maximum
 SUMMARY_LENGTH = 500  # characters for the summary in pointer message
+PREVIEW_LENGTH = 500  # characters for the preview in pointer message
 TIMESTAMP_PATTERN = re.compile(r"_\d{14}$")
 
 
@@ -62,28 +72,57 @@ class ToolResultEvictionMiddleware(AgentMiddleware if AGENT_MIDDLEWARE_AVAILABLE
     Implements the LangChain AgentMiddleware interface for compatibility
     with DeepAgents SubAgentMiddleware.
 
+    Phase 3 Enhancements:
+    - Optional workspace_store for session-scoped `/knowledge/tool_results/` storage
+    - max_file_size_bytes for size caps with truncation
+    - Content type hints in metadata
+    - evict_large_result() for direct eviction
+
     Usage:
+        # Basic usage (in-memory or Supabase backend)
         middleware = ToolResultEvictionMiddleware()
-        # Middleware is then added to the agent's middleware stack
+
+        # With workspace store (recommended for session integration)
+        from app.agents.harness.store import SparrowWorkspaceStore
+        store = SparrowWorkspaceStore(session_id="sess123")
+        middleware = ToolResultEvictionMiddleware(workspace_store=store)
+
+        # Direct eviction
+        pointer = await middleware.evict_large_result(
+            tool_call_id="call_123",
+            result="<large content>",
+            content_type="text/markdown",
+        )
 
     Attributes:
         char_threshold: Character threshold for eviction.
         backend: Storage backend for evicted results.
+        workspace_store: Optional workspace store for session-scoped storage.
+        max_file_size_bytes: Maximum size for evicted files (truncates if exceeded).
     """
 
     def __init__(
         self,
         char_threshold: int = DEFAULT_CHAR_THRESHOLD,
         backend: Optional[Any] = None,
+        workspace_store: Optional["SparrowWorkspaceStore"] = None,
+        max_file_size_bytes: int = DEFAULT_MAX_FILE_SIZE_BYTES,
     ):
         """Initialize the eviction middleware.
 
         Args:
             char_threshold: Character count threshold for eviction.
             backend: Optional storage backend (defaults to in-memory).
+            workspace_store: Optional workspace store for session-scoped
+                `/knowledge/tool_results/` storage. If provided, takes
+                precedence over backend for eviction storage.
+            max_file_size_bytes: Maximum size for evicted files (default: 100KB).
+                Content exceeding this is truncated with a warning.
         """
         self.char_threshold = char_threshold
         self.backend = backend or self._build_backend()
+        self.workspace_store = workspace_store
+        self.max_file_size_bytes = min(max_file_size_bytes, MAX_FILE_SIZE_BYTES)
         self._stats = EvictionStats()
         self._stats_lock = asyncio.Lock()  # Lock for thread-safe stat updates
 
@@ -102,6 +141,122 @@ class ToolResultEvictionMiddleware(AgentMiddleware if AGENT_MIDDLEWARE_AVAILABLE
         # Use InMemoryBackend from protocol (eliminates EvictionBackend duplication)
         from app.agents.harness.backends import InMemoryBackend
         return InMemoryBackend()
+
+    # -------------------------------------------------------------------------
+    # Phase 3: Direct Eviction API
+    # -------------------------------------------------------------------------
+
+    async def evict_large_result(
+        self,
+        tool_call_id: str,
+        result: str,
+        content_type: str = "text/markdown",
+        tool_name: str = "unknown",
+    ) -> str:
+        """Evict a large result to workspace storage and return a pointer.
+
+        This is the primary API for Phase 3 eviction. Use this when you need
+        to directly evict content (e.g., from custom tools or preprocessors)
+        without going through the middleware wrapping mechanism.
+
+        Args:
+            tool_call_id: Unique identifier for this tool call.
+            result: The content to evict.
+            content_type: MIME type hint for retrieval (default: "text/markdown").
+            tool_name: Name of the tool for logging.
+
+        Returns:
+            Pointer string with preview and path to full result.
+
+        Example:
+            pointer = await middleware.evict_large_result(
+                tool_call_id="call_abc123",
+                result=large_search_results,
+                content_type="application/json",
+                tool_name="web_search",
+            )
+            # Returns: "Preview...\n\n[Full result (50000 bytes) saved to /knowledge/tool_results/call_abc123.md]"
+        """
+        original_size = len(result.encode("utf-8"))
+        was_truncated = False
+
+        # Apply size cap with truncation
+        if original_size > self.max_file_size_bytes:
+            # Truncate safely at byte boundary
+            encoded = result.encode("utf-8")[: self.max_file_size_bytes]
+            result = encoded.decode("utf-8", errors="ignore") + (
+                f"\n\n[TRUNCATED - Original size {original_size} bytes exceeded "
+                f"limit of {self.max_file_size_bytes} bytes]"
+            )
+            was_truncated = True
+
+        # Determine storage path based on whether workspace_store is available
+        if self.workspace_store:
+            # Use workspace store (session-scoped /knowledge/tool_results/)
+            path = f"/knowledge/tool_results/{tool_call_id}.md"
+            try:
+                await self.workspace_store.write_file(
+                    path,
+                    result,
+                    metadata={
+                        "content_type": content_type,
+                        "original_size": original_size,
+                        "truncated": was_truncated,
+                        "tool_name": tool_name,
+                        "evicted_at": datetime.now(timezone.utc).isoformat(),
+                    },
+                )
+                success = True
+            except Exception as exc:
+                logger.warning(
+                    "evict_large_result_workspace_failed",
+                    path=path,
+                    error=str(exc),
+                )
+                success = False
+        else:
+            # Fall back to legacy backend
+            timestamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
+            path = f"/large_results/{tool_call_id}_{timestamp}"
+            write_result = self.backend.write(path, result)
+            success = getattr(write_result, "success", write_result)
+
+        if not success:
+            logger.warning(
+                "evict_large_result_failed",
+                tool_call_id=tool_call_id,
+                path=path,
+            )
+            # Return original (potentially truncated) content on failure
+            return result
+
+        # Thread-safe stat updates
+        async with self._stats_lock:
+            self._stats.results_evicted += 1
+            self._stats.total_chars_evicted += original_size
+            self._stats.evicted_paths.append(path)
+
+        logger.info(
+            "evict_large_result_success",
+            tool_call_id=tool_call_id,
+            tool_name=tool_name,
+            path=path,
+            original_size=original_size,
+            truncated=was_truncated,
+            content_type=content_type,
+            used_workspace_store=bool(self.workspace_store),
+        )
+
+        # Create pointer with preview
+        preview = result[:PREVIEW_LENGTH]
+        if len(result) > PREVIEW_LENGTH:
+            preview = preview.rstrip() + "..."
+
+        return (
+            f"{preview}\n\n"
+            f"[Full result ({original_size:,} bytes) saved to `{path}`]\n"
+            f"Use `read_workspace_file` tool with path `{path}` to read the complete content."
+        )
 
     @property
     def name(self) -> str:
@@ -364,6 +519,9 @@ class ToolResultEvictionMiddleware(AgentMiddleware if AGENT_MIDDLEWARE_AVAILABLE
     ) -> ToolMessage:
         """Evict content and create pointer message (async, thread-safe version).
 
+        Phase 3 Enhancement: Uses workspace_store when available for
+        session-scoped `/knowledge/tool_results/` storage, with size caps.
+
         Args:
             result: Original tool result.
             tool_call_id: Tool call identifier.
@@ -373,13 +531,49 @@ class ToolResultEvictionMiddleware(AgentMiddleware if AGENT_MIDDLEWARE_AVAILABLE
         Returns:
             Pointer message.
         """
-        # Generate storage path
-        timestamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
-        path = f"/large_results/{tool_call_id}_{timestamp}"
+        original_size = len(content.encode("utf-8"))
+        was_truncated = False
 
-        # Write to backend
-        write_result = self.backend.write(path, content)
-        success = getattr(write_result, "success", write_result)
+        # Phase 3: Apply size cap with truncation
+        if original_size > self.max_file_size_bytes:
+            content = content[: self.max_file_size_bytes] + (
+                f"\n\n[TRUNCATED - Original size {original_size} bytes exceeded "
+                f"limit of {self.max_file_size_bytes} bytes]"
+            )
+            was_truncated = True
+
+        # Phase 3: Use workspace_store when available
+        if self.workspace_store:
+            # Use session-scoped path in workspace
+            path = f"/knowledge/tool_results/{tool_call_id}.md"
+            try:
+                await self.workspace_store.write_file(
+                    path,
+                    content,
+                    metadata={
+                        "content_type": "text/markdown",
+                        "original_size": original_size,
+                        "truncated": was_truncated,
+                        "tool_name": tool_name,
+                        "evicted_at": datetime.now(timezone.utc).isoformat(),
+                    },
+                )
+                success = True
+            except Exception as exc:
+                logger.warning(
+                    "eviction_workspace_write_failed",
+                    path=path,
+                    tool=tool_name,
+                    error=str(exc),
+                )
+                success = False
+        else:
+            # Fall back to legacy backend
+            timestamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
+            path = f"/large_results/{tool_call_id}_{timestamp}"
+            write_result = self.backend.write(path, content)
+            success = getattr(write_result, "success", write_result)
+
         if not success:
             logger.warning("eviction_write_failed", path=path, tool=tool_name)
             return result
@@ -387,11 +581,11 @@ class ToolResultEvictionMiddleware(AgentMiddleware if AGENT_MIDDLEWARE_AVAILABLE
         # Thread-safe stat updates
         async with self._stats_lock:
             self._stats.results_evicted += 1
-            self._stats.total_chars_evicted += len(content)
+            self._stats.total_chars_evicted += original_size
             self._stats.evicted_paths.append(path)
 
         return self._create_pointer_message(
-            tool_call_id, tool_name, content, path
+            tool_call_id, tool_name, content, path, original_size, was_truncated
         )
 
     def _create_pointer_message(
@@ -400,36 +594,57 @@ class ToolResultEvictionMiddleware(AgentMiddleware if AGENT_MIDDLEWARE_AVAILABLE
         tool_name: str,
         content: str,
         path: str,
+        original_size: Optional[int] = None,
+        was_truncated: bool = False,
     ) -> ToolMessage:
         """Create a pointer message for evicted content.
 
         Args:
             tool_call_id: Tool call identifier.
             tool_name: Name of the tool.
-            content: Original content (for logging and summary).
+            content: Content that was saved (may be truncated).
             path: Storage path.
+            original_size: Original content size in bytes (Phase 3).
+            was_truncated: Whether content was truncated (Phase 3).
 
         Returns:
             Pointer ToolMessage.
         """
+        # Use original_size if provided, else calculate from content
+        display_size = original_size if original_size is not None else len(content)
+
         logger.info(
             "tool_result_evicted",
             tool=tool_name,
             tool_call_id=tool_call_id,
-            original_chars=len(content),
+            original_bytes=display_size,
+            truncated=was_truncated,
             path=path,
         )
 
         # Create summary
         summary = self._create_summary(content, tool_name)
 
-        # Create pointer message
+        # Create pointer message with truncation info if applicable
+        truncation_note = ""
+        if was_truncated:
+            truncation_note = (
+                f"\n\n**Note:** Content was truncated from {display_size:,} bytes "
+                f"to {self.max_file_size_bytes:,} bytes."
+            )
+
+        # Determine read instruction based on path
+        if path.startswith("/knowledge/"):
+            read_instruction = f"Use `read_workspace_file` tool with path `{path}` to read the full content."
+        else:
+            read_instruction = f"Use `read_evicted_result` tool with path: {path}"
+
         pointer_content = (
-            f"Result from {tool_name} was too large ({len(content):,} characters) "
+            f"Result from {tool_name} was too large ({display_size:,} bytes) "
             f"and has been saved to storage.\n\n"
             f"**Storage path:** `{path}`\n\n"
-            f"**Summary:**\n{summary}\n\n"
-            f"To access the full result, use the `read_evicted_result` tool with path: {path}"
+            f"**Summary:**\n{summary}{truncation_note}\n\n"
+            f"{read_instruction}"
         )
 
         return ToolMessage(
@@ -438,7 +653,8 @@ class ToolResultEvictionMiddleware(AgentMiddleware if AGENT_MIDDLEWARE_AVAILABLE
             additional_kwargs={
                 "evicted": True,
                 "evicted_path": path,
-                "original_length": len(content),
+                "original_length": display_size,
+                "truncated": was_truncated,
                 "tool_name": tool_name,
             },
         )

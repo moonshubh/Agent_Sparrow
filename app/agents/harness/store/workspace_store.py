@@ -3,14 +3,24 @@
 This module provides a LangGraph-compatible BaseStore implementation backed by
 Supabase for persistent workspace storage. It's designed for the context engineering
 pattern from DeepAgents, storing:
-- /progress/ - Session progress notes
-- /goals/ - Active goals and feature tracking
-- /handoff/ - Session handoff context for resumption
+
+**Persistence Scopes:**
+- GLOBAL: /playbooks/ - shared across all sessions (read-only for agents)
+- CUSTOMER: /customer/{id}/ - per-customer, survives across tickets
+- SESSION: /scratch/, /knowledge/, /context/, /handoff/, /progress/, /goals/ - per-ticket
 
 Usage:
     from app.agents.harness.store import SparrowWorkspaceStore
 
+    # Session-only access
     store = SparrowWorkspaceStore(session_id="abc123")
+
+    # With customer scope (for Zendesk tickets)
+    store = SparrowWorkspaceStore(
+        session_id="zendesk-12345",
+        customer_id="hash_of_email",
+    )
+
     await store.aput(("progress",), "notes.md", {"content": "Progress so far..."})
     item = await store.aget(("progress",), "notes.md")
 """
@@ -22,9 +32,37 @@ import json
 import uuid
 from collections import defaultdict
 from datetime import datetime, timezone
-from typing import Any, Dict, Iterable, List, Optional, Tuple, TYPE_CHECKING
+from enum import Enum
+from typing import Any, Dict, Iterable, List, Optional, Set, Tuple, TYPE_CHECKING
 
 from loguru import logger
+
+
+# =============================================================================
+# Persistence Scope Configuration
+# =============================================================================
+
+class PersistenceScope(Enum):
+    """Persistence scope for workspace files."""
+    GLOBAL = "global"       # /playbooks/ - shared across all sessions
+    CUSTOMER = "customer"   # /customer/{id}/ - per-customer, cross-ticket
+    SESSION = "session"     # /scratch/, /knowledge/ - per-ticket ephemeral
+
+
+# Path-to-scope routing rules
+SCOPE_ROUTING: Dict[str, PersistenceScope] = {
+    "playbooks": PersistenceScope.GLOBAL,
+    "customer": PersistenceScope.CUSTOMER,
+    "scratch": PersistenceScope.SESSION,
+    "knowledge": PersistenceScope.SESSION,
+    "context": PersistenceScope.SESSION,
+    "handoff": PersistenceScope.SESSION,
+    "progress": PersistenceScope.SESSION,
+    "goals": PersistenceScope.SESSION,
+}
+
+# Allowed path roots for validation
+ALLOWED_ROOTS: Set[str] = set(SCOPE_ROUTING.keys())
 
 if TYPE_CHECKING:
     from supabase import Client as SupabaseClient
@@ -62,40 +100,50 @@ WORKSPACE_TABLE = "store"
 class SparrowWorkspaceStore(BaseStore if _LANGGRAPH_STORE_AVAILABLE else object):
     """LangGraph BaseStore implementation for Deep Agent workspace files.
 
-    Provides persistent storage for workspace files using Supabase backend:
-    - Namespace tuple maps to path prefix (e.g., ("progress", "session123") -> "/progress/session123/")
-    - Key maps to filename within namespace
-    - Value is stored as JSON in content field
+    Provides persistent storage for workspace files using Supabase backend with
+    **three persistence scopes**:
+
+    - **GLOBAL** (`/playbooks/`): Shared across all sessions, read-only for agents
+    - **CUSTOMER** (`/customer/{id}/`): Per-customer, survives across tickets
+    - **SESSION** (`/scratch/`, `/knowledge/`, etc.): Per-ticket ephemeral
+
+    Namespace tuple maps to scope-aware prefix:
+    - Global: `workspace:global:{path}`
+    - Customer: `workspace:customer:{customer_id}:{path}`
+    - Session: `workspace:session:{session_id}:{path}`
 
     This store supports:
     - Key-value CRUD operations via get/put/delete
     - Namespace listing for organizational queries
+    - Path validation to prevent traversal attacks
     - TTL is NOT supported (supports_ttl = False)
 
     Example:
+        # Session-only access
         store = SparrowWorkspaceStore(session_id="session123")
 
-        # Store progress notes
+        # With customer scope (for Zendesk tickets)
+        store = SparrowWorkspaceStore(
+            session_id="zendesk-12345",
+            customer_id="abc123hash",
+        )
+
+        # Store progress notes (SESSION scope)
         await store.aput(
             namespace=("progress",),
             key="notes.md",
             value={"content": "Made progress on feature X..."}
         )
 
-        # Store goals
+        # Access customer history (CUSTOMER scope - requires customer_id)
         await store.aput(
-            namespace=("goals",),
-            key="active.json",
-            value={
-                "features": [
-                    {"name": "Auth", "status": "pass"},
-                    {"name": "API", "status": "pending"}
-                ]
-            }
+            namespace=("customer", "abc123hash", "history"),
+            key="ticket_12345.md",
+            value={"content": "Ticket summary..."}
         )
 
-        # Get handoff context
-        item = await store.aget(("handoff",), "summary.json")
+        # Read playbooks (GLOBAL scope - typically read-only)
+        item = await store.aget(("playbooks",), "sync_auth.md")
     """
 
     supports_ttl = False
@@ -103,19 +151,25 @@ class SparrowWorkspaceStore(BaseStore if _LANGGRAPH_STORE_AVAILABLE else object)
     def __init__(
         self,
         session_id: str,
+        customer_id: Optional[str] = None,
         supabase_client: Optional["SupabaseClient"] = None,
     ) -> None:
         """Initialize the workspace store.
 
         Args:
-            session_id: The session ID for scoping workspace files.
+            session_id: The session ID for scoping workspace files (required).
+            customer_id: Optional customer ID for customer-scoped paths.
+                         Required if accessing /customer/ paths.
             supabase_client: Optional Supabase client. If not provided,
                              will be lazy-loaded from app.db.supabase.
         """
         self.session_id = session_id
+        self.customer_id = customer_id
         self._client = supabase_client
         # Local cache for faster reads within same request
         self._cache: Dict[Tuple[str, ...], Dict[str, Item]] = defaultdict(dict)
+        # Per-path locks to serialize append operations within this process
+        self._locks: Dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
 
     @property
     def client(self) -> Optional["SupabaseClient"]:
@@ -142,27 +196,157 @@ class SparrowWorkspaceStore(BaseStore if _LANGGRAPH_STORE_AVAILABLE else object)
 
         return self._client
 
-    def _namespace_to_prefix(self, namespace: Tuple[str, ...]) -> str:
-        """Convert namespace tuple to prefix for store table.
+    def _get_scope_for_path(self, path: str) -> PersistenceScope:
+        """Determine persistence scope from path root.
+
+        Args:
+            path: Virtual path (e.g., "/scratch/notes.md", "playbooks/sync.md")
+
+        Returns:
+            PersistenceScope for this path.
 
         Example:
-            ("progress",) -> "workspace:progress:{session_id}"
-            ("goals",) -> "workspace:goals:{session_id}"
+            "/playbooks/sync.md" -> PersistenceScope.GLOBAL
+            "/customer/abc/history.md" -> PersistenceScope.CUSTOMER
+            "/scratch/notes.md" -> PersistenceScope.SESSION
         """
-        ns_path = ":".join(namespace)
-        return f"workspace:{ns_path}:{self.session_id}"
+        normalized = path.lstrip("/").split("/")[0] if path else ""
+        return SCOPE_ROUTING.get(normalized, PersistenceScope.SESSION)
+
+    def _validate_and_normalize_path(self, path: str) -> str:
+        """Validate and normalize virtual path.
+
+        Args:
+            path: Virtual path to validate.
+
+        Returns:
+            Normalized path (stripped of leading/trailing slashes).
+
+        Raises:
+            ValueError: If path is invalid or attempts traversal.
+        """
+        # Normalize slashes
+        normalized = path.replace("\\", "/").strip("/")
+
+        # Reject empty paths
+        if not normalized:
+            raise ValueError("Empty path not allowed")
+
+        # Reject path traversal
+        if ".." in normalized:
+            raise ValueError(f"Path traversal not allowed: {path}")
+
+        # Validate root
+        root = normalized.split("/")[0]
+        if root not in ALLOWED_ROOTS:
+            raise ValueError(f"Invalid path root '{root}'. Allowed: {sorted(ALLOWED_ROOTS)}")
+
+        return normalized
+
+    def _path_to_namespace_key(self, path: str) -> Tuple[Tuple[str, ...], str]:
+        """Convert virtual path to (namespace, key) tuple.
+
+        Args:
+            path: Virtual path (e.g., "/scratch/notes.md")
+
+        Returns:
+            Tuple of (namespace_tuple, key).
+
+        Example:
+            "/scratch/notes.md" -> (("scratch",), "notes.md")
+            "/customer/abc123/history/ticket_1.md" -> (("customer", "abc123", "history"), "ticket_1.md")
+            "/playbooks" -> (("playbooks",), "index")
+        """
+        normalized = self._validate_and_normalize_path(path)
+        parts = normalized.split("/")
+
+        if len(parts) == 1:
+            # Single-level path like "/scratch" -> ("scratch",), "index"
+            return (parts[0],), "index"
+
+        # Multi-level path: all but last part is namespace, last is key
+        return tuple(parts[:-1]), parts[-1]
+
+    def _namespace_to_prefix(self, namespace: Tuple[str, ...]) -> str:
+        """Convert namespace tuple to scope-aware prefix for store table.
+
+        Routes to different prefixes based on path root:
+        - Global: `workspace:global:{path}`
+        - Customer: `workspace:customer:{customer_id}:{path}`
+        - Session: `workspace:session:{session_id}:{path}`
+
+        Example:
+            ("playbooks",) -> "workspace:global:playbooks"
+            ("customer", "abc", "history") -> "workspace:customer:abc:history"
+            ("progress",) -> "workspace:session:{session_id}:progress"
+        """
+        if not namespace:
+            raise ValueError("Empty namespace not allowed")
+
+        path = "/".join(namespace)
+        scope = self._get_scope_for_path(path)
+
+        if scope == PersistenceScope.GLOBAL:
+            return f"workspace:global:{path}"
+        elif scope == PersistenceScope.CUSTOMER:
+            # For customer scope, extract customer_id from namespace or use stored one
+            # Namespace format: ("customer", "{customer_id}", ...)
+            if len(namespace) >= 2 and namespace[0] == "customer":
+                customer_id = namespace[1]
+            elif self.customer_id:
+                customer_id = self.customer_id
+            else:
+                raise ValueError(
+                    "customer_id required for customer-scoped paths. "
+                    "Either include it in namespace (\"customer\", \"id\", ...) "
+                    "or initialize store with customer_id parameter."
+                )
+
+            rest = namespace[2:] if len(namespace) > 2 else ()
+            rest_path = "/".join(rest)
+            prefix = f"workspace:customer:{customer_id}"
+            if rest_path:
+                prefix = f"{prefix}:{rest_path}"
+            return prefix
+        else:  # SESSION
+            return f"workspace:session:{self.session_id}:{path}"
 
     def _prefix_key_to_namespace(self, prefix: str, key: str) -> Tuple[Tuple[str, ...], str]:
         """Convert prefix and key back to namespace tuple and key.
 
+        Handles all scope formats:
+        - "workspace:global:playbooks" -> (("playbooks",), key)
+        - "workspace:customer:abc:history" -> (("customer", "abc", "history"), key)
+        - "workspace:session:sess123:progress" -> (("progress",), key)
+
         Example:
-            "workspace:progress:session123", "notes.md" -> (("progress",), "notes.md")
+            "workspace:session:sess123:progress", "notes.md" -> (("progress",), "notes.md")
         """
         parts = prefix.split(":")
-        if len(parts) >= 3 and parts[0] == "workspace":
-            namespace = (parts[1],)
-            return namespace, key
-        return (), key
+        if len(parts) < 3 or parts[0] != "workspace":
+            return (), key
+
+        scope = parts[1]
+
+        if scope == "global":
+            # Format: workspace:global:{path}
+            path = ":".join(parts[2:])
+            namespace = tuple(path.split("/"))
+        elif scope == "customer":
+            # Format: workspace:customer:{customer_id}:{path}
+            customer_id = parts[2] if len(parts) >= 3 else ""
+            path = ":".join(parts[3:]) if len(parts) >= 4 else ""
+            path_parts = path.split("/") if path else []
+            namespace = ("customer", customer_id, *path_parts) if customer_id else ()
+        else:  # session
+            # Format: workspace:session:{session_id}:{path}
+            if len(parts) >= 4:
+                path = ":".join(parts[3:])
+                namespace = tuple(path.split("/"))
+            else:
+                namespace = ()
+
+        return namespace, key
 
     # -------------------------------------------------------------------------
     # Required BaseStore methods
@@ -229,7 +413,21 @@ class SparrowWorkspaceStore(BaseStore if _LANGGRAPH_STORE_AVAILABLE else object)
         """Get an item by namespace and key."""
         # Check local cache first
         if namespace in self._cache and key in self._cache[namespace]:
-            return self._cache[namespace][key]
+            item = self._cache[namespace][key]
+            # Observability: log cache hits
+            path = "/".join(namespace)
+            scope = self._get_scope_for_path(path)
+            content_size = len(json.dumps(item.value).encode('utf-8'))
+            logger.debug(
+                "workspace_read",
+                scope=scope.value,
+                namespace=":".join(namespace),
+                key=key,
+                content_size_bytes=content_size,
+                session_id=self.session_id,
+                cache_hit=True,
+            )
+            return item
 
         # Try to retrieve from Supabase (store table: prefix, key, value)
         if self.client:
@@ -264,6 +462,21 @@ class SparrowWorkspaceStore(BaseStore if _LANGGRAPH_STORE_AVAILABLE else object)
                     )
                     # Cache the item
                     self._cache[namespace][key] = item
+
+                    # Observability: log workspace reads with scope and size
+                    path = "/".join(namespace)
+                    scope = self._get_scope_for_path(path)
+                    content_size = len(json.dumps(value).encode('utf-8'))
+                    logger.info(
+                        "workspace_read",
+                        scope=scope.value,
+                        namespace=":".join(namespace),
+                        key=key,
+                        content_size_bytes=content_size,
+                        session_id=self.session_id,
+                        customer_id=self.customer_id,
+                        cache_hit=False,
+                    )
                     return item
 
             except Exception as exc:
@@ -280,6 +493,11 @@ class SparrowWorkspaceStore(BaseStore if _LANGGRAPH_STORE_AVAILABLE else object)
     ) -> None:
         """Store an item with namespace and key."""
         now = datetime.now(timezone.utc)
+
+        # Determine scope for observability
+        path = "/".join(namespace)
+        scope = self._get_scope_for_path(path)
+        content_size = len(json.dumps(value).encode('utf-8'))
 
         # Create the Item for cache
         existing = self._cache.get(namespace, {}).get(key)
@@ -309,6 +527,17 @@ class SparrowWorkspaceStore(BaseStore if _LANGGRAPH_STORE_AVAILABLE else object)
                 self.client.table(WORKSPACE_TABLE).upsert(
                     data, on_conflict="prefix,key"
                 ).execute()
+
+                # Observability: log workspace writes with scope and size
+                logger.info(
+                    "workspace_write",
+                    scope=scope.value,
+                    namespace=":".join(namespace),
+                    key=key,
+                    content_size_bytes=content_size,
+                    session_id=self.session_id,
+                    customer_id=self.customer_id,
+                )
             except Exception as exc:
                 logger.warning("workspace_store_put_error", prefix=prefix, key=key, error=str(exc))
 
@@ -320,20 +549,41 @@ class SparrowWorkspaceStore(BaseStore if _LANGGRAPH_STORE_AVAILABLE else object)
         limit: int = 10,
         offset: int = 0,
     ) -> List[SearchItem]:
-        """Search for items within namespace prefix."""
+        """Search for items within namespace prefix.
+
+        If query is provided, performs content search using the GIN index
+        on the content_text generated column (uses ILIKE for case-insensitive matching).
+
+        Args:
+            namespace_prefix: Namespace tuple to search within.
+            query: Optional search query for content search.
+            filter_dict: Optional filter for exact value matches.
+            limit: Maximum results to return.
+            offset: Number of results to skip.
+
+        Returns:
+            List of matching SearchItems.
+        """
         results: List[SearchItem] = []
 
-        # Search Supabase (store table: prefix, key, value)
+        # Search Supabase (store table: prefix, key, value, content_text)
         if self.client:
             prefix_pattern = self._namespace_to_prefix(namespace_prefix)
             try:
-                response = (
+                # Build query with optional content search
+                db_query = (
                     self.client.table(WORKSPACE_TABLE)
                     .select("prefix, key, value, created_at, updated_at")
                     .like("prefix", f"{prefix_pattern}%")
-                    .limit(limit + offset)
-                    .execute()
                 )
+
+                # Add content search if query provided (uses GIN index via ILIKE)
+                if query:
+                    # Note: ilike uses the GIN index on content_text column
+                    db_query = db_query.ilike("content_text", f"%{query}%")
+
+                # Apply pagination at DB level (not client-side)
+                response = db_query.limit(limit).offset(offset).execute()
 
                 for row in response.data or []:
                     namespace, key = self._prefix_key_to_namespace(row["prefix"], row["key"])
@@ -370,11 +620,18 @@ class SparrowWorkspaceStore(BaseStore if _LANGGRAPH_STORE_AVAILABLE else object)
             except Exception as exc:
                 logger.warning("workspace_store_search_error", prefix=prefix_pattern, error=str(exc))
 
-        # Also search local cache
+        # Also search local cache (for items not yet persisted)
         for ns, items in self._cache.items():
             if len(ns) >= len(namespace_prefix):
                 if ns[: len(namespace_prefix)] == namespace_prefix:
                     for key, item in items.items():
+                        # Apply content search filter if query provided
+                        if query:
+                            content = item.value.get("content", "")
+                            if query.lower() not in content.lower():
+                                continue
+
+                        # Apply filter if provided
                         if filter_dict:
                             match = all(
                                 item.value.get(k) == v
@@ -383,6 +640,7 @@ class SparrowWorkspaceStore(BaseStore if _LANGGRAPH_STORE_AVAILABLE else object)
                             if not match:
                                 continue
 
+                        # Skip if already in results from DB
                         if not any(r.key == key and r.namespace == ns for r in results):
                             results.append(
                                 SearchItem(
@@ -391,11 +649,31 @@ class SparrowWorkspaceStore(BaseStore if _LANGGRAPH_STORE_AVAILABLE else object)
                                     namespace=item.namespace,
                                     created_at=item.created_at,
                                     updated_at=item.updated_at,
-                                    score=0.5,
+                                    score=0.5,  # Cache items scored lower than DB results
                                 )
                             )
 
-        return results[offset : offset + limit]
+        # Pagination already applied at DB level; only limit total results
+        # (cache items are extras, so we may have slightly more than limit)
+        final_results = results[:limit]
+
+        # Observability: log workspace searches with scope and result count
+        path = "/".join(namespace_prefix)
+        scope = self._get_scope_for_path(path)
+        logger.info(
+            "workspace_search",
+            scope=scope.value,
+            namespace=":".join(namespace_prefix),
+            query=query[:50] if query else None,  # Truncate long queries
+            has_filter=filter_dict is not None,
+            result_count=len(final_results),
+            limit=limit,
+            offset=offset,
+            session_id=self.session_id,
+            customer_id=self.customer_id,
+        )
+
+        return final_results
 
     async def _execute_list_namespaces(
         self,
@@ -404,26 +682,43 @@ class SparrowWorkspaceStore(BaseStore if _LANGGRAPH_STORE_AVAILABLE else object)
         limit: int = 100,
         offset: int = 0,
     ) -> List[Tuple[str, ...]]:
-        """List all namespaces matching criteria."""
+        """List all namespaces matching criteria.
+
+        Queries all accessible scopes:
+        - Session scope (session_id)
+        - Customer scope (if customer_id is set)
+        - Global scope (always accessible)
+        """
         all_namespaces = set(self._cache.keys())
 
-        # Add namespaces from Supabase (store table: prefix, key, value)
+        # Add namespaces from Supabase for all accessible scopes
         if self.client:
-            try:
-                response = (
-                    self.client.table(WORKSPACE_TABLE)
-                    .select("prefix, key")
-                    .like("prefix", f"workspace:%:{self.session_id}%")
-                    .execute()
-                )
+            # Build list of prefix patterns to query
+            prefix_patterns = [
+                f"workspace:session:{self.session_id}%",  # Session scope
+                "workspace:global:%",  # Global scope (always accessible)
+            ]
 
-                for row in response.data or []:
-                    namespace, _ = self._prefix_key_to_namespace(row["prefix"], row["key"])
-                    if namespace:
-                        all_namespaces.add(namespace)
+            # Add customer scope if customer_id is set
+            if self.customer_id:
+                prefix_patterns.append(f"workspace:customer:{self.customer_id}%")
 
-            except Exception as exc:
-                logger.warning("workspace_store_list_ns_error", error=str(exc))
+            for pattern in prefix_patterns:
+                try:
+                    response = (
+                        self.client.table(WORKSPACE_TABLE)
+                        .select("prefix, key")
+                        .like("prefix", pattern)
+                        .execute()
+                    )
+
+                    for row in response.data or []:
+                        namespace, _ = self._prefix_key_to_namespace(row["prefix"], row["key"])
+                        if namespace:
+                            all_namespaces.add(namespace)
+
+                except Exception as exc:
+                    logger.warning("workspace_store_list_ns_error", pattern=pattern, error=str(exc))
 
         # Apply match conditions
         if match_conditions:
@@ -623,3 +918,185 @@ class SparrowWorkspaceStore(BaseStore if _LANGGRAPH_STORE_AVAILABLE else object)
     def clear_cache(self) -> None:
         """Clear the local cache (called at end of session)."""
         self._cache.clear()
+
+    # -------------------------------------------------------------------------
+    # File-like convenience methods (path-based API)
+    # -------------------------------------------------------------------------
+
+    async def read_file(self, path: str) -> Optional[str]:
+        """Read content from a workspace file by path.
+
+        Args:
+            path: Virtual path (e.g., "/scratch/notes.md")
+
+        Returns:
+            File content as string, or None if not found.
+
+        Example:
+            content = await store.read_file("/scratch/notes.md")
+        """
+        namespace, key = self._path_to_namespace_key(path)
+        item = await self.aget(namespace, key)
+        if item and item.value:
+            return item.value.get("content", "")
+        return None
+
+    async def write_file(
+        self,
+        path: str,
+        content: str,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """Write content to a workspace file by path.
+
+        Args:
+            path: Virtual path (e.g., "/scratch/notes.md")
+            content: Content to write.
+            metadata: Optional metadata to store alongside content.
+
+        Example:
+            await store.write_file("/scratch/notes.md", "My notes...")
+        """
+        namespace, key = self._path_to_namespace_key(path)
+        value = {
+            "content": content,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+        if metadata:
+            value["metadata"] = metadata
+        await self.aput(namespace, key, value)
+
+    async def append_file(
+        self,
+        path: str,
+        content: str,
+        max_size_bytes: int,
+    ) -> int:
+        """Append content to a workspace file with per-path locking.
+
+        Returns the new file size in bytes.
+        """
+        namespace, key = self._path_to_namespace_key(path)
+        lock_key = "/".join(namespace + (key,))
+        lock = self._locks[lock_key]
+
+        async with lock:
+            existing = await self.read_file(path)
+            new_content = (existing or "") + content
+
+            new_size = len(new_content.encode("utf-8"))
+            if new_size > max_size_bytes:
+                current_size = len((existing or "").encode("utf-8"))
+                raise ValueError(
+                    f"Append would exceed {max_size_bytes} bytes "
+                    f"(current: {current_size}, new total: {new_size}). "
+                    "Archive old entries first."
+                )
+
+            await self.write_file(path, new_content)
+            return new_size
+
+    async def delete_file(self, path: str) -> None:
+        """Delete a workspace file by path.
+
+        Args:
+            path: Virtual path (e.g., "/scratch/notes.md")
+        """
+        namespace, key = self._path_to_namespace_key(path)
+        await self.adelete(namespace, key)
+
+    async def list_files(self, path: str = "/", depth: int = 2) -> List[Dict[str, Any]]:
+        """List files in a workspace directory.
+
+        Args:
+            path: Virtual directory path (e.g., "/scratch")
+            depth: Maximum depth to traverse (default: 2)
+
+        Returns:
+            List of file info dicts with keys: path, key, updated_at
+
+        Example:
+            files = await store.list_files("/scratch")
+        """
+        normalized = path.strip("/")
+        if normalized:
+            namespace_prefix = tuple(normalized.split("/"))
+        else:
+            namespace_prefix = ()
+
+        # Search with depth limit
+        items = await self.asearch(namespace_prefix, limit=100)
+
+        results = []
+        for item in items:
+            # Filter by depth
+            if len(item.namespace) > len(namespace_prefix) + depth:
+                continue
+
+            file_path = "/" + "/".join(item.namespace) + "/" + item.key
+            results.append({
+                "path": file_path,
+                "key": item.key,
+                "namespace": item.namespace,
+                "updated_at": item.updated_at.isoformat() if item.updated_at else None,
+            })
+
+        return results
+
+    # -------------------------------------------------------------------------
+    # Session cleanup methods
+    # -------------------------------------------------------------------------
+
+    async def cleanup_session_data(self) -> int:
+        """Delete all session-scoped data for this session.
+
+        Called after ticket resolution or session timeout.
+        Only deletes SESSION scope data; CUSTOMER and GLOBAL data are preserved.
+
+        Returns:
+            Number of items deleted.
+        """
+        if not self.client:
+            # Clear cache only
+            count = sum(len(items) for items in self._cache.values())
+            self._cache.clear()
+            return count
+
+        prefix_pattern = f"workspace:session:{self.session_id}%"
+
+        try:
+            response = self.client.table(WORKSPACE_TABLE).delete().like(
+                "prefix", prefix_pattern
+            ).execute()
+
+            count = len(response.data) if response.data else 0
+
+            # Also clear local cache
+            self._cache.clear()
+
+            logger.info(
+                "session_cleanup",
+                session_id=self.session_id,
+                items_deleted=count,
+            )
+            return count
+
+        except Exception as exc:
+            logger.warning(
+                "session_cleanup_error",
+                session_id=self.session_id,
+                error=str(exc),
+            )
+            return 0
+
+    async def file_exists(self, path: str) -> bool:
+        """Check if a workspace file exists.
+
+        Args:
+            path: Virtual path (e.g., "/scratch/notes.md")
+
+        Returns:
+            True if file exists, False otherwise.
+        """
+        content = await self.read_file(path)
+        return content is not None

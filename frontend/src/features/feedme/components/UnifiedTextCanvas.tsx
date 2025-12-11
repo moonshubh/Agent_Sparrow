@@ -423,6 +423,7 @@ export function UnifiedTextCanvas({
 
   const editor = useEditor({
     editable: !readOnly,
+    immediatelyRender: false, // Prevent SSR hydration mismatch in Next.js
     extensions: [
       StarterKit.configure({ heading: { levels: [2, 3] } }),
       Placeholder.configure({ placeholder: 'Edit extracted content here…' }),
