@@ -65,7 +65,11 @@ class CircuitBreakerStatus(BaseModel):
 class UsageStats(BaseModel):
     """Current usage statistics."""
 
-    # Gemini 3.0 Pro (newest)
+    # Gemini 3.0 Flash (newest - Dec 2025)
+    gemini_3_flash_stats: RateLimitMetadata = Field(description="Gemini 3.0 Flash usage stats")
+    gemini_3_flash_circuit: CircuitBreakerStatus = Field(description="Gemini 3.0 Flash circuit breaker status")
+
+    # Gemini 3.0 Pro
     gemini_3_pro_stats: RateLimitMetadata = Field(description="Gemini 3.0 Pro usage stats")
     gemini_3_pro_circuit: CircuitBreakerStatus = Field(description="Gemini 3.0 Pro circuit breaker status")
 

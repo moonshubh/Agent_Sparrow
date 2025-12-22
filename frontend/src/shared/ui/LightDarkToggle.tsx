@@ -1,6 +1,6 @@
 "use client"
 
-import React, { useState, useEffect } from 'react'
+import React from 'react'
 import { useTheme } from 'next-themes'
 import { Switch } from '@/shared/ui/switch'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/shared/ui/tooltip'
@@ -9,22 +9,14 @@ import { cn } from '@/shared/lib/utils'
 
 export function LightDarkToggle() {
   const { resolvedTheme, setTheme } = useTheme()
-  const [mounted, setMounted] = useState(false)
-  
-  // Ensure component is only rendered on client after hydration
-  useEffect(() => {
-    setMounted(true)
-  }, [])
-
-  // Use resolvedTheme for consistency, fallback to light for SSR
-  const isDark = mounted ? resolvedTheme === 'dark' : false
+  const isDark = resolvedTheme === 'dark'
   
   const handleToggle = (checked: boolean) => {
     setTheme(checked ? 'dark' : 'light')
   }
 
   // Don't render until mounted to prevent hydration mismatch
-  if (!mounted) {
+  if (!resolvedTheme) {
     return (
       <TooltipProvider>
         <Tooltip>

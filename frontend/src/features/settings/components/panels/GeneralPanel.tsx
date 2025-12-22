@@ -1,6 +1,6 @@
 "use client"
 
-import React, { useEffect, useState, useCallback } from "react"
+import React, { useCallback } from "react"
 import { useTheme } from "next-themes"
 import { Separator } from "@/shared/ui/separator"
 import { Switch } from "@/shared/ui/switch"
@@ -8,10 +8,7 @@ import { Label } from "@/shared/ui/label"
 
 export function GeneralPanel() {
   const { theme, setTheme, resolvedTheme } = useTheme()
-  const [mounted, setMounted] = useState(false)
-  useEffect(() => setMounted(true), [])
-
-  const selected = mounted ? (theme === "system" ? resolvedTheme : theme) : "light"
+  const selected = theme === "system" ? resolvedTheme : theme
 
   const isDark = selected === "dark"
   const onToggleDark = useCallback((next: boolean) => {

@@ -754,7 +754,21 @@ async def web_search_tool(
             return result
         except Exception as e:
             if attempt == max_retries - 1:
-                raise Exception(f"Web search failed after {max_retries} attempts: {e}")
+                logger.warning("web_search_tool_failed", error=str(e))
+                try:
+                    fallback_sources = ["web", "news", "images"] if input.include_images else ["web", "news"]
+                    fallback = await firecrawl_search_tool(
+                        input=FirecrawlSearchInput(
+                            query=input.query,
+                            limit=input.max_results,
+                            sources=fallback_sources,
+                        )
+                    )
+                    if isinstance(fallback, dict) and not fallback.get("error"):
+                        return fallback
+                except Exception as fallback_exc:
+                    logger.error("web_search_firecrawl_fallback_failed", error=str(fallback_exc))
+                return {"error": "web_search_failed", "message": str(e), "query": input.query}
             await asyncio.sleep(1 * (attempt + 1))  # Exponential backoff
 
 
@@ -1196,6 +1210,22 @@ def get_registered_tools() -> List[BaseTool]:
         get_weather,
         generate_task_steps_generative_ui,
         write_todos,
+    ]
+
+
+def get_registered_support_tools() -> List[BaseTool]:
+    """Return a minimal, support-focused tool set.
+
+    Intended for contexts like Zendesk where we want:
+    - Smaller tool schema payloads (reduces model overhead / quota pressure)
+    - Faster, more predictable routing
+    """
+    return [
+        kb_search_tool,
+        feedme_search_tool,
+        web_search_tool,
+        supabase_query_tool,
+        log_diagnoser_tool,
     ]
 
 
@@ -1796,7 +1826,58 @@ async def db_unified_search_tool(
                 no_results_sources.append("macros")
         except Exception as exc:
             logger.error("DB retrieval macros search failed: %s", exc)
-            no_results_sources.append("macros")
+
+            # Fallback: lightweight full-text search against zendesk_macros table
+            # This keeps macros usable even if the semantic RPC is missing/broken.
+            try:
+                # Build a safe ILIKE pattern from a few sanitized tokens
+                safe_query = " ".join((effective_query or "").split()).strip()[:200]
+                raw_tokens = safe_query.split()[:5]
+                tokens = [re.sub(r"[^a-zA-Z0-9]", "", t) for t in raw_tokens]
+                tokens = [t for t in tokens if len(t) >= 2][:3]
+                pattern_body = "%".join(tokens)[:200]
+                # Neutral fallback when the pattern is empty (avoids hardcoded debug biases).
+                pattern = f"%{pattern_body}%" if pattern_body else "%"
+
+                def _search_macros_text():
+                    builder = (
+                        client.client.table("zendesk_macros")
+                        .select("zendesk_id,title,comment_value,usage_30d,updated_at")
+                        .order("usage_30d", desc=True)
+                    )
+                    try:
+                        query_builder = builder.or_(
+                            f"title.ilike.{pattern},comment_value.ilike.{pattern}"
+                        )
+                    except Exception:
+                        query_builder = builder.ilike("comment_value", pattern)
+                    return query_builder.limit(max_results_per_source).execute()
+
+                macro_resp = await asyncio.to_thread(_search_macros_text)
+                macro_rows = macro_resp.data or []
+                if macro_rows:
+                    for row in macro_rows[:max_results_per_source]:
+                        content = row.get("comment_value", "") or ""
+                        results.append(
+                            _format_result_with_content_type(
+                                source="macro",
+                                title=row.get("title", "Macro"),
+                                content=content,
+                                relevance_score=0.15,  # fallback (non-semantic) score
+                                metadata={
+                                    "zendesk_id": row.get("zendesk_id"),
+                                    "usage_30d": row.get("usage_30d"),
+                                    "last_updated": row.get("updated_at"),
+                                    "search_type": "fallback_ilike",
+                                },
+                                weight=weights.get("macro", 1.0),
+                            )
+                        )
+                else:
+                    no_results_sources.append("macros")
+            except Exception as inner_exc:
+                logger.error("DB retrieval macros fallback search failed: %s", inner_exc)
+                no_results_sources.append("macros")
 
     # Search FeedMe
     if "feedme" in sources:

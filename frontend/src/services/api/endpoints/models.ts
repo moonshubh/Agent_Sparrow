@@ -26,7 +26,7 @@ export interface ModelConfig {
 
 // Fallback models when API is unavailable - main coordinator models only
 const FALLBACK_MODELS: Record<Provider, string[]> = {
-  google: ['gemini-2.5-flash', 'gemini-2.5-pro', 'gemini-3-pro-preview'],
+  google: ['gemini-3-flash-preview', 'gemini-2.5-pro', 'gemini-3-pro-preview'],
   xai: ['grok-4-1-fast-reasoning'],
   openrouter: ['x-ai/grok-4.1-fast:free', 'minimax/minimax-m2'],
 }
@@ -35,6 +35,7 @@ const FALLBACK_MODELS: Record<Provider, string[]> = {
 const FALLBACK_DISPLAY_NAMES: Record<string, string> = {
   // Google Gemini (official names)
   'gemini-3-pro-preview': 'Gemini 3.0 Pro',
+  'gemini-3-flash-preview': 'Gemini 3.0 Flash',
   'gemini-2.5-pro': 'Gemini 2.5 Pro',
   'gemini-2.5-flash': 'Gemini 2.5 Flash',
   // xAI Grok
@@ -122,7 +123,6 @@ export const modelsAPI = {
       return normalized || { google: FALLBACK_MODELS.google, xai: FALLBACK_MODELS.xai, openrouter: FALLBACK_MODELS.openrouter }
     } catch (e: unknown) {
       if (process.env.NODE_ENV === 'development') {
-        // eslint-disable-next-line no-console
         console.debug('modelsAPI.list fallback due to error:', e)
       }
       // Graceful fallback to Google only
@@ -140,7 +140,6 @@ export const modelsAPI = {
       return normalized || { google: true, xai: false, openrouter: false }
     } catch (e: unknown) {
       if (process.env.NODE_ENV === 'development') {
-        // eslint-disable-next-line no-console
         console.debug('modelsAPI.getAvailableProviders fallback due to error:', e)
       }
       // Assume Google is always available as fallback
@@ -153,9 +152,9 @@ export const modelsAPI = {
    */
   getDefaultModel(provider: Provider): string {
     if (isCacheValid() && cachedConfig) {
-      return cachedConfig.config.defaults[provider] || FALLBACK_MODELS[provider]?.[0] || 'gemini-2.5-flash'
+      return cachedConfig.config.defaults[provider] || FALLBACK_MODELS[provider]?.[0] || 'gemini-3-flash-preview'
     }
-    return FALLBACK_MODELS[provider]?.[0] || 'gemini-2.5-flash'
+    return FALLBACK_MODELS[provider]?.[0] || 'gemini-3-flash-preview'
   },
 
   /**
@@ -181,7 +180,6 @@ export const modelsAPI = {
       }
     } catch (e: unknown) {
       if (process.env.NODE_ENV === 'development') {
-        // eslint-disable-next-line no-console
         console.debug('modelsAPI.getConfig fallback due to error:', e)
       }
     }
@@ -208,15 +206,15 @@ export const modelsAPI = {
         })
       ),
       defaults: {
-        google: 'gemini-2.5-flash',
+        google: 'gemini-3-flash-preview',
         xai: 'grok-4-1-fast-reasoning',
         openrouter: 'x-ai/grok-4.1-fast:free',
       },
       fallback_chains: {
         google: {
           'gemini-3-pro-preview': 'gemini-2.5-pro',
-          'gemini-2.5-pro': 'gemini-2.5-flash',
-          'gemini-2.5-flash': null,
+          'gemini-2.5-pro': 'gemini-3-flash-preview',
+          'gemini-3-flash-preview': null,
         },
         xai: {
           'grok-4-1-fast-reasoning': null,

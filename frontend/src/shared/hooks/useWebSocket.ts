@@ -55,6 +55,17 @@ export const useWebSocket = (options: UseWebSocketOptions = {}): WebSocketConnec
     }
   }, [])
 
+  const connect = useCallback(() => {
+    if (!isMounted.current) {
+      log('Attempted to connect after unmount, ignoring')
+      return
+    }
+    log('Connecting...')
+    isManualDisconnect.current = false
+    clearReconnectTimer()
+    realtimeConnect()
+  }, [realtimeConnect, clearReconnectTimer, log])
+
   const scheduleReconnect = useCallback(() => {
     if (isManualDisconnect.current) {
       log('Skipping reconnect - manual disconnect')
@@ -92,18 +103,7 @@ export const useWebSocket = (options: UseWebSocketOptions = {}): WebSocketConnec
       reconnectAttempts.current++
       realtimeConnect()
     }, delay)
-  }, [reconnectInterval, maxReconnectAttempts, realtimeConnect, addNotification, log])
-
-  const connect = useCallback(() => {
-    if (!isMounted.current) {
-      log('Attempted to connect after unmount, ignoring')
-      return
-    }
-    log('Connecting...')
-    isManualDisconnect.current = false
-    clearReconnectTimer()
-    realtimeConnect()
-  }, [realtimeConnect, clearReconnectTimer, log])
+  }, [reconnectInterval, maxReconnectAttempts, realtimeConnect, addNotification, log, connect])
 
   const disconnect = useCallback(() => {
     log('Disconnecting...')

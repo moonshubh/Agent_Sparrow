@@ -233,7 +233,7 @@ export function VirtualList<T>({
     if (onItemsRendered && range.start !== visibleRange.start) {
       onItemsRendered(range.start, range.end)
     }
-  }, [debouncedScrollTop, calculateVisibleRange, onItemsRendered])
+  }, [debouncedScrollTop, calculateVisibleRange, onItemsRendered, visibleRange.start])
 
   // Handle container resize
   useEffect(() => {

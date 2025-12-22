@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { Alert, AlertDescription, AlertTitle } from '@/shared/ui/alert';
 import { Button } from '@/shared/ui/button';
 import { Badge } from '@/shared/ui/badge';
@@ -40,6 +40,19 @@ export const AuthStatusBanner: React.FC<AuthStatusBannerProps> = ({
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [sessionExpiryWarning, setSessionExpiryWarning] = useState(false);
 
+  const handleRefresh = useCallback(async () => {
+    setIsRefreshing(true);
+    try {
+      await refreshToken();
+      toast.success('Session refreshed successfully');
+      setSessionExpiryWarning(false);
+    } catch (error) {
+      toast.error('Failed to refresh session');
+    } finally {
+      setIsRefreshing(false);
+    }
+  }, [refreshToken]);
+
   useEffect(() => {
     if (onAuthChange) {
       onAuthChange(isAuthenticated);
@@ -73,20 +86,7 @@ export const AuthStatusBanner: React.FC<AuthStatusBannerProps> = ({
     const interval = setInterval(checkExpiry, 60000); // Check every minute
 
     return () => clearInterval(interval);
-  }, [session, autoRefresh]);
-
-  const handleRefresh = async () => {
-    setIsRefreshing(true);
-    try {
-      await refreshToken();
-      toast.success('Session refreshed successfully');
-      setSessionExpiryWarning(false);
-    } catch (error) {
-      toast.error('Failed to refresh session');
-    } finally {
-      setIsRefreshing(false);
-    }
-  };
+  }, [session, autoRefresh, handleRefresh]);
 
   const handleDismiss = () => {
     setIsDismissed(true);

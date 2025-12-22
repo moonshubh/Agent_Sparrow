@@ -38,7 +38,9 @@ Provider = str  # "google" | "xai" | "openrouter"
 # Based on prompt tier and task requirements
 # =============================================================================
 
-TEMPERATURE_CONFIG: dict[str, float] = {
+# Temperature configuration for non-Gemini-3 models (Grok, Gemini 2.5, etc.)
+# These temperatures are used when the model is NOT a Gemini 3 model
+LEGACY_TEMPERATURE_CONFIG: dict[str, float] = {
     # Heavy tier - deterministic reasoning
     "coordinator": 0.2,
     "coordinator_heavy": 0.2,
@@ -52,6 +54,16 @@ TEMPERATURE_CONFIG: dict[str, float] = {
     # Default fallback
     "default": 0.3,
 }
+
+# Gemini 3 models: Google strongly recommends temperature 1.0
+# "Changing the temperature (setting it below 1.0) may lead to unexpected behavior,
+# such as looping or degraded performance, particularly in complex mathematical
+# or reasoning tasks."
+# See: https://ai.google.dev/gemini-api/docs/gemini-3#temperature
+GEMINI_3_TEMPERATURE: float = 1.0
+
+# Backward compatibility alias
+TEMPERATURE_CONFIG = LEGACY_TEMPERATURE_CONFIG
 
 # =============================================================================
 # GROK CONFIGURATION - Always enabled reasoning for maximum quality
@@ -75,16 +87,38 @@ REQUEST_TIMEOUT_SECONDS = 300
 CONNECT_TIMEOUT_SECONDS = 30
 
 
-def get_temperature_for_role(role: str) -> float:
-    """Get the configured temperature for a specific agent role.
+def _is_gemini_3_model(model: str) -> bool:
+    """Check if a model is a Gemini 3 model.
+
+    Args:
+        model: The model identifier.
+
+    Returns:
+        True if the model is a Gemini 3 model.
+    """
+    model_lower = model.lower()
+    return "gemini-3" in model_lower or "gemini3" in model_lower
+
+
+def get_temperature_for_role(role: str, model: str | None = None) -> float:
+    """Get the configured temperature for a specific agent role and model.
+
+    For Gemini 3 models, returns 1.0 (Google's strong recommendation).
+    For other models (Grok, Gemini 2.5, etc.), returns role-based temperatures.
 
     Args:
         role: The agent role (coordinator, log_analysis, research, etc.)
+        model: Optional model identifier. If provided and is Gemini 3, returns 1.0.
 
     Returns:
-        Temperature value for the role, or default if not found.
+        Temperature value for the role/model combination.
     """
-    return TEMPERATURE_CONFIG.get(role.lower().strip(), TEMPERATURE_CONFIG["default"])
+    # Gemini 3 models: Google strongly recommends temperature 1.0
+    if model and _is_gemini_3_model(model):
+        return GEMINI_3_TEMPERATURE
+
+    # Non-Gemini-3 models: use role-based temperatures
+    return LEGACY_TEMPERATURE_CONFIG.get(role.lower().strip(), LEGACY_TEMPERATURE_CONFIG["default"])
 
 
 def build_chat_model(
@@ -98,10 +132,12 @@ def build_chat_model(
 
     Args:
         provider: The model provider ("google" or "xai").
-        model: The model identifier (e.g., "gemini-2.5-flash", "grok-4-1-fast-reasoning").
+        model: The model identifier (e.g., "gemini-3-flash-preview", "grok-4-1-fast-reasoning").
         temperature: Sampling temperature for the model (0.0-2.0).
-            If None and role is provided, uses role-based temperature.
-            If None and no role, uses default (0.3).
+            If None, temperature is determined automatically:
+            - Gemini 3 models: Always 1.0 (Google's strong recommendation)
+            - Other models: Role-based temperature from LEGACY_TEMPERATURE_CONFIG
+            Explicit temperature values will override these defaults.
         reasoning_enabled: For XAI models, whether to enable reasoning mode.
             If None, uses GROK_CONFIG["reasoning_enabled"] (always True).
         role: Optional agent role for role-based temperature selection.
@@ -120,12 +156,15 @@ def build_chat_model(
     """
     provider = provider.lower().strip()
 
-    # Determine temperature: explicit > role-based > default
+    # Determine temperature: explicit > model-aware role-based > default
+    # For Gemini 3 models, always use 1.0 unless explicitly overridden
     if temperature is None:
         if role:
-            temperature = get_temperature_for_role(role)
+            temperature = get_temperature_for_role(role, model)
+        elif _is_gemini_3_model(model):
+            temperature = GEMINI_3_TEMPERATURE
         else:
-            temperature = TEMPERATURE_CONFIG["default"]
+            temperature = LEGACY_TEMPERATURE_CONFIG["default"]
 
     if provider == "google":
         return _build_google_model(model, temperature)
@@ -176,8 +215,8 @@ def _build_google_model(model: str, temperature: float) -> BaseChatModel:
             "Please set the GEMINI_API_KEY environment variable."
         )
 
-    # Check if this is a Gemini 3 thinking model
-    is_gemini_3 = "gemini-3" in model.lower()
+    # Check if this is a Gemini 3 thinking model (use helper for consistency)
+    is_gemini_3 = _is_gemini_3_model(model)
     is_thinking_model = is_gemini_3 or "gemini-2.5" in model.lower()
 
     logger.debug(

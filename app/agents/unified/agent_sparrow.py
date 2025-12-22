@@ -69,7 +69,7 @@ from app.agents.unified.message_preparation import MessagePreparer
 from app.agents.unified.session_cache import get_session_cache, get_session_data
 
 from .model_router import ModelSelectionResult, model_router
-from .tools import get_registered_tools
+from .tools import get_registered_support_tools, get_registered_tools
 from .attachment_processor import get_attachment_processor
 from .subagents import get_subagent_specs, get_subagent_by_name
 from .prompts import get_coordinator_prompt, TODO_PROMPT
@@ -463,7 +463,11 @@ def _build_skills_context(state: GraphState, runtime: AgentRuntimeConfig) -> str
 def _build_deep_agent(state: GraphState, runtime: AgentRuntimeConfig):
     """Build the deep agent with middleware stack."""
     chat_model = _build_chat_model(runtime)
-    tools = get_registered_tools()
+    # Zendesk tickets use a curated toolset (safer, support-focused) to reduce leakage risk
+    # and keep replies aligned with internal support playbooks/macros.
+    is_zendesk = (state.forwarded_props or {}).get("is_zendesk_ticket") is True
+    tools = get_registered_support_tools() if is_zendesk else get_registered_tools()
+    logger.debug("tool_registry_selected", mode="support" if is_zendesk else "standard")
     subagents = get_subagent_specs(provider=runtime.provider)
 
     todo_prompt = TODO_PROMPT if "TODO_PROMPT" in globals() else ""

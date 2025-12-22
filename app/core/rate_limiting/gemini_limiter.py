@@ -56,8 +56,9 @@ class GeminiRateLimiter:
 
         # Initialize circuit breakers keyed by normalized base names
         # This allows all variants in a family to share a circuit breaker
-        # Base names: gemini-3-pro, gemini-2.5-pro, gemini-2.5-flash, gemini-2.5-flash-lite
+        # Base names: gemini-3-flash, gemini-3-pro, gemini-2.5-pro, gemini-2.5-flash, gemini-2.5-flash-lite
         base_names = (
+            "gemini-3-flash",       # Gemini 3.0 Flash (newest - Dec 2025)
             "gemini-3-pro",
             "gemini-2.5-pro",
             "gemini-2.5-flash",
@@ -101,6 +102,7 @@ class GeminiRateLimiter:
 
         # Get effective limits for the model family
         rpm_limit, rpd_limit = self.config.get_effective_limits(base_model)
+        safety_margin = self.config.get_safety_margin(base_model)
 
         try:
             # Check rate limits
@@ -109,7 +111,7 @@ class GeminiRateLimiter:
                 rpm_limit=rpm_limit,
                 rpd_limit=rpd_limit,
                 model=model,
-                safety_margin=self.config.safety_margin,
+                safety_margin=safety_margin,
             )
             
             self.logger.debug(
@@ -198,17 +200,20 @@ class GeminiRateLimiter:
             redis_stats = await self.redis_limiter.get_all_usage_stats()
 
             # Get circuit breaker statuses
+            gemini_3_flash_circuit = await self.circuit_breakers["gemini-3-flash"].get_status()
             gemini_3_pro_circuit = await self.circuit_breakers["gemini-3-pro"].get_status()
             flash_circuit = await self.circuit_breakers["gemini-2.5-flash"].get_status()
             flash_lite_circuit = await self.circuit_breakers["gemini-2.5-flash-lite"].get_status()
             pro_circuit = await self.circuit_breakers["gemini-2.5-pro"].get_status()
 
             # Build metadata for each model
+            gemini_3_flash_rpm_limit, gemini_3_flash_rpd_limit = self.config.get_effective_limits("gemini-3-flash")
             gemini_3_pro_rpm_limit, gemini_3_pro_rpd_limit = self.config.get_effective_limits("gemini-3-pro")
             flash_rpm_limit, flash_rpd_limit = self.config.get_effective_limits("gemini-2.5-flash")
             flash_lite_rpm_limit, flash_lite_rpd_limit = self.config.get_effective_limits("gemini-2.5-flash-lite")
             pro_rpm_limit, pro_rpd_limit = self.config.get_effective_limits("gemini-2.5-pro")
 
+            gemini_3_flash_stats = redis_stats.get("gemini-3-flash", {})
             gemini_3_pro_stats = redis_stats.get("gemini-3-pro", {})
             flash_stats = redis_stats.get("gemini-2.5-flash", {})
             flash_lite_stats = redis_stats.get("gemini-2.5-flash-lite", {})
@@ -218,50 +223,61 @@ class GeminiRateLimiter:
             
             # Create comprehensive usage stats
             def _build_metadata(model_name: str, rpm_limit: int, rpd_limit: int, stats_bucket: Dict[str, int]) -> RateLimitMetadata:
+                safety_margin = self.config.get_safety_margin(model_name)
+                effective_rpm_limit = int(rpm_limit * (1.0 - safety_margin))
+                effective_rpd_limit = int(rpd_limit * (1.0 - safety_margin))
+
                 return RateLimitMetadata(
-                    rpm_limit=rpm_limit,
+                    rpm_limit=effective_rpm_limit,
                     rpm_used=stats_bucket.get("rpm", 0),
-                    rpm_remaining=max(0, rpm_limit - stats_bucket.get("rpm", 0)),
-                    rpd_limit=rpd_limit,
+                    rpm_remaining=max(0, effective_rpm_limit - stats_bucket.get("rpm", 0)),
+                    rpd_limit=effective_rpd_limit,
                     rpd_used=stats_bucket.get("rpd", 0),
-                    rpd_remaining=max(0, rpd_limit - stats_bucket.get("rpd", 0)),
+                    rpd_remaining=max(0, effective_rpd_limit - stats_bucket.get("rpd", 0)),
                     reset_time_rpm=now.replace(second=0, microsecond=0) + timedelta(minutes=1),
                     reset_time_rpd=now.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1),
                     model=model_name,
-                    safety_margin=self.config.safety_margin
+                    safety_margin=safety_margin
                 )
 
+            gemini_3_flash_metadata = _build_metadata("gemini-3-flash", gemini_3_flash_rpm_limit, gemini_3_flash_rpd_limit, gemini_3_flash_stats)
             gemini_3_pro_metadata = _build_metadata("gemini-3-pro", gemini_3_pro_rpm_limit, gemini_3_pro_rpd_limit, gemini_3_pro_stats)
             flash_metadata = _build_metadata("gemini-2.5-flash", flash_rpm_limit, flash_rpd_limit, flash_stats)
             flash_lite_metadata = _build_metadata("gemini-2.5-flash-lite", flash_lite_rpm_limit, flash_lite_rpd_limit, flash_lite_stats)
             pro_metadata = _build_metadata("gemini-2.5-pro", pro_rpm_limit, pro_rpd_limit, pro_stats)
 
-            # Calculate uptime percentage based on circuit breaker states (4 models now)
+            # Calculate uptime percentage based on circuit breaker states (5 models now)
             uptime_percentage = 100.0
+            if gemini_3_flash_circuit.state == CircuitState.OPEN:
+                uptime_percentage -= 20.0
             if gemini_3_pro_circuit.state == CircuitState.OPEN:
-                uptime_percentage -= 25.0
+                uptime_percentage -= 20.0
             if flash_circuit.state == CircuitState.OPEN:
-                uptime_percentage -= 25.0
+                uptime_percentage -= 20.0
             if flash_lite_circuit.state == CircuitState.OPEN:
-                uptime_percentage -= 25.0
+                uptime_percentage -= 20.0
             if pro_circuit.state == CircuitState.OPEN:
-                uptime_percentage -= 25.0
+                uptime_percentage -= 20.0
             uptime_percentage = max(0.0, min(100.0, uptime_percentage))
 
             total_requests_today = (
-                gemini_3_pro_metadata.rpd_used
+                gemini_3_flash_metadata.rpd_used
+                + gemini_3_pro_metadata.rpd_used
                 + flash_metadata.rpd_used
                 + flash_lite_metadata.rpd_used
                 + pro_metadata.rpd_used
             )
             total_requests_this_minute = (
-                gemini_3_pro_metadata.rpm_used
+                gemini_3_flash_metadata.rpm_used
+                + gemini_3_pro_metadata.rpm_used
                 + flash_metadata.rpm_used
                 + flash_lite_metadata.rpm_used
                 + pro_metadata.rpm_used
             )
 
             return UsageStats(
+                gemini_3_flash_stats=gemini_3_flash_metadata,
+                gemini_3_flash_circuit=gemini_3_flash_circuit,
                 gemini_3_pro_stats=gemini_3_pro_metadata,
                 gemini_3_pro_circuit=gemini_3_pro_circuit,
                 flash_stats=flash_metadata,
@@ -336,6 +352,10 @@ class GeminiRateLimiter:
             # Get current usage
             stats = await self.get_usage_stats()
             health["rate_limits"] = {
+                "gemini-3-flash": {
+                    "rpm_utilization": stats.gemini_3_flash_stats.rpm_used / max(1, stats.gemini_3_flash_stats.rpm_limit),
+                    "rpd_utilization": stats.gemini_3_flash_stats.rpd_used / max(1, stats.gemini_3_flash_stats.rpd_limit)
+                },
                 "gemini-3-pro": {
                     "rpm_utilization": stats.gemini_3_pro_stats.rpm_used / max(1, stats.gemini_3_pro_stats.rpm_limit),
                     "rpd_utilization": stats.gemini_3_pro_stats.rpd_used / max(1, stats.gemini_3_pro_stats.rpd_limit)

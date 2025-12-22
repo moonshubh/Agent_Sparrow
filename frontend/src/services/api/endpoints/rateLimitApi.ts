@@ -174,7 +174,7 @@ class RateLimitApiClient {
   /**
    * Check if a request would be allowed for the specified model
    */
-  async checkRateLimit(model: 'gemini-2.5-flash' | 'gemini-2.5-pro'): Promise<RateLimitCheckResult> {
+  async checkRateLimit(model: 'gemini-3-flash-preview' | 'gemini-2.5-pro' | 'gemini-3-pro-preview'): Promise<RateLimitCheckResult> {
     return this.request<RateLimitCheckResult>(`/check/${model}`, {
       method: 'POST',
     });

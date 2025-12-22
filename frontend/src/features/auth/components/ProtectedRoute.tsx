@@ -1,6 +1,7 @@
 "use client"
 
-import React, { useEffect, useState } from 'react'
+import React, { useEffect } from 'react'
+import { usePathname } from 'next/navigation'
 import { useAuth } from '@/features/auth/hooks/useAuth'
 import { Loader2 } from 'lucide-react'
 
@@ -18,13 +19,7 @@ export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({
   redirectTo = '/login'
 }) => {
   const { user, isLoading, isAuthenticated } = useAuth()
-  const [pathname, setPathname] = useState<string>("/")
-
-  useEffect(() => {
-    if (typeof window !== 'undefined') {
-      try { setPathname(window.location.pathname || "/") } catch {}
-    }
-  }, [])
+  const pathname = usePathname() ?? '/'
 
   useEffect(() => {
     if (typeof window === 'undefined') return

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useCallback, useState } from 'react'
+import { useEffect, useRef, useCallback } from 'react'
 
 interface UsePollingOptions {
   enabled: boolean
@@ -10,13 +10,10 @@ interface UsePollingOptions {
 export function usePolling({ enabled, interval, onPoll, onError }: UsePollingOptions) {
   const intervalIdRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const mountedRef = useRef(true)
-  const [isPolling, setIsPolling] = useState(false)
-
   const stopPolling = useCallback(() => {
     if (intervalIdRef.current) {
       clearInterval(intervalIdRef.current)
       intervalIdRef.current = null
-      setIsPolling(false)
     }
   }, [])
 
@@ -40,7 +37,6 @@ export function usePolling({ enabled, interval, onPoll, onError }: UsePollingOpt
 
     // Set up interval for subsequent polls
     intervalIdRef.current = setInterval(pollWithErrorHandling, interval)
-    setIsPolling(true)
   }, [enabled, interval, onPoll, onError, stopPolling])
 
   useEffect(() => {
@@ -59,6 +55,6 @@ export function usePolling({ enabled, interval, onPoll, onError }: UsePollingOpt
   return {
     startPolling,
     stopPolling,
-    isPolling,
+    isPolling: enabled,
   }
 }

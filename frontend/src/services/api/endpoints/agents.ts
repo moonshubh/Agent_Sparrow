@@ -18,7 +18,6 @@ export const agentsAPI = {
       return await apiClient.get<AgentMeta[]>('/api/v1/agents')
     } catch (e) {
       if (process.env.NODE_ENV === 'development') {
-        // eslint-disable-next-line no-console
         console.debug('agentsAPI.list fallback due to error:', e)
       }
       // Safe fallback with minimal metadata

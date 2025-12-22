@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import logging
 from functools import lru_cache
@@ -89,7 +90,7 @@ class Settings(BaseSettings):
     enhanced_log_model: str = Field(default="gemini-2.5-pro", alias="ENHANCED_LOG_MODEL")
     # Provider/model selection for primary agent
     primary_agent_provider: str = Field(default="google", alias="PRIMARY_AGENT_PROVIDER")
-    primary_agent_model: str = Field(default="gemini-2.5-flash-preview-09-2025", alias="PRIMARY_AGENT_MODEL")
+    primary_agent_model: str = Field(default="gemini-3.0-flash", alias="PRIMARY_AGENT_MODEL")
     primary_agent_temperature: float = Field(default=0.2, alias="PRIMARY_AGENT_TEMPERATURE")
     primary_agent_thinking_budget: Optional[int] = Field(default=None, alias="THINKING_BUDGET")
     primary_agent_formatting: str = Field(default="natural", alias="PRIMARY_AGENT_FORMATTING")
@@ -245,8 +246,8 @@ class Settings(BaseSettings):
     # Rate Limiting Configuration (free tier defaults; override via env)
     gemini_flash_rpm_limit: int = Field(default=10, alias="GEMINI_FLASH_RPM_LIMIT")
     gemini_flash_rpd_limit: int = Field(default=250, alias="GEMINI_FLASH_RPD_LIMIT")
-    gemini_pro_rpm_limit: int = Field(default=2, alias="GEMINI_PRO_RPM_LIMIT")
-    gemini_pro_rpd_limit: int = Field(default=100, alias="GEMINI_PRO_RPD_LIMIT")
+    gemini_pro_rpm_limit: int = Field(default=100, alias="GEMINI_PRO_RPM_LIMIT")
+    gemini_pro_rpd_limit: int = Field(default=1000, alias="GEMINI_PRO_RPD_LIMIT")
 
     # Application-level usage budgets
     primary_agent_daily_budget: int = Field(default=500, alias="PRIMARY_AGENT_DAILY_BUDGET")
@@ -325,13 +326,42 @@ class Settings(BaseSettings):
     zendesk_api_token: Optional[str] = Field(default=None, alias="ZENDESK_API_TOKEN")
     zendesk_signing_secret: Optional[str] = Field(default=None, alias="ZENDESK_SIGNING_SECRET")
     zendesk_brand_id: Optional[str] = Field(default=None, alias="ZENDESK_BRAND_ID")
+    zendesk_windows_brand_ids: List[str] = Field(default_factory=list, alias="ZENDESK_WINDOWS_BRAND_IDS")
     zendesk_dry_run: bool = Field(default=True, alias="ZENDESK_DRY_RUN")
     zendesk_poll_interval_sec: int = Field(default=60, alias="ZENDESK_POLL_INTERVAL_SEC")
     zendesk_rpm_limit: int = Field(default=300, alias="ZENDESK_RPM_LIMIT")
+    zendesk_import_rpm_limit: int = Field(default=10, alias="ZENDESK_IMPORT_RPM_LIMIT")
     zendesk_monthly_api_budget: int = Field(default=350, alias="ZENDESK_MONTHLY_API_BUDGET")
     zendesk_gemini_daily_limit: int = Field(default=380, alias="ZENDESK_GEMINI_DAILY_LIMIT")
     zendesk_max_retries: int = Field(default=5, alias="ZENDESK_MAX_RETRIES")
     zendesk_queue_retention_days: int = Field(default=30, alias="ZENDESK_QUEUE_RETENTION_DAYS")
+    # Optional: prefetch web context (Firecrawl/Tavily) when internal sources are insufficient
+    zendesk_web_prefetch_enabled: bool = Field(default=True, alias="ZENDESK_WEB_PREFETCH_ENABLED")
+    zendesk_web_prefetch_pages: int = Field(default=3, alias="ZENDESK_WEB_PREFETCH_PAGES")
+    zendesk_firecrawl_enhanced_enabled: bool = Field(default=True, alias="ZENDESK_FIRECRAWL_ENHANCED_ENABLED")
+    zendesk_firecrawl_support_domains: List[str] = Field(
+        default_factory=lambda: [
+            "https://support.getmailbird.com",
+            "https://www.getmailbird.com/help",
+        ],
+        alias="ZENDESK_FIRECRAWL_SUPPORT_DOMAINS",
+    )
+    zendesk_firecrawl_support_pages: int = Field(default=3, alias="ZENDESK_FIRECRAWL_SUPPORT_PAGES")
+    zendesk_firecrawl_support_screenshots: bool = Field(default=False, alias="ZENDESK_FIRECRAWL_SUPPORT_SCREENSHOTS")
+    # Retrieval tuning for macro/KB/FeedMe preflight
+    zendesk_internal_retrieval_min_relevance: float = Field(default=0.35, alias="ZENDESK_INTERNAL_RETRIEVAL_MIN_RELEVANCE")
+    zendesk_internal_retrieval_max_per_source: int = Field(default=3, alias="ZENDESK_INTERNAL_RETRIEVAL_MAX_PER_SOURCE")
+    zendesk_macro_min_relevance: float = Field(default=0.55, alias="ZENDESK_MACRO_MIN_RELEVANCE")
+    zendesk_feedme_min_relevance: float = Field(default=0.45, alias="ZENDESK_FEEDME_MIN_RELEVANCE")
+    # Pattern-based context engineering (IssueResolutionStore + playbook learning)
+    zendesk_issue_pattern_max_hits: int = Field(default=5, alias="ZENDESK_ISSUE_PATTERN_MAX_HITS")
+    zendesk_issue_pattern_min_similarity: float = Field(default=0.62, alias="ZENDESK_ISSUE_PATTERN_MIN_SIMILARITY")
+    zendesk_issue_pattern_learning_enabled: bool = Field(default=True, alias="ZENDESK_ISSUE_PATTERN_LEARNING_ENABLED")
+    zendesk_playbook_learning_enabled: bool = Field(default=True, alias="ZENDESK_PLAYBOOK_LEARNING_ENABLED")
+    zendesk_nature_field_id: Optional[str] = Field(default=None, alias="ZENDESK_NATURE_FIELD_ID")
+    zendesk_nature_field_ids: List[str] = Field(default_factory=list, alias="ZENDESK_NATURE_FIELD_IDS")
+    zendesk_nature_category_map: Dict[str, str] = Field(default_factory=dict, alias="ZENDESK_NATURE_CATEGORY_MAP")
+    zendesk_nature_require_field: bool = Field(default=True, alias="ZENDESK_NATURE_REQUIRE_FIELD")
     # Debug: enable limited verification logs for Zendesk HMAC (do NOT enable in prod)
     zendesk_debug_verify: bool = Field(default=False, alias="ZENDESK_DEBUG_VERIFY")
     # Use HTML notes in Zendesk for better readability (fallback to text on failure)
@@ -469,7 +499,7 @@ class Settings(BaseSettings):
             raise ValueError("zendesk_poll_interval_sec must be positive")
         return v
 
-    @field_validator('zendesk_rpm_limit', 'zendesk_monthly_api_budget', 'zendesk_gemini_daily_limit', 'zendesk_max_retries')
+    @field_validator('zendesk_rpm_limit', 'zendesk_import_rpm_limit', 'zendesk_monthly_api_budget', 'zendesk_gemini_daily_limit', 'zendesk_max_retries')
     @classmethod
     def validate_zendesk_limits(cls, v: int) -> int:
         if v <= 0:
@@ -481,6 +511,30 @@ class Settings(BaseSettings):
     def validate_zendesk_retention(cls, v: int) -> int:
         if v <= 0:
             raise ValueError("zendesk_queue_retention_days must be positive")
+        return v
+
+    @field_validator(
+        'zendesk_web_prefetch_pages',
+        'zendesk_firecrawl_support_pages',
+        'zendesk_internal_retrieval_max_per_source',
+        'zendesk_issue_pattern_max_hits',
+    )
+    @classmethod
+    def validate_zendesk_positive_ints(cls, v: int) -> int:
+        if v <= 0:
+            raise ValueError("zendesk_* value must be positive")
+        return v
+
+    @field_validator(
+        'zendesk_internal_retrieval_min_relevance',
+        'zendesk_macro_min_relevance',
+        'zendesk_feedme_min_relevance',
+        'zendesk_issue_pattern_min_similarity',
+    )
+    @classmethod
+    def validate_zendesk_relevance_thresholds(cls, v: float) -> float:
+        if v < 0.0 or v > 1.0:
+            raise ValueError("zendesk_* relevance threshold must be between 0.0 and 1.0")
         return v
 
     def is_production_mode(self) -> bool:
@@ -517,6 +571,76 @@ class Settings(BaseSettings):
         if isinstance(v, list):
             return [str(d).strip().lower() for d in v if str(d).strip()]
         return []
+
+    @field_validator('zendesk_windows_brand_ids', mode='before')
+    @classmethod
+    def parse_zendesk_windows_brand_ids(cls, v):
+        if v is None:
+            return []
+        if isinstance(v, str):
+            raw = v.strip()
+            if not raw:
+                return []
+            if raw.startswith("["):
+                try:
+                    parsed = json.loads(raw)
+                    if isinstance(parsed, list):
+                        return [str(item).strip() for item in parsed if str(item).strip()]
+                except Exception:
+                    return []
+            return [item.strip() for item in raw.split(",") if item.strip()]
+        if isinstance(v, list):
+            return [str(item).strip() for item in v if str(item).strip()]
+        return []
+
+    @field_validator('zendesk_nature_field_ids', mode='before')
+    @classmethod
+    def parse_zendesk_nature_field_ids(cls, v):
+        if v is None:
+            return []
+        if isinstance(v, str):
+            raw = v.strip()
+            if not raw:
+                return []
+            if raw.startswith("["):
+                try:
+                    parsed = json.loads(raw)
+                    if isinstance(parsed, list):
+                        return [str(item).strip() for item in parsed if str(item).strip()]
+                except Exception:
+                    return []
+            return [item.strip() for item in raw.split(",") if item.strip()]
+        if isinstance(v, list):
+            return [str(item).strip() for item in v if str(item).strip()]
+        return []
+
+    @field_validator('zendesk_nature_category_map', mode='before')
+    @classmethod
+    def parse_zendesk_nature_category_map(cls, v):
+        if v is None:
+            return {}
+        if isinstance(v, str):
+            raw = v.strip()
+            if not raw:
+                return {}
+            try:
+                parsed = json.loads(raw)
+            except Exception:
+                return {}
+            if isinstance(parsed, dict):
+                return {
+                    str(k).strip().lower(): str(val).strip().lower()
+                    for k, val in parsed.items()
+                    if str(k).strip() and str(val).strip()
+                }
+            return {}
+        if isinstance(v, dict):
+            return {
+                str(k).strip().lower(): str(val).strip().lower()
+                for k, val in v.items()
+                if str(k).strip() and str(val).strip()
+            }
+        return {}
 
     def is_email_domain_allowed(self, email: Optional[str]) -> bool:
         """Return True if email's domain is in the allowed list (or list is empty)."""

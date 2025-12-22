@@ -1,7 +1,7 @@
 """Playbook Extractor for building category-specific playbooks.
 
 This module extracts and assembles playbooks for issue categories by combining:
-- Static playbook content (from /playbooks/ workspace files)
+- Static playbook content (from /playbooks/source/ workspace files)
 - Approved learned entries from resolved conversations
 - Pending entries (shown with warnings for transparency)
 
@@ -115,7 +115,7 @@ class Playbook:
 
     Attributes:
         category: The issue category this playbook covers.
-        static_content: Static playbook content from workspace files.
+        static_content: Curated playbook content from `/playbooks/source/`.
         approved_entries: List of approved learned entries.
         pending_entries: List of pending entries (shown with warning).
         kb_articles: List of relevant KB article IDs.
@@ -391,13 +391,13 @@ class PlaybookExtractor:
         if not filename:
             return None
 
-        # Try to read from workspace store
+        # Try to read curated "source" playbooks (compiled playbooks live at /playbooks/{category}.md)
         try:
             from app.agents.harness.store import SparrowWorkspaceStore
 
             # Use a temporary store for reading global playbooks
             store = SparrowWorkspaceStore(session_id="playbook-extractor")
-            path = f"/playbooks/{filename}"
+            path = f"/playbooks/source/{filename}"
             content = await store.read_file(path)
             return content
         except Exception as exc:
@@ -425,21 +425,44 @@ class PlaybookExtractor:
             # Query mailbird_knowledge for articles tagged with this category
             response = (
                 self.client.table("mailbird_knowledge")
-                .select("doc_id")
+                .select("id, url")
                 .ilike("content", f"%{_escape_like(category.replace('_', ' '))}%")
                 .limit(10)
                 .execute()
             )
 
-            return [row["doc_id"] for row in response.data or [] if row.get("doc_id")]
+            out: List[str] = []
+            for row in response.data or []:
+                if row.get("id") is not None:
+                    out.append(str(row["id"]))
+                elif row.get("url"):
+                    out.append(str(row["url"]))
+            return out
 
         except Exception as exc:
-            logger.debug(
-                "get_related_kb_articles_error",
-                category=category,
-                error=str(exc),
-            )
-            return []
+            # Fallback: try markdown column if content is unavailable.
+            try:
+                response = (
+                    self.client.table("mailbird_knowledge")
+                    .select("id, url")
+                    .ilike("markdown", f"%{_escape_like(category.replace('_', ' '))}%")
+                    .limit(10)
+                    .execute()
+                )
+                out: List[str] = []
+                for row in response.data or []:
+                    if row.get("id") is not None:
+                        out.append(str(row["id"]))
+                    elif row.get("url"):
+                        out.append(str(row["url"]))
+                return out
+            except Exception as inner_exc:
+                logger.debug(
+                    "get_related_kb_articles_error",
+                    category=category,
+                    error=str(inner_exc)[:180],
+                )
+                return []
 
     async def build_playbook_with_learned(self, category: str) -> Playbook:
         """Build a complete playbook for a category.

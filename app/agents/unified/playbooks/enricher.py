@@ -72,6 +72,9 @@ IMPORTANT:
 - The problem_summary should be what the customer was experiencing, not their words
 - diagnostic_questions should help identify if a new ticket has the same issue
 - Focus on the successful resolution path, not dead ends
+- If the conversation includes TOOL logs/results, treat them as background context only.
+  Do NOT copy tool output verbatim and do NOT include internal identifiers (macro IDs, KB IDs,
+  tool names, tool_call_id values, internal file paths) in the extracted entry.
 
 Category: {category}
 
@@ -99,7 +102,7 @@ class PlaybookEnricher:
     def __init__(
         self,
         supabase_client: Optional["SupabaseClient"] = None,
-        min_message_count: int = 4,
+        min_message_count: int = 2,
         min_word_count: int = 100,
     ) -> None:
         """Initialize the playbook enricher.

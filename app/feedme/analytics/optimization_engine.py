@@ -215,7 +215,7 @@ class OptimizationEngine:
             scored_candidates = await self._score_optimization_candidates(candidates, performance_data)
             
             # Filter based on feasibility and impact
-            filtered_candidates = self._filter_candidates_by_feasibility(scored_candidates)
+            filtered_candidates = await self._filter_candidates_by_feasibility(scored_candidates)
             
             # Sort by expected impact and implementation complexity
             prioritized_candidates = self._prioritize_candidates(filtered_candidates)
@@ -386,7 +386,7 @@ class OptimizationEngine:
         
         return scored_candidates
     
-    def _filter_candidates_by_feasibility(
+    async def _filter_candidates_by_feasibility(
         self,
         scored_candidates: List[Tuple[OptimizationCandidate, float]]
     ) -> List[Tuple[OptimizationCandidate, float]]:
@@ -395,18 +395,8 @@ class OptimizationEngine:
         
         for candidate, score in scored_candidates:
             # Skip if prerequisites not met
-# Change the filter method to async so you can use await inside it
-async def _filter_candidates_by_feasibility(
-    self,
-    scored_candidates: List[Tuple[OptimizationCandidate, float]]
-) -> List[Tuple[OptimizationCandidate, float]]:
-    filtered = []
-    for candidate, score in scored_candidates:
-        if candidate.prerequisites and not await self._check_prerequisites(candidate.prerequisites):
-            continue
-        # … other feasibility checks …
-        filtered.append((candidate, score))
-    return filtered
+            if candidate.prerequisites and not await self._check_prerequisites(candidate.prerequisites):
+                continue
             
             # Skip high-risk optimizations in production
             if candidate.risk_level == 'high' and self.config.get('environment') == 'production':
@@ -825,66 +815,66 @@ async def _filter_candidates_by_feasibility(
         
         try:
             while not self._shutdown_requested:
-            try:
-                # Check if we should run optimization analysis
-                current_time = datetime.utcnow()
-                last_analysis_time = getattr(self, '_last_analysis_time', None)
-                
-                if (last_analysis_time is None or 
-                    (current_time - last_analysis_time).total_seconds() >= optimization_interval_hours * 3600):
+                try:
+                    # Check if we should run optimization analysis
+                    current_time = datetime.utcnow()
+                    last_analysis_time = getattr(self, '_last_analysis_time', None)
                     
-                    # Check current system performance
-                    if self.performance_monitor:
-                        current_performance = await self.performance_monitor.calculate_response_time_percentiles()
-                        error_rate = await self.performance_monitor.calculate_error_rate()
+                    if (last_analysis_time is None or 
+                        (current_time - last_analysis_time).total_seconds() >= optimization_interval_hours * 3600):
                         
-                        performance_data = {
-                            'avg_response_time': current_performance.get('avg', 0),
-                            'p95_response_time': current_performance.get('p95', 0),
-                            'error_rate': error_rate
-                        }
-                        
-                        # Analyze optimization opportunities
-                        candidates = await self.analyze_optimization_opportunities(performance_data)
-                        
-                        # Implement top candidates (up to max concurrent)
-                        active_count = len(self._active_optimizations)
-                        available_slots = max_concurrent_optimizations - active_count
-                        
-                        for i, candidate in enumerate(candidates[:available_slots]):
-                            logger.info(f"Auto-implementing optimization: {candidate.name}")
+                        # Check current system performance
+                        if self.performance_monitor:
+                            current_performance = await self.performance_monitor.calculate_response_time_percentiles()
+                            error_rate = await self.performance_monitor.calculate_error_rate()
                             
-                            # Implement with A/B testing for safety
-                            result = await self.implement_optimization(
-                                candidate,
-                                enable_ab_testing=True
-                            )
+                            performance_data = {
+                                'avg_response_time': current_performance.get('avg', 0),
+                                'p95_response_time': current_performance.get('p95', 0),
+                                'error_rate': error_rate
+                            }
                             
-                            if result.implementation_success:
-                                self._active_optimizations[result.optimization_id] = {
-                                    'candidate': candidate,
-                                    'result': result,
-                                    'start_time': datetime.utcnow()
-                                }
+                            # Analyze optimization opportunities
+                            candidates = await self.analyze_optimization_opportunities(performance_data)
+                            
+                            # Implement top candidates (up to max concurrent)
+                            active_count = len(self._active_optimizations)
+                            available_slots = max_concurrent_optimizations - active_count
+                            
+                            for i, candidate in enumerate(candidates[:available_slots]):
+                                logger.info(f"Auto-implementing optimization: {candidate.name}")
+                                
+                                # Implement with A/B testing for safety
+                                result = await self.implement_optimization(
+                                    candidate,
+                                    enable_ab_testing=True
+                                )
+                                
+                                if result.implementation_success:
+                                    self._active_optimizations[result.optimization_id] = {
+                                        'candidate': candidate,
+                                        'result': result,
+                                        'start_time': datetime.utcnow()
+                                    }
+                        
+                        self._last_analysis_time = current_time
                     
-                    self._last_analysis_time = current_time
-                
-                # Monitor active optimizations
-                await self._monitor_active_optimizations()
-                
-                # Sleep before next iteration (check for shutdown every 10 seconds)
-                for _ in range(360):  # 360 * 10 = 3600 seconds (1 hour)
-                    if self._shutdown_requested:
-                        break
-                    await asyncio.sleep(10)
-                
-            except Exception as e:
-                logger.error(f"Error in continuous optimization: {e}")
-                # Wait before retrying, but check for shutdown
-                for _ in range(360):
-                    if self._shutdown_requested:
-                        break
-                    await asyncio.sleep(10)
+                    # Monitor active optimizations
+                    await self._monitor_active_optimizations()
+                    
+                    # Sleep before next iteration (check for shutdown every 10 seconds)
+                    for _ in range(360):  # 360 * 10 = 3600 seconds (1 hour)
+                        if self._shutdown_requested:
+                            break
+                        await asyncio.sleep(10)
+                    
+                except Exception as e:
+                    logger.error(f"Error in continuous optimization: {e}")
+                    # Wait before retrying, but check for shutdown
+                    for _ in range(360):
+                        if self._shutdown_requested:
+                            break
+                        await asyncio.sleep(10)
         
         finally:
             logger.info("Continuous optimization process shutting down...")

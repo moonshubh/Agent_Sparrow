@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useMemo, useState } from 'react'
+import { useMemo, useState } from 'react'
 import { Settings } from 'lucide-react'
 
 import { Button } from '@/shared/ui/button'
@@ -9,23 +9,21 @@ import { SettingsDialogV2 } from '@/features/settings/components/SettingsDialogV
 import { useRouter, useSearchParams } from 'next/navigation'
 
 export function SettingsButtonV2() {
-  const [open, setOpen] = useState(false)
-  const [defaultTab, setDefaultTab] = useState<string>('general')
+  const [manualOpen, setManualOpen] = useState(false)
   const searchParams = useSearchParams()
   const router = useRouter()
 
   const settingsParam = useMemo(() => (searchParams?.get('settings') || '').toLowerCase(), [searchParams])
 
-  useEffect(() => {
-    const allowed = new Set(['general', 'api-keys', 'zendesk', 'global-knowledge', 'rate-limits', 'account'])
-    if (allowed.has(settingsParam)) {
-      setDefaultTab(settingsParam)
-      setOpen(true)
-    }
-  }, [settingsParam])
+  const allowedTabs = useMemo(() => (
+    new Set(['general', 'api-keys', 'zendesk', 'global-knowledge', 'rate-limits', 'account'])
+  ), [])
+  const paramTab = allowedTabs.has(settingsParam) ? settingsParam : null
+  const defaultTab = (paramTab ?? 'general') as 'general' | 'api-keys' | 'zendesk' | 'global-knowledge' | 'rate-limits' | 'account'
+  const isOpen = manualOpen || Boolean(paramTab)
 
   const handleClose = () => {
-    setOpen(false)
+    setManualOpen(false)
     try {
       const sp = new URLSearchParams(Array.from(searchParams?.entries?.() || []))
       sp.delete('settings')
@@ -46,7 +44,7 @@ export function SettingsButtonV2() {
               variant="ghost"
               size="sm"
               className="h-8 w-8 p-0"
-              onClick={() => setOpen(true)}
+              onClick={() => setManualOpen(true)}
               aria-label="Open settings"
             >
               <Settings className="h-4 w-4" />
@@ -56,7 +54,12 @@ export function SettingsButtonV2() {
         </Tooltip>
       </TooltipProvider>
 
-      <SettingsDialogV2 isOpen={open} onClose={handleClose} defaultTab={defaultTab as any} />
+      <SettingsDialogV2
+        key={defaultTab}
+        isOpen={isOpen}
+        onClose={handleClose}
+        defaultTab={defaultTab}
+      />
     </>
   )
 }

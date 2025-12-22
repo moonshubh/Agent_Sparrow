@@ -456,22 +456,10 @@ class LogGroup {
 export const logger = new Logger()
 
 // React hook for component-scoped logging
-import { useEffect, useRef } from 'react'
+import { useMemo } from 'react'
 
 export function useLogger(componentName: string) {
-  const loggerRef = useRef<Logger | null>(null)
-
-  // Initialize immediately to avoid undefined on first render
-  if (!loggerRef.current) {
-    loggerRef.current = logger.createChild(componentName)
-  }
-
-  useEffect(() => {
-    // Update if componentName changes
-    loggerRef.current = logger.createChild(componentName)
-  }, [componentName])
-
-  return loggerRef.current
+  return useMemo(() => logger.createChild(componentName), [componentName])
 }
 
 // Utility function to replace console methods in production

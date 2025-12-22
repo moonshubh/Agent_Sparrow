@@ -87,7 +87,7 @@ class ModelSpec:
 # MODEL DEFINITIONS - Update these to change models across the entire system
 # =============================================================================
 
-# Google Gemini 3.0 Series (Latest - Nov 2025)
+# Google Gemini 3.0 Series (Latest - Dec 2025)
 GEMINI_3_PRO = ModelSpec(
     id="gemini-3-pro-preview",
     display_name="Gemini 3.0 Pro",
@@ -95,6 +95,17 @@ GEMINI_3_PRO = ModelSpec(
     tier=ModelTier.PRO,
     rpm_limit=5,
     rpd_limit=200,
+    supports_reasoning=True,
+    supports_vision=True,
+)
+
+GEMINI_3_FLASH = ModelSpec(
+    id="gemini-3-flash-preview",
+    display_name="Gemini 3.0 Flash",
+    provider=Provider.GOOGLE,
+    tier=ModelTier.STANDARD,
+    rpm_limit=1000,   # Tier 1: 1K RPM
+    rpd_limit=10000,  # Tier 1: 10K RPD
     supports_reasoning=True,
     supports_vision=True,
 )
@@ -224,6 +235,7 @@ MINIMAX_M2_OPENROUTER = ModelSpec(
 
 ALL_MODELS: tuple[ModelSpec, ...] = (
     GEMINI_3_PRO,
+    GEMINI_3_FLASH,
     GEMINI_PRO,
     GEMINI_FLASH,
     GEMINI_FLASH_LITE,
@@ -280,8 +292,8 @@ class ModelFamily:
 
 # Google model families
 GOOGLE_STANDARD_FAMILY = ModelFamily(
-    primary=GEMINI_FLASH,
-    fallbacks=[GEMINI_FLASH_LITE],
+    primary=GEMINI_3_FLASH,
+    fallbacks=[GEMINI_FLASH, GEMINI_FLASH_LITE],
 )
 
 GOOGLE_HEAVY_FAMILY = ModelFamily(
@@ -321,7 +333,7 @@ class ModelRegistry:
     """
 
     # Primary agent models by provider
-    coordinator_google: ModelSpec = field(default=GEMINI_FLASH)
+    coordinator_google: ModelSpec = field(default=GEMINI_3_FLASH)
     coordinator_xai: ModelSpec = field(default=GROK_4_1_FAST)
     coordinator_openrouter: ModelSpec = field(default=GROK_4_1_FAST_OPENROUTER)
 
@@ -329,12 +341,13 @@ class ModelRegistry:
     coordinator_heavy: ModelSpec = field(default=GEMINI_3_PRO)
 
     # Subagent models
-    log_analysis: ModelSpec = field(default=GEMINI_3_PRO)  # Heavy task
-    research: ModelSpec = field(default=GEMINI_FLASH)
-    db_retrieval: ModelSpec = field(default=GEMINI_FLASH_LITE)
+    # Log/trace analysis tends to be reasoning-heavy; override via ENHANCED_LOG_MODEL when needed.
+    log_analysis: ModelSpec = field(default=GEMINI_3_PRO)
+    research: ModelSpec = field(default=GEMINI_3_FLASH)
+    db_retrieval: ModelSpec = field(default=GEMINI_FLASH_LITE)  # LITE tier for cost-efficient lookups
 
     # Specialized models
-    grounding: ModelSpec = field(default=GEMINI_FLASH)
+    grounding: ModelSpec = field(default=GEMINI_3_FLASH)
     feedme: ModelSpec = field(default=GEMINI_FLASH_LITE)
     embedding: ModelSpec = field(default=GEMINI_EMBEDDING)
 

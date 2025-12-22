@@ -800,12 +800,21 @@ async def delete_chat_session(
         if current_user:
             user_id = current_user.sub
             conn = get_db_connection()
-            try:
-                updates = ChatSessionUpdate(is_active=False)
-                updated_session = update_chat_session_in_db(conn, session_id, user_id, updates)
-            finally:
-                if conn:
-                    conn.close()
+            if conn is None:
+                session = _get_local_session(user_id, session_id)
+                if session is None:
+                    raise HTTPException(status_code=404, detail="Chat session not found")
+                session['is_active'] = False
+                session['updated_at'] = datetime.utcnow()
+                _persist_local_session(user_id, session)
+                updated_session = session
+            else:
+                try:
+                    updates = ChatSessionUpdate(is_active=False)
+                    updated_session = update_chat_session_in_db(conn, session_id, user_id, updates)
+                finally:
+                    if conn:
+                        conn.close()
         else:
             user_id = get_or_create_guest_user_id(request, response)
             session = _get_local_session(user_id, session_id)
@@ -963,7 +972,7 @@ async def list_chat_messages(
     request: Request,
     response: Response,
     page: int = Query(1, ge=1, description="Page number"),
-    page_size: int = Query(200, ge=1, le=1000, description="Number of messages per page"),
+    page_size: int = Query(200, ge=1, le=200, description="Number of messages per page"),
     message_type: Optional[MessageType] = Query(None, description="Filter by message type"),
     current_user: Optional[TokenPayload] = Depends(get_optional_current_user)
 ):
@@ -987,15 +996,19 @@ async def list_chat_messages(
             if message_type is not None:
                 stored_messages = [m for m in stored_messages if m['message_type'] == message_type.value]
 
-            chat_messages = [ChatMessage(**msg) for msg in stored_messages]
+            total_count = len(stored_messages)
+            start = (page - 1) * page_size
+            end = start + page_size
+            page_rows = stored_messages[start:end]
+            chat_messages = [ChatMessage(**msg) for msg in page_rows]
 
             return ChatMessageListResponse(
                 messages=chat_messages,
-                total_count=len(chat_messages),
-                page=1,
-                page_size=len(chat_messages) if chat_messages else page_size,
-                has_next=False,
-                has_previous=False
+                total_count=total_count,
+                page=page,
+                page_size=page_size,
+                has_next=end < total_count,
+                has_previous=page > 1
             )
 
         request = ChatMessageListRequest(

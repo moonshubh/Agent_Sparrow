@@ -37,8 +37,7 @@ export default function FeedMeConversationPage() {
   const uploadedRelative = useMemo(() => conversation?.created_at ? formatDistanceToNow(new Date(conversation.created_at), { addSuffix: true }) : null, [conversation?.created_at])
   const updatedRelative = useMemo(() => conversation?.updated_at ? formatDistanceToNow(new Date(conversation.updated_at), { addSuffix: true }) : null, [conversation?.updated_at])
 
-  // Not passed to memoized children - no need for useCallback
-  const fetchConversation = async () => {
+  const fetchConversation = useCallback(async () => {
     if (!conversationId) return
     try {
       setLoading(true)
@@ -64,12 +63,11 @@ export default function FeedMeConversationPage() {
     } finally {
       setLoading(false)
     }
-  }
+  }, [conversationId, showToast])
 
   useEffect(() => {
-    if (!conversationId) return
     fetchConversation().catch(() => {})
-  }, [conversationId])
+  }, [fetchConversation])
 
   // Simple navigation - no need for useCallback
   const handleBack = () => router.push('/feedme')
@@ -91,7 +89,7 @@ export default function FeedMeConversationPage() {
       })
       throw error // Re-throw to let the UnifiedTextCanvas know the save failed
     }
-  }, [conversation, showToast])
+  }, [conversation, showToast, fetchConversation])
 
   const handleFolderChange = useCallback(async (folderId: number | null) => {
     if (!conversation) return

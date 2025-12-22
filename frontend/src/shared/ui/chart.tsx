@@ -109,7 +109,6 @@ interface TooltipPayloadItem {
   dataKey?: string | number
   color?: string
   payload?: Record<string, unknown> & { fill?: string }
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   [key: string]: any
 }
 
@@ -280,7 +279,6 @@ interface LegendPayloadItem {
   value?: string
   dataKey?: string | number
   color?: string
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   [key: string]: any
 }
 

@@ -176,10 +176,19 @@ else:
         "http://127.0.0.1:3010",
     ]
 
+is_production_mode = settings.is_production_mode()
+# Stricter octet pattern (0-255) to avoid accepting invalid IPs like 999.999.999.999.
+octet = r"(?:25[0-5]|2[0-4]\d|1\d{2}|[1-9]?\d)"
+allow_origin_regex = rf"^http:\/\/192\.168\.{octet}\.{octet}:3000$"
+if not is_production_mode:
+    allow_origin_regex = (
+        r"^http:\/\/(localhost|127\.0\.0\.1)(:[0-9]{1,5})?$|" + allow_origin_regex
+    )
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=allowed_origins,
-    allow_origin_regex=r"^http:\/\/192\.168\.[0-9]{1,3}\.[0-9]{1,3}:3000$",
+    allow_origin_regex=allow_origin_regex,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

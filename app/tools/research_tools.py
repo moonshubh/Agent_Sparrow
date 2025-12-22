@@ -41,6 +41,8 @@ _redis_client: redis.Redis | None = None
 
 def _get_redis() -> redis.Redis:
     global _redis_client
+    if not REDIS_URL:
+        raise RuntimeError("REDIS_URL not configured")
     if _redis_client is None:
         _redis_client = redis.Redis.from_url(REDIS_URL, decode_responses=True)
     return _redis_client
@@ -198,19 +200,28 @@ class FirecrawlTool:
         self.disabled = False
 
         # Redis client for caching
-        self.redis = _get_redis()
+        try:
+            self.redis = _get_redis()
+        except Exception:
+            # Cache is best-effort; Firecrawl should still work without Redis.
+            self.redis = None
 
     def _get_cache(self, cache_key: str) -> dict | None:
         """Retrieve cached result if available."""
-        if cached := self.redis.get(cache_key):
-            try:
-                return json.loads(cached)
-            except json.JSONDecodeError:
+        if self.redis is None:
+            return None
+        try:
+            cached = self.redis.get(cache_key)
+            if not cached:
                 return None
-        return None
+            return json.loads(cached)
+        except Exception:
+            return None
 
     def _set_cache(self, cache_key: str, data: dict, ttl: int = SCRAPE_CACHE_TTL_SEC):
         """Store result in cache with TTL."""
+        if self.redis is None:
+            return
         try:
             self.redis.setex(cache_key, ttl, json.dumps(data, default=str))
         except Exception:

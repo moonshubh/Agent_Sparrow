@@ -1,4 +1,15 @@
-import type { BinaryInputContent, TextInputContent } from '@ag-ui/core';
+// Local type definitions for CopilotKit v1.50 compatibility
+export interface BinaryInputContent {
+  type: 'binary';
+  mimeType: string;
+  filename: string;
+  data: string;
+}
+
+export interface TextInputContent {
+  type: 'text';
+  text: string;
+}
 
 export interface AttachmentInput {
   name: string;

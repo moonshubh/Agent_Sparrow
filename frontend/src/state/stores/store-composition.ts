@@ -713,7 +713,7 @@ export function useStoreInitialization() {
       realtimeActions.cleanup()
       storeEventBus.clear()
     }
-  }, [])
+  }, [analyticsActions, conversationsActions, foldersActions, realtimeActions, uiActions])
   
   // Setup cross-store synchronization
   useStoreSync()

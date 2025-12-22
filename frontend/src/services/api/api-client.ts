@@ -161,15 +161,12 @@ const serializeBody = (data: unknown): BodyInit | undefined => {
   return JSON.stringify(data)
 }
 
-/* eslint-disable @typescript-eslint/no-explicit-any */
 const toTextStream = (stream: ReadableStream<Uint8Array>): ReadableStream<string> => {
   // Using "any" here to safely access cross-environment Web Streams APIs without failing type checks
   // across differing TS lib versions. Runtime behavior is guarded by feature detection.
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const g: any = globalThis as any
   if (typeof g.TextDecoderStream !== 'undefined') {
     // Casts are intentional to avoid TS ReadableWritablePair type mismatch across lib versions
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     return (stream as any).pipeThrough(new g.TextDecoderStream()) as ReadableStream<string>
   }
 
@@ -182,10 +179,8 @@ const toTextStream = (stream: ReadableStream<Uint8Array>): ReadableStream<string
       controller.enqueue(decoder.decode())
     },
   })
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   return (stream as any).pipeThrough(transform as any) as ReadableStream<string>
 }
-/* eslint-enable @typescript-eslint/no-explicit-any */
 
 export class APIRequestError extends Error {
   public readonly status: number
@@ -404,11 +399,9 @@ class APIClient {
         } catch {}
         if (process.env.NODE_ENV === 'development') {
           // One-time notice; subsequent calls are short-circuited
-          // eslint-disable-next-line no-console
           console.debug('Stream token endpoint unavailable (404); falling back to session auth.')
         }
       } else if (process.env.NODE_ENV === 'development') {
-        // eslint-disable-next-line no-console
         console.debug('Failed to get stream token, using session auth fallback:', error)
       }
       return null

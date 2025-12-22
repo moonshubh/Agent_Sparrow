@@ -26,11 +26,17 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Query
 from fastapi.responses import JSONResponse, StreamingResponse
 from opentelemetry import trace
 from opentelemetry.trace import Status, StatusCode
+from pydantic import ValidationError
 
 # AG-UI Protocol imports
 from ag_ui_langgraph import LangGraphAgent
 from ag_ui.core.types import RunAgentInput
+from ag_ui.core import CustomEvent, EventType, RunFinishedEvent, RunStartedEvent
 from ag_ui.encoder import EventEncoder
+from ag_ui_langgraph.types import LangGraphEventTypes
+from ag_ui_langgraph.utils import make_json_safe
+from ag_ui_langgraph.utils import agui_messages_to_langchain, get_stream_payload_input
+from langgraph.types import Command
 
 router = APIRouter()
 
@@ -119,6 +125,80 @@ class SparrowLangGraphAgent(LangGraphAgent):
                 "tools": unique_tools,
                 "context": input.context or [],
             },
+        }
+
+    async def prepare_stream(self, input: RunAgentInput, agent_state: Any, config: Dict[str, Any]):
+        state_input = input.state or {}
+        messages = input.messages or []
+        forwarded_props = input.forwarded_props or {}
+        thread_id = input.thread_id
+
+        state_input["messages"] = agent_state.values.get("messages", [])
+        self.active_run["current_graph_state"] = agent_state.values.copy()
+        langchain_messages = agui_messages_to_langchain(messages)
+        state = self.langgraph_default_merge_state(state_input, langchain_messages, input)
+        self.active_run["current_graph_state"].update(state)
+        config["configurable"]["thread_id"] = thread_id
+        interrupts = agent_state.tasks[0].interrupts if agent_state.tasks and len(agent_state.tasks) > 0 else []
+        has_active_interrupts = len(interrupts) > 0
+        resume_input = forwarded_props.get("command", {}).get("resume", None)
+
+        self.active_run["schema_keys"] = self.get_schema_keys(config)
+
+        events_to_dispatch = []
+        if has_active_interrupts and not resume_input:
+            events_to_dispatch.append(
+                RunStartedEvent(type=EventType.RUN_STARTED, thread_id=thread_id, run_id=self.active_run["id"])
+            )
+
+            for interrupt in interrupts:
+                events_to_dispatch.append(
+                    CustomEvent(
+                        type=EventType.CUSTOM,
+                        name=LangGraphEventTypes.OnInterrupt.value,
+                        value=make_json_safe(interrupt.value),
+                        raw_event=interrupt,
+                    )
+                )
+
+            events_to_dispatch.append(
+                RunFinishedEvent(type=EventType.RUN_FINISHED, thread_id=thread_id, run_id=self.active_run["id"])
+            )
+            return {
+                "stream": None,
+                "state": None,
+                "config": None,
+                "events_to_dispatch": events_to_dispatch,
+            }
+
+        if self.active_run["mode"] == "continue":
+            await self.graph.aupdate_state(config, state, as_node=self.active_run.get("node_name"))
+
+        if resume_input:
+            stream_input = Command(resume=resume_input)
+        else:
+            payload_input = get_stream_payload_input(
+                mode=self.active_run["mode"],
+                state=state,
+                schema_keys=self.active_run["schema_keys"],
+            )
+            stream_input = {**forwarded_props, **payload_input} if payload_input else None
+
+        subgraphs_stream_enabled = input.forwarded_props.get("stream_subgraphs") if input.forwarded_props else False
+
+        kwargs = self.get_stream_kwargs(
+            input=stream_input,
+            config=config,
+            subgraphs=bool(subgraphs_stream_enabled),
+            version="v2",
+        )
+
+        stream = self.graph.astream_events(**kwargs)
+
+        return {
+            "stream": stream,
+            "state": state,
+            "config": config,
         }
 
 
@@ -370,10 +450,42 @@ def _sanitize_attachments(payload: Any) -> List[Dict[str, Any]]:
                 f"Validated attachment: name={validated.name}, mime_type={validated.mime_type}, "
                 f"size={validated.size}"
             )
+        except ValidationError as e:
+            # Required: fail loudly on validation errors
+            errors = e.errors()
+            is_payload_too_large = any(
+                (err.get("loc") or [])[-1:] == ["size"]
+                and (
+                    "less_than_equal" in str(err.get("type") or "")
+                    or "maximum allowed" in str(err.get("msg") or "").lower()
+                    or "exceeds" in str(err.get("msg") or "").lower()
+                )
+                for err in errors
+            )
+            status_code = 413 if is_payload_too_large else 400
+
+            error_detail = f"Attachment validation failed at index {idx}"
+            logging.error("%s: %s", error_detail, errors)
+            raise HTTPException(
+                status_code=status_code,
+                detail={
+                    "error": "attachment_validation_failed",
+                    "message": error_detail,
+                    "attachment_index": idx,
+                    "validation_errors": [
+                        {
+                            "loc": err.get("loc"),
+                            "msg": err.get("msg"),
+                            "type": err.get("type"),
+                        }
+                        for err in errors
+                    ],
+                }
+            )
         except Exception as e:
             # Required: fail loudly on validation errors
-            error_detail = f"Attachment validation failed at index {idx}: {str(e)}"
-            logging.error(error_detail)
+            error_detail = f"Attachment validation failed at index {idx}"
+            logging.error("%s: %s", error_detail, str(e))
             raise HTTPException(
                 status_code=400,
                 detail={

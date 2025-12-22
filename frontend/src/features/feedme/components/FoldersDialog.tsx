@@ -259,6 +259,7 @@ const FoldersDialog = React.memo(function FoldersDialog({ isOpen, onClose, onFra
         </section>
 
         <CreateOrEditFolder
+          key={createOpen ? 'create-open' : 'create-closed'}
           title="Create Folder"
           open={createOpen}
           onOpenChange={(open) => setCreateOpen(open)}
@@ -312,11 +313,6 @@ interface CreateOrEditFolderProps {
 const CreateOrEditFolder = React.memo(function CreateOrEditFolder({ title, open, onOpenChange, onSubmit, initialName = '', initialColor = '#0095ff' }: CreateOrEditFolderProps) {
   const [name, setName] = useState(initialName)
   const [color, setColor] = useState(initialColor)
-
-  useEffect(() => {
-    setName(initialName)
-    setColor(initialColor)
-  }, [initialName, initialColor, open])
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>

@@ -63,6 +63,7 @@ export default function AnimatedFeedMeLogoOptimized({
   const shouldReduceMotion = useReducedMotion()
   const animationRef = useRef<number | null>(null)
   const startTimeRef = useRef<number | null>(null)
+  const animateRef = useRef<(timestamp: number) => void>(() => {})
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const imagesRef = useRef<HTMLImageElement[]>([])
 
@@ -88,53 +89,56 @@ export default function AnimatedFeedMeLogoOptimized({
   }, [])
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     loadImages()
   }, [loadImages])
 
-  const animate = useCallback((timestamp: number) => {
-    // Get canvas and context inside the callback
-    const canvas = canvasRef.current
-    const ctx = canvas?.getContext('2d')
+  useEffect(() => {
+    animateRef.current = (timestamp: number) => {
+      // Get canvas and context inside the callback
+      const canvas = canvasRef.current
+      const ctx = canvas?.getContext('2d')
 
-    if (startTimeRef.current === null) {
-      startTimeRef.current = timestamp
-    }
-
-    const elapsed = timestamp - (startTimeRef.current ?? timestamp)
-    const progress = (elapsed % animationDuration) / animationDuration
-    const easedProgress = easingFunctions[easing](progress)
-    const frameIndex = Math.floor(easedProgress * KEYFRAMES.length) % KEYFRAMES.length
-
-    setCurrentFrameIndex(frameIndex)
-
-    if (canvas && ctx && imagesRef.current[frameIndex]) {
-      ctx.clearRect(0, 0, canvas.width, canvas.height)
-
-      const img = imagesRef.current[frameIndex]
-      const aspectRatio = img.width / img.height
-      let drawWidth = canvas.width
-      let drawHeight = canvas.height
-
-      if (aspectRatio > 1) {
-        drawHeight = canvas.width / aspectRatio
-      } else {
-        drawWidth = canvas.height * aspectRatio
+      if (startTimeRef.current === null) {
+        startTimeRef.current = timestamp
       }
 
-      const x = (canvas.width - drawWidth) / 2
-      const y = (canvas.height - drawHeight) / 2
+      const elapsed = timestamp - (startTimeRef.current ?? timestamp)
+      const progress = (elapsed % animationDuration) / animationDuration
+      const easedProgress = easingFunctions[easing](progress)
+      const frameIndex = Math.floor(easedProgress * KEYFRAMES.length) % KEYFRAMES.length
 
-      ctx.drawImage(img, x, y, drawWidth, drawHeight)
-    }
+      setCurrentFrameIndex(frameIndex)
 
-    if (!loop && elapsed >= animationDuration) {
-      setIsPlaying(false)
-      onAnimationComplete?.()
-      return
-    }
+      if (canvas && ctx && imagesRef.current[frameIndex]) {
+        ctx.clearRect(0, 0, canvas.width, canvas.height)
 
-    if (isPlaying && !(pauseOnHover && isHovered)) {
-      animationRef.current = requestAnimationFrame(animate)
+        const img = imagesRef.current[frameIndex]
+        const aspectRatio = img.width / img.height
+        let drawWidth = canvas.width
+        let drawHeight = canvas.height
+
+        if (aspectRatio > 1) {
+          drawHeight = canvas.width / aspectRatio
+        } else {
+          drawWidth = canvas.height * aspectRatio
+        }
+
+        const x = (canvas.width - drawWidth) / 2
+        const y = (canvas.height - drawHeight) / 2
+
+        ctx.drawImage(img, x, y, drawWidth, drawHeight)
+      }
+
+      if (!loop && elapsed >= animationDuration) {
+        setIsPlaying(false)
+        onAnimationComplete?.()
+        return
+      }
+
+      if (isPlaying && !(pauseOnHover && isHovered)) {
+        animationRef.current = requestAnimationFrame((nextTimestamp) => animateRef.current(nextTimestamp))
+      }
     }
   }, [animationDuration, easing, isPlaying, isHovered, loop, onAnimationComplete, pauseOnHover])
 
@@ -142,7 +146,7 @@ export default function AnimatedFeedMeLogoOptimized({
     if (!imagesLoaded || shouldReduceMotion) return
 
     if (isPlaying && !(pauseOnHover && isHovered)) {
-      animationRef.current = requestAnimationFrame(animate)
+      animationRef.current = requestAnimationFrame((timestamp) => animateRef.current(timestamp))
     }
 
     return () => {
@@ -150,7 +154,7 @@ export default function AnimatedFeedMeLogoOptimized({
         cancelAnimationFrame(animationRef.current)
       }
     }
-  }, [isPlaying, isHovered, imagesLoaded, shouldReduceMotion, animate, pauseOnHover])
+  }, [isPlaying, isHovered, imagesLoaded, shouldReduceMotion, pauseOnHover])
 
   const handlePlay = () => setIsPlaying(true)
   const handlePause = () => setIsPlaying(false)

@@ -9,7 +9,7 @@
 // Thinking Trace Types
 // -----------------------------------------------------------------------------
 
-export type TraceStepType = 'thought' | 'action' | 'result';
+export type TraceStepType = 'thought' | 'action' | 'result' | 'tool';
 
 /**
  * A single step in the agent's thinking trace.
@@ -26,6 +26,12 @@ export interface TraceStep {
   content: string;
   /** Additional metadata (tool info, model info, etc.) */
   metadata: Record<string, unknown>;
+  /** Optional tool name if type is tool/action */
+  toolName?: string;
+  /** Optional duration in seconds */
+  duration?: number;
+  /** Optional status of the step */
+  status?: 'success' | 'error';
 }
 
 /**
@@ -113,6 +119,12 @@ export interface ToolEvidenceUpdateEvent {
   toolName: string;
   /** Raw output from the tool */
   output: unknown;
+  /** Alternative field names for output (backend compatibility) */
+  result?: unknown;
+  data?: unknown;
+  value?: unknown;
+  /** Tool input arguments */
+  args?: string | Record<string, unknown>;
   /** Human-readable summary of the output */
   summary?: string;
   /** Pre-built evidence cards from the backend (optional) */

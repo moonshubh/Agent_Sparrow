@@ -3,7 +3,9 @@ from __future__ import annotations
 import base64
 import json
 import logging
-from typing import Optional, Dict, Any, List
+import time
+from typing import Optional, Dict, Any, List, Generator
+from datetime import datetime, timezone
 
 import requests
 
@@ -24,6 +26,7 @@ class ZendeskClient:
         email: str,
         api_token: str,
         dry_run: bool = False,
+        rpm_limit: Optional[int] = None,
         session: Optional[requests.Session] = None,
     ) -> None:
         if not subdomain or not email or not api_token:
@@ -33,6 +36,11 @@ class ZendeskClient:
         self.api_token = api_token
         self.dry_run = dry_run
         self.session = session or requests.Session()
+        self._user_cache: Dict[str, Dict[str, Any]] = {}
+        self._min_interval_sec = 0.0
+        self._last_request_at = 0.0
+        if rpm_limit and int(rpm_limit) > 0:
+            self._min_interval_sec = 60.0 / float(rpm_limit)
 
         # Prepare Basic auth header: base64("email/token:api_token")
         auth_bytes = f"{email}/token:{api_token}".encode("utf-8")
@@ -42,6 +50,15 @@ class ZendeskClient:
             "Content-Type": "application/json",
             "User-Agent": "mb-sparrow-zendesk-integrator/1.0",
         }
+
+    def _throttle(self) -> None:
+        if self._min_interval_sec <= 0:
+            return
+        now = time.monotonic()
+        elapsed = now - self._last_request_at
+        if elapsed < self._min_interval_sec:
+            time.sleep(self._min_interval_sec - elapsed)
+        self._last_request_at = time.monotonic()
 
     def add_internal_note(self, ticket_id: int | str, body: str, add_tag: Optional[str] = None, use_html: bool = False) -> Dict[str, Any]:
         """Add a private (internal) note to a ticket. Optionally add a tag.
@@ -73,6 +90,7 @@ class ZendeskClient:
             return {"dry_run": True, "ticket_id": ticket_id}
 
         # First attempt (maybe with html_body)
+        self._throttle()
         resp = self.session.put(url, headers=self._headers, data=json.dumps(payload), timeout=20)
         if resp.status_code >= 400 and "html_body" in comment:
             # Fallback to plain body if HTML rejected
@@ -80,6 +98,7 @@ class ZendeskClient:
                 comment.pop("html_body", None)
                 comment["body"] = body or ""
                 payload = {"ticket": ticket}
+                self._throttle()
                 resp = self.session.put(url, headers=self._headers, data=json.dumps(payload), timeout=20)
             except Exception:
                 pass
@@ -101,6 +120,7 @@ class ZendeskClient:
         """
         url = f"{self.base_url}/tickets/{ticket_id}/comments.json?sort_order=desc"
         try:
+            self._throttle()
             resp = self.session.get(url, headers=self._headers, timeout=20)
             if resp.status_code >= 400:
                 return []
@@ -150,6 +170,7 @@ class ZendeskClient:
         """
         url = f"{self.base_url}/tickets/{ticket_id}.json"
         try:
+            self._throttle()
             resp = self.session.get(url, headers=self._headers, timeout=20)
             if resp.status_code >= 400:
                 return {}
@@ -157,3 +178,153 @@ class ZendeskClient:
             return data.get("ticket") or {}
         except Exception:
             return {}
+
+    def export_resolved_tickets_cursor(
+        self,
+        start_time: int,
+        per_page: int = 100,
+        sleep_between_pages: float = 6.5,
+        end_time: Optional[int] = None,
+    ) -> Generator[Dict[str, Any], None, None]:
+        """Cursor-based incremental export of resolved tickets.
+
+        Uses: GET /api/v2/incremental/tickets/cursor.json?start_time={unix}
+        Rate limit: caller-configured (sleep_between_pages used as a fallback throttle).
+        Filters: status in ("solved", "closed")
+        """
+        def _ticket_epoch(ticket: Dict[str, Any]) -> Optional[int]:
+            for key in ("updated_at", "solved_at", "closed_at", "created_at"):
+                raw = ticket.get(key)
+                if not raw:
+                    continue
+                try:
+                    dt = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+                    if dt.tzinfo is None:
+                        dt = dt.replace(tzinfo=timezone.utc)
+                    return int(dt.timestamp())
+                except Exception:
+                    continue
+            return None
+
+        last_seen_time: Optional[int] = None
+        can_stop_early = True
+        url = f"{self.base_url}/incremental/tickets/cursor.json?start_time={int(start_time)}&per_page={int(per_page)}"
+        while url:
+            try:
+                self._throttle()
+                resp = self.session.get(url, headers=self._headers, timeout=30)
+                if resp.status_code >= 400:
+                    rid = resp.headers.get("X-Request-Id") or resp.headers.get("X-Zendesk-Request-Id")
+                    logger.warning("Zendesk export failed (%s) req_id=%s", resp.status_code, rid)
+                    break
+                data = resp.json() if resp.headers.get("Content-Type", "").startswith("application/json") else {}
+            except Exception:
+                break
+
+            tickets = data.get("tickets") or []
+            if isinstance(tickets, list):
+                page_times: List[int] = []
+                for ticket in tickets:
+                    if not isinstance(ticket, dict):
+                        continue
+                    t_epoch = _ticket_epoch(ticket)
+                    if t_epoch is not None:
+                        page_times.append(t_epoch)
+                        if last_seen_time is not None and t_epoch < last_seen_time:
+                            can_stop_early = False
+                        last_seen_time = t_epoch
+                if end_time and page_times and len(page_times) == len(tickets) and can_stop_early:
+                    if min(page_times) > int(end_time):
+                        break
+
+                for ticket in tickets:
+                    if not isinstance(ticket, dict):
+                        continue
+                    status = str(ticket.get("status") or "").lower()
+                    if status in {"solved", "closed"}:
+                        yield ticket
+
+            if data.get("end_of_stream") is True:
+                break
+
+            next_page = data.get("next_page")
+            if isinstance(next_page, str) and next_page.strip():
+                url = next_page.strip()
+            else:
+                after_cursor = data.get("after_cursor")
+                if after_cursor:
+                    url = f"{self.base_url}/incremental/tickets/cursor.json?cursor={after_cursor}"
+                else:
+                    break
+
+            if sleep_between_pages:
+                time.sleep(max(0.1, float(sleep_between_pages)))
+
+    def get_ticket_audits(
+        self,
+        ticket_id: int | str,
+        limit: int = 50,
+    ) -> List[Dict[str, Any]]:
+        """Get ticket audit trail (comments, macro applications, field changes).
+
+        Uses: GET /api/v2/tickets/{ticket_id}/audits.json
+        """
+        audits: List[Dict[str, Any]] = []
+        url = f"{self.base_url}/tickets/{ticket_id}/audits.json"
+        while url:
+            try:
+                self._throttle()
+                resp = self.session.get(url, headers=self._headers, timeout=30)
+                if resp.status_code >= 400:
+                    break
+                data = resp.json() if resp.headers.get("Content-Type", "").startswith("application/json") else {}
+            except Exception:
+                break
+
+            batch = data.get("audits") or []
+            if isinstance(batch, list):
+                audits.extend([a for a in batch if isinstance(a, dict)])
+
+            next_page = data.get("next_page")
+            if isinstance(next_page, str) and next_page.strip():
+                url = next_page.strip()
+            else:
+                break
+
+        max_limit = max(1, int(limit))
+        if len(audits) <= max_limit:
+            return audits
+        return audits[-max_limit:]
+
+    def get_user_cached(self, user_id: int | str) -> Dict[str, Any]:
+        """Get user details with in-memory caching.
+
+        Uses: GET /api/v2/users/{user_id}.json
+        Returns: {role: "agent"|"admin"|"end-user", name: "..."}
+        """
+        key = str(user_id)
+        cached = self._user_cache.get(key)
+        if cached:
+            return cached
+
+        url = f"{self.base_url}/users/{user_id}.json"
+        try:
+            self._throttle()
+            resp = self.session.get(url, headers=self._headers, timeout=20)
+            if resp.status_code >= 400:
+                data = {}
+            else:
+                data = resp.json() if resp.headers.get("Content-Type", "").startswith("application/json") else {}
+        except Exception:
+            data = {}
+
+        user = data.get("user") if isinstance(data, dict) else {}
+        if not isinstance(user, dict):
+            user = {}
+        profile = {
+            "role": str(user.get("role") or "").lower(),
+            "name": str(user.get("name") or "").strip(),
+            "id": user.get("id"),
+        }
+        self._user_cache[key] = profile
+        return profile

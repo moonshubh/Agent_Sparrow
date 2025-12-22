@@ -19,7 +19,6 @@ const supabase = (() => {
   }
   if (LOCAL_BYPASS) {
     console.warn('Supabase storage disabled (local bypass). Uploads will be no-ops.')
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const mock: any = {
       storage: {
         from: (_bucket: string) => ({

@@ -54,6 +54,10 @@ THINKING_BLOCK_PATTERN = re.compile(
     r":::(?:thinking|think)\s*([\s\S]*?)\s*:::",
     re.IGNORECASE
 )
+THINK_TAG_PATTERN = re.compile(
+    r"<(?:thinking|think)>\s*([\s\S]*?)\s*</(?:thinking|think)>",
+    re.IGNORECASE
+)
 
 
 class ThinkingBlockTracker:
@@ -174,10 +178,12 @@ class ThinkingBlockTracker:
 
         # Remove complete thinking blocks
         sanitized = THINKING_BLOCK_PATTERN.sub("", content)
+        sanitized = THINK_TAG_PATTERN.sub("", sanitized)
 
         # Also handle malformed/partial blocks
         # Remove any orphaned :::thinking markers
         sanitized = re.sub(r":::(?:thinking|think)\s*", "", sanitized, flags=re.IGNORECASE)
+        sanitized = re.sub(r"</?(?:thinking|think)>", "", sanitized, flags=re.IGNORECASE)
 
         # Remove any orphaned closing ::: that might be left
         # But be careful not to remove ::: in other contexts (like code blocks)
@@ -446,7 +452,8 @@ class StreamEventHandler:
             output = await self._rerank_grounding_results(output)
 
         if tool_name == "write_todos":
-            await self._handle_write_todos(output)
+            todos_dicts = await self._handle_write_todos(output)
+            output = {"todos": todos_dicts}
 
         # Handle image generation - emit as artifact for frontend display FIRST
         # Then strip base64 from output to prevent context overflow
@@ -576,11 +583,18 @@ class StreamEventHandler:
                 # If we have extracted reasoning, emit it to the thinking trace as a final summary
                 # This ensures the trace panel gets the full reasoning without polluting the message
                 if reasoning_content and run_id:
-                    self.emitter.add_trace_step(
-                        step_type="thought",
-                        content=f"Model reasoning:\n{reasoning_content}",
+                    cleaned_reasoning = reasoning_content.strip()
+                    updated = self.emitter.update_trace_step(
+                        alias=str(run_id),
+                        replace_content=cleaned_reasoning or reasoning_content,
                         metadata={"source": "model_reasoning", "final": True},
                     )
+                    if updated is None:
+                        self.emitter.add_trace_step(
+                            step_type="thought",
+                            content=f"Model reasoning:\n{cleaned_reasoning or reasoning_content}",
+                            metadata={"source": "model_reasoning", "final": True},
+                        )
 
             # If we buffered Gemini 3 text, emit a single sanitized message now
             run_id_str = str(run_id) if run_id is not None else None
@@ -1107,8 +1121,8 @@ class StreamEventHandler:
 
         return output
 
-    async def _handle_write_todos(self, output: Any) -> None:
-        """Handle write_todos tool output."""
+    async def _handle_write_todos(self, output: Any) -> List[Dict[str, Any]]:
+        """Handle write_todos tool output and return normalized todos."""
         from langchain_core.messages import ToolMessage
 
         # Debug: Log the actual type and value being passed
@@ -1133,6 +1147,7 @@ class StreamEventHandler:
             self.state.todos = todos_dicts  # type: ignore[attr-defined]
         except Exception as exc:
             logger.warning("state_todos_set_failed", error=str(exc))
+        return todos_dicts
 
     async def _handle_image_generation(self, output: Any) -> None:
         """Handle generate_image tool output - emit as artifact for frontend display."""

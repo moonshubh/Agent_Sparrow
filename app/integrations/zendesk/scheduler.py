@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import dataclass
+import html
+import json
 import logging
 from datetime import datetime, timedelta, timezone, date
 from typing import Any, Dict, List
 import time
 
-from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 from app.core.settings import settings
 from app.db.supabase.client import get_supabase_client
@@ -14,9 +17,18 @@ from .client import ZendeskClient
 from app.core.user_context import UserContext, user_context_scope
 from app.agents.unified.agent_sparrow import run_unified_agent
 from app.agents.orchestration.orchestration.state import GraphState
-from app.agents.unified.tools import kb_search_tool
+from app.agents.unified.tools import (
+    kb_search_tool,
+    db_unified_search_tool,
+    firecrawl_search_tool,
+    firecrawl_fetch_tool,
+    firecrawl_map_tool,
+    firecrawl_extract_tool,
+    web_search_tool,
+)
 import re
 from app.integrations.zendesk.attachments import fetch_ticket_attachments, summarize_attachments, convert_to_unified_attachments
+from app.security.pii_redactor import redact_pii
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +36,1338 @@ logger = logging.getLogger(__name__)
 # Keep low to prevent runaway agent loops (default is 400, which can take hours with Gemini Pro)
 # 30 is enough for: KB search + FeedMe + web research + subagent calls + final response
 ZENDESK_RECURSION_LIMIT = 30
+
+
+_ZENDESK_PATTERN_CATEGORIES: tuple[str, ...] = (
+    "account_setup",
+    "sync_auth",
+    "licensing",
+    "sending",
+    "performance",
+    "features",
+)
+
+
+@dataclass(frozen=True, slots=True)
+class ZendeskReplyResult:
+    reply: str
+    session_id: str
+    ticket_id: str
+    category: str | None
+    redacted_ticket_text: str
+    kb_articles_used: list[str]
+    macros_used: list[str]
+    learning_messages: list[Any]
+
+
+_ZENDESK_NOTE_SECTION_HEADINGS: set[str] = {
+    "suggested reply",
+    "issue summary",
+    "root cause analysis",
+    "relevant resources",
+    "follow-up considerations",
+    # Legacy headings (older prompt variants)
+    "solution overview",
+    "try now — immediate actions",
+    "try now - immediate actions",
+    "full fix — step-by-step instructions",
+    "full fix - step-by-step instructions",
+    "additional context",
+    "pro tips",
+    "empathetic opening",
+    "supportive closing",
+}
+
+_ZENDESK_NOTE_NON_REPLY_HEADINGS: set[str] = _ZENDESK_NOTE_SECTION_HEADINGS - {"suggested reply"}
+
+_ZENDESK_META_LINE_PREFIXES: tuple[str, ...] = (
+    "assistant",
+    "system",
+    "developer",
+    "tool",
+    "analysis",
+    "reasoning",
+    "thought process",
+    "scratchpad",
+    "plan",
+    "approach",
+    "notes",
+)
+
+_ZENDESK_META_INLINE_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"(?i)\bzendesk\s+(ticket\s+scenario|internal\s+note)\b"),
+    re.compile(r"(?i)\b(i\s+(must|should|need\s+to))\b.*\b(output|reply|respond)\b"),
+    re.compile(r"(?i)\b(do\s+not|don't)\b.*\b(mention|include|output|show)\b"),
+    re.compile(r"(?i)\b(tool\s+results|synthesi[sz]ed\s+knowledge|synthesis|final\s+output)\b"),
+    re.compile(r"(?i)\b(db[-\s]?retrieval|kb[_\s-]?search|feedme[_\s-]?search|macro\s+id|kb\s+id)\b"),
+)
+
+
+def _infer_ticket_category(
+    ticket_text: str,
+    similar_resolutions: List[Any],
+) -> str | None:
+    """Best-effort ticket category inference.
+
+    Preference order:
+    1) High-confidence majority from similar resolution hits
+    2) Keyword heuristics on current ticket text
+    """
+    # 1) Similar-resolution vote (prefer top hit when confident)
+    try:
+        if similar_resolutions:
+            top = similar_resolutions[0]
+            top_cat = getattr(top, "category", None)
+            top_sim = getattr(top, "similarity", None)
+            if top_cat in _ZENDESK_PATTERN_CATEGORIES and isinstance(top_sim, (int, float)) and top_sim >= 0.78:
+                return str(top_cat)
+
+            weights: Dict[str, float] = {}
+            total = 0.0
+            for r in similar_resolutions[:5]:
+                cat = getattr(r, "category", None)
+                sim = getattr(r, "similarity", None)
+                if cat not in _ZENDESK_PATTERN_CATEGORIES or not isinstance(sim, (int, float)):
+                    continue
+                total += float(sim)
+                weights[str(cat)] = weights.get(str(cat), 0.0) + float(sim)
+            if total > 0 and weights:
+                best_cat, best_score = max(weights.items(), key=lambda kv: kv[1])
+                if best_score / total >= 0.55:
+                    return best_cat
+    except Exception:
+        pass
+
+    # 2) Keyword fallback
+    text = (ticket_text or "").lower()
+    if not text:
+        return None
+
+    def _has_any(*needles: str) -> bool:
+        return any(n in text for n in needles)
+
+    # Licensing / billing
+    if _has_any("license", "subscription", "billing", "payment", "refund", "invoice", "renew", "cancel", "trial", "upgrade", "activation"):
+        return "licensing"
+
+    # Performance / stability
+    if _has_any("slow", "lag", "freez", "not responding", "crash", "high cpu", "high memory", "spinning", "stuck loading"):
+        return "performance"
+
+    # Sending problems (prefer explicit send failures / SMTP errors)
+    if _has_any("can't send", "cannot send", "unable to send", "sending error", "smtp error", "outgoing server", "message could not be sent", "550", "554", "relay"):
+        return "sending"
+
+    # Sync/authentication (OAuth/IMAP/SMTP auth flows)
+    if _has_any("oauth", "authorization", "authenticate", "authentication", "app password", "two-factor", "2fa", "imap", "smtp", "gmail", "google", "outlook", "office 365", "microsoft", "yahoo"):
+        return "sync_auth"
+
+    # Feature/how-to requests
+    if _has_any("feature request", "can you add", "does mailbird", "how do i", "how to", "is it possible", "unified inbox", "template", "signature", "calendar", "integration"):
+        return "features"
+
+    # Account setup / login / adding accounts
+    if _has_any("add account", "set up", "setup", "sign in", "log in", "login", "password", "credentials", "cannot add account"):
+        return "account_setup"
+
+    return None
+
+
+def _format_similar_scenarios_md(
+    ticket_id: str,
+    query: str,
+    resolutions: List[Any],
+) -> str:
+    """Render similar scenario hits into a compact markdown context file."""
+    lines: List[str] = []
+    lines.append("# Similar Scenarios (auto-retrieved)")
+    lines.append("")
+    lines.append(
+        "Use these as reference patterns. Do NOT mention internal ticket IDs, similarity scores, "
+        "or this file in the customer reply."
+    )
+    lines.append("")
+    q = (query or "").strip()
+    if q:
+        q_preview = q[:800].rstrip()
+        if len(q) > 800:
+            q_preview += "…"
+        lines.append(f"Ticket: {ticket_id}")
+        lines.append("")
+        lines.append("## Current Ticket (redacted)")
+        lines.append(q_preview)
+        lines.append("")
+
+    if not resolutions:
+        lines.append("_No close matches found in IssueResolutionStore._")
+        return "\n".join(lines).strip() + "\n"
+
+    for idx, res in enumerate(resolutions, 1):
+        cat = getattr(res, "category", "") or ""
+        sim = getattr(res, "similarity", None)
+        created_at = getattr(res, "created_at", None)
+        created_str = ""
+        try:
+            if created_at is not None:
+                created_str = created_at.isoformat()
+        except Exception:
+            created_str = ""
+        sim_str = f"{float(sim):.3f}" if isinstance(sim, (int, float)) else "n/a"
+        lines.append(f"## Scenario {idx} ({cat or 'uncategorized'}, similarity {sim_str})")
+        if created_str:
+            lines.append(f"- Created: {created_str}")
+        lines.append("")
+        prob = str(getattr(res, "problem_summary", "") or "").strip()
+        sol = str(getattr(res, "solution_summary", "") or "").strip()
+        if prob:
+            lines.append("**Problem**")
+            lines.append(prob)
+            lines.append("")
+        if sol:
+            lines.append("**Resolution**")
+            lines.append(sol)
+            lines.append("")
+
+    return "\n".join(lines).strip() + "\n"
+
+
+async def _run_pattern_preflight(
+    *,
+    ticket_id: str,
+    session_id: str,
+    ticket_text: str,
+    workspace_store: Any,
+    issue_store: Any,
+    playbook_extractor: Any | None,
+    max_hits: int,
+    min_similarity: float,
+) -> str | None:
+    """Populate workspace files for pattern-first Zendesk runs.
+
+    Writes:
+    - `/context/similar_scenarios.md` (+ legacy `/context/similar_resolutions.md`)
+    - `/context/ticket_category.json` (when inferred)
+    - `/context/ticket_playbook.md` (when a playbook is compiled)
+    - `/playbooks/{category}.md` (compiled, verified procedures)
+    """
+    max_hits = max(0, min(10, int(max_hits)))
+    min_similarity = float(min_similarity)
+
+    similar: list[Any] = []
+    if max_hits > 0:
+        try:
+            similar = await issue_store.find_similar_resolutions(
+                query=ticket_text,
+                limit=max_hits,
+                min_similarity=min_similarity,
+            )
+        except Exception as exc:  # pragma: no cover - best effort
+            logger.debug("issue_pattern_search_failed ticket_id=%s error=%s", ticket_id, str(exc)[:180])
+            similar = []
+
+    md = _format_similar_scenarios_md(ticket_id, ticket_text, similar)
+    await workspace_store.write_file("/context/similar_scenarios.md", md)
+    await workspace_store.write_file("/context/similar_resolutions.md", md)
+
+    if similar:
+        logger.info(
+            "issue_resolution_hit ticket_id=%s count=%s top_similarity=%s",
+            ticket_id,
+            len(similar),
+            getattr(similar[0], "similarity", None),
+        )
+
+    category = _infer_ticket_category(ticket_text, similar)
+    if not category:
+        return None
+
+    await workspace_store.write_file(
+        "/context/ticket_category.json",
+        json.dumps(
+            {
+                "ticket_id": str(ticket_id),
+                "session_id": str(session_id),
+                "category": category,
+                "derived_at": datetime.now(timezone.utc).isoformat(),
+            },
+            ensure_ascii=False,
+        ),
+    )
+
+    if category in _ZENDESK_PATTERN_CATEGORIES and playbook_extractor is not None:
+        try:
+            playbook = await playbook_extractor.build_playbook_with_learned(category)
+            playbook_md = playbook.to_prompt_context(include_pending=False).strip()
+            if playbook_md:
+                compiled = (
+                    "<!-- auto-generated by Zendesk scheduler; source: "
+                    "/playbooks/source + approved playbook_learned_entries -->\n\n"
+                    f"{playbook_md}\n"
+                )
+                playbook_path = f"/playbooks/{category}.md"
+                existing = await workspace_store.read_file(playbook_path)
+                if not existing or existing.strip() != compiled.strip():
+                    await workspace_store.write_file(playbook_path, compiled)
+
+                await workspace_store.write_file(
+                    "/context/ticket_playbook.md",
+                    (
+                        f"Ticket category: {category}\n"
+                        f"Use verified procedures from: {playbook_path}\n"
+                    ),
+                )
+                logger.info(
+                    "playbook_compiled ticket_id=%s category=%s has_content=%s",
+                    ticket_id,
+                    category,
+                    True,
+                )
+        except Exception as exc:  # pragma: no cover - best effort
+            logger.debug(
+                "playbook_compile_failed ticket_id=%s category=%s error=%s",
+                ticket_id,
+                category,
+                str(exc)[:180],
+            )
+
+    return category
+
+
+def _strip_html_tags(text: str) -> str:
+    if not text:
+        return ""
+    return re.sub(r"<[^>]+>", " ", text)
+
+
+def _compact_one_line(text: str, max_chars: int) -> str:
+    cleaned = re.sub(r"\s+", " ", str(text or "")).strip()
+    if len(cleaned) <= max_chars:
+        return cleaned
+    return cleaned[: max_chars - 1].rstrip() + "…"
+
+
+def _summarize_problem_for_pattern_store(ticket_text: str) -> str:
+    """Derive a short, high-signal problem summary from the ticket text."""
+    raw = str(ticket_text or "").strip()
+    if not raw:
+        return ""
+
+    # Prefer the first 1-2 paragraphs (subject/last public/description ordering).
+    parts = [p.strip() for p in raw.split("\n\n") if p.strip()]
+    chosen = "\n\n".join(parts[:2]) if parts else raw
+    return _compact_one_line(chosen, max_chars=360)
+
+
+def _summarize_solution_for_pattern_store(reply_text: str) -> str:
+    """Derive a short solution summary from the agent reply (strip HTML + greeting)."""
+    text = _strip_html_tags(str(reply_text or ""))
+    text = re.sub(r"\s+", " ", text).strip()
+    if not text:
+        return ""
+
+    # Drop the standard greeting line if present.
+    greeting_prefix = "Hi there, Many thanks for contacting the Mailbird Customer Happiness Team."
+    if text.startswith(greeting_prefix):
+        text = text[len(greeting_prefix) :].strip()
+
+    # Capture first ~2 sentences worth of content (max chars cap).
+    sentences = re.split(r"(?<=[.!?])\s+", text)
+    summary = " ".join([s for s in sentences[:2] if s]).strip()
+    if not summary:
+        summary = text
+    return _compact_one_line(summary, max_chars=420)
+
+
+def _filter_messages_for_playbook_learning(messages: list[Any]) -> list[Any]:
+    """Prepare a compact, safe conversation payload for playbook extraction.
+
+    We include customer/agent turns plus truncated TOOL outputs so the extractor
+    has enough context for short Zendesk runs, while avoiding prompt bloat.
+    """
+    MAX_HUMAN_CHARS = 8000
+    MAX_AI_CHARS = 8000
+    MAX_TOOL_CHARS = 2000
+
+    def _truncate(text: str, max_chars: int) -> str:
+        if len(text) <= max_chars:
+            return text
+        return text[: max_chars - 1].rstrip() + "…\n\n[...truncated]"
+
+    filtered: list[Any] = []
+    for msg in messages or []:
+        # LangChain BaseMessage instances
+        if isinstance(msg, HumanMessage):
+            content = getattr(msg, "content", "")
+            if isinstance(content, str) and content.strip():
+                filtered.append(HumanMessage(content=_truncate(redact_pii(content), MAX_HUMAN_CHARS)))
+            continue
+
+        if isinstance(msg, AIMessage):
+            content = getattr(msg, "content", "")
+            if isinstance(content, str) and content.strip():
+                filtered.append(AIMessage(content=_truncate(redact_pii(content), MAX_AI_CHARS)))
+            continue
+
+        if isinstance(msg, ToolMessage):
+            content = getattr(msg, "content", "")
+            if isinstance(content, str) and content.strip():
+                safe = _truncate(redact_pii(content), MAX_TOOL_CHARS)
+                filtered.append({"role": "tool", "content": safe})
+            continue
+
+        if isinstance(msg, dict):
+            role = msg.get("role") or msg.get("type")
+            content = msg.get("content")
+            if not isinstance(content, str) or not content.strip():
+                continue
+
+            if role in {"human", "user"}:
+                filtered.append({"role": "user", "content": _truncate(redact_pii(content), MAX_HUMAN_CHARS)})
+            elif role in {"ai", "assistant"}:
+                filtered.append({"role": "assistant", "content": _truncate(redact_pii(content), MAX_AI_CHARS)})
+            elif role == "tool":
+                filtered.append({"role": "tool", "content": _truncate(redact_pii(content), MAX_TOOL_CHARS)})
+    return filtered
+
+
+def _fire_and_forget(coro: Any, *, log_label: str) -> None:
+    """Schedule a coroutine and surface exceptions via logger."""
+    try:
+        task = asyncio.create_task(coro)
+    except Exception:
+        return
+
+    def _done(t: asyncio.Task) -> None:  # pragma: no cover - best effort
+        try:
+            exc = t.exception()
+        except Exception:
+            exc = None
+        if exc is not None:
+            logger.debug("%s_failed error=%s", log_label, str(exc)[:180])
+
+    try:
+        task.add_done_callback(_done)
+    except Exception:
+        pass
+
+
+def _queue_post_resolution_learning(
+    run: ZendeskReplyResult,
+    *,
+    dry_run: bool,
+) -> None:
+    """Best-effort post-resolution learning (pattern memory + playbook enrichment)."""
+    if dry_run:
+        return
+
+    category = run.category
+    if category not in _ZENDESK_PATTERN_CATEGORIES:
+        return
+
+    if bool(getattr(settings, "zendesk_issue_pattern_learning_enabled", True)):
+        try:
+            from app.agents.harness.store import IssueResolutionStore
+
+            store = IssueResolutionStore()
+            problem_summary = _summarize_problem_for_pattern_store(run.redacted_ticket_text)
+            solution_summary = _summarize_solution_for_pattern_store(run.reply)
+
+            # Extra safety: redact any stray PII in summaries.
+            problem_summary = redact_pii(problem_summary)
+            solution_summary = redact_pii(solution_summary)
+
+            _fire_and_forget(
+                store.store_resolution(
+                    ticket_id=str(run.ticket_id),
+                    category=category,
+                    problem_summary=problem_summary,
+                    solution_summary=solution_summary,
+                    was_escalated=False,
+                    kb_articles_used=run.kb_articles_used,
+                    macros_used=run.macros_used,
+                ),
+                log_label="issue_pattern_store",
+            )
+            logger.info(
+                "issue_pattern_stored_queued ticket_id=%s category=%s",
+                run.ticket_id,
+                category,
+            )
+        except Exception as exc:  # pragma: no cover - best effort
+            logger.debug(
+                "issue_pattern_store_queue_failed ticket_id=%s error=%s",
+                run.ticket_id,
+                str(exc)[:180],
+            )
+
+    if bool(getattr(settings, "zendesk_playbook_learning_enabled", True)):
+        messages = _filter_messages_for_playbook_learning(run.learning_messages)
+        if messages:
+            try:
+                from app.agents.unified.playbooks import PlaybookEnricher
+
+                enricher = PlaybookEnricher()
+                _fire_and_forget(
+                    enricher.extract_from_conversation(
+                        conversation_id=run.session_id,
+                        messages=messages,
+                        category=category,
+                    ),
+                    log_label="playbook_extraction",
+                )
+                logger.info(
+                    "playbook_extraction_queued conversation_id=%s category=%s",
+                    run.session_id,
+                    category,
+                )
+            except Exception as exc:  # pragma: no cover - best effort
+                logger.debug(
+                    "playbook_extraction_queue_failed conversation_id=%s error=%s",
+                    run.session_id,
+                    str(exc)[:180],
+                )
+
+
+def _normalize_zendesk_heading_candidate(line: str) -> str:
+    text = (line or "").strip()
+    if not text:
+        return ""
+
+    # Strip common markdown / list prefixes.
+    text = re.sub(r"^\s*#{1,6}\s*", "", text)
+    text = re.sub(r"^\s*\d+\s*[\.)]\s*", "", text)
+    text = re.sub(r"^\s*[-*]\s*", "", text)
+
+    # Strip whole-line emphasis markers.
+    text = re.sub(r"^\s*(\*\*|__|\*|_)", "", text)
+    text = re.sub(r"(\*\*|__|\*|_)\s*$", "", text)
+
+    text = text.strip().rstrip(":").strip()
+    return text.lower()
+
+
+def _extract_suggested_reply_only(note_text: str) -> str:
+    """Best-effort extraction of the Suggested Reply block from a structured note."""
+    raw = str(note_text or "").strip()
+    if not raw:
+        return ""
+
+    lines = raw.splitlines()
+    suggested_idx: int | None = None
+    first_non_reply_heading_idx: int | None = None
+
+    for idx, line in enumerate(lines):
+        normalized = _normalize_zendesk_heading_candidate(line)
+        if normalized == "suggested reply":
+            suggested_idx = idx
+            break
+        if normalized in _ZENDESK_NOTE_NON_REPLY_HEADINGS and first_non_reply_heading_idx is None:
+            first_non_reply_heading_idx = idx
+
+    if suggested_idx is not None:
+        end_idx = len(lines)
+        for j in range(suggested_idx + 1, len(lines)):
+            normalized = _normalize_zendesk_heading_candidate(lines[j])
+            if normalized in _ZENDESK_NOTE_SECTION_HEADINGS and normalized != "suggested reply":
+                end_idx = j
+                break
+        extracted = "\n".join(lines[suggested_idx:end_idx]).strip()
+        return extracted or raw
+
+    # If the model produced only non-reply sections, keep any preamble above them.
+    if first_non_reply_heading_idx is not None:
+        preamble = "\n".join(lines[:first_non_reply_heading_idx]).strip()
+        if preamble:
+            return preamble
+
+        # Otherwise, strip headings but keep content as a best-effort reply.
+        stripped: List[str] = []
+        for line in lines:
+            normalized = _normalize_zendesk_heading_candidate(line)
+            if normalized in _ZENDESK_NOTE_NON_REPLY_HEADINGS:
+                continue
+            stripped.append(line)
+        cleaned = "\n".join(stripped).strip()
+        return cleaned or raw
+
+    return raw
+
+
+def _sanitize_suggested_reply_text(text: str) -> str:
+    """Normalize the agent output into a customer-ready Suggested Reply only."""
+    extracted = _extract_suggested_reply_only(text)
+    if not extracted:
+        return ""
+
+    def _looks_like_greeting(line: str) -> bool:
+        return bool(
+            re.match(r"(?i)^hi\s+there\b", line.strip())
+            and re.search(r"(?i)mailbird\s+customer\s+happiness\s+team", line)
+        )
+
+    def _strip_meta_preamble(raw: str) -> str:
+        lines = [ln.rstrip() for ln in (raw or "").splitlines()]
+        if not lines:
+            return raw
+
+        # Prefer the last proper greeting line as the start of the customer reply.
+        greeting_indices = [idx for idx, ln in enumerate(lines) if _looks_like_greeting(ln)]
+        if greeting_indices:
+            start = greeting_indices[-1]
+            return "\n".join(lines[start:]).strip()
+
+        return raw
+
+    def _strip_meta_lines(raw: str) -> str:
+        out: List[str] = []
+        skip_block = False
+        for ln in (raw or "").splitlines():
+            line = ln.rstrip()
+            if not line.strip():
+                skip_block = False
+                out.append(line)
+                continue
+
+            normalized = _normalize_zendesk_heading_candidate(line)
+            if normalized in _ZENDESK_META_LINE_PREFIXES:
+                skip_block = True
+                continue
+
+            if re.match(r"(?i)^\s*(assistant|system|developer|tool|user)\s*:\s*", line):
+                skip_block = True
+                continue
+
+            if any(p.search(line) for p in _ZENDESK_META_INLINE_PATTERNS):
+                skip_block = True
+                continue
+
+            # Skip follow-on bullet lines when we just removed a meta heading/preamble.
+            if skip_block and re.match(r"^\s*([-*]|\d+[.)])\s+", line):
+                continue
+
+            out.append(line)
+
+        cleaned = "\n".join(out)
+        cleaned = re.sub(r"(?is)<\s*(analysis|thinking|reasoning)\b[^>]*>.*?<\s*/\s*\1\s*>", "", cleaned)
+        return cleaned.strip()
+
+    # Drop any placeholder lines if they slip through.
+    cleaned_lines: List[str] = []
+    extracted = _strip_meta_lines(_strip_meta_preamble(extracted))
+    for raw_line in extracted.splitlines():
+        line = raw_line.rstrip()
+        if re.search(r"(?i)\bpending\b", line) and re.search(r"(?i)fill\s+in\s+key\s+points", line):
+            continue
+        cleaned_lines.append(line)
+
+    cleaned = "\n".join(cleaned_lines).strip()
+
+    # Enforce greeting (single-line variant used by HTML formatter).
+    greeting = "Hi there, Many thanks for contacting the Mailbird Customer Happiness Team."
+    first_window = "\n".join(cleaned.splitlines()[:6])
+    has_hi = bool(re.search(r"(?i)\bhi\s+there\b", first_window))
+    has_team = bool(re.search(r"(?i)mailbird\s+customer\s+happiness\s+team", first_window))
+    if not (has_hi and has_team):
+        cleaned = f"{greeting}\n\n{cleaned}".strip()
+
+    # Remove exclamation marks (tone rule) and clean common punctuation artifacts.
+    cleaned = cleaned.replace("!", ".")
+    cleaned = re.sub(r"\.{2,}", ".", cleaned)
+    cleaned = re.sub(r"\s+\.", ".", cleaned)
+
+    # Final cleanup pass in case meta slipped after greeting insertion.
+    cleaned = _strip_meta_lines(cleaned)
+
+    return cleaned.strip()
+
+
+def _quality_gate_issues(note_text: str, *, use_html: bool) -> List[str]:
+    """Hard-stop checks before posting the Zendesk note."""
+    raw = str(note_text or "")
+    if not raw.strip():
+        return ["empty_reply"]
+
+    # Preserve basic line boundaries for heading detection.
+    if use_html:
+        normalized = re.sub(r"(?i)<br\s*/?>", "\n", raw)
+        normalized = re.sub(r"(?i)</p\s*>", "\n", normalized)
+        normalized = re.sub(r"(?i)</h[23]\s*>", "\n", normalized)
+        text_for_lines = _strip_html(normalized)
+    else:
+        text_for_lines = raw
+
+    text_for_lines = text_for_lines.replace("\r\n", "\n").replace("\r", "\n")
+    lines = [ln.strip() for ln in text_for_lines.splitlines() if ln.strip()]
+    flat = re.sub(r"\s+", " ", " ".join(lines)).strip()
+
+    issues: List[str] = []
+    if "!" in flat:
+        issues.append("contains_exclamation")
+
+    greeting_window = " ".join(lines[:6])[:500]
+    if not (
+        re.search(r"(?i)\bhi\s+there\b", greeting_window)
+        and re.search(r"(?i)mailbird\s+customer\s+happiness\s+team", greeting_window)
+    ):
+        issues.append("missing_greeting")
+
+    for ln in lines[:80]:
+        normalized_heading = _normalize_zendesk_heading_candidate(ln)
+        if normalized_heading in _ZENDESK_NOTE_NON_REPLY_HEADINGS:
+            issues.append("contains_non_reply_sections")
+            break
+
+    if re.search(r"(?i)\bpending\b", flat):
+        issues.append("contains_placeholder")
+
+    if re.search(r"(?i)\b(db[- ]?retrieval|supabase|firecrawl|tavily)\b", flat):
+        issues.append("mentions_internal_system")
+
+    # Block prompt leakage / transcript-like output (common with reasoning models).
+    if any(re.match(r"(?i)^(assistant|system|developer|tool|user)\s*:", ln) for ln in lines[:120]):
+        issues.append("contains_role_transcript")
+
+    if any(p.search(flat) for p in _ZENDESK_META_INLINE_PATTERNS):
+        issues.append("contains_prompt_leakage")
+
+    return issues
+
+
+def _format_zendesk_internal_note_html(
+    text: str,
+    *,
+    heading_level: str = "h3",
+    format_style: str = "compact",
+) -> str:
+    """Format a customer-ready Suggested Reply as readable Zendesk HTML.
+
+    Accepts plain text with light Markdown (bold + inline code + lists) and
+    produces Zendesk-safe HTML with paragraphs and nested lists.
+    """
+
+    safe_heading_level = (heading_level or "h3").lower()
+    if safe_heading_level not in {"h2", "h3"}:
+        safe_heading_level = "h3"
+
+    def render_inline_md(raw: str) -> str:
+        escaped = html.escape(raw or "", quote=False)
+
+        # Inline code first so emphasis doesn't touch code spans.
+        escaped = re.sub(r"`([^`]+)`", r"<code>\1</code>", escaped)
+
+        # Bold
+        escaped = re.sub(r"\*\*([^*]+)\*\*", r"<strong>\1</strong>", escaped)
+        escaped = re.sub(r"__([^_]+)__", r"<strong>\1</strong>", escaped)
+
+        # Italic (best-effort, avoids **bold** which is already handled)
+        escaped = re.sub(r"(?<!\*)\*([^*]+)\*(?!\*)", r"<em>\1</em>", escaped)
+        escaped = re.sub(r"(?<!_)_([^_]+)_(?!_)", r"<em>\1</em>", escaped)
+
+        return escaped
+
+    heading_names = {
+        # Legacy headings
+        "solution overview",
+        "try now — immediate actions",
+        "try now - immediate actions",
+        "full fix — step-by-step instructions",
+        "full fix - step-by-step instructions",
+        "additional context",
+        "pro tips",
+        "supportive closing",
+        # Current Zendesk structured headings
+        "suggested reply",
+        "issue summary",
+        "root cause analysis",
+        "relevant resources",
+        "follow-up considerations",
+        # Hidden (sometimes emitted by older prompts)
+        "empathetic opening",
+    }
+    hidden_headings = {"empathetic opening", "supportive closing"}
+
+    def is_heading(line: str) -> str | None:
+        t = re.sub(r"^\s*#+\s*", "", line).strip()
+        low = t.lower().rstrip(":").strip()
+        if low in heading_names:
+            return t.rstrip(":").strip()
+        return None
+
+    def list_indent(line: str) -> int:
+        indent = 0
+        for ch in line:
+            if ch == " ":
+                indent += 1
+            elif ch == "\t":
+                indent += 4
+            else:
+                break
+        return indent
+
+    def ordered_item(line: str) -> tuple[int, int, str] | None:
+        m = re.match(r"^(\s*)(\d+)[\.)]\s+(.*)$", line)
+        if not m:
+            return None
+        indent = list_indent(m.group(1))
+        num = int(m.group(2))
+        content = m.group(3).strip()
+        return indent, num, content
+
+    def unordered_item(line: str) -> tuple[int, str] | None:
+        m = re.match(r"^(\s*)[-*]\s+(.*)$", line)
+        if m:
+            indent = list_indent(m.group(1))
+            return indent, m.group(2).strip()
+        m2 = re.match(r"^(\s*)([A-Z][A-Za-z0-9 \-/()]+):\s+(.*)$", line)
+        if m2:
+            indent = list_indent(m2.group(1))
+            title, rest = m2.group(2).strip(), m2.group(3).strip()
+            return indent, f"<strong>{render_inline_md(title)}:</strong> {render_inline_md(rest)}"
+        return None
+
+    style = (format_style or "compact").lower()
+    sep = "<br>" if style != "relaxed" else "<br><br>"
+
+    def render_paragraph(lines: list[str]) -> str | None:
+        content = " ".join(ln.strip() for ln in lines if ln.strip())
+        if not content:
+            return None
+        return f"<p>{render_inline_md(content)}</p>"
+
+    html_parts: list[str] = []
+    paragraph_buf: list[str] = []
+
+    # List rendering with nesting based on indentation.
+    list_stack: list[dict[str, Any]] = []  # {"type": "ul"|"ol", "indent": int, "li_open": bool}
+
+    def close_li_if_open() -> None:
+        if list_stack and list_stack[-1].get("li_open"):
+            html_parts.append("</li>")
+            list_stack[-1]["li_open"] = False
+
+    def close_lists_to_indent(target_indent: int) -> None:
+        while list_stack and list_stack[-1]["indent"] > target_indent:
+            close_li_if_open()
+            html_parts.append(f"</{list_stack[-1]['type']}>")
+            list_stack.pop()
+
+    def close_all_lists() -> None:
+        close_lists_to_indent(-1)
+
+    def open_list(list_type: str, indent: int, start: int | None = None) -> None:
+        start_attr = f' start="{start}"' if start and list_type == "ol" else ""
+        html_parts.append(f"<{list_type}{start_attr}>")
+        list_stack.append({"type": list_type, "indent": indent, "li_open": False})
+
+    def begin_list_item(list_type: str, indent: int, *, start: int | None = None, content_html: str) -> None:
+        if not list_stack:
+            open_list(list_type, indent, start=start)
+        else:
+            cur = list_stack[-1]
+            if indent > cur["indent"]:
+                # Nested list inside the current <li>.
+                if not cur.get("li_open"):
+                    html_parts.append("<li>")
+                    cur["li_open"] = True
+                open_list(list_type, indent, start=start)
+            else:
+                close_lists_to_indent(indent)
+                if not list_stack:
+                    open_list(list_type, indent, start=start)
+                else:
+                    cur = list_stack[-1]
+                    if list_stack and cur["indent"] == indent and cur["type"] != list_type:
+                        close_li_if_open()
+                        html_parts.append(f"</{cur['type']}>")
+                        list_stack.pop()
+                        open_list(list_type, indent, start=start)
+
+        # Same level list item: close prior <li> first.
+        close_li_if_open()
+        html_parts.append(f"<li>{content_html}")
+        list_stack[-1]["li_open"] = True
+
+    def append_to_current_list_item(fragment_html: str) -> None:
+        if not list_stack or not list_stack[-1].get("li_open"):
+            return
+        html_parts.append(fragment_html)
+
+    heading_seen = False
+    suggested_seen = False
+    heading_dedup: set[str] = set()
+
+    lines = (text or "").replace("\r\n", "\n").replace("\r", "\n").splitlines()
+    for raw_line in lines:
+        line = raw_line.rstrip()
+        if not line.strip():
+            # Paragraph boundary.
+            para = render_paragraph(paragraph_buf)
+            if para:
+                close_all_lists()
+                html_parts.append(para)
+            paragraph_buf = []
+            continue
+
+        h = is_heading(line)
+        if h is not None:
+            h_norm = h.strip().lower()
+            if h_norm in heading_dedup:
+                continue
+            heading_dedup.add(h_norm)
+            heading_seen = True
+            if h_norm == "suggested reply":
+                suggested_seen = True
+
+            para = render_paragraph(paragraph_buf)
+            if para:
+                close_all_lists()
+                html_parts.append(para)
+            paragraph_buf = []
+            close_all_lists()
+            if h_norm not in hidden_headings:
+                html_parts.append(f"<{safe_heading_level}>{render_inline_md(h)}</{safe_heading_level}>")
+            continue
+
+        ordered = ordered_item(line)
+        if ordered is not None:
+            indent, num, item_text = ordered
+            para = render_paragraph(paragraph_buf)
+            if para:
+                close_all_lists()
+                html_parts.append(para)
+            paragraph_buf = []
+
+            start = None
+            if not list_stack or list_stack[-1]["type"] != "ol" or list_stack[-1]["indent"] != indent:
+                start = num
+            begin_list_item("ol", indent, start=start, content_html=render_inline_md(item_text))
+            continue
+
+        unordered = unordered_item(line)
+        if unordered is not None:
+            indent, item_text = unordered
+            para = render_paragraph(paragraph_buf)
+            if para:
+                close_all_lists()
+                html_parts.append(para)
+            paragraph_buf = []
+
+            content_html = item_text if item_text.startswith("<strong>") else render_inline_md(item_text)
+            begin_list_item("ul", indent, content_html=content_html)
+            continue
+
+        m = re.match(r"^\s*(Action|Where|Expected Result|If different)\s*:\s*(.*)$", line)
+        if m and list_stack:
+            label = m.group(1)
+            val = m.group(2).strip()
+            append_to_current_list_item(f" — <strong>{render_inline_md(label)}:</strong> {render_inline_md(val)}")
+            continue
+
+        if list_stack and list_indent(line) > list_stack[-1]["indent"]:
+            append_to_current_list_item(f"{sep}{render_inline_md(line.strip())}")
+            continue
+
+        paragraph_buf.append(line)
+
+    para = render_paragraph(paragraph_buf)
+    if para:
+        close_all_lists()
+        html_parts.append(para)
+    close_all_lists()
+
+    # Ensure a Suggested Reply heading wrapper exists (matches existing UI expectation).
+    if not heading_seen or not suggested_seen:
+        html_parts = [f"<{safe_heading_level}>Suggested Reply</{safe_heading_level}>", *html_parts]
+
+    # Ensure the greeting is present as an early paragraph (downstream quality gate expects it).
+    greeting_window = "\n".join(html_parts[:3])
+    has_hi = bool(re.search(r"(?i)\bhi\s+there\b", greeting_window))
+    has_team = bool(re.search(r"(?i)mailbird\s+customer\s+happiness\s+team", greeting_window))
+    if not (has_hi and has_team):
+        insert_at = 1 if html_parts and html_parts[0].lower().startswith(f"<{safe_heading_level}>") else 0
+        html_parts.insert(insert_at, "<p>Hi there, Many thanks for contacting the Mailbird Customer Happiness Team.</p>")
+
+    merged: list[str] = []
+    seen_pro = False
+    for frag in html_parts:
+        low = frag.strip().lower()
+        if low in ("<h2>pro tips</h2>", "<h3>pro tips</h3>"):
+            if seen_pro:
+                continue
+            seen_pro = True
+        merged.append(frag)
+
+    return "\n".join(merged).strip()
+
+
+def _trim_block(text: str, max_chars: int) -> str:
+    content = str(text or "").strip()
+    if not content:
+        return ""
+    if len(content) <= max_chars:
+        return content
+    return content[: max(1, max_chars - 1)].rstrip() + "…"
+
+
+def _format_internal_retrieval_context(results: List[Dict[str, Any]]) -> Dict[str, Any]:
+    macro_min = float(getattr(settings, "zendesk_macro_min_relevance", 0.55))
+    kb_min = float(getattr(settings, "primary_agent_min_kb_relevance", 0.35))
+    feedme_min = float(getattr(settings, "zendesk_feedme_min_relevance", 0.45))
+
+    macro_hits = [r for r in results if r.get("source") == "macro" and float(r.get("relevance_score") or 0.0) >= macro_min]
+    kb_hits = [r for r in results if r.get("source") == "kb" and float(r.get("relevance_score") or 0.0) >= kb_min]
+    feedme_hits = [r for r in results if r.get("source") == "feedme" and float(r.get("relevance_score") or 0.0) >= feedme_min]
+
+    lines: List[str] = []
+    if macro_hits or kb_hits or feedme_hits:
+        lines.append("Internal knowledge (do NOT mention sources in the customer reply):")
+
+    def add_section(title: str, items: List[Dict[str, Any]], max_items: int, max_chars: int) -> None:
+        if not items:
+            return
+        lines.append(f"\n{title}:")
+        for item in items[:max_items]:
+            item_title = str(item.get("title") or "Untitled").strip()
+            score = float(item.get("relevance_score") or 0.0)
+            content = _trim_block(item.get("content") or item.get("snippet") or "", max_chars=max_chars)
+            if not content:
+                continue
+            lines.append(f"- {item_title} (relevance ~{score:.2f}): {content}")
+
+    # Macro-first: if a good macro exists, show it first.
+    add_section("Macro guidance", macro_hits, max_items=2, max_chars=1400)
+    add_section("Knowledge base", kb_hits, max_items=3, max_chars=900)
+    add_section("Similar past examples", feedme_hits, max_items=2, max_chars=900)
+
+    context = "\n".join([ln for ln in lines if ln.strip()]).strip()
+    return {
+        "context": context or None,
+        "macro_ok": bool(macro_hits),
+        "kb_ok": bool(kb_hits),
+        "feedme_ok": bool(feedme_hits),
+        "macro_hits": len(macro_hits),
+        "kb_hits": len(kb_hits),
+        "feedme_hits": len(feedme_hits),
+        "macro_results": macro_hits,
+    }
+
+
+def _select_macro_candidate(
+    results: List[Dict[str, Any]],
+    *,
+    min_relevance: float,
+    max_candidates: int = 3,
+) -> Dict[str, Any] | None:
+    """Pick the strongest macro ahead of drafting to avoid the wrong template."""
+    macros = [
+        r
+        for r in results or []
+        if r.get("source") == "macro" and float(r.get("relevance_score") or 0.0) >= min_relevance
+    ]
+    if not macros:
+        return None
+
+    ordered = sorted(macros, key=lambda r: float(r.get("relevance_score") or 0.0), reverse=True)
+    top = ordered[0]
+    top_score = float(top.get("relevance_score") or 0.0)
+    runner_up = ordered[1] if len(ordered) > 1 else None
+    runner_score = float(runner_up.get("relevance_score") or 0.0) if runner_up else 0.0
+
+    # Confidence: relative lead over runner-up, capped to sensible bounds.
+    denom = max(top_score + runner_score, 1e-6)
+    confidence = max(0.35, min(0.99, top_score / denom))
+
+    alternates = []
+    for alt in ordered[1 : max_candidates]:
+        alt_title = str(alt.get("title") or "").strip() or "Alternate macro"
+        alt_score = float(alt.get("relevance_score") or 0.0)
+        alternates.append(f"{alt_title} (~{alt_score:.2f})")
+
+    title = str(top.get("title") or "Macro").strip()
+    macro_id = (top.get("metadata") or {}).get("zendesk_id")
+    reason = "Highest semantic match vs. other macros"
+    if runner_score:
+        reason += f" (+{top_score - runner_score:.2f} vs. next)"
+
+    return {
+        "macro_id": macro_id,
+        "title": title,
+        "confidence": confidence,
+        "reason": reason,
+        "alternates": alternates,
+    }
+
+
+def _format_macro_selector_context(choice: Dict[str, Any] | None) -> str | None:
+    if not choice:
+        return None
+    lines = ["Macro selector (internal — do not cite macros/templates to the customer):"]
+    title = choice.get("title") or "Macro"
+    conf = choice.get("confidence")
+    macro_id = choice.get("macro_id")
+    reason = choice.get("reason")
+    if conf is not None:
+        lines.append(f"- Recommended template: {title} (confidence ~{conf:.2f})")
+    else:
+        lines.append(f"- Recommended template: {title}")
+    if macro_id:
+        lines.append(f"- Internal ref: {macro_id}")
+    if reason:
+        lines.append(f"- Why: {reason}")
+    alts = choice.get("alternates") or []
+    if alts:
+        lines.append(f"- Alternates: {', '.join(alts[:2])}")
+    lines.append("- Use it as guidance; write a customer-ready reply directly with no IDs.")
+    return "\n".join(lines)
+
+
+def _build_web_search_query(*, subject: str | None, description: str | None, fallback: str) -> str:
+    raw = "\n\n".join([p for p in [subject, description] if p]) or fallback
+    redacted = redact_pii(raw) or raw
+    # Remove any attachment summary blocks (often too noisy for search).
+    redacted = re.split(r"(?im)^attachments\s+summary\s+for\s+agent\s*:\s*$", redacted)[0].strip()
+    query = re.sub(r"\s+", " ", redacted).strip()
+    if query and "mailbird" not in query.lower():
+        query = f"Mailbird {query}"
+    return query[:400].strip()
+
+
+def _strip_html(text: str) -> str:
+    if not text:
+        return ""
+    try:
+        return re.sub(r"<[^>]+>", " ", text)
+    except Exception:
+        return text
+
+
+def _format_web_research_context(items: List[Dict[str, Any]]) -> str | None:
+    lines: List[str] = []
+    for item in items:
+        url = str(item.get("url") or "").strip()
+        title = str(item.get("title") or "Web result").strip()
+        content = str(item.get("content") or "").strip()
+        if not url and not content:
+            continue
+        lines.append(f"- {title}" + (f" — {url}" if url else ""))
+        if content:
+            lines.append(_trim_block(content, max_chars=1400))
+    if not lines:
+        return None
+    context = "Web research (do NOT mention sources in the customer reply):\n" + "\n".join(lines)
+    return _trim_block(context, max_chars=6500)
+
+
+async def _prefetch_web_research(
+    *,
+    search_query: str,
+    max_pages: int,
+) -> str | None:
+    """Best-effort web context using Firecrawl first, Tavily as fallback."""
+    query = (search_query or "").strip()
+    if not query:
+        return None
+
+    scrape_options = {
+        # Ask Firecrawl to return markdown for results when possible.
+        "formats": ["markdown"],
+        "onlyMainContent": True,
+    }
+
+    urls: List[str] = []
+    try:
+        res = await firecrawl_search_tool.ainvoke({
+            "query": query,
+            "limit": max(1, min(10, int(max_pages) * 2)),
+            "sources": ["web"],
+            "scrape_options": scrape_options,
+        })
+        if isinstance(res, dict) and res.get("error"):
+            raise RuntimeError(str(res.get("error")))
+
+        data = res.get("data") if isinstance(res, dict) else None
+        web_list = []
+        if isinstance(data, dict):
+            web_list = data.get("web") or data.get("results") or []
+        if isinstance(web_list, list):
+            for row in web_list:
+                if not isinstance(row, dict):
+                    continue
+                url = row.get("url") or row.get("link")
+                if isinstance(url, str) and url.startswith("http"):
+                    urls.append(url)
+                if len(urls) >= max_pages:
+                    break
+    except Exception:
+        urls = []
+
+    # Fallback: Tavily for URLs when Firecrawl search is unavailable.
+    if not urls:
+        try:
+            tavily = await web_search_tool.ainvoke({
+                "query": query,
+                "max_results": max(3, min(10, int(max_pages) * 2)),
+                "include_images": False,
+            })
+            if isinstance(tavily, dict):
+                raw_urls = tavily.get("urls") or []
+                if isinstance(raw_urls, list):
+                    urls = [u for u in raw_urls if isinstance(u, str) and u.startswith("http")][:max_pages]
+        except Exception:
+            urls = []
+
+    if not urls:
+        return None
+
+    fetched: List[Dict[str, Any]] = []
+    for url in urls[:max_pages]:
+        try:
+            page = await firecrawl_fetch_tool.ainvoke({
+                "url": url,
+                "formats": ["markdown"],
+            })
+            if not isinstance(page, dict) or page.get("error"):
+                continue
+            markdown = page.get("markdown")
+            data = page.get("data")
+            if markdown is None and isinstance(data, dict):
+                markdown = data.get("markdown")
+            content = _strip_html(str(markdown or "")) if markdown else ""
+            content = _trim_block(content, max_chars=1800)
+            title = ""
+            try:
+                title = str(page.get("metadata", {}).get("title") or "") if isinstance(page.get("metadata"), dict) else ""
+            except Exception:
+                title = ""
+            fetched.append({"url": url, "title": title or "Web result", "content": content})
+        except Exception:
+            continue
+
+    return _format_web_research_context(fetched)
+
+
+async def _firecrawl_support_bundle(
+    *,
+    search_query: str,
+    domains: List[str],
+    max_pages: int,
+    include_screenshots: bool,
+) -> str | None:
+    """Domain-scoped Firecrawl bundle for Mailbird help sources."""
+    query = (search_query or "").strip()
+    if not query or not domains:
+        return None
+
+    urls: List[str] = []
+    seen: set[str] = set()
+    for domain in domains:
+        try:
+            mapped = await firecrawl_map_tool.ainvoke({
+                "url": domain,
+                "limit": max(1, min(20, max_pages * 4)),
+                "search": query[:120],
+                "include_subdomains": True,
+            })
+            raw_urls = []
+            if isinstance(mapped, dict):
+                raw_urls = (
+                    mapped.get("links")
+                    or mapped.get("urls")
+                    or mapped.get("data", {}).get("links")
+                    or mapped.get("data", {}).get("urls")
+                    or []
+                )
+            for u in raw_urls or []:
+                if not isinstance(u, str):
+                    continue
+                if not u.startswith("http"):
+                    continue
+                if u in seen:
+                    continue
+                seen.add(u)
+                urls.append(u)
+                if len(urls) >= max_pages * 2:
+                    break
+        except Exception:
+            continue
+        if len(urls) >= max_pages * 2:
+            break
+
+    if not urls:
+        return None
+
+    fetch_formats = ["markdown"]
+    if include_screenshots:
+        fetch_formats.append("screenshot")
+
+    page_summaries: List[str] = []
+    for url in urls[:max_pages]:
+        try:
+            page = await firecrawl_fetch_tool.ainvoke({
+                "url": url,
+                "formats": fetch_formats,
+                "only_main_content": True,
+            })
+            if isinstance(page, dict) and "screenshot" in page:
+                # Drop large binary blobs to keep context lightweight.
+                page = dict(page)
+                page.pop("screenshot", None)
+            markdown = None
+            if isinstance(page, dict):
+                if page.get("markdown"):
+                    markdown = page.get("markdown")
+                elif isinstance(page.get("data"), dict):
+                    markdown = page.get("data", {}).get("markdown")
+            snippet = _trim_block(_strip_html(str(markdown or "")), max_chars=1400) if markdown else ""
+            title = ""
+            try:
+                title = str(page.get("metadata", {}).get("title") or "") if isinstance(page, dict) else ""
+            except Exception:
+                title = ""
+            if snippet:
+                page_summaries.append(f"- {title or 'Page'} — {url}\n  {snippet}")
+        except Exception:
+            continue
+
+    extract_lines: List[str] = []
+    try:
+        schema = {
+            "type": "object",
+            "properties": {
+                "steps": {"type": "array", "items": {"type": "string"}},
+                "requirements": {"type": "array", "items": {"type": "string"}},
+                "caveats": {"type": "array", "items": {"type": "string"}},
+            },
+        }
+        extraction = await firecrawl_extract_tool.ainvoke({
+            "urls": urls[: max(1, max_pages)],
+            "schema": schema,
+            "enable_web_search": False,
+        })
+        data = extraction.get("data") if isinstance(extraction, dict) else None
+        if isinstance(data, dict):
+            for key in ("steps", "requirements", "caveats"):
+                vals = data.get(key)
+                if isinstance(vals, list):
+                    trimmed = [f"- {v}" for v in vals if isinstance(v, str) and v.strip()]
+                    if trimmed:
+                        extract_lines.append(f"{key.title()}:")
+                        extract_lines.extend(trimmed[:5])
+    except Exception:
+        extract_lines = []
+
+    if not page_summaries and not extract_lines:
+        return None
+
+    lines: List[str] = ["Firecrawl Mailbird help (internal only — do not cite URLs directly):"]
+    if extract_lines:
+        lines.append("Structured guidance:")
+        lines.extend(extract_lines)
+    if page_summaries:
+        lines.append("Page highlights:")
+        lines.extend(page_summaries)
+
+    return _trim_block("\n".join(lines), max_chars=6500)
 
 
 class RPMLimiter:
@@ -258,7 +1602,13 @@ async def _inc_daily_usage(n: int) -> None:
     )
 
 
-async def _generate_reply(ticket_id: int | str, subject: str | None, description: str | None, provider: str | None = None, model: str | None = None) -> str:
+async def _generate_reply(
+    ticket_id: int | str,
+    subject: str | None,
+    description: str | None,
+    provider: str | None = None,
+    model: str | None = None,
+) -> ZendeskReplyResult:
     """Run Primary Agent with the same pipeline as chat to produce a high-quality reply.
 
     Uses raw subject/description (no meta-prompt), optional latest public comment context,
@@ -334,25 +1684,58 @@ async def _generate_reply(ticket_id: int | str, subject: str | None, description
         text_out = re.sub(r"(?im)^thinking\s*\n?", "", text_out)
         text_out = re.sub(r"(?im)^\*?\s*thoughts?:.*$", "", text_out)
         # Strip any accidental offers for channels we don't support (e.g., screen sharing)
-        text_out = re.sub(r"(?im)^.*screen\\s*share.*$", "", text_out)
+        text_out = re.sub(r"(?im)^.*screen\s*share.*$", "", text_out)
         text_out = re.sub(r"(?im)^.*screenshare.*$", "", text_out)
-        # Collapse blank lines created by removals
-        text_out = "\n".join([ln for ln in text_out.splitlines() if ln.strip() != ""])
+        text_out = text_out.replace("\r\n", "\n").replace("\r", "\n")
 
-        # De-duplicate repeated greetings/first lines that often occur in model output
-        lines = [ln for ln in text_out.splitlines() if ln.strip()]
+        # Collapse *excessive* blank lines created by removals but preserve paragraph breaks.
         cleaned_lines: List[str] = []
-        for idx, ln in enumerate(lines):
-            if idx == 0 and len(lines) > 1:
-                nxt = lines[1].strip()
-                cur = ln.strip()
-                # If the next line starts with the current greeting, drop the shorter duplicate
-                if nxt.lower().startswith(cur.lower()):
-                    continue
-            if cleaned_lines and cleaned_lines[-1].strip().lower() == ln.strip().lower():
+        blank = 0
+        for ln in text_out.splitlines():
+            line = ln.rstrip()
+            if not line.strip():
+                blank += 1
+                if blank <= 1:
+                    cleaned_lines.append("")
                 continue
-            cleaned_lines.append(ln)
-        text_out = "\n".join(cleaned_lines)
+            blank = 0
+            cleaned_lines.append(line)
+        text_out = "\n".join(cleaned_lines).strip("\n")
+
+        # De-duplicate repeated greetings/first lines that often occur in model output,
+        # while preserving indentation and paragraph boundaries.
+        raw_lines = [ln.rstrip("\n") for ln in text_out.splitlines()]
+        non_empty_indices = [i for i, ln in enumerate(raw_lines) if ln.strip()]
+        skip_idx: set[int] = set()
+        if len(non_empty_indices) >= 2:
+            i0, i1 = non_empty_indices[0], non_empty_indices[1]
+            cur = raw_lines[i0].strip()
+            nxt = raw_lines[i1].strip()
+            if nxt.lower().startswith(cur.lower()):
+                skip_idx.add(i0)
+
+        deduped: List[str] = []
+        blank = 0
+        last_nonblank_lower: str | None = None
+        for i, ln in enumerate(raw_lines):
+            if i in skip_idx:
+                continue
+            line = ln.rstrip()
+            if not line.strip():
+                blank += 1
+                if blank <= 1:
+                    deduped.append("")
+                last_nonblank_lower = None
+                continue
+            blank = 0
+            key = line.strip().lower()
+            if last_nonblank_lower == key:
+                continue
+            deduped.append(line)
+            last_nonblank_lower = key
+
+        text_out = "\n".join(deduped).strip("\n")
+        text_out = _sanitize_suggested_reply_text(text_out)
 
         # Plain‑text normalization for Zendesk display (consistent headings and spacing)
         def _to_plaintext_for_zendesk(s: str) -> str:
@@ -377,7 +1760,7 @@ async def _generate_reply(ticket_id: int | str, subject: str | None, description
             for _, l in enumerate(lines):
                 is_heading = bool(
                     re.match(
-                        r"^(Empathetic Opening|Solution Overview|Try Now — Immediate Actions|Full Fix — Step-by-Step Instructions|Additional Context|Pro Tips|Supportive Closing)\s*$",
+                        r"^(Suggested Reply|Empathetic Opening|Solution Overview|Try Now — Immediate Actions|Full Fix — Step-by-Step Instructions|Additional Context|Pro Tips|Supportive Closing)\s*$",
                         l,
                     )
                 )
@@ -418,261 +1801,13 @@ async def _generate_reply(ticket_id: int | str, subject: str | None, description
 
         # HTML formatter for Zendesk internal notes (no inline CSS)
         def _format_html_for_zendesk(s: str) -> str:
-            raw_lines = (s or "").splitlines()
-
-            def strip_emphasis(text: str) -> str:
-                t = text
-                t = re.sub(r"`([^`]+)`", r"<code>\1</code>", t)
-                t = re.sub(r"\*\*([^*]+)\*\*", r"\1", t)
-                t = re.sub(r"\*([^*]+)\*", r"\1", t)
-                t = re.sub(r"__([^_]+)__", r"\1", t)
-                t = re.sub(r"_([^_]+)_", r"\1", t)
-                return t
-
-            lines = [strip_emphasis(l) for l in raw_lines]
-            html_parts: List[str] = []
-            buf: List[str] = []
-
-            p_style = 'style="margin:0 0 14px; line-height:1.5;"'
-            ul_style = 'style="margin:0 0 14px 20px; padding-left:18px; line-height:1.5;"'
-            ol_style = 'style="margin:0 0 14px 20px; padding-left:18px; line-height:1.5;"'
-            li_style = 'style="margin:4px 0; line-height:1.5;"'
-
-            def flush_paragraph():
-                nonlocal buf
-                content = " ".join(x.strip() for x in buf if x.strip())
-                if content:
-                    html_parts.append(f"<p {p_style}>{content}</p>")
-                buf = []
-
-            def open_list(list_type: str, start: int | None = None):
-                style = ul_style if list_type == "ul" else ol_style
-                start_attr = f' start="{start}"' if start and list_type == "ol" else ""
-                html_parts.append(f"<{list_type} {style}{start_attr}>")
-
-            def close_list(list_type: str):
-                html_parts.append(f"</{list_type}>")
-
-            in_ol = False
-            in_ul = False
-            ordered_counter = 0
-            last_li_index: int | None = None
-
-            def ensure_lists_closed():
-                nonlocal in_ol, in_ul, last_li_index
-                if in_ol:
-                    close_list("ol")
-                if in_ul:
-                    close_list("ul")
-                in_ol = False
-                in_ul = False
-                last_li_index = None
-
-            heading_names = {
-                # Legacy headings
-                "solution overview",
-                "try now — immediate actions",
-                "try now - immediate actions",
-                "full fix — step-by-step instructions",
-                "full fix - step-by-step instructions",
-                "additional context",
-                "pro tips",
-                "supportive closing",
-                # Current Zendesk structured headings
-                "suggested reply",
-                "issue summary",
-                "root cause analysis",
-                "relevant resources",
-                "follow-up considerations",
-            }
-            hidden_headings = {"empathetic opening", "supportive closing"}
-
-            def is_heading(line: str) -> str | None:
-                t = re.sub(r"^\s*#+\s*", "", line).strip()
-                low = t.lower()
-                if low in hidden_headings:
-                    return "empathetic opening" if low == "empathetic opening" else "supportive closing"
-                return t if low in heading_names else None
-
-            def is_ordered_item(line: str) -> str | None:
-                m = re.match(r"^\s*(\d+)[\.)]\s+(.*)$", line)
-                return m.group(2).strip() if m else None
-
-            def is_unordered_item(line: str) -> str | None:
-                m = re.match(r"^\s*[-*]\s+(.*)$", line)
-                if m:
-                    return m.group(1).strip()
-                m2 = re.match(r"^\s*([A-Z][A-Za-z0-9 \-/()]+):\s+(.*)$", line)
-                if m2:
-                    title, rest = m2.group(1).strip(), m2.group(2).strip()
-                    return f"<strong>{title}:</strong> {rest}"
-                return None
-
-            style = str(getattr(settings, "zendesk_format_style", "compact")).lower()
-            br_sep = "<br>" if style != "relaxed" else "<br><br>"
-
-            def sentence_breaks(text: str) -> str:
-                def repl(m: re.Match[str]) -> str:
-                    return m.group(1) + br_sep + " "
-                return re.sub(r"([.!?])\s+(?=[A-Z0-9\(])", repl, text)
-
-            heading_seen = False
-            suggested_seen = False
-            issue_summary_seen = False
-            rca_seen = False
-            resources_seen = False
-            followup_seen = False
-            heading_dedup: set[str] = set()
-            for raw in lines:
-                line = raw.rstrip()
-                h = is_heading(line)
-                if h is not None:
-                    h_norm = h.strip().lower()
-                    # Skip duplicate headings to avoid repeated sections
-                    if h_norm in heading_dedup:
-                        continue
-                    heading_dedup.add(h_norm)
-                    heading_seen = True
-                    if h.lower().strip() == "suggested reply":
-                        suggested_seen = True
-                    if h.lower().strip() == "issue summary":
-                        issue_summary_seen = True
-                    if h.lower().strip() == "root cause analysis":
-                        rca_seen = True
-                    if h.lower().strip() == "relevant resources":
-                        resources_seen = True
-                    if h.lower().strip() == "follow-up considerations":
-                        followup_seen = True
-                    ensure_lists_closed()
-                    flush_paragraph()
-                    if h.lower() not in hidden_headings:
-                        heading_tag = getattr(settings, "zendesk_heading_level", "h3").lower()
-                        if heading_tag not in {"h2", "h3"}:
-                            heading_tag = "h3"
-                        html_parts.append(f"<{heading_tag}>{h}</{heading_tag}>")
-                    continue
-
-                oi = is_ordered_item(line)
-                if oi is not None:
-                    flush_paragraph()
-                    if not in_ol:
-                        ensure_lists_closed()
-                        open_list("ol", start=ordered_counter + 1)
-                        in_ol = True
-                    html_parts.append(f"<li {li_style}>{oi}</li>")
-                    ordered_counter += 1
-                    last_li_index = len(html_parts) - 1
-                    continue
-
-                ui = is_unordered_item(line)
-                if ui is not None:
-                    flush_paragraph()
-                    if not in_ul:
-                        ensure_lists_closed()
-                        open_list("ul")
-                        in_ul = True
-                    html_parts.append(f"<li {li_style}>{ui}</li>")
-                    last_li_index = len(html_parts) - 1
-                    continue
-
-                m = re.match(r"^\s*(Action|Where|Expected Result|If different)\s*:\s*(.*)$", line)
-                if m:
-                    label = m.group(1)
-                    val = m.group(2).strip()
-                    if last_li_index is not None and 0 <= last_li_index < len(html_parts):
-                        prev = html_parts[last_li_index]
-                        prev = prev.rstrip("</li>") + f" — <strong>{label}:</strong> {val}</li>"
-                        html_parts[last_li_index] = prev
-                    else:
-                        if buf:
-                            buf[-1] = (buf[-1] + f" — {label}: {val}").strip()
-                        else:
-                            buf.append(f"{label}: {val}")
-                    continue
-
-                buf.append(line)
-
-            ensure_lists_closed()
-            flush_paragraph()
-
-            # Force consistent shell + greeting when headings are missing or Suggested Reply absent
-            heading_tag = getattr(settings, "zendesk_heading_level", "h3").lower()
-            if heading_tag not in {"h2", "h3"}:
-                heading_tag = "h3"
-
-            def ensure_greeting_block(parts: List[str]) -> List[str]:
-                if not parts:
-                    return parts
-                first_block = parts[0]
-                # If first block is heading, greeting will be in following paragraph
-                start_idx = 1 if first_block.lower().startswith(f"<{heading_tag}>") else 0
-                if start_idx < len(parts):
-                    body = parts[start_idx]
-                    if "Hi there, Many thanks for contacting the Mailbird Customer Happiness Team." not in body:
-                        parts.insert(
-                            start_idx,
-                            f"<p {p_style}>Hi there, Many thanks for contacting the Mailbird Customer Happiness Team.</p>",
-                        )
-                else:
-                    parts.append(f"<p {p_style}>Hi there, Many thanks for contacting the Mailbird Customer Happiness Team.</p>")
-                return parts
-
-            if not heading_seen or not suggested_seen:
-                wrapped = []
-                wrapped.append(f"<{heading_tag}>Suggested Reply</{heading_tag}>")
-                if html_parts:
-                    wrapped.extend(html_parts)
-                else:
-                    wrapped.append(f"<p {p_style}>{sentence_breaks(s or '')}</p>")
-                html_parts = ensure_greeting_block(wrapped)
-            else:
-                html_parts = ensure_greeting_block(html_parts)
-
-            # Ensure downstream sections always exist in the note
-            def ensure_section(parts: List[str], title: str) -> List[str]:
-                marker = f"<{heading_tag}>{title}</{heading_tag}>"
-                if not any(p.lower().startswith(marker.lower()) for p in parts):
-                    parts.append(marker)
-                    parts.append(f"<p {p_style}>Pending — fill in key points for {title.lower()}.</p>")
-                return parts
-
-            html_parts = ensure_section(html_parts, "Issue Summary")
-            html_parts = ensure_section(html_parts, "Root Cause Analysis")
-            html_parts = ensure_section(html_parts, "Relevant Resources")
-            html_parts = ensure_section(html_parts, "Follow-up Considerations")
-
-            merged: List[str] = []
-            seen_pro = False
-            i = 0
-            while i < len(html_parts):
-                frag = html_parts[i]
-                if frag.strip().lower() in ("<h2>pro tips</h2>", "<h3>pro tips</h3>"):
-                    if seen_pro:
-                        i += 1
-                        continue
-                    seen_pro = True
-                merged.append(frag)
-                i += 1
-
-            def transform_paragraphs(html: str) -> str:
-                # Force paragraph-style output (avoid sentence-per-line) and add relaxed line spacing.
-                sentence_blocks = False
-
-                def rewriter(m: re.Match[str]) -> str:
-                    inner = m.group(1).strip()
-                    if not inner:
-                        return ""
-                    if sentence_blocks:
-                        parts = re.split(r"(?<=[.!?])\s+(?=[A-Z0-9\(])", inner)
-                        parts = [p.strip() for p in parts if p.strip()]
-                        return "".join(f"<p>{p}</p>" for p in parts)
-                    return f"<p>{sentence_breaks(inner)}</p>"
-
-                content = "\n".join(merged)
-                transformed = re.sub(r"<p>(.*?)</p>", rewriter, content, flags=re.DOTALL)
-                return f'<div style="line-height:1.5;">{transformed}</div>'
-
-            return transform_paragraphs("\n".join(merged))
+            heading_tag = getattr(settings, "zendesk_heading_level", "h3")
+            style = getattr(settings, "zendesk_format_style", "compact")
+            return _format_zendesk_internal_note_html(
+                s,
+                heading_level=str(heading_tag),
+                format_style=str(style),
+            )
 
         if getattr(settings, "zendesk_use_html", True):
             return _format_html_for_zendesk(text_out)
@@ -789,10 +1924,99 @@ async def _generate_reply(ticket_id: int | str, subject: str | None, description
     session_id = f"zendesk-{ticket_id}"
     state: GraphState | None = None
     result: Dict[str, Any] | None = None
+    learning_messages: list[Any] = []
+    inferred_category: str | None = None
+    kb_articles_used: list[str] = []
+    macros_used: list[str] = []
 
     try:
         async with user_context_scope(UserContext(user_id="zendesk-bot")):
-            kb_ok = True
+            kb_ok = False
+            macro_ok = False
+            feedme_ok = False
+            internal_context: str | None = None
+            web_context: str | None = None
+            web_ok = False
+            macro_choice: Dict[str, Any] | None = None
+
+            # Macro-first retrieval preflight (KB + macros + FeedMe) to guide the agent.
+            try:
+                min_rel = float(getattr(settings, "zendesk_internal_retrieval_min_relevance", 0.35))
+                max_per_source = int(getattr(settings, "zendesk_internal_retrieval_max_per_source", 3))
+                retrieved = await db_unified_search_tool.ainvoke({
+                    "query": user_query,
+                    "sources": ["macros", "kb", "feedme"],
+                    "max_results_per_source": max_per_source,
+                    "min_relevance": min_rel,
+                })
+                retrieved_results = list((retrieved or {}).get("results") or [])
+                # Capture which KB/macros contributed (for post-resolution pattern memory)
+                for item in retrieved_results:
+                    if not isinstance(item, dict):
+                        continue
+                    source = str(item.get("source") or "").lower()
+                    meta = item.get("metadata") or {}
+                    if not isinstance(meta, dict):
+                        meta = {}
+                    if source == "kb":
+                        kb_id = meta.get("id") or meta.get("url")
+                        if kb_id:
+                            kb_articles_used.append(str(kb_id))
+                    if source in {"macro", "macros"}:
+                        macro_id = meta.get("zendesk_id")
+                        if macro_id:
+                            macros_used.append(str(macro_id))
+                preflight = _format_internal_retrieval_context(retrieved_results)
+                internal_context = preflight.get("context")
+                macro_ok = bool(preflight.get("macro_ok"))
+                feedme_ok = bool(preflight.get("feedme_ok"))
+                macro_min = float(getattr(settings, "zendesk_macro_min_relevance", 0.55))
+                macro_choice = _select_macro_candidate(retrieved_results, min_relevance=macro_min)
+                # This is a vector-only KB check; we still run hybrid KB search below for better recall.
+                kb_ok = bool(preflight.get("kb_ok"))
+                logger.info(
+                    "zendesk_retrieval_preflight ticket_id=%s macro_hits=%s kb_hits=%s feedme_hits=%s",
+                    ticket_id,
+                    preflight.get("macro_hits"),
+                    preflight.get("kb_hits"),
+                    preflight.get("feedme_hits"),
+                )
+            except Exception as e:
+                logger.debug("retrieval preflight failed: %s", e)
+
+            # Pattern-based semantic grounding (IssueResolutionStore + verified playbooks)
+            try:
+                from app.agents.harness.store import IssueResolutionStore, SparrowWorkspaceStore
+
+                workspace_store = SparrowWorkspaceStore(session_id=session_id)
+                issue_store = IssueResolutionStore()
+
+                playbook_extractor = None
+                try:
+                    from app.agents.unified.playbooks import PlaybookExtractor
+
+                    playbook_extractor = PlaybookExtractor()
+                except Exception:
+                    playbook_extractor = None
+
+                inferred_category = await _run_pattern_preflight(
+                    ticket_id=str(ticket_id),
+                    session_id=session_id,
+                    ticket_text=user_query,
+                    workspace_store=workspace_store,
+                    issue_store=issue_store,
+                    playbook_extractor=playbook_extractor,
+                    max_hits=int(getattr(settings, "zendesk_issue_pattern_max_hits", 5)),
+                    min_similarity=float(getattr(settings, "zendesk_issue_pattern_min_similarity", 0.62)),
+                )
+            except Exception as exc:  # pragma: no cover - best effort
+                logger.debug(
+                    "zendesk_pattern_preflight_failed ticket_id=%s error=%s",
+                    ticket_id,
+                    str(exc)[:180],
+                )
+
+            # Hybrid KB preflight (vector + full-text) for better recall.
             try:
                 kb_payload: Dict[str, Any] = {
                     "query": user_query,
@@ -803,27 +2027,135 @@ async def _generate_reply(ticket_id: int | str, subject: str | None, description
                     kb_payload["min_confidence"] = min_conf
 
                 kb_result = await kb_search_tool.ainvoke(kb_payload)
-                kb_ok = isinstance(kb_result, str) and len(kb_result.strip()) > 50
+                if isinstance(kb_result, str) and kb_result.strip():
+                    try:
+                        parsed = json.loads(kb_result)
+                        kb_ok = bool(int(parsed.get("result_count") or 0) > 0)
+                    except Exception:
+                        kb_ok = len(kb_result.strip()) > 50
             except Exception as e:
                 logger.debug(f"KB preflight check failed: {e}, defaulting to web search")
                 kb_ok = False
 
-            # Use provided provider/model from DB config, fallback to settings
-            use_provider = provider or getattr(settings, "zendesk_agent_provider", None) or getattr(settings, "primary_agent_provider", "google")
-            use_model = model or getattr(settings, "zendesk_agent_model", None) or "gemini-3-pro-preview"
+            internal_ok = bool(kb_ok or macro_ok or feedme_ok)
+            macro_selector_context = _format_macro_selector_context(macro_choice)
+            if macro_selector_context:
+                internal_context = "\n\n".join([p for p in [internal_context, macro_selector_context] if p]).strip()
 
+            search_query = _build_web_search_query(subject=subject, description=description, fallback=user_query)
+            internal_relevance_low = not internal_ok
+            if not internal_ok and bool(getattr(settings, "zendesk_web_prefetch_enabled", True)):
+                try:
+                    max_pages = int(getattr(settings, "zendesk_web_prefetch_pages", 3))
+                    web_context = await _prefetch_web_research(search_query=search_query, max_pages=max_pages)
+                    web_ok = bool(web_context)
+                    logger.info(
+                        "zendesk_web_prefetch ticket_id=%s ok=%s query_len=%s",
+                        ticket_id,
+                        web_ok,
+                        len(search_query),
+                    )
+                except Exception as e:
+                    logger.debug("zendesk_web_prefetch_failed ticket_id=%s error=%s", ticket_id, str(e)[:180])
+
+            if (
+                internal_relevance_low
+                and getattr(settings, "zendesk_firecrawl_enhanced_enabled", False)
+                and search_query
+            ):
+                try:
+                    domains = [d for d in getattr(settings, "zendesk_firecrawl_support_domains", []) or [] if isinstance(d, str) and d.strip()]
+                    max_pages = int(getattr(settings, "zendesk_firecrawl_support_pages", 3))
+                    include_shots = bool(getattr(settings, "zendesk_firecrawl_support_screenshots", False))
+                    support_pack = await _firecrawl_support_bundle(
+                        search_query=search_query,
+                        domains=domains,
+                        max_pages=max_pages,
+                        include_screenshots=include_shots,
+                    )
+                    if support_pack:
+                        web_context = "\n\n".join([p for p in [web_context, support_pack] if p]).strip() or web_context
+                        web_ok = web_ok or bool(support_pack)
+                    logger.info(
+                        "zendesk_firecrawl_support ticket_id=%s ok=%s domains=%s",
+                        ticket_id,
+                        bool(support_pack),
+                        len(domains),
+                    )
+                except Exception as e:
+                    logger.debug("zendesk_firecrawl_support_failed ticket_id=%s error=%s", ticket_id, str(e)[:180])
+
+            # Use provided provider/model from DB config, fallback to settings/registry defaults
+            use_provider = provider or getattr(settings, "zendesk_agent_provider", None) or getattr(settings, "primary_agent_provider", "google")
+            try:
+                from app.core.config import get_registry
+
+                registry = get_registry()
+                default_google_model = registry.coordinator_google.id  # Gemini 3 Flash (preview)
+                default_xai_model = registry.coordinator_xai.id
+            except Exception:
+                default_google_model = "gemini-3-flash-preview"
+                default_xai_model = "grok-4-1-fast-reasoning"
+
+            fallback_model = default_google_model if str(use_provider).lower() == "google" else default_xai_model
+            use_model = model or getattr(settings, "zendesk_agent_model", None) or fallback_model
+
+            # Gemini 2.5 Pro currently trips quota/429 frequently when used with tool-enabled
+            # LangGraph runs; run the unified agent on Flash and then do a Pro-only rewrite
+            # as a final polishing pass (still via Google/GEMINI_API_KEY).
+            agent_model = use_model
+            rewrite_model: str | None = None
+            if str(use_provider).lower() == "google" and str(use_model).lower().startswith("gemini-2.5-pro"):
+                # Prefer the configured primary agent model (often a preview Flash variant)
+                # rather than hard-coding a stable ID that may not be enabled for the key.
+                candidate = getattr(settings, "primary_agent_model", None) or "gemini-2.5-flash-preview-09-2025"
+                candidate = str(candidate)
+                if candidate.lower().startswith("gemini-2.5-pro"):
+                    candidate = "gemini-2.5-flash-preview-09-2025"
+                agent_model = candidate
+                rewrite_model = str(use_model)
+
+            # LangChain's Google GenAI image_url handling rejects PDF data URLs.
+            # Until upstream supports PDF parts properly, drop PDFs from multimodal
+            # attachments and rely on the text attachment summary already injected
+            # into `user_query`.
+            attachments_for_agent = unified_attachments
+            provider_lower = str(use_provider).lower()
+            if provider_lower in {"google", "xai"} and unified_attachments:
+                # Gemini and Grok do not reliably support PDFs via image_url blocks today.
+                pdfs = [a for a in unified_attachments if getattr(a, "mime_type", None) == "application/pdf"]
+                if pdfs:
+                    logger.info(
+                        "zendesk_drop_pdf_attachments ticket_id=%s provider=%s count=%s",
+                        ticket_id,
+                        provider_lower,
+                        len(pdfs),
+                    )
+                attachments_for_agent = [
+                    a for a in unified_attachments if getattr(a, "mime_type", None) != "application/pdf"
+                ]
+
+            content_parts = [user_query]
+            if internal_context:
+                content_parts.append(internal_context)
+            if web_context:
+                content_parts.append(web_context)
             state = GraphState(
-                messages=[HumanMessage(content=user_query)],
+                messages=[HumanMessage(content="\n\n".join(content_parts).strip())],
                 session_id=session_id,
                 provider=use_provider,
-                model=use_model,
-                attachments=unified_attachments,  # Pass multimodal attachments for vision processing
+                model=agent_model,
+                attachments=attachments_for_agent,  # Pass multimodal attachments for vision processing
                 forwarded_props={
-                    "force_websearch": not kb_ok,
+                    "force_websearch": not (kb_ok or macro_ok or feedme_ok or web_ok),
                     "websearch_max_results": None,
                     "is_final_response": True,      # Triggers writing/empathy skills
                     "task_type": "support",          # Support ticket context
                     "is_zendesk_ticket": True,       # Explicit Zendesk marker
+                    # Pattern-based context engineering
+                    "ticket_category": inferred_category,
+                    "similar_scenarios_path": "/context/similar_scenarios.md",
+                    "playbook_path": f"/playbooks/{inferred_category}.md" if inferred_category else None,
                 },
             )
 
@@ -832,6 +2164,222 @@ async def _generate_reply(ticket_id: int | str, subject: str | None, description
                 state,
                 config={"recursion_limit": ZENDESK_RECURSION_LIMIT},
             )
+            try:
+                # Preserve original conversation for post-resolution learning (before rewrite passes)
+                if isinstance(result, dict):
+                    learning_messages = list(result.get("messages") or [])
+            except Exception:
+                learning_messages = []
+            # Treat missing AI output or explicit agent errors as retryable failures.
+            if isinstance(result, dict):
+                if result.get("error"):
+                    raise RuntimeError(f"unified_agent_error: {result.get('error')}")
+                msgs = list(result.get("messages") or [])
+                if not any(isinstance(m, AIMessage) for m in msgs):
+                    raise RuntimeError("unified_agent_no_ai_message")
+
+            def _extract_ai_text(payload: Dict[str, Any] | None) -> str:
+                out_msgs = list((payload or {}).get("messages") or [])
+                for candidate in reversed(out_msgs):
+                    if isinstance(candidate, AIMessage):
+                        content = getattr(candidate, "content", "")
+                        if isinstance(content, list):
+                            parts: List[str] = []
+                            for block in content:
+                                if isinstance(block, dict):
+                                    if block.get("type") == "text" and "text" in block:
+                                        parts.append(str(block["text"]))
+                                    elif "text" in block:
+                                        parts.append(str(block["text"]))
+                                elif isinstance(block, str):
+                                    parts.append(block)
+                            return "\n".join(parts).strip()
+                        return str(content).strip()
+                return ""
+
+            def _draft_needs_customer_rewrite(draft_text: str) -> bool:
+                if not str(draft_text or "").strip():
+                    return True
+                text = str(draft_text)
+                if any(p.search(text) for p in _ZENDESK_META_INLINE_PATTERNS):
+                    return True
+                if re.search(r"(?im)^\s*(assistant|system|developer|tool|user)\s*:", text):
+                    return True
+                # If it looks like a KB/macro dump without customer steps, rewrite it.
+                if re.search(r"(?i)\b(kb\s+articles|zendesk\s+macros|feedme\s+history)\b", text):
+                    return True
+                return False
+
+            # For Grok, a tool-enabled run can leak internal context. Perform a strict, tool-free rewrite.
+            if str(use_provider).lower() == "xai":
+                draft = _extract_ai_text(result)
+                if _draft_needs_customer_rewrite(draft):
+                    ticket_context = user_query
+                    if len(ticket_context) > 7000:
+                        ticket_context = ticket_context[:7000].rstrip() + "\n[truncated]"
+                    draft_context = draft
+                    if len(draft_context) > 7000:
+                        draft_context = draft_context[:7000].rstrip() + "\n[truncated]"
+
+                    guidance_parts: List[str] = []
+                    if internal_context:
+                        guidance_parts.append(_trim_block(internal_context, max_chars=3500))
+                    if web_context:
+                        guidance_parts.append(_trim_block(web_context, max_chars=3500))
+                    guidance = "\n\n".join([p for p in guidance_parts if p]).strip()
+
+                    prompt = (
+                        "Rewrite the content into a customer-ready Mailbird support reply.\n\n"
+                        "Output rules (must follow exactly):\n"
+                        "- Output ONLY the customer reply (no headings, no analysis, no tool results, no IDs).\n"
+                        "- Do NOT include any text like 'Assistant:', 'Tool results', 'KB ID', 'Macro ID', or 'Final output:'.\n"
+                        "- Do NOT mention internal tooling, retrieval, or web scraping.\n"
+                        "- Do NOT use exclamation marks.\n"
+                        "- Do NOT address the customer by name.\n"
+                        "- Start with: Hi there, Many thanks for contacting the Mailbird Customer Happiness Team.\n"
+                        "- Keep it concise but actionable; include step-by-step instructions when helpful.\n"
+                        "- Formatting: use short paragraphs separated by blank lines.\n"
+                        "- Formatting: use '-' bullets (with 2-space indented sub-bullets) and '1.' numbered steps when needed.\n"
+                        "- Formatting: use **bold** for UI labels / key actions and `inline code` for errors, server names, and ports.\n"
+                        "- Do NOT output HTML (Markdown only).\n\n"
+                        f"Ticket context (redacted):\n{ticket_context}\n\n"
+                        + (f"Internal guidance (do NOT cite):\n{guidance}\n\n" if guidance else "")
+                        + f"Draft (may include internal notes; do not copy those parts):\n{draft_context}\n"
+                    )
+
+                    try:
+                        from langchain_core.messages import SystemMessage
+                        from langchain_xai import ChatXAI
+
+                        llm = ChatXAI(
+                            model=str(use_model),
+                            temperature=0.2,
+                            xai_api_key=settings.xai_api_key,
+                            timeout=300,
+                        )
+                        rewritten_text = ""
+                        for attempt in range(1, 6):
+                            try:
+                                rewritten = await llm.ainvoke(
+                                    [
+                                        SystemMessage(
+                                            content=(
+                                                "You are a senior Mailbird support agent. "
+                                                "Return only the final customer reply."
+                                            )
+                                        ),
+                                        HumanMessage(content=prompt),
+                                    ]
+                                )
+                                rewritten_text = str(getattr(rewritten, "content", "") or "").strip()
+                                if rewritten_text:
+                                    break
+                            except Exception as inner_exc:
+                                msg = str(inner_exc)
+                                is_429 = "429" in msg or "rate limit" in msg.lower()
+                                if attempt < 5 and is_429:
+                                    wait_sec = min(90, 10 * attempt)
+                                    logger.warning(
+                                        "zendesk_xai_rewrite_rate_limited ticket_id=%s attempt=%s wait_sec=%s",
+                                        ticket_id,
+                                        attempt,
+                                        wait_sec,
+                                    )
+                                    await asyncio.sleep(wait_sec)
+                                    continue
+                                raise
+                        if rewritten_text:
+                            result = {"messages": [AIMessage(content=rewritten_text)]}
+                    except Exception as exc:
+                        logger.warning(
+                            "zendesk_xai_rewrite_failed ticket_id=%s error=%s",
+                            ticket_id,
+                            str(exc)[:180],
+                        )
+
+            # Optional Pro rewrite pass (keeps Pro usage to a single, tool-free call).
+            if rewrite_model:
+                draft = _extract_ai_text(result)
+                # Keep the Pro rewrite prompt bounded to reduce quota pressure.
+                ticket_context = user_query
+                if len(ticket_context) > 6000:
+                    ticket_context = ticket_context[:6000].rstrip() + "\n[truncated]"
+                draft_context = draft
+                if len(draft_context) > 6000:
+                    draft_context = draft_context[:6000].rstrip() + "\n[truncated]"
+
+                prompt = (
+                    "You are a senior Mailbird support agent writing an INTERNAL Zendesk note.\n\n"
+                    "Rewrite the draft into a clean, customer-ready Suggested Reply only.\n\n"
+                    "Rules:\n"
+                    "- Do NOT include placeholders like 'Pending'.\n"
+                    "- Do NOT include hidden chain-of-thought or planning.\n"
+                    "- Output ONLY the Suggested Reply (no Issue Summary / Root Cause / Resources / Follow-up sections).\n"
+                    "- Keep it customer-ready (public-facing tone), but do not mention internal tooling, macro IDs, or KB IDs.\n"
+                    "- Do NOT use exclamation marks.\n"
+                    "- Do NOT address the customer by name.\n"
+                    "- Start with: Hi there, Many thanks for contacting the Mailbird Customer Happiness Team.\n"
+                    "- Be concise but actionable; include step-by-step instructions when helpful.\n"
+                    "- Formatting: use short paragraphs separated by blank lines.\n"
+                    "- Formatting: use '-' bullets (with 2-space indented sub-bullets) and '1.' numbered steps when needed.\n"
+                    "- Formatting: use **bold** for UI labels / key actions and `inline code` for errors, server names, and ports.\n"
+                    "- Do NOT output HTML (Markdown only).\n\n"
+                    f"Ticket context (redacted):\n{ticket_context}\n\n"
+                    f"Draft to rewrite:\n{draft_context}\n"
+                )
+
+                try:
+                    from langchain_google_genai import ChatGoogleGenerativeAI
+
+                    llm = ChatGoogleGenerativeAI(
+                        model=rewrite_model,
+                        temperature=0.2,
+                        google_api_key=settings.gemini_api_key,
+                        include_thoughts=False,
+                        timeout=300,
+                    )
+                    rewritten_text = ""
+                    for attempt in range(1, 7):
+                        try:
+                            rewritten = await llm.ainvoke(prompt)
+                            rewritten_text = str(getattr(rewritten, "content", "") or "").strip()
+                            if rewritten_text:
+                                break
+                        except Exception as inner_exc:
+                            msg = str(inner_exc)
+                            is_429 = "429" in msg or "ResourceExhausted" in msg
+                            if attempt < 6 and is_429:
+                                wait_sec = min(180, 15 * attempt)
+                                logger.warning(
+                                    "zendesk_pro_rewrite_rate_limited ticket_id=%s attempt=%s wait_sec=%s",
+                                    ticket_id,
+                                    attempt,
+                                    wait_sec,
+                                )
+                                await asyncio.sleep(wait_sec)
+                                continue
+                            raise
+                    if not rewritten_text:
+                        raise RuntimeError("empty_pro_rewrite_output")
+                except Exception as exc:
+                    msg = str(exc)
+                    if "429" in msg or "ResourceExhausted" in msg:
+                        logger.warning(
+                            "zendesk_pro_rewrite_skipped ticket_id=%s reason=%s",
+                            ticket_id,
+                            msg[:180],
+                        )
+                        rewritten_text = ""
+                    else:
+                        raise RuntimeError(f"zendesk_pro_rewrite_failed: {exc}") from exc
+
+                # Replace agent result with the rewritten output for downstream formatting.
+                if rewritten_text:
+                    result = {"messages": [AIMessage(content=rewritten_text)]}
+                    try:
+                        state.model = rewrite_model
+                    except Exception:
+                        pass
     finally:
         try:
             if attachments:
@@ -840,7 +2388,19 @@ async def _generate_reply(ticket_id: int | str, subject: str | None, description
         except Exception:
             pass
 
-    return _normalize_result_to_text(result, state) or "Thank you for reaching out. We’re reviewing your request and will follow up shortly."
+    reply_text = _normalize_result_to_text(result, state) or (
+        "Thank you for reaching out. We’re reviewing your request and will follow up shortly."
+    )
+    return ZendeskReplyResult(
+        reply=reply_text,
+        session_id=session_id,
+        ticket_id=str(ticket_id),
+        category=inferred_category,
+        redacted_ticket_text=user_query,
+        kb_articles_used=sorted(set(kb_articles_used)),
+        macros_used=sorted(set(macros_used)),
+        learning_messages=learning_messages,
+    )
 
 
 async def _process_window(window_start: datetime, window_end: datetime, dry_run: bool, provider: str | None = None, model: str | None = None) -> Dict[str, Any]:
@@ -950,10 +2510,21 @@ async def _process_window(window_start: datetime, window_end: datetime, dry_run:
                 continue
 
             # Generate suggested reply after successful claim
-            reply = await _generate_reply(tid, row.get("subject"), row.get("description"), provider=provider, model=model)
+            run = await _generate_reply(
+                tid,
+                row.get("subject"),
+                row.get("description"),
+                provider=provider,
+                model=model,
+            )
+            reply = run.reply
+            use_html = bool(getattr(settings, "zendesk_use_html", True))
+            gate_issues = _quality_gate_issues(reply, use_html=use_html)
+            if gate_issues:
+                raise RuntimeError(f"quality_gate_failed: {','.join(gate_issues)}")
             # Try HTML if enabled; fallback signature without use_html for test stubs
             try:
-                await asyncio.to_thread(zc.add_internal_note, tid, reply, add_tag="mb_auto_triaged", use_html=getattr(settings, "zendesk_use_html", True))
+                await asyncio.to_thread(zc.add_internal_note, tid, reply, add_tag="mb_auto_triaged", use_html=use_html)
             except TypeError:
                 await asyncio.to_thread(zc.add_internal_note, tid, reply, add_tag="mb_auto_triaged")
             await supa._exec(
@@ -965,6 +2536,7 @@ async def _process_window(window_start: datetime, window_end: datetime, dry_run:
                 .eq("id", row["id"])
                 .execute()
             )
+            _queue_post_resolution_learning(run, dry_run=dry_run)
             processed += 1
             gemini_remaining = gemini_remaining if dry_run else max(0, gemini_remaining - 1)
         except Exception as e:

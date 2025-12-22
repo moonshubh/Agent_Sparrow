@@ -56,7 +56,7 @@ export function DateRangePicker({
     if (!isDateRangeEqual(date, value)) {
       setDate(value)
     }
-  }, [value]) // Only depend on value to prevent unnecessary executions
+  }, [value, date])
 
   // Handle internal date changes and notify parent
   const handleDateChange = React.useCallback((newDate: DateRange | undefined) => {

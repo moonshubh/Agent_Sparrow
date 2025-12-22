@@ -1,11 +1,27 @@
-import type { Metadata } from "next";
-import Script from "next/script";
-import { ThemeProvider } from "next-themes";
+import type { Metadata } from 'next';
+import Script from 'next/script';
+import { ThemeProvider } from 'next-themes';
+import { Lora, Poppins } from 'next/font/google';
 // no server-side cookies read here; keep layout minimal
-import "./globals.css";
-import { Toaster } from "@/shared/ui/sonner";
-import { AuthProvider } from "@/shared/contexts/AuthContext";
-import { ChunkErrorRecovery } from "@/shared/components/utils/ChunkErrorRecovery";
+import './globals.css';
+import { Toaster } from '@/shared/ui/sonner';
+import { AuthProvider } from '@/shared/contexts/AuthContext';
+import { ChunkErrorRecovery } from '@/shared/components/utils/ChunkErrorRecovery';
+
+const lora = Lora({
+  subsets: ['latin'],
+  variable: '--font-lora',
+  display: 'swap',
+  weight: ['400', '500', '600', '700'],
+  style: ['normal', 'italic'],
+});
+
+const poppins = Poppins({
+  subsets: ['latin'],
+  variable: '--font-poppins',
+  display: 'swap',
+  weight: ['400', '500', '600'],
+});
 
 export const metadata: Metadata = {
   title: 'MB-Sparrow Agent',
@@ -21,18 +37,13 @@ export default function RootLayout({
   return (
     <html lang="en" suppressHydrationWarning>
       <head>
-        {/* Dark Academia Typography - Lora (primary serif) + Poppins (UI fallback) */}
-        <link
-          rel="stylesheet"
-          href="https://fonts.googleapis.com/css2?family=Lora:ital,wght@0,400;0,500;0,600;0,700;1,400;1,500&family=Poppins:wght@400;500;600&display=swap"
-        />
         <link
           rel="stylesheet"
           href="https://cdn.jsdelivr.net/npm/katex@0.16.25/dist/katex.min.css"
           crossOrigin="anonymous"
         />
       </head>
-      <body className="antialiased" suppressHydrationWarning>
+      <body className={`${lora.variable} ${poppins.variable} antialiased`} suppressHydrationWarning>
         <Script 
           id="disable-grammarly" 
           strategy="beforeInteractive"

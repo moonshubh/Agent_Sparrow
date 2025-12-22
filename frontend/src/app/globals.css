@@ -1,6 +1,9 @@
 /* FeedMe Navigation Polish - must be before @tailwind to comply with CSS spec */
 @import '../features/feedme/styles/feedme-navigation.css';
 
+/* LibreChat-style ChatGPT theme */
+@import '../features/librechat/styles/chat.css';
+
 /* KaTeX CSS for LaTeX math rendering */
 @import 'katex/dist/katex.min.css';
 
@@ -519,8 +522,8 @@
        ============================================================ */
 
     /* === TYPOGRAPHY === */
-    --font-serif: 'Lora', 'Source Serif Pro', Georgia, 'Times New Roman', serif;
-    --font-sans: 'Poppins', -apple-system, BlinkMacSystemFont, sans-serif;
+    --font-serif: var(--font-lora), 'Source Serif Pro', Georgia, 'Times New Roman', serif;
+    --font-sans: var(--font-poppins), -apple-system, BlinkMacSystemFont, sans-serif;
     --font-mono: 'JetBrains Mono', 'Fira Code', ui-monospace, monospace;
 
     /* Type Scale - Slightly larger for serif readability */
