@@ -66,6 +66,8 @@ Feed_Me_Sample PDF/
 
 # Scripts and dev tools
 scripts/
+!scripts/
+!scripts/railway-entrypoint.sh
 startup_errors.log
 backend.log
 system_logs/

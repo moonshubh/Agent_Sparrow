@@ -312,7 +312,7 @@ BenchmarkDotNet.Artifacts/
 # .NET Core
 project.lock.json
 project.fragment.lock.json
-artifacts/
+/artifacts/
 
 # ASP.NET Scaffolding
 ScaffoldingReadMe.txt
@@ -720,9 +720,14 @@ Backend.md
 Sample_PDFs/
 sample logs/
 sample\ logs/
-supabase/
+/supabase/
 # Allow backend compat wrapper under app/db/supabase
 !app/db/supabase/**
+# Allow frontend Supabase client helpers
+!frontend/src/services/supabase/**
+app/db/supabase/__pycache__/
+# Allow frontend LibreChat artifacts modules
+!frontend/src/features/librechat/artifacts/**
 # Zendesk PDFs - contain sensitive customer data
 Zendesk PDF/
 *.pdf
