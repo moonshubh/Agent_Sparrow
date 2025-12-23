@@ -5,6 +5,7 @@ import asyncio
 import base64
 import logging
 import sys
+import time
 from pathlib import Path
 from dataclasses import dataclass
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
@@ -140,6 +141,7 @@ async def process_tickets(
     add_tag: str,
     skip_if_tagged: Optional[str],
     sleep_sec: float,
+    max_runtime_sec: float | None,
 ) -> Dict[str, List[int]]:
     subdomain, email, api_token = _require_settings()
 
@@ -155,8 +157,12 @@ async def process_tickets(
     failed: List[int] = []
 
     max_successes = max(1, int(max_successes))
+    started_at = time.monotonic()
 
     for i, ticket_id in enumerate(ticket_ids, start=1):
+        if max_runtime_sec is not None and (time.monotonic() - started_at) >= float(max_runtime_sec):
+            logger.info("Time limit reached (%.1fs); stopping early", float(max_runtime_sec))
+            break
         if len(processed) >= max_successes:
             break
         logger.info("(%d/%d) ticket=%s starting", i, len(ticket_ids), ticket_id)
@@ -171,7 +177,8 @@ async def process_tickets(
 
             subject = ticket.get("subject") if isinstance(ticket, dict) else None
             description = ticket.get("description") if isinstance(ticket, dict) else None
-            reply = await _generate_reply(ticket_id, subject, description, provider=provider, model=model)
+            run = await _generate_reply(ticket_id, subject, description, provider=provider, model=model)
+            reply = run.reply
             use_html = bool(getattr(settings, "zendesk_use_html", True))
             gate_issues = _quality_gate_issues(reply, use_html=use_html)
             if gate_issues:
@@ -207,6 +214,7 @@ async def main() -> None:
     parser.add_argument("--tag", type=str, default="mb_auto_triaged", help='Tag to add on update (default: "mb_auto_triaged")')
     parser.add_argument("--skip-if-tagged", type=str, default="mb_auto_triaged", help="Skip tickets that already have this tag")
     parser.add_argument("--sleep-sec", type=float, default=0.5, help="Sleep between tickets (seconds)")
+    parser.add_argument("--max-minutes", type=float, default=0.0, help="Stop after N minutes (0 = no limit)")
     parser.add_argument("--log-level", type=str, default="INFO", help="Logging level (INFO, DEBUG, ...)")
     args = parser.parse_args()
 
@@ -214,6 +222,22 @@ async def main() -> None:
         level=getattr(logging, args.log_level.upper(), logging.INFO),
         format="%(asctime)s %(levelname)s %(message)s",
     )
+
+    # Reduce extremely noisy dependency logs (keeps CLI output readable and avoids truncation).
+    for noisy in ("httpx", "httpcore", "supabase", "postgrest"):
+        try:
+            logging.getLogger(noisy).setLevel(logging.WARNING)
+        except Exception:
+            pass
+
+    # Normalize Loguru output volume (many core modules use Loguru directly).
+    try:
+        from loguru import logger as loguru_logger
+
+        loguru_logger.remove()
+        loguru_logger.add(sys.stdout, level=str(args.log_level).upper())
+    except Exception:
+        pass
 
     subdomain, email, api_token = _require_settings()
 
@@ -263,6 +287,7 @@ async def main() -> None:
         add_tag=str(args.tag),
         skip_if_tagged=str(args.skip_if_tagged) if args.skip_if_tagged else None,
         sleep_sec=float(args.sleep_sec),
+        max_runtime_sec=(float(args.max_minutes) * 60.0) if float(args.max_minutes) > 0 else None,
     )
 
     processed_ids = result["processed"]

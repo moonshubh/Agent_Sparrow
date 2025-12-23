@@ -90,7 +90,7 @@ class Settings(BaseSettings):
     enhanced_log_model: str = Field(default="gemini-2.5-pro", alias="ENHANCED_LOG_MODEL")
     # Provider/model selection for primary agent
     primary_agent_provider: str = Field(default="google", alias="PRIMARY_AGENT_PROVIDER")
-    primary_agent_model: str = Field(default="gemini-3.0-flash", alias="PRIMARY_AGENT_MODEL")
+    primary_agent_model: str = Field(default="gemini-3-flash-preview", alias="PRIMARY_AGENT_MODEL")
     primary_agent_temperature: float = Field(default=0.2, alias="PRIMARY_AGENT_TEMPERATURE")
     primary_agent_thinking_budget: Optional[int] = Field(default=None, alias="THINKING_BUDGET")
     primary_agent_formatting: str = Field(default="natural", alias="PRIMARY_AGENT_FORMATTING")
@@ -366,8 +366,18 @@ class Settings(BaseSettings):
     zendesk_debug_verify: bool = Field(default=False, alias="ZENDESK_DEBUG_VERIFY")
     # Use HTML notes in Zendesk for better readability (fallback to text on failure)
     zendesk_use_html: bool = Field(default=True, alias="ZENDESK_USE_HTML")
+    # Zendesk note formatting engine: legacy|markdown_v2
+    zendesk_format_engine: str = Field(default="markdown_v2", alias="ZENDESK_FORMAT_ENGINE")
     # Formatting style for paragraph sentence breaks in HTML mode: compact|relaxed
     zendesk_format_style: str = Field(default="compact", alias="ZENDESK_FORMAT_STYLE")
+
+    @field_validator("zendesk_format_engine")
+    @classmethod
+    def validate_zendesk_format_engine(cls, value: str) -> str:
+        normalized = (value or "legacy").strip().lower()
+        if normalized not in {"legacy", "markdown_v2"}:
+            raise ValueError("zendesk_format_engine must be one of: legacy, markdown_v2")
+        return normalized
 
     @field_validator('feedme_max_pdf_size_mb')
     @classmethod

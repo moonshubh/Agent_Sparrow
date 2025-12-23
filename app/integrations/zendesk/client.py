@@ -82,7 +82,19 @@ class ZendeskClient:
             comment["body"] = body or ""
         ticket: Dict[str, Any] = {"comment": comment}
         if add_tag:
-            ticket["additional_tags"] = [add_tag]
+            # Best-effort tag add. Some Zendesk accounts ignore `additional_tags` on update,
+            # so we merge into the explicit `tags` list when we can.
+            try:
+                cur = self.get_ticket(ticket_id) or {}
+                existing = cur.get("tags") if isinstance(cur, dict) else None
+                existing_tags = [t for t in existing if isinstance(t, str)] if isinstance(existing, list) else []
+                merged = list(existing_tags)
+                if add_tag not in merged:
+                    merged.append(add_tag)
+                if merged:
+                    ticket["tags"] = merged
+            except Exception:
+                ticket["additional_tags"] = [add_tag]
 
         payload = {"ticket": ticket}
         if self.dry_run:

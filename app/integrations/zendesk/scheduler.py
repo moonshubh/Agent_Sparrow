@@ -638,7 +638,6 @@ def _sanitize_suggested_reply_text(text: str) -> str:
                 continue
 
             if any(p.search(line) for p in _ZENDESK_META_INLINE_PATTERNS):
-                skip_block = True
                 continue
 
             # Skip follow-on bullet lines when we just removed a meta heading/preamble.
@@ -661,6 +660,31 @@ def _sanitize_suggested_reply_text(text: str) -> str:
         cleaned_lines.append(line)
 
     cleaned = "\n".join(cleaned_lines).strip()
+    def _is_heading_line(line: str) -> bool:
+        return _normalize_zendesk_heading_candidate(line) in _ZENDESK_NOTE_SECTION_HEADINGS
+
+    greeting_pattern = re.compile(
+        r"(?i)\bhi\s+there\b.*?\bmailbird\s+customer\s+happiness\s+team\b\.?",
+        re.DOTALL,
+    )
+
+    def _strip_greeting(line: str) -> str:
+        return greeting_pattern.sub("", line).strip()
+
+    meaningful_lines: List[str] = []
+    for ln in cleaned.splitlines():
+        if not ln.strip():
+            continue
+        if _is_heading_line(ln):
+            continue
+        if _looks_like_greeting(ln):
+            stripped = _strip_greeting(ln)
+            if stripped:
+                meaningful_lines.append(stripped)
+            continue
+        meaningful_lines.append(ln)
+    if not meaningful_lines:
+        return ""
 
     # Enforce greeting (single-line variant used by HTML formatter).
     greeting = "Hi there, Many thanks for contacting the Mailbird Customer Happiness Team."
@@ -716,6 +740,35 @@ def _quality_gate_issues(note_text: str, *, use_html: bool) -> List[str]:
         if normalized_heading in _ZENDESK_NOTE_NON_REPLY_HEADINGS:
             issues.append("contains_non_reply_sections")
             break
+
+    def _is_greeting_line(line: str) -> bool:
+        return bool(
+            re.search(r"(?i)\bhi\s+there\b", line)
+            and re.search(r"(?i)mailbird\s+customer\s+happiness\s+team", line)
+        )
+
+    greeting_pattern = re.compile(
+        r"(?i)\bhi\s+there\b.*?\bmailbird\s+customer\s+happiness\s+team\b\.?",
+        re.DOTALL,
+    )
+
+    def _strip_greeting(line: str) -> str:
+        return greeting_pattern.sub("", line).strip()
+
+    content_lines: List[str] = []
+    for ln in lines:
+        if _normalize_zendesk_heading_candidate(ln) in _ZENDESK_NOTE_SECTION_HEADINGS:
+            continue
+        if _is_greeting_line(ln):
+            stripped = _strip_greeting(ln)
+            if stripped:
+                content_lines.append(stripped)
+            continue
+        content_lines.append(ln)
+
+    content_words = re.sub(r"\s+", " ", " ".join(content_lines)).strip().split()
+    if len(content_words) < 5:
+        issues.append("reply_too_short")
 
     if re.search(r"(?i)\bpending\b", flat):
         issues.append("contains_placeholder")
@@ -784,7 +837,7 @@ def _format_zendesk_internal_note_html(
         # Hidden (sometimes emitted by older prompts)
         "empathetic opening",
     }
-    hidden_headings = {"empathetic opening", "supportive closing"}
+    hidden_headings = {"empathetic opening", "supportive closing", "suggested reply"}
 
     def is_heading(line: str) -> str | None:
         t = re.sub(r"^\s*#+\s*", "", line).strip()
@@ -806,15 +859,29 @@ def _format_zendesk_internal_note_html(
 
     def ordered_item(line: str) -> tuple[int, int, str] | None:
         m = re.match(r"^(\s*)(\d+)[\.)]\s+(.*)$", line)
-        if not m:
+        if m:
+            indent = list_indent(m.group(1))
+            num = int(m.group(2))
+            content = m.group(3).strip()
+            return indent, num, content
+
+        # Handle bolded ordinals emitted by some prompts: "**2. Title**" -> "2. **Title**"
+        m2 = re.match(r"^(\s*)(\*\*|__)(\d+)[\.)]\s+(.*?)(\2)\s*(.*)$", line)
+        if not m2:
             return None
-        indent = list_indent(m.group(1))
-        num = int(m.group(2))
-        content = m.group(3).strip()
+        indent = list_indent(m2.group(1))
+        num = int(m2.group(3))
+        title = m2.group(4).strip()
+        tail = m2.group(6).strip()
+        marker = m2.group(2)
+        content = f"{marker}{title}{marker}"
+        if tail:
+            content += f" {tail}"
         return indent, num, content
 
     def unordered_item(line: str) -> tuple[int, str] | None:
-        m = re.match(r"^(\s*)[-*]\s+(.*)$", line)
+        # Support common LLM bullet styles (Markdown '-'/'*' plus unicode bullets).
+        m = re.match(r"^(\s*)(?:[-*]|[•●◦‣▪∙·])\s+(.*)$", line)
         if m:
             indent = list_indent(m.group(1))
             return indent, m.group(2).strip()
@@ -842,6 +909,11 @@ def _format_zendesk_internal_note_html(
 
     def close_li_if_open() -> None:
         if list_stack and list_stack[-1].get("li_open"):
+            if style == "relaxed":
+                if not html_parts or not re.search(
+                    r"(?i)<br\s*/?>\s*(?:&nbsp;|\u00a0)?\s*$", html_parts[-1]
+                ):
+                    html_parts.append("<br/>&nbsp;")
             html_parts.append("</li>")
             list_stack[-1]["li_open"] = False
 
@@ -887,13 +959,14 @@ def _format_zendesk_internal_note_html(
         html_parts.append(f"<li>{content_html}")
         list_stack[-1]["li_open"] = True
 
-    def append_to_current_list_item(fragment_html: str) -> None:
+    def append_to_current_list_item(fragment_html: str, *, as_paragraph: bool = False) -> None:
         if not list_stack or not list_stack[-1].get("li_open"):
             return
-        html_parts.append(fragment_html)
+        if as_paragraph:
+            html_parts.append(f"<p>{fragment_html}</p>")
+        else:
+            html_parts.append(fragment_html)
 
-    heading_seen = False
-    suggested_seen = False
     heading_dedup: set[str] = set()
 
     lines = (text or "").replace("\r\n", "\n").replace("\r", "\n").splitlines()
@@ -914,10 +987,6 @@ def _format_zendesk_internal_note_html(
             if h_norm in heading_dedup:
                 continue
             heading_dedup.add(h_norm)
-            heading_seen = True
-            if h_norm == "suggested reply":
-                suggested_seen = True
-
             para = render_paragraph(paragraph_buf)
             if para:
                 close_all_lists()
@@ -952,6 +1021,21 @@ def _format_zendesk_internal_note_html(
                 html_parts.append(para)
             paragraph_buf = []
 
+            if list_stack:
+                current = list_stack[-1]
+                if (
+                    current["type"] == "ul"
+                    and current.get("li_open")
+                    and indent < current["indent"]
+                ):
+                    indent = current["indent"]
+                elif (
+                    current["type"] == "ol"
+                    and current.get("li_open")
+                    and indent <= current["indent"]
+                ):
+                    indent = current["indent"] + 2
+
             content_html = item_text if item_text.startswith("<strong>") else render_inline_md(item_text)
             begin_list_item("ul", indent, content_html=content_html)
             continue
@@ -964,7 +1048,14 @@ def _format_zendesk_internal_note_html(
             continue
 
         if list_stack and list_indent(line) > list_stack[-1]["indent"]:
-            append_to_current_list_item(f"{sep}{render_inline_md(line.strip())}")
+            if list_stack[-1]["type"] == "ol":
+                append_to_current_list_item(render_inline_md(line.strip()), as_paragraph=True)
+            else:
+                append_to_current_list_item(f"{sep}{render_inline_md(line.strip())}")
+            continue
+
+        if list_stack and list_stack[-1]["type"] == "ol" and list_stack[-1].get("li_open"):
+            append_to_current_list_item(render_inline_md(line.strip()), as_paragraph=True)
             continue
 
         paragraph_buf.append(line)
@@ -974,10 +1065,6 @@ def _format_zendesk_internal_note_html(
         close_all_lists()
         html_parts.append(para)
     close_all_lists()
-
-    # Ensure a Suggested Reply heading wrapper exists (matches existing UI expectation).
-    if not heading_seen or not suggested_seen:
-        html_parts = [f"<{safe_heading_level}>Suggested Reply</{safe_heading_level}>", *html_parts]
 
     # Ensure the greeting is present as an early paragraph (downstream quality gate expects it).
     greeting_window = "\n".join(html_parts[:3])
@@ -1454,7 +1541,7 @@ async def _get_feature_state() -> Dict[str, Any]:
     enabled = bool(getattr(settings, "zendesk_enabled", False))
     dry_run = bool(getattr(settings, "zendesk_dry_run", True))
     provider = getattr(settings, "zendesk_agent_provider", None) or "google"
-    model = getattr(settings, "zendesk_agent_model", None) or "gemini-3-pro-preview"
+    model = getattr(settings, "zendesk_agent_model", None) or "gemini-3-flash-preview"
     last_run_at = None
     try:
         supa = get_supabase_client()
@@ -1629,56 +1716,69 @@ async def _generate_reply(
 
     def _normalize_result_to_text(result_payload: Dict[str, Any] | None, state_obj: GraphState | None) -> str:
         result_messages = list((result_payload or {}).get("messages") or [])
-        final_msg = None
-        for candidate in reversed(result_messages):
-            if not isinstance(candidate, AIMessage):
-                continue
-            content_str = str(getattr(candidate, "content", "") or "")
-            # Skip planning/analysis artifacts
-            if re.search(r"(?i):::thinking", content_str) or re.search(r"(?i)\bthinking\b", content_str):
-                continue
-            final_msg = candidate
-            break
-        # If everything was filtered, fall back to the last AI message
-        if final_msg is None:
-            for candidate in reversed(result_messages):
-                if isinstance(candidate, AIMessage):
-                    final_msg = candidate
-                    break
-        if final_msg is None:
-            trace_id = getattr(state_obj, "trace_id", None)
-            preview_payload = []
-            for msg in result_messages[-3:]:
-                content = getattr(msg, "content", "")
-                if isinstance(content, str):
-                    preview_payload.append(content[:120])
-                else:
-                    preview_payload.append(str(type(content)))
-            logger.warning(
-                "zendesk_unified_agent_no_ai_message session_id=%s trace_id=%s message_types=%s previews=%s",
-                getattr(state_obj, "session_id", None),
-                trace_id,
-                [type(msg).__name__ for msg in result_messages],
-                preview_payload,
-            )
-        text_out = ""
-        if final_msg and getattr(final_msg, "content", None):
-            content = final_msg.content
-            # Handle list content blocks (e.g., [{'type': 'text', 'text': '...'}])
+        def _extract_text(content: Any) -> str:
             if isinstance(content, list):
-                text_parts = []
+                text_parts: List[str] = []
                 for block in content:
                     if isinstance(block, dict):
-                        # Extract text from content block
                         if block.get("type") == "text" and "text" in block:
                             text_parts.append(str(block["text"]))
                         elif "text" in block:
                             text_parts.append(str(block["text"]))
                     elif isinstance(block, str):
                         text_parts.append(block)
-                text_out = "\n".join(text_parts).strip()
-            else:
-                text_out = str(content).strip()
+                return "\n".join(text_parts).strip()
+            if content is None:
+                return ""
+            return str(content).strip()
+
+        candidates: List[tuple[int, str]] = []
+        for candidate in result_messages:
+            if not isinstance(candidate, AIMessage):
+                continue
+            content_text = _extract_text(getattr(candidate, "content", None))
+            if not content_text:
+                continue
+            # Skip planning/analysis artifacts
+            if re.search(r"(?i):::thinking", content_text) or re.search(r"(?i)\bthinking\b", content_text):
+                continue
+            score = len(content_text)
+            if re.search(r"(?i)\bsuggested reply\b", content_text):
+                score += 5000
+            if re.search(r"(?i)\bhi\s+there\b", content_text) and re.search(
+                r"(?i)mailbird\s+customer\s+happiness\s+team",
+                content_text,
+            ):
+                score += 10000
+            candidates.append((score, content_text))
+
+        text_out = ""
+        if candidates:
+            _, text_out = max(candidates, key=lambda item: item[0])
+        else:
+            final_msg = None
+            for candidate in reversed(result_messages):
+                if isinstance(candidate, AIMessage):
+                    final_msg = candidate
+                    break
+            if final_msg is None:
+                trace_id = getattr(state_obj, "trace_id", None)
+                preview_payload = []
+                for msg in result_messages[-3:]:
+                    content = getattr(msg, "content", "")
+                    if isinstance(content, str):
+                        preview_payload.append(content[:120])
+                    else:
+                        preview_payload.append(str(type(content)))
+                logger.warning(
+                    "zendesk_unified_agent_no_ai_message session_id=%s trace_id=%s message_types=%s previews=%s",
+                    getattr(state_obj, "session_id", None),
+                    trace_id,
+                    [type(msg).__name__ for msg in result_messages],
+                    preview_payload,
+                )
+            if final_msg and getattr(final_msg, "content", None):
+                text_out = _extract_text(final_msg.content)
         # Strip any accidental planning/thinking markers from model output
         text_out = re.sub(r"(?im)^:::thinking\s*\n?", "", text_out)
         text_out = re.sub(r"(?im)^thinking\s*\n?", "", text_out)
@@ -1803,6 +1903,17 @@ async def _generate_reply(
         def _format_html_for_zendesk(s: str) -> str:
             heading_tag = getattr(settings, "zendesk_heading_level", "h3")
             style = getattr(settings, "zendesk_format_style", "compact")
+            engine = getattr(settings, "zendesk_format_engine", "legacy")
+            if str(engine).strip().lower() == "markdown_v2":
+                from app.integrations.zendesk.formatters.markdown_v2 import (
+                    format_zendesk_internal_note_markdown_v2,
+                )
+
+                return format_zendesk_internal_note_markdown_v2(
+                    s,
+                    heading_level=str(heading_tag),
+                    format_style=str(style),
+                )
             return _format_zendesk_internal_note_html(
                 s,
                 heading_level=str(heading_tag),
@@ -2197,6 +2308,22 @@ async def _generate_reply(
                         return str(content).strip()
                 return ""
 
+            def _extract_llm_content(content: Any) -> str:
+                if isinstance(content, list):
+                    parts: List[str] = []
+                    for block in content:
+                        if isinstance(block, dict):
+                            if block.get("type") == "text" and "text" in block:
+                                parts.append(str(block["text"]))
+                            elif "text" in block:
+                                parts.append(str(block["text"]))
+                        elif isinstance(block, str):
+                            parts.append(block)
+                    return "\n".join(parts).strip()
+                if content is None:
+                    return ""
+                return str(content).strip()
+
             def _draft_needs_customer_rewrite(draft_text: str) -> bool:
                 if not str(draft_text or "").strip():
                     return True
@@ -2271,7 +2398,7 @@ async def _generate_reply(
                                         HumanMessage(content=prompt),
                                     ]
                                 )
-                                rewritten_text = str(getattr(rewritten, "content", "") or "").strip()
+                                rewritten_text = _extract_llm_content(getattr(rewritten, "content", ""))
                                 if rewritten_text:
                                     break
                             except Exception as inner_exc:
@@ -2293,6 +2420,83 @@ async def _generate_reply(
                     except Exception as exc:
                         logger.warning(
                             "zendesk_xai_rewrite_failed ticket_id=%s error=%s",
+                            ticket_id,
+                            str(exc)[:180],
+                        )
+
+            # For Gemini runs, do a lightweight rewrite when the draft looks like internal/tool output.
+            if str(use_provider).lower() == "google" and not rewrite_model:
+                draft = _extract_ai_text(result)
+                if _draft_needs_customer_rewrite(draft):
+                    ticket_context = user_query
+                    if len(ticket_context) > 7000:
+                        ticket_context = ticket_context[:7000].rstrip() + "\n[truncated]"
+                    draft_context = draft
+                    if len(draft_context) > 7000:
+                        draft_context = draft_context[:7000].rstrip() + "\n[truncated]"
+
+                    guidance_parts: List[str] = []
+                    if internal_context:
+                        guidance_parts.append(_trim_block(internal_context, max_chars=3500))
+                    if web_context:
+                        guidance_parts.append(_trim_block(web_context, max_chars=3500))
+                    guidance = "\n\n".join([p for p in guidance_parts if p]).strip()
+
+                    prompt = (
+                        "Rewrite the content into a customer-ready Mailbird support reply.\n\n"
+                        "Output rules (must follow exactly):\n"
+                        "- Output ONLY the customer reply (no headings, no analysis, no tool results, no IDs).\n"
+                        "- Do NOT include any text like 'Assistant:', 'Tool results', 'KB ID', 'Macro ID', or 'Final output:'.\n"
+                        "- Do NOT mention internal tooling, retrieval, or web scraping.\n"
+                        "- Do NOT use exclamation marks.\n"
+                        "- Do NOT address the customer by name.\n"
+                        "- Start with: Hi there, Many thanks for contacting the Mailbird Customer Happiness Team.\n"
+                        "- Keep it concise but actionable; include step-by-step instructions when helpful.\n"
+                        "- Formatting: use short paragraphs separated by blank lines.\n"
+                        "- Formatting: use '-' bullets (with 2-space indented sub-bullets) and '1.' numbered steps when needed.\n"
+                        "- Formatting: use **bold** for UI labels / key actions and `inline code` for errors, server names, and ports.\n"
+                        "- Do NOT output HTML (Markdown only).\n\n"
+                        f"Ticket context (redacted):\n{ticket_context}\n\n"
+                        + (f"Internal guidance (do NOT cite):\n{guidance}\n\n" if guidance else "")
+                        + f"Draft (may include internal notes; do not copy those parts):\n{draft_context}\n"
+                    )
+
+                    try:
+                        from langchain_google_genai import ChatGoogleGenerativeAI
+
+                        llm = ChatGoogleGenerativeAI(
+                            model=str(agent_model),
+                            temperature=0.2,
+                            google_api_key=settings.gemini_api_key,
+                            include_thoughts=False,
+                            timeout=300,
+                        )
+                        rewritten_text = ""
+                        for attempt in range(1, 6):
+                            try:
+                                rewritten = await llm.ainvoke(prompt)
+                                rewritten_text = _extract_llm_content(getattr(rewritten, "content", ""))
+                                if rewritten_text:
+                                    break
+                            except Exception as inner_exc:
+                                msg = str(inner_exc)
+                                is_429 = "429" in msg or "ResourceExhausted" in msg
+                                if attempt < 5 and is_429:
+                                    wait_sec = min(90, 10 * attempt)
+                                    logger.warning(
+                                        "zendesk_google_rewrite_rate_limited ticket_id=%s attempt=%s wait_sec=%s",
+                                        ticket_id,
+                                        attempt,
+                                        wait_sec,
+                                    )
+                                    await asyncio.sleep(wait_sec)
+                                    continue
+                                raise
+                        if rewritten_text:
+                            result = {"messages": [AIMessage(content=rewritten_text)]}
+                    except Exception as exc:
+                        logger.warning(
+                            "zendesk_google_rewrite_failed ticket_id=%s error=%s",
                             ticket_id,
                             str(exc)[:180],
                         )
@@ -2342,7 +2546,7 @@ async def _generate_reply(
                     for attempt in range(1, 7):
                         try:
                             rewritten = await llm.ainvoke(prompt)
-                            rewritten_text = str(getattr(rewritten, "content", "") or "").strip()
+                            rewritten_text = _extract_llm_content(getattr(rewritten, "content", ""))
                             if rewritten_text:
                                 break
                         except Exception as inner_exc:

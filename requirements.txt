@@ -2,7 +2,7 @@
 fastapi==0.123.3
 fastapi-limiter==0.1.6
 slowapi==0.1.9
-redis==7.1.0
+redis==5.2.1  # Must be <6.5 for kombu[redis] compatibility
 uvicorn==0.38.0
 python-multipart==0.0.20
 pydantic==2.12.5
@@ -65,6 +65,7 @@ firecrawl-py==4.10.0
 beautifulsoup4==4.14.3
 lxml==6.0.2
 bleach==6.3.0  # For HTML sanitization in FeedMe security
+mistune==3.0.2  # Markdown parsing for Zendesk note formatter (v2)
 
 # PDF Processing (for PDF ticket support)
 pdfplumber==0.11.8

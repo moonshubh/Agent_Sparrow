@@ -19,7 +19,7 @@ router = APIRouter(prefix="/integrations/zendesk", tags=["Zendesk"])
 logger = logging.getLogger(__name__)
 
 # Default model for Zendesk - centralized to ensure consistency
-ZENDESK_DEFAULT_MODEL = "gemini-3-pro-preview"
+ZENDESK_DEFAULT_MODEL = "gemini-3-flash-preview"
 ZENDESK_DEFAULT_PROVIDER = "google"
 
 # Basic PII redactors for emails and phone numbers
@@ -255,6 +255,7 @@ class FeatureToggleRequest(BaseModel):
 ZENDESK_MODEL_OPTIONS = {
     "google": [
         # All Gemini models support vision natively
+        {"id": "gemini-3-flash-preview", "name": "Gemini 3.0 Flash (Vision)"},
         {"id": "gemini-3-pro-preview", "name": "Gemini 3.0 Pro (Vision)"},
         {"id": "gemini-2.5-flash", "name": "Gemini 2.5 Flash (Vision)"},
         {"id": "gemini-2.5-flash-lite", "name": "Gemini 2.5 Flash Lite"},
