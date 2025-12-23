@@ -94,7 +94,19 @@ def _get_supabase_jwks() -> dict:
 
     keys_url = f"{SUPABASE_URL}/auth/v1/keys"
     try:
-        resp = httpx.get(keys_url, timeout=10)
+        api_key = (
+            os.getenv("SUPABASE_ANON_KEY")
+            or os.getenv("SUPABASE_SERVICE_KEY")
+            or getattr(settings, "supabase_anon_key", None)
+            or getattr(settings, "supabase_service_key", None)
+        )
+        headers = {}
+        if api_key:
+            headers["apikey"] = api_key
+            headers["Authorization"] = f"Bearer {api_key}"
+        else:
+            logger.warning("SUPABASE_ANON_KEY/SUPABASE_SERVICE_KEY not set; JWKS fetch may fail")
+        resp = httpx.get(keys_url, timeout=10, headers=headers or None)
         resp.raise_for_status()
         _SUPABASE_JWKS = resp.json()
         _SUPABASE_JWKS_FETCHED_AT = datetime.now(timezone.utc)

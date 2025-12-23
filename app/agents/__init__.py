@@ -19,8 +19,10 @@ except Exception:  # pragma: no cover
 try:
     from app.agents.orchestration.orchestration.graph import app as agent_graph  # noqa: F401
     from app.agents.orchestration.orchestration.state import GraphState as GraphState  # noqa: F401
-except Exception:  # pragma: no cover
-    pass
+except Exception as e:  # pragma: no cover
+    import logging
+    logging.error(f"Failed to import agent_graph: {e}")
+    raise  # Re-raise to show the actual error
 
 __all__ = [
     # Legacy exports removed - use unified agent via app/agents/unified/

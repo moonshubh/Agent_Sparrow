@@ -10,18 +10,22 @@ This module provides:
 """
 
 import os
+from http.server import BaseHTTPRequestHandler, HTTPServer
+import logging
+from threading import Thread
+from typing import Dict, Any, Type
+
 from celery import Celery
 from celery.signals import worker_init, worker_shutdown
-from kombu import Queue
-import logging
-from typing import Dict, Any, Type
 from celery import Task
+from kombu import Queue
 import psycopg2
 import requests
 
 from app.core.settings import settings
 
 logger = logging.getLogger(__name__)
+_health_server: HTTPServer | None = None
 
 # Create Celery application
 # Set default broker/backend if not configured
@@ -140,6 +144,8 @@ class BaseTaskWithRetry(Task):
 def worker_init_handler(sender=None, **kwargs):
     """Initialize worker with necessary connections and configurations"""
     logger.info(f"Celery worker starting: {sender}")
+
+    _start_worker_health_server()
     
     # Initialize Supabase client
     try:
@@ -204,6 +210,45 @@ def check_celery_health() -> Dict[str, Any]:
                 "message": str(e)
             }
         }
+
+
+def _start_worker_health_server() -> None:
+    """Start a lightweight HTTP health endpoint for Railway worker checks."""
+    global _health_server
+    if _health_server is not None:
+        return
+
+    port_raw = os.getenv("HEALTH_PORT") or os.getenv("PORT", "8000")
+    try:
+        port = int(port_raw)
+    except ValueError:
+        logger.warning("Invalid health port %r; defaulting to 8000", port_raw)
+        port = 8000
+
+    class HealthHandler(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            if self.path == "/health":
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(b"ok")
+                return
+            self.send_response(404)
+            self.end_headers()
+
+        def log_message(self, *_args) -> None:
+            # Silence default request logs in worker containers.
+            return
+
+    try:
+        _health_server = HTTPServer(("", port), HealthHandler)
+    except OSError as exc:
+        logger.warning("Health server failed to bind on port %s: %s", port, exc)
+        _health_server = None
+        return
+
+    thread = Thread(target=_health_server.serve_forever, daemon=True)
+    thread.start()
+    logger.info("Worker health server listening on port %s", port)
 
 
 if __name__ == "__main__":
