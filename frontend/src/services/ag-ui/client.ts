@@ -6,6 +6,8 @@
  */
 
 import type { AttachmentInput } from './types';
+import { supabase } from '@/services/supabase';
+import { getAuthToken as getLocalToken } from '@/services/auth/local-auth';
 
 export const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 export const AGUI_STREAM_URL = `${API_URL}/api/v1/agui/stream`;
@@ -47,27 +49,48 @@ export function getInitialAgentState(config: AgentConfig): Record<string, unknow
 /**
  * Get auth token from localStorage or sessionStorage
  */
-export function getAuthToken(): string {
-  if (typeof window !== 'undefined') {
-    const token = localStorage.getItem('authToken');
-    if (token) return token;
-
-    const sessionToken = sessionStorage.getItem('authToken');
-    if (sessionToken) return sessionToken;
+export async function getAuthToken(): Promise<string> {
+  if (typeof window === 'undefined') {
+    return '';
   }
+
+  const localBypass = process.env.NEXT_PUBLIC_LOCAL_AUTH_BYPASS === 'true';
+  if (localBypass) {
+    const localToken = getLocalToken();
+    if (localToken) {
+      return localToken;
+    }
+  }
+
+  try {
+    const { data } = await supabase.auth.getSession();
+    const supaToken = data.session?.access_token;
+    if (supaToken) {
+      return supaToken;
+    }
+  } catch {
+    // Ignore and fall back to local storage tokens.
+  }
+
+  const token = localStorage.getItem('authToken');
+  if (token) return token;
+
+  const sessionToken = sessionStorage.getItem('authToken');
+  if (sessionToken) return sessionToken;
+
   return '';
 }
 
 /**
  * Get headers for AG-UI streaming requests
  */
-export function getStreamHeaders(): Record<string, string> {
+export async function getStreamHeaders(): Promise<Record<string, string>> {
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
     'Accept': 'text/event-stream',
   };
 
-  const authToken = getAuthToken();
+  const authToken = await getAuthToken();
   if (authToken) {
     headers['Authorization'] = `Bearer ${authToken}`;
   }
@@ -174,7 +197,7 @@ export function createSparrowAgent(config: AgentConfig): SparrowAgent {
       try {
         const response = await fetch(AGUI_STREAM_URL, {
           method: 'POST',
-          headers: getStreamHeaders(),
+          headers: await getStreamHeaders(),
           body: JSON.stringify({
             threadId: config.sessionId,
             runId: crypto.randomUUID(),

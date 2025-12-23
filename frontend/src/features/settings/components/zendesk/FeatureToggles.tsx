@@ -33,7 +33,7 @@ export function FeatureToggles({ initialEnabled, initialDryRun, initialProvider,
   const [enabled, setEnabled] = useState<boolean>(!!initialEnabled)
   const [dryRun, setDryRun] = useState<boolean>(!!initialDryRun)
   const [provider, setProvider] = useState<string>(initialProvider || 'google')
-  const [model, setModel] = useState<string>(initialModel || 'gemini-3-pro-preview')
+  const [model, setModel] = useState<string>(initialModel || 'gemini-3-flash-preview')
   const [loading, setLoading] = useState<boolean>(false)
   const [modelsConfig, setModelsConfig] = useState<ModelsConfig | null>(null)
 
@@ -168,7 +168,7 @@ export function FeatureToggles({ initialEnabled, initialDryRun, initialProvider,
         </div>
 
         <p className="text-xs text-muted-foreground">
-          Default: Gemini 3 Pro Preview. Enable dry run to test model changes without affecting live tickets.
+          Default: Gemini 3 Flash. Enable dry run to test model changes without affecting live tickets.
         </p>
       </div>
     </div>

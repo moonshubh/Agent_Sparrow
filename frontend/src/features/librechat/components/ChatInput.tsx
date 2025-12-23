@@ -125,10 +125,9 @@ export function ChatInput({ initialInput, onInitialInputUsed }: ChatInputProps) 
         continue;
       }
 
-      let reader: FileReader | null = null;
+      const reader = new FileReader();
       try {
         // Read file as base64 with proper error handling
-        reader = new FileReader();
         readersRef.current.push(reader);
         const dataUrl = await new Promise<string>((resolve, reject) => {
           reader.onload = () => {
@@ -162,9 +161,7 @@ export function ChatInput({ initialInput, onInitialInputUsed }: ChatInputProps) 
           console.error('File read failed');
         }
       } finally {
-        if (reader) {
-          readersRef.current = readersRef.current.filter((r) => r !== reader);
-        }
+        readersRef.current = readersRef.current.filter((r) => r !== reader);
       }
     }
 

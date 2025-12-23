@@ -21,6 +21,10 @@ import {
 } from '../artifacts';
 import type { Artifact, ArtifactType } from '../artifacts';
 
+type ExtendedComponents = Components & {
+  artifact?: (props: any) => React.ReactElement | null;
+};
+
 interface EnhancedMarkdownProps {
   /** The markdown content to render */
   content: string;
@@ -143,11 +147,11 @@ export const EnhancedMarkdown = memo(function EnhancedMarkdown({
   );
 
   // Custom components for markdown rendering
-  const components: Components = useMemo(() => {
+  const components: ExtendedComponents = useMemo(() => {
     const isLibreChat = variant === 'librechat';
     const artifactTheme = isLibreChat ? 'librechat' : 'default';
 
-    const baseComponents: Components = {
+    const baseComponents: ExtendedComponents = {
       // Code blocks with syntax highlighting, copy button, and artifact detection
       // Destructure artifact props to prevent them from being spread onto DOM elements
       code({
