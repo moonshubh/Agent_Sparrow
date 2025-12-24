@@ -3,6 +3,7 @@
 import { useEffect, Suspense } from 'react'
 import { useSearchParams } from 'next/navigation'
 import { GoogleLoginForm } from '@/features/auth/components/GoogleLoginForm'
+import { LampSectionHeader } from '@/features/auth/components/LampSectionHeader'
 import { Loader2 } from 'lucide-react'
 import Image from 'next/image'
 
@@ -21,13 +22,11 @@ function LoginInner() {
     <div className="grid min-h-screen w-full lg:grid-cols-2">
       {/* Left Column - Login Form */}
       <div className="flex flex-col items-center justify-center p-6 lg:p-8">
-        <div className="w-full max-w-md space-y-6">
-          <div className="flex flex-col items-center gap-2 text-center">
-            <h2 className="text-3xl font-bold tracking-tight">Agent Sparrow</h2>
-            <p className="text-balance text-muted-foreground">
-              Welcome back! Please sign in to continue.
-            </p>
-          </div>
+        <div className="w-full max-w-md space-y-8">
+          <LampSectionHeader
+            title="Agent Sparrow"
+            subtitle="Welcome back! Please sign in to continue."
+          />
           <GoogleLoginForm />
         </div>
       </div>
@@ -37,7 +36,7 @@ function LoginInner() {
         {/* NOTE: Don't rely on `aspect-*` utilities here. This repo's Tailwind config
            does not generate aspect-ratio classes, and `Image fill` requires an
            explicit-sized parent. */}
-        <div className="relative h-[70vh] w-full max-w-xl">
+        <div className="relative h-[82vh] w-full max-w-2xl">
           <Image
             src="/Sparrow_login_logo.png"
             alt="Agent Sparrow"

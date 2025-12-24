@@ -6,12 +6,16 @@ import { cn } from '@/shared/lib/utils'
 type LampContainerProps = {
   children: React.ReactNode
   className?: string
+  align?: 'center' | 'left' | 'right'
 }
 
-export function LampContainer({ children, className }: LampContainerProps) {
+export function LampContainer({ children, className, align = 'center' }: LampContainerProps) {
+  const justifyClass =
+    align === 'left' ? 'justify-start' : align === 'right' ? 'justify-end' : 'justify-center'
+
   return (
-    <div className={cn('relative flex w-full justify-center', className)}>
-      <div className="pointer-events-none absolute inset-x-0 -top-[220px] flex h-[460px] justify-center">
+    <div className={cn('relative flex w-full', justifyClass, className)}>
+      <div className={cn('pointer-events-none absolute inset-x-0 -top-[220px] flex h-[460px]', justifyClass)}>
         <div className="relative h-full w-[420px]">
           <div className="absolute left-1/2 top-0 h-[420px] w-[420px] -translate-x-1/2 rounded-full bg-[radial-gradient(circle_at_center,rgba(255,255,255,0.32),rgba(253,212,112,0.22),transparent_70%)] blur-[140px] opacity-90" />
           <div className="absolute left-1/2 top-[120px] h-[320px] w-[320px] -translate-x-1/2 rounded-full bg-[radial-gradient(circle_at_center,rgba(253,230,138,0.32),rgba(250,204,21,0.18),transparent_70%)] blur-[110px] opacity-80" />
@@ -20,7 +24,7 @@ export function LampContainer({ children, className }: LampContainerProps) {
         </div>
       </div>
 
-      <div className="relative z-10 flex w-full justify-center">
+      <div className={cn('relative z-10 flex w-full', justifyClass)}>
         {children}
       </div>
     </div>
