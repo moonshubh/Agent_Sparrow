@@ -14,6 +14,7 @@ from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from app.core.settings import settings
 from app.db.supabase.client import get_supabase_client
 from .client import ZendeskClient
+from .exclusions import compute_ticket_exclusion
 from app.core.user_context import UserContext, user_context_scope
 from app.agents.unified.agent_sparrow import run_unified_agent
 from app.agents.orchestration.orchestration.state import GraphState
@@ -3783,6 +3784,39 @@ async def _process_window(
             v = getattr(verify, "data", None) or {}
             if v.get("status") != "processing":
                 # Already claimed/processed elsewhere; skip
+                continue
+
+            # Exclusions (e.g., solved tickets, or feature-delivery macro tags) should not
+            # get an internal note / suggested reply.
+            try:
+                ticket = await asyncio.to_thread(zc.get_ticket, tid)
+            except Exception:
+                ticket = {}
+            exclusion = compute_ticket_exclusion(
+                ticket if isinstance(ticket, dict) else None,
+                brand_id=row.get("brand_id"),
+                excluded_statuses=getattr(settings, "zendesk_excluded_statuses", []),
+                excluded_tags=getattr(settings, "zendesk_excluded_tags", []),
+                excluded_brand_ids=getattr(settings, "zendesk_excluded_brand_ids", []),
+            )
+            if exclusion.excluded:
+                await supa._exec(
+                    lambda: supa.client.table("zendesk_pending_tickets")
+                    .update(
+                        {
+                            "status": "processed",
+                            "processed_at": datetime.now(timezone.utc).isoformat(),
+                            "status_details": {
+                                "processing_started_at": now_iso,
+                                "skipped": True,
+                                "skip_reason": exclusion.reason,
+                                **(exclusion.details or {}),
+                            },
+                        }
+                    )
+                    .eq("id", row["id"])
+                    .execute()
+                )
                 continue
 
             # Generate suggested reply after successful claim

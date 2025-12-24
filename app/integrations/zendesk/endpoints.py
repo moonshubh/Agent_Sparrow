@@ -12,6 +12,7 @@ from pydantic import BaseModel
 
 from app.core.settings import settings
 from app.db.supabase.client import get_supabase_client
+from .exclusions import compute_ticket_exclusion
 from .security import verify_webhook_signature
 
 router = APIRouter(prefix="/integrations/zendesk", tags=["Zendesk"])
@@ -476,6 +477,25 @@ async def webhook(request: Request) -> Dict[str, Any]:
     configured_brand = getattr(settings, "zendesk_brand_id", None)
     if configured_brand and str(brand_id) != str(configured_brand):
         return {"ok": True, "filtered": True}
+
+    # Exclusions (status/tags/brand) to avoid generating internal notes on tickets like
+    # proactive feature-delivery macros that are created already solved.
+    ticket_for_exclusion: Dict[str, Any] = t if isinstance(t, dict) else {}
+    if isinstance(payload, dict):
+        if "status" not in ticket_for_exclusion and payload.get("status") is not None:
+            ticket_for_exclusion = {**ticket_for_exclusion, "status": payload.get("status")}
+        if "tags" not in ticket_for_exclusion and payload.get("tags") is not None:
+            ticket_for_exclusion = {**ticket_for_exclusion, "tags": payload.get("tags")}
+
+    exclusion = compute_ticket_exclusion(
+        ticket_for_exclusion,
+        brand_id=str(brand_id) if brand_id is not None else None,
+        excluded_statuses=getattr(settings, "zendesk_excluded_statuses", []),
+        excluded_tags=getattr(settings, "zendesk_excluded_tags", []),
+        excluded_brand_ids=getattr(settings, "zendesk_excluded_brand_ids", []),
+    )
+    if exclusion.excluded:
+        return {"ok": True, "filtered": True, "reason": exclusion.reason}
 
     # Minimal retention: truncate long text fields and do NOT persist raw payload
     if subject:

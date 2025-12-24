@@ -326,6 +326,20 @@ class Settings(BaseSettings):
     zendesk_api_token: Optional[str] = Field(default=None, alias="ZENDESK_API_TOKEN")
     zendesk_signing_secret: Optional[str] = Field(default=None, alias="ZENDESK_SIGNING_SECRET")
     zendesk_brand_id: Optional[str] = Field(default=None, alias="ZENDESK_BRAND_ID")
+    # Exclusion rules to prevent generating internal notes on certain tickets.
+    # Example use-case: skip proactive feature-delivery tickets that are created already solved.
+    zendesk_excluded_statuses: List[str] = Field(
+        default_factory=lambda: ["solved", "closed"],
+        alias="ZENDESK_EXCLUDED_STATUSES",
+    )
+    zendesk_excluded_tags: List[str] = Field(
+        default_factory=lambda: ["mac_general__feature_delivered"],
+        alias="ZENDESK_EXCLUDED_TAGS",
+    )
+    zendesk_excluded_brand_ids: List[str] = Field(
+        default_factory=list,
+        alias="ZENDESK_EXCLUDED_BRAND_IDS",
+    )
     zendesk_windows_brand_ids: List[str] = Field(default_factory=list, alias="ZENDESK_WINDOWS_BRAND_IDS")
     zendesk_dry_run: bool = Field(default=True, alias="ZENDESK_DRY_RUN")
     zendesk_poll_interval_sec: int = Field(default=60, alias="ZENDESK_POLL_INTERVAL_SEC")
@@ -585,6 +599,77 @@ class Settings(BaseSettings):
     @field_validator('zendesk_windows_brand_ids', mode='before')
     @classmethod
     def parse_zendesk_windows_brand_ids(cls, v):
+        if v is None:
+            return []
+        if isinstance(v, str):
+            raw = v.strip()
+            if not raw:
+                return []
+            if raw.startswith("["):
+                try:
+                    parsed = json.loads(raw)
+                    if isinstance(parsed, list):
+                        return [str(item).strip() for item in parsed if str(item).strip()]
+                except Exception:
+                    return []
+            return [item.strip() for item in raw.split(",") if item.strip()]
+        if isinstance(v, list):
+            return [str(item).strip() for item in v if str(item).strip()]
+        return []
+
+    @field_validator("zendesk_excluded_statuses", mode="before")
+    @classmethod
+    def parse_zendesk_excluded_statuses(cls, v):
+        if v is None:
+            return ["solved", "closed"]
+        if isinstance(v, str):
+            raw = v.strip()
+            if not raw:
+                return []
+            if raw.startswith("["):
+                try:
+                    parsed = json.loads(raw)
+                    if isinstance(parsed, list):
+                        return [
+                            str(item).strip().lower()
+                            for item in parsed
+                            if str(item).strip()
+                        ]
+                except Exception:
+                    return []
+            return [item.strip().lower() for item in raw.split(",") if item.strip()]
+        if isinstance(v, list):
+            return [str(item).strip().lower() for item in v if str(item).strip()]
+        return []
+
+    @field_validator("zendesk_excluded_tags", mode="before")
+    @classmethod
+    def parse_zendesk_excluded_tags(cls, v):
+        if v is None:
+            return ["mac_general__feature_delivered"]
+        if isinstance(v, str):
+            raw = v.strip()
+            if not raw:
+                return []
+            if raw.startswith("["):
+                try:
+                    parsed = json.loads(raw)
+                    if isinstance(parsed, list):
+                        return [
+                            str(item).strip().lower()
+                            for item in parsed
+                            if str(item).strip()
+                        ]
+                except Exception:
+                    return []
+            return [item.strip().lower() for item in raw.split(",") if item.strip()]
+        if isinstance(v, list):
+            return [str(item).strip().lower() for item in v if str(item).strip()]
+        return []
+
+    @field_validator("zendesk_excluded_brand_ids", mode="before")
+    @classmethod
+    def parse_zendesk_excluded_brand_ids(cls, v):
         if v is None:
             return []
         if isinstance(v, str):
