@@ -166,14 +166,63 @@ def _convert_paragraphs_to_br(root, soup: BeautifulSoup) -> None:
         p.unwrap()
 
 
+def _ensure_br_nbsp_before_nested_lists(root, soup: BeautifulSoup) -> None:
+    """Ensure a visible break between a list item's intro text and its nested list.
+
+    Mistune sometimes renders nested lists without a <p> wrapper in the parent <li>,
+    so our paragraph-to-<br> conversion won't insert spacing. Zendesk's editor typically
+    inserts a <br>&nbsp; here when humans edit.
+    """
+
+    def _is_whitespace_text(node: object) -> bool:
+        if not isinstance(node, NavigableString):
+            return False
+        txt = str(node)
+        if txt in {"\u00a0", "&nbsp;"}:
+            return False
+        return not txt.strip()
+
+    for li in root.find_all("li"):
+        for child in list(li.contents):
+            if getattr(child, "name", None) not in {"ul", "ol"}:
+                continue
+
+            # Build a list of meaningful nodes that appear before the nested list.
+            prefix: list[object] = []
+            for n in li.contents:
+                if n is child:
+                    break
+                if _is_whitespace_text(n):
+                    continue
+                prefix.append(n)
+
+            if not prefix:
+                continue
+
+            # Already has <br>&nbsp; immediately before the nested list.
+            if len(prefix) >= 2:
+                prev, last = prefix[-2], prefix[-1]
+                if (
+                    getattr(prev, "name", None) == "br"
+                    and isinstance(last, NavigableString)
+                    and str(last) in {"\u00a0", "&nbsp;"}
+                ):
+                    continue
+
+            child.insert_before(soup.new_tag("br"))
+            child.insert_before(NavigableString("\u00a0"))
+
+
 def _normalize_list_spacing(root, soup: BeautifulSoup) -> None:
-    # Unordered lists: compact items, but add a trailing <br>&nbsp; on the LAST item only
+    # Unordered lists: loose spacing per item, but avoid trailing breaks on items that
+    # contain nested lists (Zendesk already adds spacing there).
     for ul in root.find_all("ul"):
         lis = ul.find_all("li", recursive=False)
-        for li in lis[:-1]:
-            _remove_trailing_br_nbsp(li)
-        if lis:
-            _ensure_trailing_br_nbsp(lis[-1], soup)
+        for li in lis:
+            if li.find(["ul", "ol"]):
+                _remove_trailing_br_nbsp(li)
+                continue
+            _ensure_trailing_br_nbsp(li, soup)
 
     # Ordered lists: loose spacing for each item unless it contains a nested list
     for ol in root.find_all("ol"):
@@ -315,13 +364,13 @@ def format_zendesk_internal_note_markdown_v2(
     has_hi = "hi there" in greeting_window
     has_team = "mailbird customer happiness team" in greeting_window
     if not (has_hi and has_team):
-        greeting = "<p>Hi there,&nbsp;<br>Many thanks for contacting the Mailbird Customer Happiness Team.</p>"
+        greeting = "<p>Hi there,<br>&nbsp;<br>Many thanks for contacting the Mailbird Customer Happiness Team.</p>"
         cleaned = f"{greeting}\n{cleaned}".strip()
 
     # Normalize legacy greeting to the split-line format.
     cleaned = re.sub(
         r"(?is)<p>\s*Hi\s+there\s*,?\s+Many\s+thanks\s+for\s+contacting\s+the\s+Mailbird\s+Customer\s+Happiness\s+Team\b\.?\s*</p>",
-        "<p>Hi there,&nbsp;<br>Many thanks for contacting the Mailbird Customer Happiness Team.</p>",
+        "<p>Hi there,<br>&nbsp;<br>Many thanks for contacting the Mailbird Customer Happiness Team.</p>",
         cleaned,
     )
 
@@ -331,6 +380,7 @@ def format_zendesk_internal_note_markdown_v2(
         return cleaned
 
     _convert_paragraphs_to_br(root, soup)
+    _ensure_br_nbsp_before_nested_lists(root, soup)
     _flatten_secondary_ordered_lists(root, soup)
     _normalize_list_spacing(root, soup)
 
