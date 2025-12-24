@@ -9,9 +9,7 @@ from mistune.plugins import url
 
 
 _UNICODE_BULLETS_RE = re.compile(r"^(\s*)([•●◦‣▪∙·])\s+(.*)$")
-_BOLDED_ORDINAL_RE = re.compile(
-    r"^(\s*)(\*\*|__)(\d+)[\.)]\s+(.*?)(\2)\s*(.*)$"
-)
+_BOLDED_ORDINAL_RE = re.compile(r"^(\s*)(\*\*|__)(\d+)[\.)]\s+(.*?)(\2)\s*(.*)$")
 _LABEL_VALUE_RE = re.compile(r"^(\s*)([A-Z][A-Za-z0-9 \-/()]+):\s+(.*)$")
 _TABLE_SEPARATOR_RE = re.compile(r"^\s*\|?\s*[:\-]+\s*(?:\|\s*[:\-]+\s*)+\|?\s*$")
 
@@ -59,7 +57,11 @@ def _normalize_markdown(text: str) -> str:
         stripped = line.strip()
 
         # Render pipe tables as a fenced code block (safe fallback if Zendesk strips <table>).
-        if "|" in line and i + 1 < len(lines) and _TABLE_SEPARATOR_RE.match(lines[i + 1]):
+        if (
+            "|" in line
+            and i + 1 < len(lines)
+            and _TABLE_SEPARATOR_RE.match(lines[i + 1])
+        ):
             header_cells = _split_table_row(line)
             if len(header_cells) >= 2:
                 table_block = [line, lines[i + 1]]
@@ -125,7 +127,11 @@ _TRAILING_BR_NBSP_RE = re.compile(r"(?is)<br\s*/?>\s*(?:&nbsp;|\u00a0)\s*$")
 
 def _remove_trailing_br_nbsp(li) -> None:
     # Remove whitespace-only text nodes at the end.
-    while li.contents and isinstance(li.contents[-1], NavigableString) and not str(li.contents[-1]).strip():
+    while (
+        li.contents
+        and isinstance(li.contents[-1], NavigableString)
+        and not str(li.contents[-1]).strip()
+    ):
         li.contents[-1].extract()
 
     # Remove <br>&nbsp; at the very end.
@@ -234,7 +240,6 @@ def _flatten_secondary_ordered_lists(root, soup: BeautifulSoup) -> None:
         next2.decompose()
 
 
-
 class _ZendeskMarkdownV2Renderer(mistune.HTMLRenderer):
     def __init__(self, *, format_style: str) -> None:
         super().__init__()
@@ -310,8 +315,15 @@ def format_zendesk_internal_note_markdown_v2(
     has_hi = "hi there" in greeting_window
     has_team = "mailbird customer happiness team" in greeting_window
     if not (has_hi and has_team):
-        greeting = "<p>Hi there, Many thanks for contacting the Mailbird Customer Happiness Team.</p>"
+        greeting = "<p>Hi there,&nbsp;<br>Many thanks for contacting the Mailbird Customer Happiness Team.</p>"
         cleaned = f"{greeting}\n{cleaned}".strip()
+
+    # Normalize legacy greeting to the split-line format.
+    cleaned = re.sub(
+        r"(?is)<p>\s*Hi\s+there\s*,?\s+Many\s+thanks\s+for\s+contacting\s+the\s+Mailbird\s+Customer\s+Happiness\s+Team\b\.?\s*</p>",
+        "<p>Hi there,&nbsp;<br>Many thanks for contacting the Mailbird Customer Happiness Team.</p>",
+        cleaned,
+    )
 
     soup = BeautifulSoup(f"<div>{cleaned}</div>", "lxml")
     root = soup.div

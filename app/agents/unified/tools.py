@@ -8,7 +8,7 @@ from datetime import datetime
 from functools import lru_cache
 import json
 import uuid
-from typing import Any, Dict, List, Optional, Annotated, Union, Callable
+from typing import Any, Dict, List, Optional, Annotated, Callable
 
 import httpx
 from bs4 import BeautifulSoup
@@ -47,7 +47,9 @@ from app.core.logging_config import get_logger
 import redis
 
 
-TOOL_RATE_LIMIT_MODEL = settings.router_model or settings.primary_agent_model or "gemini-2.5-flash-lite"
+TOOL_RATE_LIMIT_MODEL = (
+    settings.router_model or settings.primary_agent_model or "gemini-2.5-flash-lite"
+)
 ALLOWED_SUPABASE_TABLES = {
     "mailbird_knowledge",
     "feedme_conversations",
@@ -259,6 +261,8 @@ async def _http_fetch_fallback(url: str, max_chars: int = 8000) -> Dict[str, Any
     except Exception:
         title = None
 
+    content_type = (resp.headers.get("content-type") or "").split(";")[0].strip()
+
     payload = {
         "url": str(resp.url),
         "status_code": resp.status_code,
@@ -272,7 +276,9 @@ async def _http_fetch_fallback(url: str, max_chars: int = 8000) -> Dict[str, Any
     return payload
 
 
-async def _grounding_fallback(query: str, max_results: int, reason: str) -> Dict[str, Any]:
+async def _grounding_fallback(
+    query: str, max_results: int, reason: str
+) -> Dict[str, Any]:
     service = _grounding_service()
     return await service.fallback_search(query, max_results, reason=reason)
 
@@ -324,7 +330,9 @@ class WebSearchInput(BaseModel):
 
 
 class GroundingSearchInput(BaseModel):
-    query: str = Field(..., description="Query to send through Gemini Search Grounding.")
+    query: str = Field(
+        ..., description="Query to send through Gemini Search Grounding."
+    )
     max_results: int = Field(
         default=5,
         ge=1,
@@ -334,11 +342,21 @@ class GroundingSearchInput(BaseModel):
 
 
 class FeedMeSearchInput(BaseModel):
-    query: str = Field(..., description="Natural language query to search FeedMe conversations.")
-    max_results: int = Field(default=5, ge=1, le=10, description="Maximum conversations to surface.")
-    folder_id: Optional[int] = Field(default=None, description="Optional FeedMe folder filter.")
-    start_date: Optional[datetime] = Field(default=None, description="Only include conversations on/after this ISO date.")
-    end_date: Optional[datetime] = Field(default=None, description="Only include conversations on/before this ISO date.")
+    query: str = Field(
+        ..., description="Natural language query to search FeedMe conversations."
+    )
+    max_results: int = Field(
+        default=5, ge=1, le=10, description="Maximum conversations to surface."
+    )
+    folder_id: Optional[int] = Field(
+        default=None, description="Optional FeedMe folder filter."
+    )
+    start_date: Optional[datetime] = Field(
+        default=None, description="Only include conversations on/after this ISO date."
+    )
+    end_date: Optional[datetime] = Field(
+        default=None, description="Only include conversations on/before this ISO date."
+    )
 
 
 class SupabaseQueryInput(BaseModel):
@@ -348,8 +366,12 @@ class SupabaseQueryInput(BaseModel):
         description="Field→operations map (eq/gte/lte/ilike/in).",
     )
     limit: int = Field(default=20, ge=1, le=100, description="Max rows to return.")
-    order_by: Optional[str] = Field(default=None, description="Optional column to order by.")
-    ascending: bool = Field(default=True, description="Order direction when order_by is set.")
+    order_by: Optional[str] = Field(
+        default=None, description="Optional column to order by."
+    )
+    ascending: bool = Field(
+        default=True, description="Order direction when order_by is set."
+    )
 
 
 # --- Database Retrieval Subagent Input Schemas ---
@@ -454,12 +476,14 @@ async def kb_search_tool(
     sources = search_sources or ["knowledge_base"]
     if "knowledge_base" not in sources:
         logger.info("kb_search skipped because knowledge_base not requested")
-        return _serialize_tool_output({
-            "query": query,
-            "results": [],
-            "reason": "knowledge_base_not_requested",
-            "session_id": session_id,
-        })
+        return _serialize_tool_output(
+            {
+                "query": query,
+                "results": [],
+                "reason": "knowledge_base_not_requested",
+                "session_id": session_id,
+            }
+        )
 
     retriever = _hybrid_retriever()
     filters = _build_kb_filters(context or {})
@@ -515,117 +539,108 @@ class LogDiagnoserInput(BaseModel):
 
 class FirecrawlFetchInput(BaseModel):
     """Enhanced input schema for Firecrawl fetch with advanced options."""
+
     url: str = Field(..., description="URL to scrape for detailed content.")
     formats: Optional[List[str]] = Field(
         default=None,
-        description="Output formats: markdown, html, screenshot, links, rawHtml. Default: ['markdown']"
+        description="Output formats: markdown, html, screenshot, links, rawHtml. Default: ['markdown']",
     )
     actions: Optional[List[Dict[str, Any]]] = Field(
         default=None,
-        description="Page actions before scraping: [{type: 'click'|'scroll'|'wait'|'write'|'press', ...}]"
+        description="Page actions before scraping: [{type: 'click'|'scroll'|'wait'|'write'|'press', ...}]",
     )
     wait_for: Optional[int] = Field(
         default=None,
-        description="Wait time in milliseconds for dynamic content to load."
+        description="Wait time in milliseconds for dynamic content to load.",
     )
     only_main_content: bool = Field(
         default=True,
-        description="Extract main content only, filtering out navigation/ads."
+        description="Extract main content only, filtering out navigation/ads.",
     )
     json_schema: Optional[Dict[str, Any]] = Field(
         default=None,
-        description="JSON schema for structured extraction (enables JSON mode)."
+        description="JSON schema for structured extraction (enables JSON mode).",
     )
 
 
 class FirecrawlMapInput(BaseModel):
     """Input schema for Firecrawl map (URL discovery)."""
+
     url: str = Field(..., description="Base URL to map and discover all pages.")
     limit: int = Field(
-        default=100,
-        ge=1,
-        le=1000,
-        description="Maximum URLs to discover."
+        default=100, ge=1, le=1000, description="Maximum URLs to discover."
     )
     search: Optional[str] = Field(
-        default=None,
-        description="Filter URLs containing this string."
+        default=None, description="Filter URLs containing this string."
     )
     include_subdomains: bool = Field(
-        default=False,
-        description="Include subdomains in results."
+        default=False, description="Include subdomains in results."
     )
 
 
 class FirecrawlCrawlInput(BaseModel):
     """Input schema for Firecrawl crawl (multi-page extraction)."""
+
     url: str = Field(..., description="Starting URL to crawl.")
     limit: int = Field(
         default=10,
         ge=1,
         le=50,
-        description="Max pages to crawl. <=10 is sync, >10 is async."
+        description="Max pages to crawl. <=10 is sync, >10 is async.",
     )
     max_depth: int = Field(
-        default=2,
-        ge=1,
-        le=5,
-        description="Maximum link depth to follow."
+        default=2, ge=1, le=5, description="Maximum link depth to follow."
     )
     include_paths: Optional[List[str]] = Field(
         default=None,
-        description="Only crawl paths matching these patterns (e.g., ['/blog/*'])."
+        description="Only crawl paths matching these patterns (e.g., ['/blog/*']).",
     )
     exclude_paths: Optional[List[str]] = Field(
         default=None,
-        description="Skip paths matching these patterns (e.g., ['/admin/*'])."
+        description="Skip paths matching these patterns (e.g., ['/admin/*']).",
     )
 
 
 class FirecrawlCrawlStatusInput(BaseModel):
     """Input schema for checking async crawl status."""
+
     crawl_id: str = Field(..., description="Crawl job ID from async crawl.")
 
 
 class FirecrawlExtractInput(BaseModel):
     """Input schema for Firecrawl extract (AI-powered structured extraction)."""
+
     urls: List[str] = Field(..., description="URLs to extract data from.")
     prompt: Optional[str] = Field(
         default=None,
-        description="Natural language extraction prompt (e.g., 'Extract product prices')."
+        description="Natural language extraction prompt (e.g., 'Extract product prices').",
     )
     schema: Optional[Dict[str, Any]] = Field(
-        default=None,
-        description="JSON schema for structured extraction."
+        default=None, description="JSON schema for structured extraction."
     )
     enable_web_search: bool = Field(
-        default=False,
-        description="Enable web search for additional context."
+        default=False, description="Enable web search for additional context."
     )
 
     @model_validator(mode="after")
     def validate_prompt_or_schema(self):
         if not self.prompt and not self.schema:
-            raise ValueError("Either 'prompt' or 'schema' must be provided for extraction.")
+            raise ValueError(
+                "Either 'prompt' or 'schema' must be provided for extraction."
+            )
         return self
 
 
 class FirecrawlSearchInput(BaseModel):
     """Input schema for Firecrawl enhanced search."""
+
     query: str = Field(..., description="Search query string.")
-    limit: int = Field(
-        default=5,
-        ge=1,
-        le=10,
-        description="Maximum number of results."
-    )
+    limit: int = Field(default=5, ge=1, le=10, description="Maximum number of results.")
     sources: List[str] = Field(
-        default=["web"],
-        description="Sources to search: web, images, news."
+        default=["web"], description="Sources to search: web, images, news."
     )
     scrape_options: Optional[Dict[str, Any]] = Field(
-        default=None,
-        description="Options for scraping search results."
+        default=None, description="Options for scraping search results."
     )
 
 
@@ -691,7 +706,7 @@ async def log_diagnoser_tool(
             "error": "log_analysis_failed",
             "message": str(e),
             "trace_id": input.trace_id,
-            "suggestion": "Please check the log format and try again."
+            "suggestion": "Please check the log format and try again.",
         }
 
 
@@ -708,7 +723,7 @@ async def web_search_tool(
     Supports both structured invocation with a WebSearchInput object and
     direct kwargs (query, max_results, include_images) so that LangChain/DeepAgents tool
     calls that pass raw arguments continue to work.
-    
+
     Returns a dict containing:
     - query: The search query
     - results: List of search result objects
@@ -719,7 +734,9 @@ async def web_search_tool(
 
     # Normalize inputs regardless of how the tool is invoked
     if input is None:
-        input = WebSearchInput(query=query or "", max_results=max_results, include_images=include_images)
+        input = WebSearchInput(
+            query=query or "", max_results=max_results, include_images=include_images
+        )
 
     max_retries = 3
     tavily = _tavily_client()
@@ -740,10 +757,7 @@ async def web_search_tool(
                 f"web_search_tool_invoked query='{input.query}' max_results={input.max_results} include_images={input.include_images} attempt={attempt + 1}"
             )
             result = await asyncio.to_thread(
-                tavily.search, 
-                input.query, 
-                input.max_results,
-                input.include_images
+                tavily.search, input.query, input.max_results, input.include_images
             )
             urls = result.get("urls") if isinstance(result, dict) else None
             images = result.get("images") if isinstance(result, dict) else None
@@ -756,7 +770,11 @@ async def web_search_tool(
             if attempt == max_retries - 1:
                 logger.warning("web_search_tool_failed", error=str(e))
                 try:
-                    fallback_sources = ["web", "news", "images"] if input.include_images else ["web", "news"]
+                    fallback_sources = (
+                        ["web", "news", "images"]
+                        if input.include_images
+                        else ["web", "news"]
+                    )
                     fallback = await firecrawl_search_tool(
                         input=FirecrawlSearchInput(
                             query=input.query,
@@ -767,8 +785,14 @@ async def web_search_tool(
                     if isinstance(fallback, dict) and not fallback.get("error"):
                         return fallback
                 except Exception as fallback_exc:
-                    logger.error("web_search_firecrawl_fallback_failed", error=str(fallback_exc))
-                return {"error": "web_search_failed", "message": str(e), "query": input.query}
+                    logger.error(
+                        "web_search_firecrawl_fallback_failed", error=str(fallback_exc)
+                    )
+                return {
+                    "error": "web_search_failed",
+                    "message": str(e),
+                    "query": input.query,
+                }
             await asyncio.sleep(1 * (attempt + 1))  # Exponential backoff
 
 
@@ -807,16 +831,24 @@ async def grounding_search_tool(
         if response.get("results"):
             return response
         logger.info(f"grounding_search_tool_empty query='{input.query}'")
-        return await _grounding_fallback(input.query, input.max_results, reason="empty_results")
+        return await _grounding_fallback(
+            input.query, input.max_results, reason="empty_results"
+        )
     except QuotaExceededError as exc:
         logger.warning("grounding_search_quota", error=str(exc))
-        return await _grounding_fallback(input.query, input.max_results, reason="quota_exceeded")
+        return await _grounding_fallback(
+            input.query, input.max_results, reason="quota_exceeded"
+        )
     except GroundingUnavailableError as exc:
         logger.info("grounding_search_unavailable", error=str(exc))
-        return await _grounding_fallback(input.query, input.max_results, reason="unavailable")
+        return await _grounding_fallback(
+            input.query, input.max_results, reason="unavailable"
+        )
     except GroundingServiceError as exc:
         logger.warning("grounding_search_error", error=str(exc))
-        return await _grounding_fallback(input.query, input.max_results, reason="service_error")
+        return await _grounding_fallback(
+            input.query, input.max_results, reason="service_error"
+        )
 
 
 @tool("fetch_url", args_schema=FirecrawlFetchInput)
@@ -857,7 +889,9 @@ async def firecrawl_fetch_tool(
     firecrawl = _firecrawl_client()
 
     # Determine if we need advanced scraping or basic
-    use_advanced = bool(input.formats or input.actions or input.wait_for or input.json_schema)
+    use_advanced = bool(
+        input.formats or input.actions or input.wait_for or input.json_schema
+    )
     cache_key = f"firecrawl_fetch:{input.url}:{input.formats}:{input.actions}:{input.wait_for}:{input.json_schema}"
     cached = _maybe_cached_tool_result(cache_key)
     if cached:
@@ -1066,7 +1100,9 @@ async def firecrawl_crawl_status_tool(
             raise RuntimeError(result["error"])
         return result
     except Exception as e:
-        logger.error(f"firecrawl_crawl_status_tool_error crawl_id='{input.crawl_id}' error='{str(e)}'")
+        logger.error(
+            f"firecrawl_crawl_status_tool_error crawl_id='{input.crawl_id}' error='{str(e)}'"
+        )
         return {"error": str(e)}
 
 
@@ -1115,7 +1151,9 @@ async def firecrawl_extract_tool(
             raise RuntimeError(result["error"])
         return result
     except Exception as e:
-        logger.error(f"firecrawl_extract_tool_error urls={len(input.urls)} error='{str(e)}'")
+        logger.error(
+            f"firecrawl_extract_tool_error urls={len(input.urls)} error='{str(e)}'"
+        )
         return {"error": str(e)}
 
 
@@ -1165,7 +1203,9 @@ async def firecrawl_search_tool(
             raise RuntimeError(result["error"])
         return result
     except Exception as e:
-        logger.error(f"firecrawl_search_tool_error query='{input.query}' error='{str(e)}'")
+        logger.error(
+            f"firecrawl_search_tool_error query='{input.query}' error='{str(e)}'"
+        )
         return {"error": str(e)}
 
 
@@ -1194,19 +1234,19 @@ def get_registered_tools() -> List[BaseTool]:
         grounding_search_tool,
         web_search_tool,
         # Firecrawl tools - full web scraping and extraction suite
-        firecrawl_fetch_tool,         # Enhanced single-page scrape (screenshots, actions, JSON)
-        firecrawl_map_tool,           # URL discovery
-        firecrawl_crawl_tool,         # Multi-page extraction
+        firecrawl_fetch_tool,  # Enhanced single-page scrape (screenshots, actions, JSON)
+        firecrawl_map_tool,  # URL discovery
+        firecrawl_crawl_tool,  # Multi-page extraction
         firecrawl_crawl_status_tool,  # Async crawl status
-        firecrawl_extract_tool,       # AI structured extraction
-        firecrawl_search_tool,        # Enhanced web search
+        firecrawl_extract_tool,  # AI structured extraction
+        firecrawl_search_tool,  # Enhanced web search
         # Other tools
         feedme_search_tool,
         supabase_query_tool,
         log_diagnoser_tool,
-        generate_image_tool,          # Gemini Nano Banana Pro image generation
-        write_article_tool,           # Rich article/report artifact creation
-        read_skill_tool,              # Progressive skill disclosure - load full skill on demand
+        generate_image_tool,  # Gemini Nano Banana Pro image generation
+        write_article_tool,  # Rich article/report artifact creation
+        read_skill_tool,  # Progressive skill disclosure - load full skill on demand
         get_weather,
         generate_task_steps_generative_ui,
         write_todos,
@@ -1233,15 +1273,22 @@ class Step(BaseModel):
     """
     A step in a task.
     """
+
     description: str = Field(description="The text of the step in gerund form")
-    status: str = Field(description="The status of the step (pending|in_progress|done), defaults to pending")
+    status: str = Field(
+        description="The status of the step (pending|in_progress|done), defaults to pending"
+    )
 
 
 class TodoItem(BaseModel):
     """Lightweight todo list entry for planning."""
 
-    id: Optional[str] = Field(default=None, description="Stable id for tracking updates.")
-    title: str = Field(description="Short title of the todo item (imperative).", alias="content")
+    id: Optional[str] = Field(
+        default=None, description="Stable id for tracking updates."
+    )
+    title: str = Field(
+        description="Short title of the todo item (imperative).", alias="content"
+    )
     status: Optional[str] = Field(
         default="pending",
         description="Status of the todo item (normalized to pending|in_progress|done).",
@@ -1256,7 +1303,9 @@ class TodoItem(BaseModel):
 class TodoPayload(BaseModel):
     """Relaxed schema used for inbound todo items from tools."""
 
-    id: Optional[str] = Field(default=None, description="Stable id for tracking updates.")
+    id: Optional[str] = Field(
+        default=None, description="Stable id for tracking updates."
+    )
     title: Optional[str] = Field(
         default=None,
         description="Short title of the todo item (imperative).",
@@ -1358,7 +1407,9 @@ class WriteTodosInput(BaseModel):
             value["todos"] = value["todo_list"]
 
         # If we still didn't get todos, but a single todo-like dict was passed
-        if "todos" not in value and {"title", "content", "description"} & set(value.keys()):
+        if "todos" not in value and {"title", "content", "description"} & set(
+            value.keys()
+        ):
             value["todos"] = [value]
 
         # Ensure todos field always exists to avoid validation errors
@@ -1385,10 +1436,9 @@ def get_weather(location: str):
 @tool
 async def generate_task_steps_generative_ui(
     steps: Annotated[
-        List[Step],
-        "An array of 10 step objects, each containing text and status"
+        List[Step], "An array of 10 step objects, each containing text and status"
     ],
-    config: Annotated[RunnableConfig, InjectedToolArg]
+    config: Annotated[RunnableConfig, InjectedToolArg],
 ):
     """
     Make up 10 steps (only a couple of words per step) that are required for a task.
@@ -1396,7 +1446,7 @@ async def generate_task_steps_generative_ui(
     """
     # Simulate executing the steps with streaming updates
     current_steps = [step.model_dump() for step in steps]
-    
+
     # Emit initial state
     await adispatch_custom_event(
         "manually_emit_state",
@@ -1412,8 +1462,8 @@ async def generate_task_steps_generative_ui(
             "manually_emit_state",
             {"steps": current_steps},
             config=config,
-    )
-    
+        )
+
     return "Steps generated and executed."
 
 
@@ -1599,7 +1649,9 @@ async def feedme_search_tool(
                 summary_source = extracted.strip()
         if not summary_source:
             summary_source = _summarize_snippets(payload.get("snippets", []))
-        summary_compact = _summarize_snippets([summary_source] if summary_source else [])
+        summary_compact = _summarize_snippets(
+            [summary_source] if summary_source else []
+        )
         summary = redact_pii(summary_compact or summary_source or "")
 
         results.append(
@@ -1725,7 +1777,9 @@ async def db_unified_search_tool(
     """
     if sources is None:
         sources = ["kb", "macros", "feedme"]
-    weights = getattr(settings, "db_source_weights", {"kb": 1.0, "macro": 0.9, "feedme": 0.8})
+    weights = getattr(
+        settings, "db_source_weights", {"kb": 1.0, "macro": 0.9, "feedme": 0.8}
+    )
 
     retrieval_id = f"ret-{uuid.uuid4().hex[:8]}"
     results: List[Dict[str, Any]] = []
@@ -1753,6 +1807,7 @@ async def db_unified_search_tool(
     if "kb" in sources:
         sources_searched.append("kb")
         try:
+
             def _search_kb():
                 return client.client.rpc(
                     "search_mailbird_knowledge",
@@ -1771,19 +1826,25 @@ async def db_unified_search_tool(
                     content = row.get("content") or row.get("markdown") or ""
                     # Extract title from URL if available
                     url = row.get("url", "")
-                    title = url.split("/")[-1].replace("-", " ").title() if url else "KB Article"
-                    results.append(_format_result_with_content_type(
-                        source="kb",
-                        title=title,
-                        content=content,  # Full content
-                        relevance_score=float(row.get("similarity", 0.0)),
-                        metadata={
-                            "id": row.get("id"),
-                            "url": url,
-                            "last_updated": row.get("updated_at"),
-                        },
-                        weight=weights.get("kb", 1.0),
-                    ))
+                    title = (
+                        url.split("/")[-1].replace("-", " ").title()
+                        if url
+                        else "KB Article"
+                    )
+                    results.append(
+                        _format_result_with_content_type(
+                            source="kb",
+                            title=title,
+                            content=content,  # Full content
+                            relevance_score=float(row.get("similarity", 0.0)),
+                            metadata={
+                                "id": row.get("id"),
+                                "url": url,
+                                "last_updated": row.get("updated_at"),
+                            },
+                            weight=weights.get("kb", 1.0),
+                        )
+                    )
             else:
                 no_results_sources.append("kb")
         except Exception as exc:
@@ -1795,6 +1856,7 @@ async def db_unified_search_tool(
     if "macros" in sources:
         sources_searched.append("macros")
         try:
+
             def _search_macros():
                 return client.client.rpc(
                     "search_zendesk_macros",
@@ -1811,17 +1873,19 @@ async def db_unified_search_tool(
                 for row in macro_rows[:max_results_per_source]:
                     # Full macro content
                     content = row.get("comment_value", "") or row.get("description", "")
-                    results.append(_format_result_with_content_type(
-                        source="macro",
-                        title=row.get("title", "Macro"),
-                        content=content,
-                        relevance_score=float(row.get("similarity", 0.0)),
-                        metadata={
-                            "zendesk_id": row.get("zendesk_id"),
-                            "last_updated": row.get("updated_at"),
-                        },
-                        weight=weights.get("macro", 1.0),
-                    ))
+                    results.append(
+                        _format_result_with_content_type(
+                            source="macro",
+                            title=row.get("title", "Macro"),
+                            content=content,
+                            relevance_score=float(row.get("similarity", 0.0)),
+                            metadata={
+                                "zendesk_id": row.get("zendesk_id"),
+                                "last_updated": row.get("updated_at"),
+                            },
+                            weight=weights.get("macro", 1.0),
+                        )
+                    )
             else:
                 no_results_sources.append("macros")
         except Exception as exc:
@@ -1876,7 +1940,9 @@ async def db_unified_search_tool(
                 else:
                     no_results_sources.append("macros")
             except Exception as inner_exc:
-                logger.error("DB retrieval macros fallback search failed: %s", inner_exc)
+                logger.error(
+                    "DB retrieval macros fallback search failed: %s", inner_exc
+                )
                 no_results_sources.append("macros")
 
     # Search FeedMe
@@ -1909,25 +1975,57 @@ async def db_unified_search_tool(
 
             # Get conversation details and build results
             if conv_data:
-                conv_details = await client.get_conversations_by_ids(list(conv_data.keys()))
-                for conv_id, data in list(conv_data.items())[:max_results_per_source]:
+                ranked = sorted(
+                    conv_data.items(),
+                    key=lambda kv: float(kv[1].get("max_similarity") or 0.0),
+                    reverse=True,
+                )[:max_results_per_source]
+                conv_ids = [cid for cid, _ in ranked]
+                conv_details = await client.get_conversations_by_ids(conv_ids)
+
+                for conv_id, data in ranked:
                     details = (conv_details or {}).get(conv_id, {})
-                    # Combine all content parts for full context
-                    full_content = "\n\n".join(data["content_parts"])
+
+                    # Fetch FULL conversation chunks (not just matched chunks).
+                    chunks: list[dict[str, Any]] = []
+                    try:
+                        resp = await asyncio.to_thread(
+                            lambda: client.client.table("feedme_text_chunks")
+                            .select("content, chunk_index")
+                            .eq("conversation_id", conv_id)
+                            .order("chunk_index")
+                            .execute()
+                        )
+                        chunks = resp.data or []
+                    except Exception:
+                        chunks = []
+
+                    if chunks:
+                        full_content = "\n\n".join(
+                            str(chunk.get("content") or "") for chunk in chunks
+                        )
+                    else:
+                        # Fallback: include whatever matched chunks we already have.
+                        full_content = "\n\n".join(data["content_parts"])
+
                     full_content = redact_pii(full_content)
-                    results.append(_format_result_with_content_type(
-                        source="feedme",
-                        title=details.get("title", f"Conversation {conv_id}"),
-                        content=full_content,  # Full or marked for summarization if >3000
-                        relevance_score=data["max_similarity"],
-                        metadata={
-                            "id": conv_id,
-                            "created_at": details.get("created_at"),
-                            "folder_id": details.get("folder_id"),
-                            "last_updated": details.get("updated_at"),
-                        },
-                        weight=weights.get("feedme", 1.0),
-                    ))
+
+                    results.append(
+                        _format_result_with_content_type(
+                            source="feedme",
+                            title=details.get("title", f"Conversation {conv_id}"),
+                            content=full_content,
+                            relevance_score=data["max_similarity"],
+                            metadata={
+                                "id": conv_id,
+                                "created_at": details.get("created_at"),
+                                "folder_id": details.get("folder_id"),
+                                "chunk_count": len(chunks) if chunks else None,
+                                "last_updated": details.get("updated_at"),
+                            },
+                            weight=weights.get("feedme", 1.0),
+                        )
+                    )
             else:
                 no_results_sources.append("feedme")
         except Exception as exc:
@@ -1937,7 +2035,8 @@ async def db_unified_search_tool(
     # Deduplicate and sort by weighted score, fallback to relevance_score
     deduped = _dedupe_results(
         results,
-        key_func=lambda r: (r.get("metadata") or {}).get("id") or (r.get("metadata") or {}).get("url"),
+        key_func=lambda r: (r.get("metadata") or {}).get("id")
+        or (r.get("metadata") or {}).get("url"),
     )
     deduped.sort(
         key=lambda r: (
@@ -1980,9 +2079,15 @@ async def db_grep_search_tool(
     sources_searched: List[str] = []
 
     # Default per-source caps to avoid noisy scans
-    kb_limit = max(1, min(max_results, getattr(settings, "db_grep_kb_limit", max_results)))
-    macro_limit = max(1, min(max_results, getattr(settings, "db_grep_macro_limit", max_results)))
-    feedme_limit = max(1, min(max_results, getattr(settings, "db_grep_feedme_limit", max_results)))
+    kb_limit = max(
+        1, min(max_results, getattr(settings, "db_grep_kb_limit", max_results))
+    )
+    macro_limit = max(
+        1, min(max_results, getattr(settings, "db_grep_macro_limit", max_results))
+    )
+    feedme_limit = max(
+        1, min(max_results, getattr(settings, "db_grep_feedme_limit", max_results))
+    )
 
     client = _supabase_client_cached()
     if getattr(client, "mock_mode", False):
@@ -2011,32 +2116,42 @@ async def db_grep_search_tool(
     if "kb" in sources:
         sources_searched.append("kb")
         try:
-            query_builder = client.client.table("mailbird_knowledge").select("id, url, content, markdown")
+            query_builder = client.client.table("mailbird_knowledge").select(
+                "id, url, content, markdown"
+            )
             if case_sensitive:
                 query_builder = query_builder.like("content", ilike_pattern)
             else:
                 query_builder = query_builder.ilike("content", ilike_pattern)
-            kb_resp = await asyncio.to_thread(lambda: query_builder.limit(kb_limit).execute())
+            kb_resp = await asyncio.to_thread(
+                lambda: query_builder.limit(kb_limit).execute()
+            )
             for row in kb_resp.data or []:
                 content = row.get("content") or row.get("markdown") or ""
                 url = row.get("url", "")
                 # Extract title from URL
-                title = url.split("/")[-1].replace("-", " ").title() if url else "KB Article"
+                title = (
+                    url.split("/")[-1].replace("-", " ").title()
+                    if url
+                    else "KB Article"
+                )
                 snippet = _trim_content(content)
-                results.append({
-                    "source": "kb",
-                    "title": title,
-                    "snippet": snippet,
-                    "content": content,
-                    "content_type": "full",
-                    "match_pattern": pattern,
-                    "score": None,
-                    "metadata": {
-                        "id": row.get("id"),
-                        "url": url,
-                        "last_updated": row.get("updated_at"),
-                    },
-                })
+                results.append(
+                    {
+                        "source": "kb",
+                        "title": title,
+                        "snippet": snippet,
+                        "content": content,
+                        "content_type": "full",
+                        "match_pattern": pattern,
+                        "score": None,
+                        "metadata": {
+                            "id": row.get("id"),
+                            "url": url,
+                            "last_updated": row.get("updated_at"),
+                        },
+                    }
+                )
         except Exception as exc:
             logger.error("DB grep KB search failed: %s", exc)
 
@@ -2044,27 +2159,33 @@ async def db_grep_search_tool(
     if "macros" in sources:
         sources_searched.append("macros")
         try:
-            query_builder = client.client.table("zendesk_macros").select("zendesk_id, title, comment_value, usage_30d")
+            query_builder = client.client.table("zendesk_macros").select(
+                "zendesk_id, title, comment_value, usage_30d"
+            )
             if case_sensitive:
                 query_builder = query_builder.like("comment_value", ilike_pattern)
             else:
                 query_builder = query_builder.ilike("comment_value", ilike_pattern)
-            macro_resp = await asyncio.to_thread(lambda: query_builder.limit(macro_limit).execute())
+            macro_resp = await asyncio.to_thread(
+                lambda: query_builder.limit(macro_limit).execute()
+            )
             for row in macro_resp.data or []:
-                results.append({
-                    "source": "macro",
-                    "title": row.get("title", "Macro"),
-                    "snippet": _trim_content(row.get("comment_value", "")),
-                    "content": row.get("comment_value", ""),
-                    "content_type": "full",
-                    "match_pattern": pattern,
-                    "score": None,
-                    "metadata": {
-                        "zendesk_id": row.get("zendesk_id"),
-                        "usage_30d": row.get("usage_30d"),
-                        "last_updated": row.get("updated_at"),
-                    },
-                })
+                results.append(
+                    {
+                        "source": "macro",
+                        "title": row.get("title", "Macro"),
+                        "snippet": _trim_content(row.get("comment_value", "")),
+                        "content": row.get("comment_value", ""),
+                        "content_type": "full",
+                        "match_pattern": pattern,
+                        "score": None,
+                        "metadata": {
+                            "zendesk_id": row.get("zendesk_id"),
+                            "usage_30d": row.get("usage_30d"),
+                            "last_updated": row.get("updated_at"),
+                        },
+                    }
+                )
         except Exception as exc:
             logger.error("DB grep macros search failed: %s", exc)
 
@@ -2073,12 +2194,16 @@ async def db_grep_search_tool(
         sources_searched.append("feedme")
         try:
             # Search in feedme_text_chunks for pattern
-            query_builder = client.client.table("feedme_text_chunks").select("conversation_id, content")
+            query_builder = client.client.table("feedme_text_chunks").select(
+                "conversation_id, content"
+            )
             if case_sensitive:
                 query_builder = query_builder.like("content", ilike_pattern)
             else:
                 query_builder = query_builder.ilike("content", ilike_pattern)
-            feedme_resp = await asyncio.to_thread(lambda: query_builder.limit(feedme_limit * 2).execute())
+            feedme_resp = await asyncio.to_thread(
+                lambda: query_builder.limit(feedme_limit * 2).execute()
+            )
 
             # Deduplicate by conversation
             seen_convs: set = set()
@@ -2089,16 +2214,23 @@ async def db_grep_search_tool(
                 seen_convs.add(conv_id)
                 content = redact_pii(row.get("content", ""))
                 snippet = _trim_content(content)
-                results.append({
-                    "source": "feedme",
-                    "title": f"Conversation {conv_id}",
-                    "snippet": snippet,
-                    "content": content,
-                    "content_type": "full" if len(content) <= FEEDME_SUMMARIZE_THRESHOLD else "summarized",
-                    "match_pattern": pattern,
-                    "score": None,
-                    "metadata": {"id": conv_id, "last_updated": row.get("updated_at")},
-                })
+                results.append(
+                    {
+                        "source": "feedme",
+                        "title": f"Conversation {conv_id}",
+                        "snippet": snippet,
+                        "content": content,
+                        "content_type": "full"
+                        if len(content) <= FEEDME_SUMMARIZE_THRESHOLD
+                        else "summarized",
+                        "match_pattern": pattern,
+                        "score": None,
+                        "metadata": {
+                            "id": conv_id,
+                            "last_updated": row.get("updated_at"),
+                        },
+                    }
+                )
                 if len([r for r in results if r["source"] == "feedme"]) >= feedme_limit:
                     break
         except Exception as exc:
@@ -2236,7 +2368,11 @@ async def db_context_search_tool(
                 result["title"] = details.get("title", f"Conversation {doc_id}")
                 result["content"] = full_content
                 result["snippet"] = _trim_content(full_content)
-                result["content_type"] = "full" if len(full_content) <= FEEDME_SUMMARIZE_THRESHOLD else "needs_summarization"
+                result["content_type"] = (
+                    "full"
+                    if len(full_content) <= FEEDME_SUMMARIZE_THRESHOLD
+                    else "needs_summarization"
+                )
                 result["original_length"] = len(full_content)
                 result["metadata"] = {
                     "conversation_id": doc_id,
@@ -2369,7 +2505,11 @@ async def generate_image_tool(
         mime_type = "image/png"
 
         candidates = response.candidates or []
-        if not candidates or not getattr(candidates[0], "content", None) or not candidates[0].content.parts:
+        if (
+            not candidates
+            or not getattr(candidates[0], "content", None)
+            or not candidates[0].content.parts
+        ):
             return {
                 "success": False,
                 "error": "No content generated by the model",
@@ -2380,6 +2520,7 @@ async def generate_image_tool(
                 text_output = part.text
             elif hasattr(part, "inline_data") and part.inline_data:
                 import base64 as b64
+
                 image_base64 = b64.b64encode(part.inline_data.data).decode("utf-8")
                 mime_type = part.inline_data.mime_type or "image/png"
 
@@ -2430,11 +2571,14 @@ async def generate_image_tool(
 
 class ArticleInput(BaseModel):
     """Input schema for article writing tool."""
+
     title: str = Field(description="Title of the article")
-    content: str = Field(description="Markdown content of the article with sections, images, etc.")
+    content: str = Field(
+        description="Markdown content of the article with sections, images, etc."
+    )
     images: Optional[List[Dict[str, str]]] = Field(
         default=None,
-        description="Optional list of images to embed. Each dict should have 'url' and 'alt' keys."
+        description="Optional list of images to embed. Each dict should have 'url' and 'alt' keys.",
     )
 
 
@@ -2473,7 +2617,9 @@ def write_article_tool(
     Returns:
         Success status with article content (displayed in artifacts panel)
     """
-    logger.info(f"write_article_tool_invoked title='{title}' content_length={len(content)}")
+    logger.info(
+        f"write_article_tool_invoked title='{title}' content_length={len(content)}"
+    )
 
     if runtime and getattr(runtime, "stream_writer", None):
         runtime.stream_writer.write(f"Creating article: {title}...")
@@ -2557,7 +2703,9 @@ def read_skill_tool(
             "description": skill.metadata.description,
             "content": skill.content,
             "has_references": len(skill.references) > 0,
-            "reference_names": list(skill.references.keys()) if skill.references else [],
+            "reference_names": list(skill.references.keys())
+            if skill.references
+            else [],
         }
 
     except Exception as e:
@@ -2573,5 +2721,5 @@ def get_db_retrieval_tools() -> List[BaseTool]:
     return [
         db_unified_search_tool,  # semantic/hybrid first
         db_context_search_tool,  # full doc/context retrieval
-        db_grep_search_tool,     # exact/pattern match
+        db_grep_search_tool,  # exact/pattern match
     ]
