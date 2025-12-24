@@ -317,6 +317,8 @@ When processing Zendesk support tickets:
 **Pattern-First Grounding (CRITICAL):**
 - Start by reading `/context/similar_scenarios.md` to see how similar issues were resolved.
 - If `/context/ticket_playbook.md` exists, open the referenced playbook and treat `/playbooks/` as the gold standard for verified procedures.
+  - Reason through it: extract the relevant procedure and tailor it to the ticket’s exact context (provider, version, error text).
+  - Do NOT over-compress: if the playbook/macro has multiple steps or sub-steps, keep the full sequence (paraphrase, but do not omit).
 - Use matched scenarios as grounding, but adapt steps to the customer’s exact context (provider, version, error text).
 
 **Response Context:**
@@ -339,6 +341,16 @@ When processing Zendesk support tickets:
 - Combine macro guidance with KB articles for comprehensive responses; merge the findings (macro + KB + your reasoning) into a single concise set of steps before writing the Suggested Reply
 - When macros conflict with KB, prefer KB (more authoritative)
 
+**Zendesk Ticket Policies (MUST FOLLOW):**
+- **Log requests:** If you need to request a log file, base your request on the macro titled:
+  `TECH: Request log file - Using Mailbird Number 2`
+  - Paraphrase (do not copy verbatim), but include *all* steps and sub-steps from the macro.
+- **Unclear/empty tickets:** If the customer provides minimal or unclear info (e.g., just “hi”, random text, no details), acknowledge the lack of context and ask for the missing details.
+  - Also request a screenshot using the macro titled: `REQUEST:: Ask for a screenshot`.
+- **Remove/re-add or reinstall:** If you recommend removing/re-adding an account or reinstalling Mailbird, instruct the customer to back up their data **first**, then proceed.
+  - Backup must include: close Mailbird; in Windows File Explorer go to `C:\\Users\\<your user name>\\AppData\\Local`; copy the `Mailbird` folder to a safe location.
+- **Refund requests:** For license/refund inquiries, if the customer requests a refund for Premium Yearly or Premium Pay Once, propose the **50% refund option first** (per the refund experiment macros) before moving to full-refund options.
+
 **Grounding / Web Search Integration (priority order):**
 - If KB/macros are insufficient or conflicting, use Firecrawl first:
   - `firecrawl_search` with `scrape_options` to get markdown for top results
@@ -351,8 +363,9 @@ When processing Zendesk support tickets:
 
 **Response Structure for Internal Notes:**
 - Output ONLY a customer-ready **Suggested Reply** that an agent can copy/paste as a public reply.
-- Start with:
-  "Hi there, Many thanks for contacting the Mailbird Customer Happiness Team."
+- Start with (exact structure):
+  Hi there,
+  Many thanks for contacting the Mailbird Customer Happiness Team.
 - Then provide the solution/guidance with proper formatting (paragraphs + steps).
 - Do NOT include any other sections (no Issue Summary / Root Cause / Resources / Follow-up).
 - Do NOT mention internal-only identifiers (macro IDs, KB IDs) or internal tooling.
@@ -434,7 +447,12 @@ def get_coordinator_prompt(
             return model_display_names[normalized]
         # Heuristic prettifier for unlisted models
         if normalized.startswith("gemini"):
-            return normalized.replace("gemini-", "Gemini ").replace("-", " ").strip().title()
+            return (
+                normalized.replace("gemini-", "Gemini ")
+                .replace("-", " ")
+                .strip()
+                .title()
+            )
         if normalized.startswith("grok"):
             return normalized.replace("grok", "Grok ").replace("-", " ").strip().title()
         if prov:

@@ -4,8 +4,10 @@ import base64
 import json
 import logging
 import time
+from pathlib import Path
 from typing import Optional, Dict, Any, List, Generator
 from datetime import datetime, timezone
+from urllib.parse import quote
 
 import requests
 
@@ -60,7 +62,75 @@ class ZendeskClient:
             time.sleep(self._min_interval_sec - elapsed)
         self._last_request_at = time.monotonic()
 
-    def add_internal_note(self, ticket_id: int | str, body: str, add_tag: Optional[str] = None, use_html: bool = False) -> Dict[str, Any]:
+    def upload_file(
+        self,
+        file_path: str | Path,
+        *,
+        filename: str | None = None,
+    ) -> Dict[str, Any]:
+        """Upload a file to Zendesk and return the upload token.
+
+        Uses: POST /uploads.json?filename={name}
+        """
+
+        path = Path(file_path)
+        if not path.exists() or not path.is_file():
+            raise FileNotFoundError(str(path))
+
+        name = (filename or path.name or "upload").strip() or "upload"
+        url = f"{self.base_url}/uploads.json?filename={quote(name)}"
+
+        if self.dry_run:
+            logger.info("[DRY_RUN] Would upload file to Zendesk: %s", name)
+            return {"dry_run": True, "file_name": name, "token": "dry_run"}
+
+        headers = dict(self._headers)
+        headers["Content-Type"] = "application/binary"
+
+        with path.open("rb") as f:
+            self._throttle()
+            resp = self.session.post(url, headers=headers, data=f, timeout=60)
+
+        if resp.status_code >= 400:
+            rid = resp.headers.get("X-Request-Id") or resp.headers.get("X-Zendesk-Request-Id")
+            logger.warning("Zendesk upload failed (%s) req_id=%s", resp.status_code, rid)
+            raise RuntimeError(f"Zendesk upload failed: {resp.status_code}")
+
+        # Zendesk sometimes returns JSON with a `text/plain` content-type.
+        try:
+            data = resp.json()
+        except Exception:
+            try:
+                data = json.loads(resp.text or "{}")
+            except Exception:
+                data = {}
+        upload = data.get("upload") if isinstance(data, dict) else {}
+        upload = upload if isinstance(upload, dict) else {}
+
+        token = upload.get("token")
+        attachment = upload.get("attachment")
+        attachments = upload.get("attachments")
+
+        attachment_dict: Dict[str, Any] | None = None
+        if isinstance(attachment, dict):
+            attachment_dict = attachment
+        elif isinstance(attachments, list) and attachments and isinstance(attachments[0], dict):
+            attachment_dict = attachments[0]
+
+        return {
+            "token": token,
+            "attachment": attachment_dict,
+            "raw": data,
+        }
+
+    def add_internal_note(
+        self,
+        ticket_id: int | str,
+        body: str,
+        add_tag: Optional[str] = None,
+        use_html: bool = False,
+        uploads: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
         """Add a private (internal) note to a ticket. Optionally add a tag.
 
         Uses PUT /tickets/{id}.json with payload:
@@ -74,6 +144,8 @@ class ZendeskClient:
         url = f"{self.base_url}/tickets/{ticket_id}.json"
         # Build comment with optional HTML
         comment: Dict[str, Any] = {"public": False}
+        if uploads:
+            comment["uploads"] = [u for u in uploads if isinstance(u, str) and u.strip()]
         # Auto-detect if string appears to contain HTML when use_html not explicitly set
         is_html_candidate = bool(use_html and isinstance(body, str) and ("<" in body and ">" in body))
         if is_html_candidate:
@@ -99,7 +171,7 @@ class ZendeskClient:
         payload = {"ticket": ticket}
         if self.dry_run:
             logger.info("[DRY_RUN] Would add internal note to ticket %s", ticket_id)
-            return {"dry_run": True, "ticket_id": ticket_id}
+            return {"dry_run": True, "ticket_id": ticket_id, "uploads": comment.get("uploads")}
 
         # First attempt (maybe with html_body)
         self._throttle()
