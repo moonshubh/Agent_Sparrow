@@ -13,6 +13,7 @@
 !claude.md
 !railway-env-template.md
 !environment-railway-template.md
+!CHANGELOG.md
 
 # Ignore test files
 **/test_*.py
@@ -713,6 +714,7 @@ docs/frontend/*.md
 tests/frontend/*.md
 reviews/*.md
 Backend.md
+!CHANGELOG.md
 *.xml
 *.bak
 
