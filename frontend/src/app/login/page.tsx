@@ -2,8 +2,7 @@
 
 import { useEffect, Suspense } from 'react'
 import { useSearchParams } from 'next/navigation'
-import { LoginForm } from '@/features/auth/components/LoginForm'
-import { Card, CardContent, CardHeader, CardTitle } from '@/shared/ui/card'
+import { GoogleLoginForm } from '@/features/auth/components/GoogleLoginForm'
 import { Loader2 } from 'lucide-react'
 import Image from 'next/image'
 
@@ -19,39 +18,33 @@ function LoginInner() {
   }, [returnUrl])
 
   return (
-    <div className="relative flex min-h-screen items-center justify-center bg-background">
-      {/* Simple gradient background */}
-      <div className="absolute inset-0 bg-gradient-to-br from-blue-50/20 to-blue-100/20 dark:from-blue-950/20 dark:to-gray-900" />
-      
-      {/* Content */}
-      <div className="relative z-10 w-full max-w-md px-4">
-        {/* Logo */}
-        <div className="mb-8 text-center">
-          <div className="mx-auto mb-4 w-16 h-16">
+    <div className="grid min-h-screen w-full lg:grid-cols-2">
+      {/* Left Column - Login Form */}
+      <div className="flex flex-col items-center justify-center p-6 lg:p-8">
+        <div className="w-full max-w-md space-y-6">
+          <div className="flex flex-col items-center gap-2 text-center">
+            <h2 className="text-3xl font-bold tracking-tight">Agent Sparrow</h2>
+            <p className="text-balance text-muted-foreground">
+              Welcome back! Please sign in to continue.
+            </p>
+          </div>
+          <GoogleLoginForm />
+        </div>
+      </div>
+
+      {/* Right Column - Logo Image */}
+      <div className="hidden bg-muted lg:flex lg:items-center lg:justify-center lg:p-8">
+        <div className="flex flex-col items-center justify-center space-y-4">
+          <div className="relative w-full max-w-md aspect-square">
             <Image
-              src="/Sparrow_logo.png"
+              src="/Sparrow_login_logo.png"
               alt="Agent Sparrow"
-              width={64}
-              height={64}
-              className="w-full h-full object-contain"
+              fill
+              className="object-contain"
               priority
             />
           </div>
-          <h1 className="text-2xl font-semibold">Agent Sparrow</h1>
-          <p className="mt-2 text-sm text-muted-foreground">
-            Sign in to continue
-          </p>
         </div>
-
-        {/* Login Card */}
-        <Card>
-          <CardHeader className="pb-4">
-            <CardTitle className="text-center text-lg font-medium">Welcome</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <LoginForm />
-          </CardContent>
-        </Card>
       </div>
     </div>
   )
