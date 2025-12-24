@@ -85,9 +85,7 @@ export const GoogleLoginForm: React.FC<GoogleLoginFormProps> = ({ className }) =
     try {
       setIsLoading(true)
       await loginWithOAuth('google')
-      
-      // Success feedback (loginWithOAuth handles redirect, so this may not be reached)
-      toast.success('Successfully connected to Google')
+      // loginWithOAuth handles redirect, so no success toast needed here
     } catch (error: unknown) {
       const errorMessage = getErrorMessage(error)
       
@@ -105,7 +103,7 @@ export const GoogleLoginForm: React.FC<GoogleLoginFormProps> = ({ className }) =
     }
   }
 
-  const isButtonDisabled = authLoading || isLoading
+  const isButtonDisabled = authLoading || isLoading || !oauthConfig.google.enabled
 
   return (
     <div className={cn("flex flex-col gap-6", className)}>
@@ -124,7 +122,7 @@ export const GoogleLoginForm: React.FC<GoogleLoginFormProps> = ({ className }) =
             'hover:scale-[1.02] hover:shadow-lg active:scale-[0.98]'
           )}
           onClick={handleGoogleLogin}
-          disabled={isButtonDisabled || !oauthConfig.google.enabled}
+          disabled={isButtonDisabled}
           aria-label="Login with Google"
         >
           {isLoading || authLoading ? (

@@ -3,9 +3,10 @@ import React from 'react'
 import { motion } from 'motion/react'
 import { cn } from '@/shared/lib/utils'
 
-type LampContainerProps = {
+export type LampContainerProps = {
   children: React.ReactNode
   className?: string
+  align?: 'center' | 'left' | 'right'
 }
 
 /**
@@ -14,9 +15,12 @@ type LampContainerProps = {
  * - Warm amber color scheme
  * - Lamp bar anchors the effect at the top
  */
-export function LampContainer({ children, className }: LampContainerProps) {
+export function LampContainer({ children, className, align = 'center' }: LampContainerProps) {
+  const justifyClass =
+    align === 'left' ? 'justify-start' : align === 'right' ? 'justify-end' : 'justify-center'
+
   return (
-    <div className={cn('relative w-full', className)}>
+    <div className={cn('relative w-full', justifyClass, className)}>
       {/* Lamp effect layer - positioned at top */}
       <div className="pointer-events-none absolute inset-x-0 top-0 flex justify-center">
         {/* Lamp bar */}
@@ -180,7 +184,7 @@ export function LampContainer({ children, className }: LampContainerProps) {
       </div>
 
       {/* Content */}
-      <div className="relative z-10 flex h-full w-full flex-col items-center justify-center px-6 pt-8 text-center">
+      <div className={cn('relative z-10 flex h-full w-full flex-col px-6 pt-8 text-center', justifyClass === 'justify-center' ? 'items-center' : justifyClass === 'justify-start' ? 'items-start' : 'items-end')}>
         {children}
       </div>
     </div>

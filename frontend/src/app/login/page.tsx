@@ -14,7 +14,12 @@ function LoginInner() {
   useEffect(() => {
     // Store return URL in session storage for use after OAuth callback
     if (returnUrl) {
-      sessionStorage.setItem('authReturnUrl', returnUrl)
+      try {
+        sessionStorage.setItem('authReturnUrl', returnUrl)
+      } catch {
+        // sessionStorage may be disabled or quota exceeded - continue without storing
+        console.warn('Unable to store return URL in sessionStorage')
+      }
     }
   }, [returnUrl])
 
@@ -36,7 +41,7 @@ function LoginInner() {
         {/* NOTE: Don't rely on `aspect-*` utilities here. This repo's Tailwind config
            does not generate aspect-ratio classes, and `Image fill` requires an
            explicit-sized parent. */}
-        <div className="relative h-[92vh] w-full max-w-3xl">
+        <div className="relative h-[90vh] w-full max-w-3xl">
           <Image
             src="/Sparrow_login_logo.png"
             alt="Agent Sparrow"

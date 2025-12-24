@@ -5,7 +5,7 @@ import { motion } from 'motion/react'
 import { LampContainer } from '@/components/ui/lamp'
 import { cn } from '@/shared/lib/utils'
 
-type LampSectionHeaderProps = {
+export type LampSectionHeaderProps = {
   title: React.ReactNode
   subtitle?: React.ReactNode
   className?: string
