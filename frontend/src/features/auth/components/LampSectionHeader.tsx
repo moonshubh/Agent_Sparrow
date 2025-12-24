@@ -2,7 +2,7 @@
 
 import React from 'react'
 import { motion } from 'motion/react'
-import { LampContainer } from '@/shared/ui/lamp'
+import { LampContainer } from '@/components/ui/lamp'
 import { cn } from '@/shared/lib/utils'
 
 type LampSectionHeaderProps = {
@@ -14,37 +14,36 @@ type LampSectionHeaderProps = {
 export function LampSectionHeader({ title, subtitle, className }: LampSectionHeaderProps) {
   return (
     <LampContainer
-      align="left"
       className={cn(
-        // Give the lamp room to render above and “focus” underneath the header
-        'py-10',
+        // Compact height for the login left column; the lamp bar lives near the top.
+        'h-[240px] w-full md:h-[280px]',
         className
       )}
     >
-      <div className="w-full">
+      <div className="mx-auto flex max-w-md flex-col items-center">
         <motion.h1
-          initial={{ opacity: 0.5, y: 24 }}
-          animate={{ opacity: 1, y: 0 }}
+          initial={{ opacity: 0.5, y: 48 }}
+          whileInView={{ opacity: 1, y: 0 }}
           transition={{
-            delay: 0.15,
-            duration: 0.6,
+            delay: 0.2,
+            duration: 0.8,
             ease: 'easeInOut',
           }}
-          className="bg-gradient-to-br from-foreground to-muted-foreground bg-clip-text text-left text-4xl font-semibold tracking-tight text-transparent md:text-5xl"
+          className="mt-6 bg-gradient-to-br from-foreground to-muted-foreground bg-clip-text py-2 text-center text-4xl font-semibold tracking-tight text-transparent md:text-5xl"
         >
           {title}
         </motion.h1>
 
         {subtitle ? (
           <motion.p
-            initial={{ opacity: 0, y: 16 }}
-            animate={{ opacity: 1, y: 0 }}
+            initial={{ opacity: 0, y: 18 }}
+            whileInView={{ opacity: 1, y: 0 }}
             transition={{
-              delay: 0.25,
-              duration: 0.6,
+              delay: 0.3,
+              duration: 0.7,
               ease: 'easeInOut',
             }}
-            className="mt-3 max-w-[52ch] text-left text-muted-foreground"
+            className="mt-2 text-center text-muted-foreground"
           >
             {subtitle}
           </motion.p>

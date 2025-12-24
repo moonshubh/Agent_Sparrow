@@ -32,11 +32,11 @@ function LoginInner() {
       </div>
 
       {/* Right Column - Logo Image */}
-      <div className="hidden bg-muted lg:flex lg:items-center lg:justify-center lg:p-8">
+      <div className="hidden bg-muted lg:flex lg:items-center lg:justify-center lg:p-4 xl:p-6">
         {/* NOTE: Don't rely on `aspect-*` utilities here. This repo's Tailwind config
            does not generate aspect-ratio classes, and `Image fill` requires an
            explicit-sized parent. */}
-        <div className="relative h-[82vh] w-full max-w-2xl">
+        <div className="relative h-[92vh] w-full max-w-3xl">
           <Image
             src="/Sparrow_login_logo.png"
             alt="Agent Sparrow"
