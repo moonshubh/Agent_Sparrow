@@ -10,7 +10,7 @@ import UnassignedDialog from '@/features/feedme/components/UnassignedDialog'
 import { StatsPopover } from '@/features/feedme/components/StatsPopover'
 import { ErrorBoundary } from '@/features/feedme/components/ErrorBoundary'
 import BackendHealthAlert from '@/shared/components/BackendHealthAlert'
-import { LampContainer } from '@/shared/ui/lamp'
+import { LampContainer } from '@/components/ui/lamp'
 
 export default function FeedMeRevampedPage() {
   const [showCenter, setShowCenter] = useState(true)

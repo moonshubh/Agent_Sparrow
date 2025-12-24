@@ -2,8 +2,8 @@
 
 import { useEffect, Suspense } from 'react'
 import { useSearchParams } from 'next/navigation'
-import { LoginForm } from '@/features/auth/components/LoginForm'
-import { Card, CardContent, CardHeader, CardTitle } from '@/shared/ui/card'
+import { GoogleLoginForm } from '@/features/auth/components/GoogleLoginForm'
+import { LampSectionHeader } from '@/features/auth/components/LampSectionHeader'
 import { Loader2 } from 'lucide-react'
 import Image from 'next/image'
 
@@ -14,44 +14,43 @@ function LoginInner() {
   useEffect(() => {
     // Store return URL in session storage for use after OAuth callback
     if (returnUrl) {
-      sessionStorage.setItem('authReturnUrl', returnUrl)
+      try {
+        sessionStorage.setItem('authReturnUrl', returnUrl)
+      } catch {
+        // sessionStorage may be disabled or quota exceeded - continue without storing
+        console.warn('Unable to store return URL in sessionStorage')
+      }
     }
   }, [returnUrl])
 
   return (
-    <div className="relative flex min-h-screen items-center justify-center bg-background">
-      {/* Simple gradient background */}
-      <div className="absolute inset-0 bg-gradient-to-br from-blue-50/20 to-blue-100/20 dark:from-blue-950/20 dark:to-gray-900" />
-      
-      {/* Content */}
-      <div className="relative z-10 w-full max-w-md px-4">
-        {/* Logo */}
-        <div className="mb-8 text-center">
-          <div className="mx-auto mb-4 w-16 h-16">
-            <Image
-              src="/Sparrow_logo.png"
-              alt="Agent Sparrow"
-              width={64}
-              height={64}
-              className="w-full h-full object-contain"
-              priority
-            />
-          </div>
-          <h1 className="text-2xl font-semibold">Agent Sparrow</h1>
-          <p className="mt-2 text-sm text-muted-foreground">
-            Sign in to continue
-          </p>
+    <div className="grid min-h-screen w-full lg:grid-cols-2">
+      {/* Left Column - Login Form */}
+      <div className="flex flex-col items-center justify-center p-6 lg:p-8">
+        <div className="w-full max-w-md space-y-8">
+          <LampSectionHeader
+            title="Agent Sparrow"
+            subtitle="Welcome back! Please sign in to continue."
+          />
+          <GoogleLoginForm />
         </div>
+      </div>
 
-        {/* Login Card */}
-        <Card>
-          <CardHeader className="pb-4">
-            <CardTitle className="text-center text-lg font-medium">Welcome</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <LoginForm />
-          </CardContent>
-        </Card>
+      {/* Right Column - Logo Image */}
+      <div className="hidden bg-muted lg:flex lg:items-center lg:justify-center lg:p-4 xl:p-6">
+        {/* NOTE: Don't rely on `aspect-*` utilities here. This repo's Tailwind config
+           does not generate aspect-ratio classes, and `Image fill` requires an
+           explicit-sized parent. */}
+        <div className="relative h-[90vh] w-full max-w-3xl">
+          <Image
+            src="/Sparrow_login_logo.png"
+            alt="Agent Sparrow"
+            fill
+            sizes="(min-width: 1024px) 50vw, 0vw"
+            className="object-contain"
+            priority
+          />
+        </div>
       </div>
     </div>
   )
