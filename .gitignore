@@ -99,6 +99,8 @@ eggs/
 .eggs/
 lib/
 !frontend/lib/
+!frontend/src/shared/lib/
+!frontend/src/shared/lib/**
 lib64/
 parts/
 sdist/
@@ -142,6 +144,8 @@ eggs/
 .eggs/
 lib/
 !frontend/lib/
+!frontend/src/shared/lib/
+!frontend/src/shared/lib/**
 lib64/
 parts/
 sdist/
