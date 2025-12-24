@@ -9,87 +9,178 @@ type LampContainerProps = {
 }
 
 /**
- * Aceternity Lamp (customized for Agent Sparrow)
- * - Keeps the clean “lamp bar” + conic beams look (Serenity UI reference)
- * - Uses warm amber light to match Agent Sparrow theme
- * - Does NOT force min-h-screen; caller controls height via className
+ * Aceternity-style Lamp with proper cone-shaped glow
+ * - Uses concentric radial gradients for natural light falloff
+ * - Warm amber color scheme
+ * - Lamp bar anchors the effect at the top
  */
 export function LampContainer({ children, className }: LampContainerProps) {
   return (
-    <div className={cn('relative w-full overflow-hidden', className)}>
-      {/* Lamp + beams (purely decorative) */}
-      <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
-        <div className="relative flex h-full w-full scale-y-125 items-center justify-center isolate">
-          <motion.div
-            initial={{ opacity: 0.5, width: '15rem' }}
-            whileInView={{ opacity: 1, width: '30rem' }}
-            transition={{
-              delay: 0.3,
-              duration: 0.8,
-              ease: 'easeInOut',
-            }}
+    <div className={cn('relative w-full', className)}>
+      {/* Lamp effect layer - positioned at top */}
+      <div className="pointer-events-none absolute inset-x-0 top-0 flex justify-center">
+        {/* Lamp bar */}
+        <motion.div
+          initial={{ width: '15rem', opacity: 0 }}
+          whileInView={{ width: '30rem', opacity: 1 }}
+          transition={{
+            delay: 0.2,
+            duration: 0.8,
+            ease: 'easeInOut',
+          }}
+          className="absolute top-0 z-20 h-0.5 bg-amber-400"
+        />
+
+        {/* Light glow container - clips everything above the lamp bar */}
+        <motion.div
+          initial={{ opacity: 0 }}
+          whileInView={{ opacity: 1 }}
+          transition={{
+            delay: 0.25,
+            duration: 1.2,
+            ease: 'easeOut',
+          }}
+          className="absolute top-0 left-1/2 -translate-x-1/2 w-full h-[500px]"
+          style={{ clipPath: 'inset(0 0 0 0)' }}
+        >
+          {/* ============================================
+              3D LIGHT PHYSICS MODEL:
+              - Light source: lamp bar (linear, horizontal)
+              - Emission direction: downward only
+              - Intensity falloff: inverse with distance
+              - Spread: expands as distance increases
+              - No light above the source
+              ============================================ */}
+
+          {/* ZONE A: Source emission (0-5px below bar) */}
+          {/* Brightest zone - light just leaving the source */}
+          <div
+            className="absolute left-1/2 -translate-x-1/2 w-[480px] h-[50px]"
             style={{
-              backgroundImage: `conic-gradient(var(--conic-position), var(--tw-gradient-stops))`,
+              top: '2px',
+              background: 'linear-gradient(180deg, rgba(255,255,255,0.7) 0%, rgba(255,252,240,0.5) 20%, rgba(253,245,200,0.3) 50%, rgba(253,235,160,0.15) 80%, transparent 100%)',
+              filter: 'blur(8px)',
+              maskImage: 'linear-gradient(90deg, transparent 0%, white 15%, white 85%, transparent 100%)',
+              WebkitMaskImage: 'linear-gradient(90deg, transparent 0%, white 15%, white 85%, transparent 100%)',
             }}
-            className="absolute inset-auto right-1/2 h-56 w-[30rem] overflow-visible from-amber-200 via-transparent to-transparent [--conic-position:from_70deg_at_center_top]"
-          >
-            <div className="absolute bottom-0 left-0 z-20 h-40 w-full bg-background [mask-image:linear-gradient(to_top,white,transparent)]" />
-            <div className="absolute bottom-0 left-0 z-20 h-full w-40 bg-background [mask-image:linear-gradient(to_right,white,transparent)]" />
-          </motion.div>
-
-          <motion.div
-            initial={{ opacity: 0.5, width: '15rem' }}
-            whileInView={{ opacity: 1, width: '30rem' }}
-            transition={{
-              delay: 0.3,
-              duration: 0.8,
-              ease: 'easeInOut',
-            }}
-            style={{
-              backgroundImage: `conic-gradient(var(--conic-position), var(--tw-gradient-stops))`,
-            }}
-            className="absolute inset-auto left-1/2 h-56 w-[30rem] from-transparent via-transparent to-amber-200 [--conic-position:from_290deg_at_center_top]"
-          >
-            <div className="absolute bottom-0 right-0 z-20 h-full w-40 bg-background [mask-image:linear-gradient(to_left,white,transparent)]" />
-            <div className="absolute bottom-0 right-0 z-20 h-40 w-full bg-background [mask-image:linear-gradient(to_top,white,transparent)]" />
-          </motion.div>
-
-          {/* Clean fade + glow stack */}
-          <div className="absolute top-1/2 h-48 w-full translate-y-12 scale-x-150 bg-background blur-2xl" />
-          <div className="absolute top-1/2 z-50 h-48 w-full bg-transparent opacity-10 backdrop-blur-md" />
-          <div className="absolute inset-auto z-50 h-36 w-[28rem] -translate-y-1/2 rounded-full bg-amber-200/40 blur-3xl" />
-
-          {/* Lamp focus */}
-          <motion.div
-            initial={{ width: '8rem' }}
-            whileInView={{ width: '16rem' }}
-            transition={{
-              delay: 0.3,
-              duration: 0.8,
-              ease: 'easeInOut',
-            }}
-            className="absolute inset-auto z-30 h-36 w-64 -translate-y-[6rem] rounded-full bg-amber-100/40 blur-2xl"
           />
 
-          {/* Lamp bar */}
-          <motion.div
-            initial={{ width: '15rem' }}
-            whileInView={{ width: '30rem' }}
-            transition={{
-              delay: 0.3,
-              duration: 0.8,
-              ease: 'easeInOut',
+          {/* ZONE B: Near field (5-80px) - primary illumination */}
+          {/* Center bright column */}
+          <div
+            className="absolute left-1/2 -translate-x-1/2 w-[280px] h-[200px]"
+            style={{
+              top: '8px',
+              background: 'linear-gradient(180deg, rgba(255,252,235,0.55) 0%, rgba(253,240,180,0.35) 25%, rgba(253,225,140,0.2) 50%, rgba(253,212,112,0.08) 75%, transparent 100%)',
+              filter: 'blur(30px)',
+              borderRadius: '0 0 50% 50%',
             }}
-            className="absolute inset-auto z-50 h-0.5 w-[30rem] -translate-y-[7rem] bg-amber-200/90"
           />
 
-          {/* Clean top mask (hides beam tops, leaving a crisp bar origin) */}
-          <div className="absolute inset-auto z-40 h-44 w-full -translate-y-[12.5rem] bg-background" />
-        </div>
+          {/* Left near-field spread */}
+          <div
+            className="absolute w-[200px] h-[180px]"
+            style={{
+              top: '10px',
+              left: 'calc(50% - 220px)',
+              background: 'linear-gradient(160deg, rgba(253,240,180,0.4) 0%, rgba(253,225,140,0.2) 30%, rgba(253,212,112,0.08) 60%, transparent 100%)',
+              filter: 'blur(35px)',
+              borderRadius: '0 0 40% 60%',
+            }}
+          />
+
+          {/* Right near-field spread */}
+          <div
+            className="absolute w-[200px] h-[180px]"
+            style={{
+              top: '10px',
+              right: 'calc(50% - 220px)',
+              background: 'linear-gradient(200deg, rgba(253,240,180,0.4) 0%, rgba(253,225,140,0.2) 30%, rgba(253,212,112,0.08) 60%, transparent 100%)',
+              filter: 'blur(35px)',
+              borderRadius: '0 0 60% 40%',
+            }}
+          />
+
+          {/* ZONE C: Mid field (80-200px) - diffused spread */}
+          {/* Center mid-field cone */}
+          <div
+            className="absolute left-1/2 -translate-x-1/2 w-[380px] h-[280px]"
+            style={{
+              top: '50px',
+              background: 'radial-gradient(ellipse 100% 80% at 50% 0%, rgba(253,225,140,0.3) 0%, rgba(253,212,112,0.12) 40%, rgba(250,204,21,0.05) 70%, transparent 90%)',
+              filter: 'blur(50px)',
+            }}
+          />
+
+          {/* Left mid-field wrap */}
+          <div
+            className="absolute w-[180px] h-[220px]"
+            style={{
+              top: '60px',
+              left: 'calc(50% - 280px)',
+              background: 'radial-gradient(ellipse 70% 80% at 80% 0%, rgba(253,220,130,0.25) 0%, rgba(250,204,21,0.08) 50%, transparent 85%)',
+              filter: 'blur(45px)',
+            }}
+          />
+
+          {/* Right mid-field wrap */}
+          <div
+            className="absolute w-[180px] h-[220px]"
+            style={{
+              top: '60px',
+              right: 'calc(50% - 280px)',
+              background: 'radial-gradient(ellipse 70% 80% at 20% 0%, rgba(253,220,130,0.25) 0%, rgba(250,204,21,0.08) 50%, transparent 85%)',
+              filter: 'blur(45px)',
+            }}
+          />
+
+          {/* ZONE D: Far field (200px+) - ambient scatter */}
+          {/* Wide ambient base */}
+          <div
+            className="absolute left-1/2 -translate-x-1/2 w-[550px] h-[300px]"
+            style={{
+              top: '100px',
+              background: 'radial-gradient(ellipse 100% 60% at 50% 0%, rgba(253,212,112,0.18) 0%, rgba(250,204,21,0.06) 50%, transparent 80%)',
+              filter: 'blur(60px)',
+            }}
+          />
+
+          {/* Far left scatter */}
+          <div
+            className="absolute w-[140px] h-[200px]"
+            style={{
+              top: '80px',
+              left: 'calc(50% - 320px)',
+              background: 'linear-gradient(150deg, rgba(253,215,120,0.15) 0%, rgba(250,204,21,0.05) 50%, transparent 100%)',
+              filter: 'blur(40px)',
+            }}
+          />
+
+          {/* Far right scatter */}
+          <div
+            className="absolute w-[140px] h-[200px]"
+            style={{
+              top: '80px',
+              right: 'calc(50% - 320px)',
+              background: 'linear-gradient(210deg, rgba(253,215,120,0.15) 0%, rgba(250,204,21,0.05) 50%, transparent 100%)',
+              filter: 'blur(40px)',
+            }}
+          />
+
+          {/* ZONE E: Ground reflection - light bouncing back */}
+          <div
+            className="absolute left-1/2 -translate-x-1/2 w-[420px] h-[100px]"
+            style={{
+              top: '280px',
+              background: 'radial-gradient(ellipse 100% 50% at 50% 0%, rgba(253,230,160,0.15) 0%, rgba(250,210,100,0.05) 60%, transparent 90%)',
+              filter: 'blur(40px)',
+            }}
+          />
+        </motion.div>
       </div>
 
       {/* Content */}
-      <div className="relative z-10 flex h-full w-full flex-col items-center justify-center px-6 text-center">
+      <div className="relative z-10 flex h-full w-full flex-col items-center justify-center px-6 pt-8 text-center">
         {children}
       </div>
     </div>
