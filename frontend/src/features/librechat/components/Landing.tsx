@@ -2,7 +2,7 @@
 
 import React, { useCallback, useState, useRef, ChangeEvent } from 'react';
 import { useAgent } from '@/features/librechat/AgentContext';
-import { Sparkles, ArrowUp, Command, PenTool, MessageSquare, Zap, Paperclip } from 'lucide-react';
+import { Sparkles, ArrowUp, Command, PenTool, MessageSquare, Zap, Paperclip, SquarePen } from 'lucide-react';
 import type { AttachmentInput } from '@/services/ag-ui/types';
 import { AttachmentPreviewList } from '@/features/librechat/components/AttachmentPreview';
 import { LayoutTextFlip } from '@/components/ui/layout-text-flip';
@@ -19,7 +19,7 @@ interface AgentState {
 
 const ACTION_PILLS = [
   { icon: Zap, label: 'Skills', action: 'skills' },
-  { icon: PenTool, label: 'Rephrase', action: 'rephrase' },
+  { icon: SquarePen, label: 'Rephrase', action: 'rephrase' },
   { icon: MessageSquare, label: 'Reply', action: 'reply' },
   { icon: Command, label: 'Prompt', action: 'prompt' },
 ];
