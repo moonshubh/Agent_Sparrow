@@ -37,8 +37,8 @@ const config: Config = {
 		   Warm, scholarly aesthetic with organic natural elements
 		   ============================================================ */
 		fontFamily: {
-			// Primary: Lora serif for scholarly warmth
-			sans: ['"Lora"', '"Source Serif Pro"', 'Georgia', 'serif'],
+			// Primary: Poppins sans-serif for clean AI interface
+			sans: ['"Poppins"', '-apple-system', 'BlinkMacSystemFont', 'sans-serif'],
 			serif: ['"Lora"', '"Source Serif Pro"', 'Georgia', 'serif'],
 			// Fallback sans for UI elements
 			ui: ['"Poppins"', '-apple-system', 'BlinkMacSystemFont', 'sans-serif'],

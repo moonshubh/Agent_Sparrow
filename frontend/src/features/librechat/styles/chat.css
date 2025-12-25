@@ -17,8 +17,8 @@
   --lc-user-bg: #2d223f;
   --lc-user-border: #3a2b57;
   --lc-assistant-bg: #444654;
-  --lc-font-sans: 'Inter', 'Poppins', 'SF Pro Text', 'SF Pro Display', system-ui, -apple-system, 'Segoe UI', sans-serif;
-  --lc-font-mono: 'JetBrains Mono', 'Fira Code', ui-monospace, SFMono-Regular, monospace;
+  --lc-font-sans: var(--font-sans);
+  --lc-font-mono: var(--font-mono);
 }
 
 /* Light mode overrides */
@@ -35,8 +35,8 @@
   --lc-user-bg: #eef1f6;
   --lc-user-border: #d5d9e4;
   --lc-assistant-bg: #f7f7f8;
-  --lc-font-sans: 'Inter', 'Poppins', 'SF Pro Text', 'SF Pro Display', system-ui, -apple-system, 'Segoe UI', sans-serif;
-  --lc-font-mono: 'JetBrains Mono', 'Fira Code', ui-monospace, SFMono-Regular, monospace;
+  --lc-font-sans: var(--font-sans);
+  --lc-font-mono: var(--font-mono);
 }
 
 /* Main layout */
@@ -78,13 +78,17 @@
 .lc-sidebar-brand {
   display: flex;
   align-items: center;
-  gap: 10px;
+  justify-content: center;
+  gap: 12px;
   padding: 4px 0;
 }
 
 .lc-sidebar-avatar {
-  width: 62px;
-  height: 62px;
+  width: 58px;
+  height: 58px;
+  min-width: 58px;
+  min-height: 58px;
+  flex-shrink: 0;
   border-radius: 50%;
   object-fit: cover;
   border: 1px solid var(--lc-border-light);
@@ -102,7 +106,8 @@
 .lc-new-chat-btn {
   display: flex;
   align-items: center;
-  gap: 8px;
+  justify-content: center;
+  gap: 10px;
   width: 100%;
   padding: 10px 12px;
   border-radius: 8px;

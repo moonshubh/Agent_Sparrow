@@ -40,26 +40,22 @@ const getUserDisplayName = (user: User | null): string => {
 };
 
 const getUserAvatarUrl = (user: User | null): string => {
-  if (!user) return '/Sparrow_logo.png';
+  if (!user) return '/Sparrow_logo_cropped.png';
 
   const meta = (user.user_metadata ?? {}) as Record<string, unknown>;
   const avatarUrl = typeof meta.avatar_url === 'string' ? meta.avatar_url.trim() : '';
   const pictureUrl = typeof meta.picture === 'string' ? meta.picture.trim() : '';
 
-  return avatarUrl || pictureUrl || '/Sparrow_logo.png';
+  return avatarUrl || pictureUrl || '/Sparrow_logo_cropped.png';
 };
 
 // Agent Sparrow Logo Component
-const SparrowLogo = memo(function SparrowLogo({ size = 40 }: { size?: number }) {
+const SparrowLogo = memo(function SparrowLogo() {
   return (
     <img
       src="/Sparrow_logo_cropped.png"
       alt="Agent Sparrow"
       className="lc-sidebar-avatar"
-      style={{
-        width: size,
-        height: size,
-      }}
     />
   );
 });
@@ -134,7 +130,7 @@ export function Sidebar({
       {/* Header with Logo and New Chat */}
       <div className="lc-sidebar-header">
         <div className="lc-sidebar-brand">
-          <SparrowLogo size={62} />
+          <SparrowLogo />
           <span className="lc-sidebar-brand-text">Agent Sparrow</span>
         </div>
         <button
@@ -202,7 +198,8 @@ export function Sidebar({
           style={{
             display: 'flex',
             alignItems: 'center',
-            gap: '8px',
+            justifyContent: 'center',
+            gap: '12px',
             padding: '8px 12px',
             borderRadius: '8px',
             cursor: 'pointer',
@@ -213,12 +210,8 @@ export function Sidebar({
           <img
             src={avatarSrc}
             alt={userDisplayName}
-            onError={() => setAvatarSrc('/Sparrow_logo.png')}
+            onError={() => setAvatarSrc('/Sparrow_logo_cropped.png')}
             className="lc-sidebar-avatar"
-            style={{
-              width: '62px',
-              height: '62px',
-            }}
           />
           <span>{userDisplayName}</span>
         </div>

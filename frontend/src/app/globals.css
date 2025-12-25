@@ -161,7 +161,7 @@
     color: hsl(var(--primary-foreground));
     border: none;
     border-radius: var(--radius-md);
-    font-family: var(--font-serif);
+    font-family: var(--font-sans);
     font-weight: 500;
     transition: all 0.2s ease;
   }
@@ -178,7 +178,7 @@
     color: hsl(var(--accent-foreground));
     border: none;
     border-radius: var(--radius-md);
-    font-family: var(--font-serif);
+    font-family: var(--font-sans);
     font-weight: 500;
     transition: all 0.2s ease;
   }
@@ -819,7 +819,7 @@
 
   body {
     @apply bg-background text-foreground;
-    font-family: var(--font-serif);
+    font-family: var(--font-sans);
     font-size: var(--text-base);
     line-height: var(--leading-normal);
     letter-spacing: 0.01em;
@@ -835,7 +835,7 @@
   h4,
   h5,
   h6 {
-    font-family: var(--font-serif);
+    font-family: var(--font-sans);
     font-weight: 600;
     line-height: var(--leading-tight);
     letter-spacing: -0.01em;
