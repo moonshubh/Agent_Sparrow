@@ -1,7 +1,9 @@
 'use client';
 
 import React, { useState, useCallback, useRef, useEffect, memo } from 'react';
-import { Plus, MessageSquare, Trash2, MoreHorizontal, Pencil, Bird } from 'lucide-react';
+import type { User } from '@supabase/supabase-js';
+import { Plus, MessageSquare, Trash2, MoreHorizontal, Pencil } from 'lucide-react';
+import { useAuth } from '@/shared/contexts/AuthContext';
 
 interface Conversation {
   id: string;
@@ -21,16 +23,42 @@ interface SidebarProps {
   onDeleteConversation?: (id: string) => void;
 }
 
+const getUserDisplayName = (user: User | null): string => {
+  if (!user) return 'Agent Sparrow';
+
+  const meta = (user.user_metadata ?? {}) as Record<string, unknown>;
+  const fullName = typeof meta.full_name === 'string' ? meta.full_name.trim() : '';
+  const name = typeof meta.name === 'string' ? meta.name.trim() : '';
+
+  if (fullName) return fullName;
+  if (name) return name;
+
+  const email = user.email?.trim();
+  if (email) return email.split('@')[0] || email;
+
+  return 'User';
+};
+
+const getUserAvatarUrl = (user: User | null): string => {
+  if (!user) return '/Sparrow_logo.png';
+
+  const meta = (user.user_metadata ?? {}) as Record<string, unknown>;
+  const avatarUrl = typeof meta.avatar_url === 'string' ? meta.avatar_url.trim() : '';
+  const pictureUrl = typeof meta.picture === 'string' ? meta.picture.trim() : '';
+
+  return avatarUrl || pictureUrl || '/Sparrow_logo.png';
+};
+
 // Agent Sparrow Logo Component
 const SparrowLogo = memo(function SparrowLogo({ size = 40 }: { size?: number }) {
   return (
     <img
-      src="/Sparrow_logo.png"
+      src="/Sparrow_logo_cropped.png"
       alt="Agent Sparrow"
+      className="lc-sidebar-avatar"
       style={{
         width: size,
         height: size,
-        objectFit: 'contain',
       }}
     />
   );
@@ -47,6 +75,16 @@ export function Sidebar({
   onRenameConversation,
   onDeleteConversation,
 }: SidebarProps) {
+  const { user } = useAuth();
+
+  const userDisplayName = React.useMemo(() => getUserDisplayName(user), [user]);
+  const userAvatarUrl = React.useMemo(() => getUserAvatarUrl(user), [user]);
+  const [avatarSrc, setAvatarSrc] = useState<string>(userAvatarUrl);
+
+  useEffect(() => {
+    setAvatarSrc(userAvatarUrl);
+  }, [userAvatarUrl]);
+
   // Group conversations by date
   const groupedConversations = React.useMemo(() => {
     const groups: Record<string, Conversation[]> = {
@@ -173,17 +211,16 @@ export function Sidebar({
           }}
         >
           <img
-            src="/Sparrow_logo.png"
-            alt="Agent Sparrow"
+            src={avatarSrc}
+            alt={userDisplayName}
+            onError={() => setAvatarSrc('/Sparrow_logo.png')}
+            className="lc-sidebar-avatar"
             style={{
               width: '62px',
               height: '62px',
-              borderRadius: '50%',
-              backgroundColor: 'var(--lc-accent)',
-              objectFit: 'contain'
             }}
           />
-          <span>Agent Sparrow</span>
+          <span>{userDisplayName}</span>
         </div>
       </div>
     </aside>

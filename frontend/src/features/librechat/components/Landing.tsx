@@ -5,6 +5,8 @@ import { useAgent } from '@/features/librechat/AgentContext';
 import { Sparkles, ArrowUp, Command, PenTool, MessageSquare, Zap, Paperclip } from 'lucide-react';
 import type { AttachmentInput } from '@/services/ag-ui/types';
 import { AttachmentPreviewList } from '@/features/librechat/components/AttachmentPreview';
+import { LayoutTextFlip } from '@/components/ui/layout-text-flip';
+import { motion } from 'motion/react';
 
 interface LandingProps {
   onStarterClick?: (prompt: string) => void;
@@ -134,7 +136,14 @@ export function Landing({ onStarterClick }: LandingProps) {
           <img src="/Sparrow_logo.png" alt="Agent Sparrow" />
         </div>
 
-        <h1 className="lc-landing-title">How can I help you today?</h1>
+        <div>
+          <motion.div className="relative mx-4 mt-4 mb-8 flex max-w-full flex-col items-center justify-center gap-3 text-center sm:mx-0 sm:flex-row sm:flex-wrap">
+            <LayoutTextFlip
+              text="What can I help you with?"
+              words={["Log files", "Images", "General questions", "Technical questions", "Writing articles"]}
+            />
+          </motion.div>
+        </div>
 
         <div className="lc-hero-search-container">
           <div
