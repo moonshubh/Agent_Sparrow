@@ -29,15 +29,15 @@ export const metadata: Metadata = {
   generator: 'MB-Sparrow',
   icons: {
     icon: [
-      { url: '/Sparrow_logo.png', sizes: '32x32', type: 'image/png' },
-      { url: '/Sparrow_logo.png', sizes: '16x16', type: 'image/png' },
-      { url: '/Sparrow_logo.png', sizes: '192x192', type: 'image/png' },
-      { url: '/Sparrow_logo.png', sizes: '512x512', type: 'image/png' },
+      { url: '/Sparrow_logo_cropped.png', sizes: '32x32', type: 'image/png' },
+      { url: '/Sparrow_logo_cropped.png', sizes: '16x16', type: 'image/png' },
+      { url: '/Sparrow_logo_cropped.png', sizes: '192x192', type: 'image/png' },
+      { url: '/Sparrow_logo_cropped.png', sizes: '512x512', type: 'image/png' },
     ],
     apple: [
-      { url: '/Sparrow_logo.png', sizes: '180x180', type: 'image/png' },
+      { url: '/Sparrow_logo_cropped.png', sizes: '180x180', type: 'image/png' },
     ],
-    shortcut: ['/Sparrow_logo.png'],
+    shortcut: ['/Sparrow_logo_cropped.png'],
   },
 }
 
@@ -49,9 +49,9 @@ export default function RootLayout({
   return (
     <html lang="en" suppressHydrationWarning>
       <head>
-        <link rel="icon" href="/Sparrow_logo.png" type="image/png" sizes="32x32" />
-        <link rel="shortcut icon" href="/Sparrow_logo.png" />
-        <link rel="apple-touch-icon" href="/Sparrow_logo.png" />
+        <link rel="icon" href="/Sparrow_logo_cropped.png" type="image/png" sizes="32x32" />
+        <link rel="shortcut icon" href="/Sparrow_logo_cropped.png" />
+        <link rel="apple-touch-icon" href="/Sparrow_logo_cropped.png" />
         <link
           rel="stylesheet"
           href="https://cdn.jsdelivr.net/npm/katex@0.16.25/dist/katex.min.css"
