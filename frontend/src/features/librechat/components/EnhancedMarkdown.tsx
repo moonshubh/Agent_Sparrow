@@ -98,10 +98,21 @@ export const EnhancedMarkdown = memo(function EnhancedMarkdown({
     return next;
   }, []);
 
-  // Preprocess content for LaTeX
+  // Preprocess content for LaTeX and strip any markdown data URIs
   const processedContent = useMemo(() => {
     if (!content) return '';
-    return preprocessLaTeX(content);
+
+    // CRITICAL: Strip markdown images with data URIs as final safety net
+    // Pattern: ![alt text](data:image/...) - these should never reach markdown rendering
+    // Images are displayed as artifacts, not embedded in chat text
+    const MARKDOWN_DATA_URI_PATTERN = /!\[[^\]]*\]\(data:image\/[^)]+\)/gi;
+    let sanitized = content;
+    if (MARKDOWN_DATA_URI_PATTERN.test(content)) {
+      sanitized = content.replace(MARKDOWN_DATA_URI_PATTERN, '').trim();
+      console.debug('[EnhancedMarkdown] Stripped markdown data URI from content');
+    }
+
+    return preprocessLaTeX(sanitized);
   }, [content]);
 
   // Memoize remark plugins (including artifact detection)
@@ -176,8 +187,12 @@ export const EnhancedMarkdown = memo(function EnhancedMarkdown({
         const artifactType = (hProps.artifactType || _artifactType) as ArtifactType | undefined;
         const artifactTitle = (hProps.artifactTitle || _artifactTitle) as string | undefined;
 
-        // Inline code
-        if (inline) {
+        // Inline code detection for react-markdown v9+
+        // The `inline` prop was removed in v9, so we detect by absence of language class
+        // Inline code has no language-* class, block code does
+        const isInline = inline || !codeClassName?.includes('language-');
+
+        if (isInline) {
           if (isLibreChat) {
             return (
               <code {...props} className={codeClassName}>

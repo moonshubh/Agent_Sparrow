@@ -2,7 +2,7 @@
 
 import React, { useState, useCallback, useMemo, useRef, useEffect } from 'react';
 import { Eye, Edit3, Save, RotateCcw, FileText, Image as ImageIcon, Link, Bold, Italic, Heading1, Heading2, List, ListOrdered, Quote, Code, Maximize2 } from 'lucide-react';
-import ReactMarkdown from 'react-markdown';
+import ReactMarkdown, { type Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { cn } from '@/shared/lib/utils';
 import type { Artifact } from './types';
@@ -254,17 +254,56 @@ export function ArticleEditor({ artifact }: ArticleEditorProps) {
   // State for image lightbox
   const [lightboxImage, setLightboxImage] = useState<{ src: string; alt: string } | null>(null);
 
+  // Track failed images
+  const [failedImages, setFailedImages] = useState<Set<string>>(new Set());
+
   // Custom markdown components for preview
-  const markdownComponents = useMemo(() => ({
+  const markdownComponents = useMemo((): Partial<Components> => ({
     // Style images with proper sizing and click-to-zoom
-    img: ({ src, alt, ...props }: any) => {
-      const isBase64 = src?.startsWith('data:');
+    // Note: Returns a <span> wrapper (inline) with display:block styling to avoid <p><figure></p> hydration errors
+    img: ({ src, alt, ...props }) => {
+      // Normalize src to string (react-markdown types allow Blob, but in practice it's always string)
+      const srcString = typeof src === 'string' ? src : undefined;
+      const altString = alt ?? 'Article image';
+      const isBase64 = srcString?.startsWith('data:');
+      const hasFailed = srcString && failedImages.has(srcString);
+
+      // Handle image load error
+      const handleImageError = () => {
+        if (srcString) {
+          setFailedImages(prev => new Set(prev).add(srcString));
+        }
+      };
+
+      // Show error state for failed images
+      if (hasFailed) {
+        return (
+          <span className="block my-6 mx-auto max-w-full">
+            <span className="block relative rounded-xl border border-border/50 bg-secondary/30 p-8 text-center">
+              <ImageIcon className="h-12 w-12 mx-auto mb-3 text-muted-foreground/50" />
+              <span className="block text-sm text-muted-foreground">
+                Image failed to load
+              </span>
+              {altString !== 'Article image' && (
+                <span className="block text-xs text-muted-foreground/70 mt-1 italic">
+                  {altString}
+                </span>
+              )}
+            </span>
+          </span>
+        );
+      }
+
+      // Use <span> with display:block to avoid <p><figure></p> nesting issues
       return (
-        <figure className="my-6 mx-auto max-w-full">
-          <div className="relative group cursor-pointer" onClick={() => setLightboxImage({ src, alt })}>
+        <span className="block my-6 mx-auto max-w-full">
+          <span
+            className="block relative group cursor-pointer"
+            onClick={() => srcString && setLightboxImage({ src: srcString, alt: altString })}
+          >
             <img
-              src={src}
-              alt={alt || 'Article image'}
+              src={srcString}
+              alt={altString}
               className={cn(
                 'w-full h-auto rounded-xl shadow-lg',
                 'border border-border/50',
@@ -272,47 +311,48 @@ export function ArticleEditor({ artifact }: ArticleEditorProps) {
                 isBase64 && 'bg-secondary/20' // Background for generated images
               )}
               loading="lazy"
+              onError={handleImageError}
               {...props}
             />
-            <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity bg-black/20 rounded-xl">
-              <div className="bg-background/90 backdrop-blur-sm px-3 py-1.5 rounded-lg text-xs font-medium text-foreground flex items-center gap-1.5">
+            <span className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity bg-black/20 rounded-xl">
+              <span className="bg-background/90 backdrop-blur-sm px-3 py-1.5 rounded-lg text-xs font-medium text-foreground flex items-center gap-1.5">
                 <Maximize2 className="h-3.5 w-3.5" />
                 Click to enlarge
-              </div>
-            </div>
-          </div>
-          {alt && alt !== 'Article image' && (
-            <figcaption className="text-center text-sm text-muted-foreground mt-2 italic">
-              {alt}
-            </figcaption>
+              </span>
+            </span>
+          </span>
+          {altString !== 'Article image' && (
+            <span className="block text-center text-sm text-muted-foreground mt-2 italic">
+              {altString}
+            </span>
           )}
-        </figure>
+        </span>
       );
     },
     // Style headings
-    h1: ({ children, ...props }: any) => (
+    h1: ({ children, ...props }) => (
       <h1 className="text-2xl font-bold mt-6 mb-3 text-foreground border-b border-border pb-2" {...props}>
         {children}
       </h1>
     ),
-    h2: ({ children, ...props }: any) => (
+    h2: ({ children, ...props }) => (
       <h2 className="text-xl font-semibold mt-5 mb-2 text-foreground" {...props}>
         {children}
       </h2>
     ),
-    h3: ({ children, ...props }: any) => (
+    h3: ({ children, ...props }) => (
       <h3 className="text-lg font-medium mt-4 mb-2 text-foreground" {...props}>
         {children}
       </h3>
     ),
     // Style paragraphs
-    p: ({ children, ...props }: any) => (
+    p: ({ children, ...props }) => (
       <p className="my-3 text-foreground/90 leading-relaxed" {...props}>
         {children}
       </p>
     ),
     // Style blockquotes
-    blockquote: ({ children, ...props }: any) => (
+    blockquote: ({ children, ...props }) => (
       <blockquote
         className="border-l-4 border-terracotta-400 pl-4 my-4 italic text-muted-foreground bg-secondary/30 py-2 rounded-r"
         {...props}
@@ -321,19 +361,21 @@ export function ArticleEditor({ artifact }: ArticleEditorProps) {
       </blockquote>
     ),
     // Style lists
-    ul: ({ children, ...props }: any) => (
+    ul: ({ children, ...props }) => (
       <ul className="list-disc list-inside my-3 space-y-1 text-foreground/90" {...props}>
         {children}
       </ul>
     ),
-    ol: ({ children, ...props }: any) => (
+    ol: ({ children, ...props }) => (
       <ol className="list-decimal list-inside my-3 space-y-1 text-foreground/90" {...props}>
         {children}
       </ol>
     ),
-    // Style code
-    code: ({ inline, children, ...props }: any) => (
-      inline ? (
+    // Style code - react-markdown v9+ uses className prop to indicate code block vs inline
+    code: ({ className, children, ...props }) => {
+      // If className contains 'language-', it's a code block
+      const isInline = !className?.includes('language-');
+      return isInline ? (
         <code className="px-1.5 py-0.5 rounded bg-secondary text-terracotta-300 text-sm font-mono" {...props}>
           {children}
         </code>
@@ -341,10 +383,10 @@ export function ArticleEditor({ artifact }: ArticleEditorProps) {
         <code className="block p-3 rounded-lg bg-secondary text-sm font-mono overflow-x-auto" {...props}>
           {children}
         </code>
-      )
-    ),
+      );
+    },
     // Style links
-    a: ({ href, children, ...props }: any) => (
+    a: ({ href, children, ...props }) => (
       <a
         href={href}
         target="_blank"
@@ -355,7 +397,7 @@ export function ArticleEditor({ artifact }: ArticleEditorProps) {
         {children}
       </a>
     ),
-  }), []);
+  }), [failedImages]);
 
   return (
     <div className="flex flex-col h-full">

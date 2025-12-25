@@ -3,6 +3,27 @@
 import React, { createContext, useContext, useState, useCallback, useRef, useEffect } from 'react';
 import type { Message, RunAgentInput } from '@/services/ag-ui/client';
 import type { DocumentPointer, AttachmentInput, InterruptPayload } from '@/services/ag-ui/types';
+import type { Artifact } from './artifacts/types';
+
+/**
+ * Serializable artifact data for persistence in message metadata.
+ * Excludes runtime fields like lastUpdateTime and messageId (which will be set on restore).
+ */
+export interface SerializedArtifact {
+  id: string;
+  type: Artifact['type'];
+  title: string;
+  content: string;
+  language?: string;
+  identifier?: string;
+  index?: number;
+  // Image artifact fields
+  imageData?: string;
+  mimeType?: string;
+  altText?: string;
+  aspectRatio?: string;
+  resolution?: string;
+}
 
 /**
  * Abstract agent interface for CopilotKit compatibility.
@@ -42,6 +63,7 @@ import {
   extractTodosFromPayload,
   formatIfStructuredLog,
 } from './utils';
+import { sessionsAPI } from '@/services/api/endpoints/sessions';
 
 interface AgentContextValue {
   agent: AbstractAgent | null;
@@ -73,6 +95,7 @@ const AgentContext = createContext<AgentContextValue | null>(null);
 interface AgentProviderProps {
   children: React.ReactNode;
   agent: AbstractAgent;
+  sessionId?: string;
 }
 
 // Utility functions moved to ./utils
@@ -201,7 +224,8 @@ const inferLogAnalysisFromMessages = (messages: any[]) => {
 
 export function AgentProvider({
   children,
-  agent
+  agent,
+  sessionId,
 }: AgentProviderProps) {
   const [messages, setMessages] = useState<Message[]>(agent.messages || []);
   const messagesRef = useRef<Message[]>(agent.messages || []);
@@ -222,6 +246,9 @@ export function AgentProvider({
   const interruptResolverRef = useRef<((value: string) => void) | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
   const toolNameByIdRef = useRef<Record<string, string>>({});
+  const assistantPersistedRef = useRef(false);
+  // Track artifacts created during the current run for persistence
+  const pendingArtifactsRef = useRef<SerializedArtifact[]>([]);
 
   const sendMessage = useCallback(async (content: string, attachments?: AttachmentInput[]) => {
     if (!agent || isStreaming) return;
@@ -236,6 +263,8 @@ export function AgentProvider({
     setThinkingTrace([]);
     setActiveTraceStepId(undefined);
     toolNameByIdRef.current = {};
+    assistantPersistedRef.current = false;
+    pendingArtifactsRef.current = [];
 
     try {
       // Create abort controller for this request
@@ -265,6 +294,17 @@ export function AgentProvider({
 
       // Add user message to agent's message list
       agent.addMessage(userMessage);
+
+      // Persist user message to backend database
+      if (sessionId && content.trim()) {
+        // Fire-and-forget but with error logging - user experience is not blocked
+        sessionsAPI.postMessage(sessionId, {
+          message_type: 'user',
+          content: content.trim(),
+        }).catch((err) => {
+          console.error('[Persistence] Failed to persist user message:', err);
+        });
+      }
 
       const shouldForceLogAnalysis = hasLogAttachment(attachments);
       if (shouldForceLogAnalysis) {
@@ -318,6 +358,21 @@ export function AgentProvider({
             if (!buffer) {
               return;
             }
+
+            // CRITICAL: Strip markdown images with data URIs - safety filter
+            // Pattern: ![alt text](data:image/...)
+            // The model sometimes outputs these despite prompt instructions not to.
+            // Images are already displayed as artifacts, so this is just garbage in chat.
+            const MARKDOWN_DATA_URI_PATTERN = /!\[[^\]]*\]\(data:image\/[^)]+\)/gi;
+            if (MARKDOWN_DATA_URI_PATTERN.test(buffer)) {
+              const cleaned = buffer.replace(MARKDOWN_DATA_URI_PATTERN, '').trim();
+              console.debug('[AG-UI] Stripped markdown data URI from buffer, original:', buffer.length, 'cleaned:', cleaned.length);
+              if (!cleaned) {
+                return; // Skip if entire buffer was just a markdown image
+              }
+              buffer = cleaned;
+            }
+
             if (agentType === 'log_analysis') {
               const formatted = formatIfStructuredLog(buffer);
               if (formatted) {
@@ -383,6 +438,18 @@ export function AgentProvider({
                 ...msg,
                 content: normalized,
               };
+            });
+
+            // CRITICAL: Strip markdown data URIs from all assistant messages
+            // Pattern: ![alt text](data:image/...) - safety filter for final messages
+            const MARKDOWN_DATA_URI_FILTER = /!\[[^\]]*\]\(data:image\/[^)]+\)/gi;
+            messagesWithIds = messagesWithIds.map((msg) => {
+              if (msg.role !== 'assistant') return msg;
+              if (typeof msg.content !== 'string') return msg;
+              if (!MARKDOWN_DATA_URI_FILTER.test(msg.content)) return msg;
+              const cleaned = msg.content.replace(MARKDOWN_DATA_URI_FILTER, '').trim();
+              console.debug('[AG-UI] Stripped markdown data URI from final message');
+              return { ...msg, content: cleaned };
             });
 
             if (agent) {
@@ -572,6 +639,14 @@ export function AgentProvider({
               (agent as any).messages = nextMessages;
             }
 
+            // CRITICAL: Update messagesRef synchronously before setMessages
+            // This ensures the finally block sees the latest messages
+            // (React's useEffect that syncs messagesRef runs asynchronously after render)
+            messagesRef.current = nextMessages;
+
+            // Note: Persistence moved to finally block to ensure all artifacts are collected
+            // before persisting (custom events like article_artifact arrive after onMessagesChanged)
+
             setMessages(nextMessages);
           },
 
@@ -681,6 +756,15 @@ export function AgentProvider({
                   state.setCurrentArtifact(payload.id);
                   state.setArtifactsVisible(true);
                 }
+                // Track for persistence (exclude messageId - will be set on restore)
+                pendingArtifactsRef.current.push({
+                  id: payload.id,
+                  type: 'image',
+                  title: payload.title || 'Generated Image',
+                  content: payload.content || '',
+                  imageData: payload.imageData,
+                  mimeType: payload.mimeType || 'image/png',
+                });
               }
             } else if (event.name === 'article_artifact') {
               // Handle article artifact for research reports, articles with images
@@ -701,6 +785,13 @@ export function AgentProvider({
                   state.setCurrentArtifact(payload.id);
                   state.setArtifactsVisible(true);
                 }
+                // Track for persistence (exclude messageId - will be set on restore)
+                pendingArtifactsRef.current.push({
+                  id: payload.id,
+                  type: 'article',
+                  title: payload.title || 'Article',
+                  content: payload.content,
+                });
               }
             }
 
@@ -780,8 +871,40 @@ export function AgentProvider({
       setIsStreaming(false);
       abortControllerRef.current = null;
       setActiveTools([]);
+
+      // Persist final assistant message AFTER run completes
+      // This ensures all custom events (artifacts) have been processed
+      if (sessionId && !assistantPersistedRef.current) {
+        const currentMessages = messagesRef.current;
+        const lastAssistantMessage = [...currentMessages].reverse().find(
+          (msg) => msg.role === 'assistant' && typeof msg.content === 'string' && msg.content.trim()
+        );
+        if (lastAssistantMessage) {
+          assistantPersistedRef.current = true;
+          const agentType = (agent?.state as any)?.agent_type || (agent?.state as any)?.agentType || 'primary';
+
+          // Include artifacts in metadata for persistence
+          const artifacts = pendingArtifactsRef.current.length > 0
+            ? pendingArtifactsRef.current
+            : undefined;
+
+          console.debug('[Persistence] Persisting assistant message with', artifacts?.length || 0, 'artifacts');
+
+          sessionsAPI.postMessage(sessionId, {
+            message_type: 'assistant',
+            content: lastAssistantMessage.content,
+            agent_type: agentType,
+            metadata: artifacts ? { artifacts } : undefined,
+          }).then(() => {
+            console.debug('[Persistence] Assistant message persisted successfully');
+          }).catch((err) => {
+            console.error('[Persistence] Failed to persist assistant message:', err);
+            assistantPersistedRef.current = false;
+          });
+        }
+      }
     }
-  }, [agent, isStreaming]);
+  }, [agent, isStreaming, sessionId]);
 
   const abortRun = useCallback(() => {
     if (abortControllerRef.current) {

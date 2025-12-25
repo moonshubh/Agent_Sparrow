@@ -7,7 +7,7 @@ import { ChatInput } from './ChatInput';
 import { Sidebar } from './Sidebar';
 import { Header } from './Header';
 import { Landing } from './Landing';
-import { ArtifactPanel, useArtifactActions } from '@/features/librechat/artifacts';
+import { ArtifactPanel } from '@/features/librechat/artifacts';
 
 interface LibreChatViewProps {
   sessionId?: string;
@@ -31,7 +31,6 @@ export function LibreChatView({
   onAutoName,
 }: LibreChatViewProps) {
   const { messages, isStreaming, error } = useAgent();
-  const { resetArtifacts } = useArtifactActions();
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [initialInput, setInitialInput] = useState('');
@@ -70,9 +69,8 @@ export function LibreChatView({
     hasAutoNamedRef.current = false;
   }, [currentConversationId]);
 
-  useEffect(() => {
-    resetArtifacts();
-  }, [currentConversationId, resetArtifacts]);
+  // Note: Artifact reset/restore is handled by LibreChatClient.tsx
+  // when switching conversations via restoreArtifactsFromMessages()
 
   const toggleSidebar = useCallback(() => {
     setSidebarOpen((prev) => !prev);

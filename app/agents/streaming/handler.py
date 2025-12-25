@@ -7,6 +7,7 @@ handling LangGraph streaming events.
 from __future__ import annotations
 
 import hashlib
+import re
 import time
 from contextlib import nullcontext
 from typing import Any, Callable, Dict, List, Optional, TYPE_CHECKING
@@ -56,6 +57,14 @@ THINKING_BLOCK_PATTERN = re.compile(
 )
 THINK_TAG_PATTERN = re.compile(
     r"<(?:thinking|think)>\s*([\s\S]*?)\s*</(?:thinking|think)>",
+    re.IGNORECASE
+)
+
+# Pattern for detecting markdown images with data URIs (base64-encoded images)
+# Matches: ![alt text](data:image/...) where the base64 data can be very long
+# This catches the model outputting embedded images as markdown which should be filtered
+MARKDOWN_DATA_URI_PATTERN = re.compile(
+    r"!\[[^\]]*\]\(data:image/[^)]+\)",
     re.IGNORECASE
 )
 
@@ -162,16 +171,16 @@ class ThinkingBlockTracker:
 
     @staticmethod
     def sanitize_final_content(content: str) -> str:
-        """Strip any remaining thinking blocks from final content.
+        """Strip any remaining thinking blocks and markdown data URIs from final content.
 
-        This is a safety net for any thinking content that slipped through
-        during streaming. Should be called on the final message content.
+        This is a safety net for any thinking content or embedded images that
+        slipped through during streaming. Should be called on the final message content.
 
         Args:
             content: The final message content.
 
         Returns:
-            Content with all :::thinking blocks removed.
+            Content with all :::thinking blocks and markdown data URIs removed.
         """
         if not content:
             return content
@@ -189,6 +198,11 @@ class ThinkingBlockTracker:
         # But be careful not to remove ::: in other contexts (like code blocks)
         # Only remove ::: at the start of a line or after whitespace
         sanitized = re.sub(r"(?:^|\n)\s*:::\s*(?=\n|$)", "\n", sanitized)
+
+        # Remove markdown images with data URIs: ![alt](data:image/...)
+        # These are generated when the model tries to embed base64 images in text
+        # The images are already displayed as artifacts, so this is just garbage
+        sanitized = MARKDOWN_DATA_URI_PATTERN.sub("", sanitized)
 
         # Clean up excess whitespace
         sanitized = re.sub(r"\n{3,}", "\n\n", sanitized).strip()
@@ -748,12 +762,60 @@ class StreamEventHandler:
             if chunk_text:
                 self.emitter.stream_thought_chunk(run_id, chunk_text)
 
+            # CRITICAL: Filter markdown images with data URIs BEFORE any early returns
+            # (including the Gemini 3 buffer path). The model sometimes outputs
+            # ![alt](data:image/...) despite prompt instructions not to.
+            if visible_content and MARKDOWN_DATA_URI_PATTERN.search(visible_content):
+                cleaned = MARKDOWN_DATA_URI_PATTERN.sub("", visible_content).strip()
+                logger.debug(
+                    "stripped_markdown_data_uri_early",
+                    original_length=len(visible_content),
+                    cleaned_length=len(cleaned),
+                )
+                if not cleaned:
+                    return  # Skip if entire chunk was just a markdown image
+                visible_content = cleaned
+
             # Buffer Gemini 3 visible text so chain-of-thought never hits the
             # main chat stream; we'll emit a single sanitized answer at model_end.
             if run_id_str in self._gemini_buffer_runs:
                 if visible_content:
                     self._gemini_buffer_runs[run_id_str].append(visible_content)
                 return
+
+            # Skip large content that looks like base64 or binary data
+            # Filter visible_content since that's what gets emitted to the chat
+            # Base64 images are typically 50KB-3MB; normal text chunks are < 8KB
+            if visible_content and len(visible_content) > 8000:
+                logger.debug("skipping_large_visible_chunk", length=len(visible_content))
+                return
+
+            # Also detect base64-like patterns (long strings of alphanumeric + /+=)
+            # Real text has spaces, punctuation, varied patterns - base64 doesn't
+            if visible_content and len(visible_content) > 500:
+                sample = visible_content.replace('\n', '').replace(' ', '')[:500]
+                stripped = sample.rstrip('=')
+                # Check for valid base64 alphabet (no spaces, punctuation, or varied case patterns)
+                if stripped and re.match(r'^[A-Za-z0-9+/]+$', stripped):
+                    logger.debug("skipping_base64_like_visible_chunk", length=len(visible_content))
+                    return
+
+            # Filter markdown images with data URIs: ![alt](data:image/...)
+            # These are generated when the model tries to "embed" images it generated
+            # via the generate_image tool. The image is already displayed as an artifact,
+            # so this markdown just creates garbage in the chat display.
+            if visible_content and MARKDOWN_DATA_URI_PATTERN.search(visible_content):
+                # Strip the markdown data URI from the content
+                cleaned = MARKDOWN_DATA_URI_PATTERN.sub("", visible_content).strip()
+                logger.debug(
+                    "stripped_markdown_data_uri",
+                    original_length=len(visible_content),
+                    cleaned_length=len(cleaned),
+                )
+                if not cleaned:
+                    # If the entire chunk was just a markdown image, skip it
+                    return
+                visible_content = cleaned
 
             looks_like_json = normalized.startswith(("{", "[")) and normalized.endswith(("}", "]"))
 
