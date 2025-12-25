@@ -27,6 +27,10 @@ export const metadata: Metadata = {
   title: 'MB-Sparrow Agent',
   description: 'Multi-agent AI system for Mailbird customer support',
   generator: 'MB-Sparrow',
+  icons: {
+    icon: '/Sparrow_logo.png',
+    apple: '/Sparrow_logo.png',
+  },
 }
 
 export default function RootLayout({
