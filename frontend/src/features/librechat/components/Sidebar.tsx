@@ -2,7 +2,7 @@
 
 import React, { useState, useCallback, useRef, useEffect, memo } from 'react';
 import type { User } from '@supabase/supabase-js';
-import { Plus, MessageSquare, Trash2, MoreHorizontal, Pencil, Bird } from 'lucide-react';
+import { Plus, MessageSquare, Trash2, MoreHorizontal, Pencil, Bird, PenLine } from 'lucide-react';
 import { useAuth } from '@/shared/contexts/AuthContext';
 
 interface Conversation {
@@ -59,6 +59,23 @@ const SparrowLogo = memo(function SparrowLogo() {
     />
   );
 });
+
+// Custom New Chat Icon (Stylized Cursive Stroke matching attached image)
+const NewChatIcon = ({ size = 18 }: { size?: number }) => (
+  <svg 
+    width={size} 
+    height={size} 
+    viewBox="0 0 24 24" 
+    fill="none" 
+    stroke="currentColor" 
+    strokeWidth="2.5" 
+    strokeLinecap="round" 
+    strokeLinejoin="round"
+    className="lc-new-chat-icon"
+  >
+    <path d="M7 19c0-6 4-15 9-15s3 3 1 8s-6 6-8 5s2-8 6-8s5 3 5 6s-3 9-5 9s-4-2-4-3" />
+  </svg>
+);
 
 export function Sidebar({
   isOpen,
@@ -138,7 +155,7 @@ export function Sidebar({
           onClick={onNewChat}
           aria-label="Start new chat"
         >
-          <Plus size={18} />
+          <NewChatIcon size={18} />
           <span>New Chat</span>
         </button>
       </div>
