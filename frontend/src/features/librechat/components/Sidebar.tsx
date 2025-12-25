@@ -2,7 +2,7 @@
 
 import React, { useState, useCallback, useRef, useEffect, memo } from 'react';
 import type { User } from '@supabase/supabase-js';
-import { Plus, MessageSquare, Trash2, MoreHorizontal, Pencil } from 'lucide-react';
+import { Plus, MessageSquare, Trash2, MoreHorizontal, Pencil, Bird } from 'lucide-react';
 import { useAuth } from '@/shared/contexts/AuthContext';
 
 interface Conversation {
@@ -358,7 +358,7 @@ const ConversationItem = memo(function ConversationItem({
       role="listitem"
       aria-current={isActive ? 'page' : undefined}
     >
-      <MessageSquare size={16} style={{ flexShrink: 0, opacity: 0.7 }} aria-hidden="true" />
+      <Bird size={16} style={{ flexShrink: 0, opacity: 0.7 }} aria-hidden="true" />
       <span className="lc-conversation-title">
         {conversation.title}
       </span>
