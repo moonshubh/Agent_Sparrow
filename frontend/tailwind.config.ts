@@ -37,11 +37,11 @@ const config: Config = {
 		   Warm, scholarly aesthetic with organic natural elements
 		   ============================================================ */
 		fontFamily: {
-			// Primary: Poppins sans-serif for clean AI interface
-			sans: ['"Poppins"', '-apple-system', 'BlinkMacSystemFont', 'sans-serif'],
+			// Primary: Inter sans-serif for clean, modern AI interface
+			sans: ['var(--font-inter)', '"Inter"', '-apple-system', 'BlinkMacSystemFont', 'sans-serif'],
 			serif: ['"Lora"', '"Source Serif Pro"', 'Georgia', 'serif'],
 			// Fallback sans for UI elements
-			ui: ['"Poppins"', '-apple-system', 'BlinkMacSystemFont', 'sans-serif'],
+			ui: ['var(--font-inter)', '"Inter"', '-apple-system', 'BlinkMacSystemFont', 'sans-serif'],
 			mono: ['"JetBrains Mono"', '"Fira Code"', 'ui-monospace', 'monospace'],
 		},
 		colors: {

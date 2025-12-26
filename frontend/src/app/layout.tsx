@@ -1,7 +1,7 @@
 import type { Metadata } from 'next';
 import Script from 'next/script';
 import { ThemeProvider } from 'next-themes';
-import { Lora, Poppins } from 'next/font/google';
+import { Lora, Inter } from 'next/font/google';
 // no server-side cookies read here; keep layout minimal
 import './globals.css';
 import { Toaster } from '@/shared/ui/sonner';
@@ -16,11 +16,11 @@ const lora = Lora({
   style: ['normal', 'italic'],
 });
 
-const poppins = Poppins({
+const inter = Inter({
   subsets: ['latin'],
-  variable: '--font-poppins',
+  variable: '--font-inter',
   display: 'swap',
-  weight: ['400', '500', '600'],
+  weight: ['400', '500', '600', '700'],
 });
 
 export const metadata: Metadata = {
@@ -58,7 +58,7 @@ export default function RootLayout({
           crossOrigin="anonymous"
         />
       </head>
-      <body className={`${lora.variable} ${poppins.variable} antialiased`} suppressHydrationWarning>
+      <body className={`${lora.variable} ${inter.variable} antialiased`} suppressHydrationWarning>
         <Script 
           id="disable-grammarly" 
           strategy="beforeInteractive"

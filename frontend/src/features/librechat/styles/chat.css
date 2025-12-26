@@ -1,22 +1,22 @@
 /* LibreChat/ChatGPT-style theme */
 
-/* Color palette - ChatGPT gray theme */
+/* Color palette - Darker ChatGPT-inspired theme */
 :root {
-  --lc-surface-primary: #343541;
-  --lc-surface-secondary: #202123;
-  --lc-surface-tertiary: #444654;
-  --lc-surface-hover: #2a2b32;
+  --lc-surface-primary: #0f0f0f;     /* Darker main bg */
+  --lc-surface-secondary: #121212;    /* Darker sidebar */
+  --lc-surface-tertiary: #1e1e1e;     /* Card surfaces */
+  --lc-surface-hover: #252525;        /* Hover state */
   --lc-text-primary: #ececf1;
   --lc-text-secondary: #c5c5d2;
   --lc-text-tertiary: #8e8ea0;
-  --lc-border: #4e4f60;
-  --lc-border-light: #3e3f4b;
-  --lc-accent: #10a37f;
-  --lc-accent-hover: #1a7f64;
+  --lc-border: #2a2a2a;               /* More subtle border */
+  --lc-border-light: #1f1f1f;
+  --lc-accent: hsl(200.4 98% 38%);    /* Terracotta accent */
+  --lc-accent-hover: hsl(200.4 98% 45%);
   --lc-error: #ef4444;
-  --lc-user-bg: #2d223f;
-  --lc-user-border: #3a2b57;
-  --lc-assistant-bg: #444654;
+  --lc-user-bg: #1a1a1a;              /* Subtle user msg bg */
+  --lc-user-border: #252525;
+  --lc-assistant-bg: transparent;      /* Clean assistant bg */
   --lc-font-sans: var(--font-sans);
   --lc-font-mono: var(--font-mono);
 }
