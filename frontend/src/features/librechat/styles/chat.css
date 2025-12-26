@@ -14,8 +14,8 @@
   --lc-accent: hsl(200.4 98% 38%);    /* Blue accent */
   --lc-accent-hover: hsl(200.4 98% 45%);
   --lc-error: #ef4444;
-  --lc-user-bg: #2a2a2a;              /* Subtle user msg bg */
-  --lc-user-border: #383838;
+  --lc-user-bg: hsl(205 35% 28%);     /* Agent Sparrow blue bubble */
+  --lc-user-border: hsl(205 40% 35%);
   --lc-assistant-bg: transparent;      /* Clean assistant bg */
   --lc-font-sans: var(--font-sans);
   --lc-font-mono: var(--font-mono);
@@ -32,8 +32,8 @@
   --lc-text-tertiary: #9ca3af;
   --lc-border: #e5e7eb;
   --lc-border-light: #d1d5db;
-  --lc-user-bg: #eef1f6;
-  --lc-user-border: #d5d9e4;
+  --lc-user-bg: hsl(205 60% 92%);     /* Light blue bubble */
+  --lc-user-border: hsl(205 50% 82%);
   --lc-assistant-bg: #f7f7f8;
   --lc-font-sans: var(--font-sans);
   --lc-font-mono: var(--font-mono);
