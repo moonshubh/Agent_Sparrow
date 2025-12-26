@@ -5,10 +5,8 @@ Refactored to use modular streaming, event emission, and message preparation.
 
 from __future__ import annotations
 
-import asyncio
 import re
 import textwrap
-import time
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Set
 
@@ -65,8 +63,9 @@ from app.agents.helpers.gemma_helper import GemmaHelper
 
 # Import new streaming modules
 from app.agents.streaming import StreamEventEmitter, StreamEventHandler
+from app.agents.streaming.handler import ThinkingBlockTracker
 from app.agents.unified.message_preparation import MessagePreparer
-from app.agents.unified.session_cache import get_session_cache, get_session_data
+from app.agents.unified.session_cache import get_session_data
 
 from .model_router import ModelSelectionResult, model_router
 from .tools import get_registered_support_tools, get_registered_tools
@@ -594,13 +593,14 @@ def _build_runnable_config(
     """Build the runnable config for agent invocation."""
     base_config: Dict[str, Any] = dict(config or {})
     recursion_limit = base_config.get("recursion_limit")
-    if recursion_limit is None:
-        base_config["recursion_limit"] = DEFAULT_RECURSION_LIMIT
-    else:
-        try:
-            base_config["recursion_limit"] = int(recursion_limit)
-        except Exception:
-            base_config["recursion_limit"] = DEFAULT_RECURSION_LIMIT
+    try:
+        resolved_limit = int(recursion_limit) if recursion_limit is not None else DEFAULT_RECURSION_LIMIT
+    except (ValueError, TypeError):
+        resolved_limit = DEFAULT_RECURSION_LIMIT
+    # Prevent upstream configs (e.g., adapters) from lowering recursion_limit too far.
+    if resolved_limit < DEFAULT_RECURSION_LIMIT:
+        resolved_limit = DEFAULT_RECURSION_LIMIT
+    base_config["recursion_limit"] = resolved_limit
 
     configurable = dict(base_config.get("configurable") or {})
     configurable.setdefault("thread_id", state.session_id)
@@ -777,6 +777,78 @@ def _coerce_message_text(message: BaseMessage) -> str:
                 parts.append(str(chunk))
         return "".join(parts)
     return str(content) if content is not None else ""
+
+
+def _coerce_visible_assistant_text(content: Any) -> str:
+    """Extract user-visible assistant text from LangChain content blocks.
+
+    Gemini 3 (and some OpenAI-compatible providers) may return structured content
+    blocks containing thinking/reasoning/signatures. These must never leak into
+    user-facing outputs (including Zendesk replies).
+    """
+    if content is None:
+        return ""
+
+    if isinstance(content, str):
+        return ThinkingBlockTracker.sanitize_final_content(content).strip()
+
+    if isinstance(content, dict):
+        raw_type = content.get("type", "")
+        block_type = raw_type.lower() if isinstance(raw_type, str) else ""
+        if block_type in ("thinking", "reasoning", "thought", "signature", "thought_signature"):
+            return ""
+        if block_type in ("tool", "tool_use", "tool_call", "tool_calls", "function_call", "function"):
+            return ""
+        text = content.get("text")
+        if isinstance(text, str) and text.strip():
+            return ThinkingBlockTracker.sanitize_final_content(text).strip()
+        raw_content = content.get("content")
+        if isinstance(raw_content, str) and raw_content.strip():
+            return ThinkingBlockTracker.sanitize_final_content(raw_content).strip()
+        return ""
+
+    if isinstance(content, list):
+        parts: list[str] = []
+        for part in content:
+            if part is None:
+                continue
+            if isinstance(part, str):
+                parts.append(part)
+                continue
+            if isinstance(part, dict):
+                raw_type = part.get("type", "")
+                block_type = raw_type.lower() if isinstance(raw_type, str) else ""
+                if block_type in ("thinking", "reasoning", "thought", "signature", "thought_signature"):
+                    continue
+                if block_type in ("tool", "tool_use", "tool_call", "tool_calls", "function_call", "function"):
+                    continue
+                text = part.get("text")
+                if isinstance(text, str) and text.strip():
+                    parts.append(text)
+                    continue
+                raw_part_content = part.get("content")
+                if isinstance(raw_part_content, str) and raw_part_content.strip():
+                    parts.append(raw_part_content)
+                    continue
+        joined = "".join(parts)
+        return ThinkingBlockTracker.sanitize_final_content(joined).strip()
+
+    return ThinkingBlockTracker.sanitize_final_content(str(content)).strip()
+
+
+def _sanitize_user_facing_messages(messages: list[BaseMessage]) -> list[BaseMessage]:
+    """Ensure assistant messages are safe, plain-text, and free of thinking."""
+    sanitized: list[BaseMessage] = []
+    for message in messages:
+        if isinstance(message, AIMessage):
+            sanitized.append(
+                message.model_copy(
+                    update={"content": _coerce_visible_assistant_text(message.content)}
+                )
+            )
+        else:
+            sanitized.append(message)
+    return sanitized
 
 
 def _extract_last_user_query(messages: List[BaseMessage]) -> str:
@@ -1245,6 +1317,10 @@ async def run_unified_agent(state: GraphState, config: Optional[RunnableConfig] 
         log_agent = (state.agent_type or state.forwarded_props.get("agent_type")) == "log_analysis"
         if log_agent:
             updated_messages = _format_log_analysis_messages(updated_messages)
+
+        # Ensure assistant messages never leak thinking/tool-call artifacts to the user,
+        # including non-AGUI contexts like the Zendesk scheduler.
+        updated_messages = _sanitize_user_facing_messages(updated_messages)
 
         # 13. Record memory from response
         last_ai_message = next((m for m in reversed(updated_messages) if isinstance(m, AIMessage)), None)

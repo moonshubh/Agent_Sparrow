@@ -96,6 +96,16 @@ class Settings(BaseSettings):
     primary_agent_formatting: str = Field(default="natural", alias="PRIMARY_AGENT_FORMATTING")
     primary_agent_quality_level: str = Field(default="balanced", alias="PRIMARY_AGENT_QUALITY_LEVEL")
     primary_agent_prompt_version: str = Field(default="v10", alias="PRIMARY_AGENT_PROMPT_VERSION")
+    # Thinking trace mode: narrated | hybrid | provider_reasoning | off
+    trace_mode: str = Field(default="narrated", alias="TRACE_MODE")
+
+    @field_validator("trace_mode")
+    @classmethod
+    def validate_trace_mode(cls, value: str) -> str:
+        allowed = {"narrated", "hybrid", "provider_reasoning", "off"}
+        normalized = (value or "narrated").lower().strip()
+        return normalized if normalized in allowed else "narrated"
+
     # Optional override specifically for Zendesk auto-responses (e.g., OpenRouter Grok)
     zendesk_agent_provider: Optional[str] = Field(default=None, alias="ZENDESK_AGENT_PROVIDER")
     zendesk_agent_model: Optional[str] = Field(default=None, alias="ZENDESK_AGENT_MODEL")

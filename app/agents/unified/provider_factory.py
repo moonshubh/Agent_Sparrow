@@ -28,6 +28,7 @@ from loguru import logger
 
 from app.core.settings import settings
 from app.core.config import get_registry
+from app.core.config.model_registry import get_model_by_id
 
 
 # Type alias for supported providers
@@ -227,20 +228,30 @@ def _build_google_model(model: str, temperature: float) -> BaseChatModel:
         is_gemini_3=is_gemini_3,
     )
 
-    # Configure Gemini model with thinking settings
-    # IMPORTANT: include_thoughts=False doesn't work with chains (LangGraph)
-    # due to known bug: https://github.com/langchain-ai/langchain/issues/31767
-    # Thinking content WILL still appear in streaming - handler.py filters it
-    #
-    # NOTE: thinking_level and thinking_budget are not supported by langchain-google-genai 3.2.0
-    # We rely entirely on handler.py's _extract_thinking_and_text() to filter thinking content
+    trace_mode = getattr(settings, "trace_mode", "narrated")
+    include_thoughts = trace_mode in {"hybrid", "provider_reasoning"}
+
+    # Configure Gemini model thinking settings.
+    # `langchain-google-genai==3.2.0` supports `thinking_config` via:
+    # - include_thoughts
+    # - thinking_budget (Gemini 2.5+)
+    # - thinking_level (Gemini 3+, API-dependent)
     kwargs = {
         "model": model,
         "temperature": temperature,
         "google_api_key": settings.gemini_api_key,
-        "include_thoughts": False,  # Attempt to prevent thinking (may not work with chains)
+        "include_thoughts": include_thoughts,
         "timeout": REQUEST_TIMEOUT_SECONDS,  # Prevent 504 Deadline Exceeded errors
     }
+
+    if include_thoughts:
+        if is_gemini_3:
+            # Gemini 3: request high thinking depth when supported.
+            kwargs["thinking_level"] = "high"
+        else:
+            # Gemini 2.5: optional thinking budget (tokens).
+            if settings.primary_agent_thinking_budget is not None:
+                kwargs["thinking_budget"] = settings.primary_agent_thinking_budget
 
     return ChatGoogleGenerativeAI(**kwargs)
 
@@ -302,8 +313,13 @@ def _build_xai_model(
         provider="xai",
     )
 
-    # Build extra_body for reasoning mode if enabled
-    extra_body = {"reasoning_enabled": use_reasoning} if use_reasoning else None
+    # Grok reasoning exposure varies by model family.
+    # Grok 3: supports `reasoning_content` with `reasoning_effort` in extra_body.
+    # Grok 4: may ignore/reject these flags; keep request minimal.
+    model_lower = model.lower()
+    extra_body = None
+    if use_reasoning and "grok-3" in model_lower:
+        extra_body = {"reasoning_effort": "high"}
 
     return ChatXAI(
         model=model,
@@ -343,12 +359,19 @@ def _build_openrouter_model(model: str, temperature: float) -> BaseChatModel:
         base_url=base_url,
     )
 
+    trace_mode = getattr(settings, "trace_mode", "narrated")
+    spec = get_model_by_id(model)
+    supports_reasoning = spec.supports_reasoning if spec is not None else True
+    include_reasoning = trace_mode in {"hybrid", "provider_reasoning"}
+    extra_body = {"include_reasoning": True} if supports_reasoning and include_reasoning else None
+
     return ChatOpenAI(
         model=model,
         temperature=temperature,
         api_key=api_key,
         base_url=base_url,
         default_headers=headers,
+        extra_body=extra_body,
     )
 
 

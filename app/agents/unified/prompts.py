@@ -15,6 +15,7 @@ from typing import Optional
 import re
 
 from app.core.config import get_registry
+from app.core.settings import settings
 from app.agents.skills import get_skills_registry
 
 
@@ -42,6 +43,18 @@ chain-of-thought:
 - Focus user-facing output on clear, actionable answers
 - Use your deeper reasoning for hypothesis testing and evidence synthesis
 </grok_configuration>
+""".strip()
+
+TRACE_NARRATION_ADDENDUM = """
+<trace_updates>
+Progress Updates panel (internal trace):
+- Use the `trace_update` tool to add short narration that the user sees in the Progress Updates panel.
+- Do NOT include these thoughts in the main chat answer.
+- Keep it lightweight: ~3–6 calls per run max.
+- Use `kind="phase"` for major stages (Planning, Working, Writing answer); otherwise use `kind="thought"`.
+- Keep `detail` to 1–3 sentences; never dump raw tool outputs, JSON payloads, or secrets.
+- If you are about to call a tool, you MAY set `goalForNextTool` to label the intent of the next tool call.
+</trace_updates>
 """.strip()
 
 
@@ -489,6 +502,9 @@ def get_coordinator_prompt(
         except Exception:
             # Skills loading failure should not break the agent
             pass
+
+    if settings.trace_mode in {"narrated", "hybrid"}:
+        prompt_parts.append(TRACE_NARRATION_ADDENDUM)
 
     return "\n\n".join(prompt_parts)
 

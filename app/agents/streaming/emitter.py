@@ -16,7 +16,7 @@ import hashlib
 import itertools
 import time
 from datetime import datetime, timezone
-from typing import Any, Callable, Dict, List, Optional, Set, Tuple
+from typing import Any, Callable, Dict, List, Optional, Set
 
 from loguru import logger
 
@@ -112,6 +112,7 @@ class StreamEventEmitter:
         self._emitted_trace_hashes: Set[str] = set()
         self._last_trace_emission_time: float = 0.0
         self._last_emitted_trace_version: int = 0
+        self._last_emitted_trace_fingerprint: Optional[str] = None
 
         # Summarized older steps (progressive summarization)
         self._summarized_steps: List[Dict[str, Any]] = []
@@ -374,6 +375,7 @@ class StreamEventEmitter:
         tool_call_id: str,
         tool_name: str,
         input_data: Optional[Any] = None,
+        goal: Optional[str] = None,
     ) -> TimelineOperation:
         """Record a tool operation starting."""
         tool_op = self.operations.get(tool_call_id)
@@ -385,24 +387,29 @@ class StreamEventEmitter:
             )
             self.operations[tool_call_id] = tool_op
             self._add_to_parent(tool_call_id)
+        if goal:
+            tool_op.metadata["goal"] = goal
 
         # Emit events
         self._emit_timeline_update(tool_call_id)
         self.emit_tool_call_start(tool_call_id, tool_name)
 
-        # Add trace step
-        trace_meta: Dict[str, Any] = {
-            "toolCallId": tool_call_id,
-            "toolName": tool_name,
-        }
-        if input_data is not None:
-            trace_meta["input"] = safe_json_value(input_data)
+        # Add trace step (skip internal housekeeping tools; those have dedicated UI)
+        if tool_name not in {"write_todos", "trace_update"}:
+            trace_meta: Dict[str, Any] = {
+                "toolCallId": tool_call_id,
+                "toolName": tool_name,
+            }
+            if input_data is not None:
+                trace_meta["input"] = safe_json_value(input_data)
+            if goal:
+                trace_meta["goal"] = goal
 
-        self.add_trace_step(
-            step_type="action",
-            content=f"Executing {tool_name}",
-            metadata=trace_meta,
-        )
+            self.add_trace_step(
+                step_type="action",
+                content=f"Executing {tool_name}",
+                metadata=trace_meta,
+            )
 
         return tool_op
 
@@ -452,21 +459,25 @@ class StreamEventEmitter:
             ).to_dict(),
         )
 
-        # Add trace step
-        result_meta: Dict[str, Any] = {
-            "toolCallId": tool_call_id,
-            "toolName": tool_name,
-        }
-        if safe_output is not None:
-            result_meta["output"] = safe_output
-        if tool_op.duration is not None:
-            result_meta["durationMs"] = tool_op.duration
+        # Add trace step (skip internal housekeeping tools; those have dedicated UI)
+        if tool_name not in {"write_todos", "trace_update"}:
+            result_meta: Dict[str, Any] = {
+                "toolCallId": tool_call_id,
+                "toolName": tool_name,
+            }
+            goal = tool_op.metadata.get("goal") if tool_op else None
+            if isinstance(goal, str) and goal.strip():
+                result_meta["goal"] = goal.strip()
+            if safe_output is not None:
+                result_meta["output"] = safe_output
+            if tool_op.duration is not None:
+                result_meta["durationMs"] = tool_op.duration
 
-        self.add_trace_step(
-            step_type="result",
-            content=f"{tool_name} completed",
-            metadata=result_meta,
-        )
+            self.add_trace_step(
+                step_type="result",
+                content=f"{tool_name} completed",
+                metadata=result_meta,
+            )
 
     def error_tool(
         self,
@@ -527,7 +538,7 @@ class StreamEventEmitter:
 
         self.add_trace_step(
             step_type="thought",
-            content="Model reasoning",
+            content="",
             metadata=thinking_meta,
             alias=str(run_id),
         )
@@ -541,17 +552,27 @@ class StreamEventEmitter:
     ) -> None:
         """Record a thought/reasoning operation completing."""
         thought_op = self.operations.get(run_id)
+        duration_ms: Optional[int] = None
+        status: Optional[str] = None
         if thought_op:
             thought_op.complete(success=True)
+            duration_ms = thought_op.duration
+            status = thought_op.status
             if content:
                 thought_op.metadata["content"] = str(content)
 
         self._emit_timeline_update(run_id)
 
-        # Update trace step
+        trace_meta: Dict[str, Any] = {}
+        if duration_ms is not None:
+            trace_meta["durationMs"] = duration_ms
+        if status is not None:
+            trace_meta["status"] = status
+
+        # Update trace step (never attach final user-visible answer here).
         self.update_trace_step(
             alias=str(run_id),
-            metadata={"finalOutput": content} if content else None,
+            metadata=trace_meta or None,
             finalize=True,
         )
 
@@ -690,6 +711,74 @@ class StreamEventEmitter:
             self._emit_todos()
             return self.todo_items
 
+        # Preserve progress across imperfect todo rewrites:
+        # - If the model re-emits the same todos with new IDs, keep the existing IDs.
+        # - Never regress status (pending < in_progress < done).
+        status_rank = {"pending": 0, "in_progress": 1, "done": 2}
+
+        existing_by_id = {todo.id: todo for todo in self.todo_items if todo.id}
+        existing_by_title: Dict[str, TodoItem] = {}
+        duplicate_titles: Set[str] = set()
+        matched_existing_ids: Set[str] = set()
+        for todo in self.todo_items:
+            title_key = " ".join((todo.title or "").split()).lower()
+            if not title_key:
+                continue
+            if title_key in existing_by_title:
+                duplicate_titles.add(title_key)
+            else:
+                existing_by_title[title_key] = todo
+        for key in duplicate_titles:
+            existing_by_title.pop(key, None)
+
+        for todo_dict in normalized:
+            title_key = " ".join(str(todo_dict.get("title") or "").split()).lower()
+            incoming_id = str(todo_dict.get("id") or "")
+            match: Optional[TodoItem] = None
+            if incoming_id and incoming_id in existing_by_id:
+                candidate = existing_by_id[incoming_id]
+                if candidate.id and candidate.id not in matched_existing_ids:
+                    match = candidate
+            elif title_key and title_key in existing_by_title:
+                candidate = existing_by_title[title_key]
+                if candidate.id and candidate.id not in matched_existing_ids:
+                    match = candidate
+
+            if match is None:
+                continue
+
+            if match.id:
+                matched_existing_ids.add(match.id)
+
+            # Keep a stable ID when the same title reappears with a new/random ID.
+            if title_key and incoming_id and incoming_id != match.id:
+                todo_dict["id"] = match.id
+
+            # Never regress status.
+            incoming_status = str(todo_dict.get("status") or "pending").lower()
+            existing_status = str(match.status or "pending").lower()  # type: ignore[attr-defined]
+            if status_rank.get(existing_status, 0) > status_rank.get(incoming_status, 0):
+                todo_dict["status"] = existing_status
+
+            # Merge metadata (new fields win).
+            incoming_meta = todo_dict.get("metadata")
+            if not isinstance(incoming_meta, dict):
+                incoming_meta = {}
+            merged_meta = {**(match.metadata or {}), **incoming_meta}
+            todo_dict["metadata"] = merged_meta
+
+        # Ensure IDs are unique (model output can contain duplicates).
+        seen_ids: Set[str] = set()
+        for idx, todo_dict in enumerate(normalized, start=1):
+            base_id = str(todo_dict.get("id") or "").strip() or f"{self.root_id}-todo-{idx}"
+            unique_id = base_id
+            suffix = 2
+            while unique_id in seen_ids:
+                unique_id = f"{base_id}-{suffix}"
+                suffix += 1
+            todo_dict["id"] = unique_id
+            seen_ids.add(unique_id)
+
         logger.info(
             "write_todos_normalized",
             normalized_count=len(normalized),
@@ -791,17 +880,31 @@ class StreamEventEmitter:
         """
         current_time = time.time() * 1000  # ms
 
+        # Compute a fingerprint that changes when step content changes.
+        # This prevents "stale" trace panels where the step count stays the same
+        # but the active step content is streaming in.
+        changed_step = step or (self.thinking_trace[-1] if self.thinking_trace else None)
+        if changed_step is not None:
+            tail = changed_step.content[-512:] if changed_step.content else ""
+            tail_hash = hashlib.md5(tail.encode("utf-8", errors="ignore")).hexdigest()[:8]
+            fingerprint = (
+                f"{len(self.thinking_trace)}|{changed_step.id}|{changed_step.timestamp}|"
+                f"{changed_step.type}|{len(changed_step.content)}|{tail_hash}"
+            )
+        else:
+            fingerprint = f"{len(self.thinking_trace)}|none"
+
         # =====================================================================
         # DEDUPLICATION CHECK (LangGraph pattern)
         # Skip if we just emitted and content hasn't meaningfully changed
         # =====================================================================
         if not force:
             time_since_last = current_time - self._last_trace_emission_time
-            if time_since_last < DEDUP_EMISSION_WINDOW_MS:
-                # Check if content actually changed
-                trace_version = len(self.thinking_trace)
-                if trace_version == self._last_emitted_trace_version:
-                    return  # No new steps, skip emission
+            if (
+                time_since_last < DEDUP_EMISSION_WINDOW_MS
+                and fingerprint == self._last_emitted_trace_fingerprint
+            ):
+                return  # No meaningful change within dedup window
 
         # =====================================================================
         # WINDOWED TRACE WITH PROGRESSIVE SUMMARIZATION (DeepAgents pattern)
@@ -820,17 +923,17 @@ class StreamEventEmitter:
 
             # Older steps: Create summaries
             for i, trace_step in enumerate(self.thinking_trace[:summary_count]):
-                windowed_trace.append(self._prepare_step_for_emission(trace_step, full=False))
+                should_keep_full = (
+                    trace_step.type == "thought"
+                    or str(trace_step.metadata.get("kind", "")).lower() in {"narration", "phase", "provider_reasoning"}
+                )
+                windowed_trace.append(
+                    self._prepare_step_for_emission(trace_step, full=should_keep_full)
+                )
 
             # Recent steps: Full detail
             for trace_step in self.thinking_trace[summary_count:]:
                 windowed_trace.append(self._prepare_step_for_emission(trace_step, full=True))
-
-        # =====================================================================
-        # CONTENT HASH FOR DEDUPLICATION
-        # =====================================================================
-        content_repr = f"{total_steps}:{step.id if step else 'none'}"
-        content_hash = hashlib.md5(content_repr.encode()).hexdigest()[:8]
 
         # =====================================================================
         # APPROXIMATE TOKEN COUNT (LangChain pattern)
@@ -867,7 +970,7 @@ class StreamEventEmitter:
         # Update deduplication state
         self._last_trace_emission_time = current_time
         self._last_emitted_trace_version = total_steps
-        self._emitted_trace_hashes.add(content_hash)
+        self._last_emitted_trace_fingerprint = fingerprint
 
     def _prepare_step_for_emission(self, trace_step: TraceStep, full: bool = True) -> TraceStep:
         """Prepare a trace step for emission with optional summarization.
