@@ -389,77 +389,86 @@ export const useFoldersStore = create<FoldersStore>()(
             return
           }
 
-          // Helper function to update folder in tree structure
-          const updateFolderNode = (folders: Folder[], targetId: number, updatedFolder: Folder): Folder[] => {
-            return folders.map(f => {
-              if (f.id === targetId) {
-                return {
-                  ...updatedFolder,
-                  children: f.children || [],
-                  level: f.level
+          // Find current folder in tree to check if parent changed
+          const findFolderInTree = (nodes: Folder[], targetId: number): { folder: Folder | null, parentId: number | null } => {
+            for (const node of nodes) {
+              if (node.id === targetId) {
+                return { folder: node, parentId: null } // Found at root level
+              }
+              if (node.children && node.children.length > 0) {
+                for (const child of node.children) {
+                  if (child.id === targetId) {
+                    return { folder: child, parentId: node.id }
+                  }
                 }
+                const result = findFolderInTree(node.children, targetId)
+                if (result.folder) return result
               }
-              if (f.children && f.children.length > 0) {
-                return {
-                  ...f,
-                  children: updateFolderNode(f.children, targetId, updatedFolder)
-                }
-              }
-              return f
-            })
-          }
-
-          // Helper function to remove folder from tree
-          const removeFolderNode = (folders: Folder[], targetId: number): Folder[] => {
-            return folders.filter(f => f.id !== targetId).map(f => ({
-              ...f,
-              children: f.children ? removeFolderNode(f.children, targetId) : []
-            }))
-          }
-
-          // Helper function to add folder to correct parent
-          const addFolderToParent = (folders: Folder[], newFolder: Folder, parentId: number | null | undefined): Folder[] => {
-            if (parentId == null) {
-              // Add to root level
-              const rootFolder = {
-                ...newFolder,
-                children: [],
-                level: 0
-              }
-              return [...folders, rootFolder].sort((a, b) => a.name.localeCompare(b.name))
             }
-
-            return folders.map(f => {
-              if (f.id === parentId) {
-                const childFolder = {
-                  ...newFolder,
-                  children: [],
-                  level: (f.level || 0) + 1
-                }
-                const updatedChildren = [...(f.children || []), childFolder]
-                  .sort((a, b) => a.name.localeCompare(b.name))
-                return {
-                  ...f,
-                  children: updatedChildren
-                }
-              }
-              if (f.children && f.children.length > 0) {
-                return {
-                  ...f,
-                  children: addFolderToParent(f.children, newFolder, parentId)
-                }
-              }
-              return f
-            })
+            return { folder: null, parentId: null }
           }
 
-          let updatedTree = [...state.folderTree]
+          const currentInTree = findFolderInTree(state.folderTree, folderId)
+          const parentChanged = currentInTree.folder && (
+            (currentInTree.parentId ?? null) !== (folder.parent_id ?? null)
+          )
 
-          // First, remove the folder from its current position (if it exists)
-          updatedTree = removeFolderNode(updatedTree, folderId)
+          // Helper function to update folder in place, preserving children and other properties
+          const updateFolderInPlace = (nodes: Folder[]): { nodes: Folder[], found: boolean } => {
+            let found = false
+            const updatedNodes = nodes.map(node => {
+              if (node.id === folderId) {
+                found = true
+                // Update folder while preserving tree-specific properties
+                return {
+                  ...folder,
+                  children: node.children || [],
+                  level: node.level,
+                  isExpanded: node.isExpanded,
+                  isSelected: node.isSelected,
+                  isDragOver: node.isDragOver
+                }
+              }
+              if (node.children && node.children.length > 0) {
+                const result = updateFolderInPlace(node.children)
+                if (result.found) {
+                  found = true
+                  return {
+                    ...node,
+                    children: result.nodes
+                  }
+                }
+              }
+              return node
+            })
+            return { nodes: updatedNodes, found }
+          }
 
-          // Then, add it back to the correct position
-          updatedTree = addFolderToParent(updatedTree, folder, folder.parent_id)
+          // If parent changed or folder not found, do full rebuild
+          if (parentChanged) {
+            get().actions.buildFolderTree()
+            return
+          }
+
+          // Try to update in place
+          const result = updateFolderInPlace(state.folderTree)
+
+          if (!result.found) {
+            // Folder not in tree (new folder), do full rebuild
+            get().actions.buildFolderTree()
+            return
+          }
+
+          // Sort root level if a root folder's name changed
+          let updatedTree = result.nodes
+          if (currentInTree.parentId === null) {
+            // Re-sort root level (keep unassigned folder at top)
+            updatedTree = [...result.nodes].sort((a, b) => {
+              if (a.id === 0) return -1 // UNASSIGNED_FOLDER_ID
+              if (b.id === 0) return 1
+              return a.name.localeCompare(b.name)
+            })
+          }
 
           set({ folderTree: updatedTree })
         },

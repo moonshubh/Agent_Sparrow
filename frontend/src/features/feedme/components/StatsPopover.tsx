@@ -3,6 +3,8 @@
  *
  * Main popover component that displays comprehensive FeedMe statistics
  * when the Stats button is clicked in the Dock.
+ * 
+ * Features dot-matrix style cards with smooth animations.
  */
 
 import React, { useState, useCallback } from 'react'
@@ -22,12 +24,13 @@ import { useStatsData, formatTimeAgo } from '@/features/feedme/hooks/use-stats-d
 import {
   ConversationStatsCard,
   ProcessingMetricsCard,
-  ApiUsageCard,
-  RecentActivityCard,
+  GeminiUsageCard,
+  EmbeddingUsageCard,
   SystemHealthCard,
   StatsCardSkeleton
 } from './stats/StatsCards'
 import { Alert, AlertDescription } from '@/shared/ui/alert'
+import { motion } from 'motion/react'
 
 interface StatsPopoverProps {
   open?: boolean
@@ -78,7 +81,8 @@ export function StatsPopover({
       <DialogContent
         hideClose
         className={cn(
-          "max-w-[800px] p-0 h-[600px] overflow-hidden",
+          "max-w-[1000px] p-0 h-[700px] overflow-hidden",
+          "bg-[hsl(40_10%_96%)] dark:bg-[hsl(0_0%_10%)]",
           className
         )}
       >
@@ -87,82 +91,113 @@ export function StatsPopover({
         </DialogHeader>
 
         <div className="flex h-full min-h-0 flex-col">
-          {/* Header (Zendesk-style) */}
-          <div className="flex items-center justify-between px-4 py-3 border-b bg-muted/40">
-            <div className="flex items-center gap-2">
-              <BarChart3 className="h-5 w-5 text-muted-foreground" />
-              <h3 className="text-base font-semibold">FeedMe — Stats</h3>
-              <Badge variant="outline" className="text-xs">Live</Badge>
+          {/* Header */}
+          <motion.div
+            initial={{ opacity: 0, y: -10 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.3 }}
+            className="flex items-center justify-between px-6 py-4 border-b border-[hsl(0_0%_90%)] dark:border-[hsl(0_0%_20%)] bg-white/50 dark:bg-black/20 backdrop-blur-sm"
+          >
+            <div className="flex items-center gap-3">
+              <div className="p-2 rounded-lg bg-[hsl(200.4_98%_38%)] text-white">
+                <BarChart3 className="h-5 w-5" />
+              </div>
+              <div>
+                <h3 className="text-lg font-semibold text-[hsl(0_0%_15%)] dark:text-[hsl(40_15%_92%)]">
+                  FeedMe Statistics
+                </h3>
+                <p className="text-xs text-[hsl(0_0%_50%)] dark:text-[hsl(0_0%_55%)]">
+                  Real-time system metrics and insights
+                </p>
+              </div>
+              <Badge
+                variant="outline"
+                className="ml-2 bg-[hsl(135_45%_45%)] text-white border-0 text-xs animate-pulse"
+              >
+                LIVE
+              </Badge>
             </div>
-            <div className="flex items-center gap-2">
-              <span className="text-xs text-muted-foreground">Updated {lastUpdatedText}</span>
+            <div className="flex items-center gap-3">
+              <span className="text-xs text-[hsl(0_0%_50%)] dark:text-[hsl(0_0%_55%)]">
+                Updated {lastUpdatedText}
+              </span>
               <Button
                 variant="ghost"
                 size="icon"
-                className="h-8 w-8"
+                className="h-9 w-9 rounded-lg hover:bg-[hsl(0_0%_90%)] dark:hover:bg-[hsl(0_0%_20%)]"
                 onClick={handleRefresh}
                 aria-label="Refresh stats"
                 disabled={isRefreshing || isLoading}
               >
                 <RefreshCw className={cn('h-4 w-4', isRefreshing && 'animate-spin')} />
               </Button>
-              {/* Close button in header for consistency with settings UIs */}
               <DialogClose asChild>
-                <Button variant="ghost" size="icon" className="h-8 w-8" aria-label="Close">
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-9 w-9 rounded-lg hover:bg-[hsl(0_0%_90%)] dark:hover:bg-[hsl(0_0%_20%)]"
+                  aria-label="Close"
+                >
                   <X className="h-4 w-4" />
                 </Button>
               </DialogClose>
             </div>
-          </div>
+          </motion.div>
 
-          <Separator className="my-0" />
+          <Separator className="my-0 bg-transparent" />
 
           <div className="flex-1 overflow-hidden min-h-0">
-            <div className="flex h-full min-h-0 flex-col">
-              <ScrollArea className="flex-1 h-full px-4 pb-4">
+            <ScrollArea className="h-full">
+              <div className="p-6">
                 {error && !data && (
-                  <Alert variant="destructive" className="mb-4">
-                    <AlertCircle className="h-4 w-4" />
-                    <AlertDescription>
-                      Failed to load statistics. Please try again later.
-                    </AlertDescription>
-                  </Alert>
+                  <motion.div
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                  >
+                    <Alert variant="destructive" className="mb-6">
+                      <AlertCircle className="h-4 w-4" />
+                      <AlertDescription>
+                        Failed to load statistics. Please try again later.
+                      </AlertDescription>
+                    </Alert>
+                  </motion.div>
                 )}
 
                 {isLoading && !data ? (
-                  <div className="grid gap-4">
-                    <div className="grid grid-cols-2 gap-4">
-                      <StatsCardSkeleton />
-                      <StatsCardSkeleton />
-                    </div>
-                    <StatsCardSkeleton />
-                    <div className="grid grid-cols-2 gap-4">
-                      <StatsCardSkeleton />
-                      <StatsCardSkeleton />
-                    </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
+                    {Array.from({ length: 5 }).map((_, i) => (
+                      <StatsCardSkeleton key={i} />
+                    ))}
                   </div>
                 ) : data ? (
-                  <div className="space-y-4">
-                    <div>
-                      <h4 className="mb-3 text-sm font-medium text-muted-foreground">Overview</h4>
-                      <div className="grid grid-cols-2 gap-4">
-                        <ConversationStatsCard data={data.conversations} />
-                        <ProcessingMetricsCard data={data.processing} />
-                      </div>
-                    </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
+                    {/* Row 1: Overview */}
+                    <ConversationStatsCard
+                      data={data.conversations}
+                      animationDelay={0}
+                    />
+                    <ProcessingMetricsCard
+                      data={data.processing}
+                      animationDelay={0.1}
+                    />
+                    <SystemHealthCard
+                      data={data.systemHealth}
+                      animationDelay={0.2}
+                    />
 
-                    <div>
-                      <h4 className="mb-3 text-sm font-medium text-muted-foreground">API Usage</h4>
-                      <ApiUsageCard data={data.apiUsage} />
-                    </div>
-
-                    {/* Activity & Health and Quick Stats removed to avoid mock data; only live sections shown */}
+                    {/* Row 2: API Usage */}
+                    <GeminiUsageCard
+                      data={data.apiUsage}
+                      animationDelay={0.3}
+                    />
+                    <EmbeddingUsageCard
+                      data={data.apiUsage}
+                      animationDelay={0.4}
+                    />
                   </div>
                 ) : null}
-              </ScrollArea>
-
-              {/* Bottom dashboard link removed */}
-            </div>
+              </div>
+            </ScrollArea>
           </div>
         </div>
       </DialogContent>

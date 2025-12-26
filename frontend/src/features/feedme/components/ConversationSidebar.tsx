@@ -9,31 +9,38 @@ import { Textarea } from '@/shared/ui/textarea'
 import { Label } from '@/shared/ui/label'
 import { Select, SelectTrigger, SelectContent, SelectItem, SelectValue } from '@/shared/ui/select'
 import { ScrollArea } from '@/shared/ui/scroll-area'
-import { Loader2, RefreshCw } from 'lucide-react'
+import { Loader2, RefreshCw, Monitor, Apple } from 'lucide-react'
 import { useFoldersStore } from '@/state/stores/folders-store'
 import { cn } from '@/shared/lib/utils'
+import { type PlatformType, PLATFORM_OPTIONS } from '@/features/feedme/services/feedme-api'
 
 interface ConversationSidebarProps {
   folderId?: number | null
   aiNote?: string
+  platform?: PlatformType
   onFolderChange: (folderId: number | null) => Promise<void>
   onSaveNote: (note: string) => Promise<void>
+  onPlatformChange?: (platform: PlatformType) => Promise<void>
   onRegenerateNote?: () => Promise<void>
   onMarkReady?: () => Promise<void>
   isSavingFolder?: boolean
   isSavingNote?: boolean
+  isSavingPlatform?: boolean
   isMarkingReady?: boolean
 }
 
 export function ConversationSidebar({
   folderId,
   aiNote,
+  platform,
   onFolderChange,
   onSaveNote,
+  onPlatformChange,
   onRegenerateNote,
   onMarkReady,
   isSavingFolder = false,
   isSavingNote = false,
+  isSavingPlatform = false,
   isMarkingReady = false,
 }: ConversationSidebarProps) {
   const folders = useFoldersStore(state => state.folderTree)
@@ -41,6 +48,7 @@ export function ConversationSidebar({
   const [noteDraft, setNoteDraft] = useState(aiNote || '')
   const [noteTouched, setNoteTouched] = useState(false)
   const [folderValue, setFolderValue] = useState<string>('root')
+  const [platformValue, setPlatformValue] = useState<string>(platform || 'none')
   const [isRegenerating, setIsRegenerating] = useState(false)
   const [isNoteFocused, setIsNoteFocused] = useState(false)
 
@@ -53,6 +61,10 @@ export function ConversationSidebar({
       setFolderValue(String(folderId))
     }
   }, [folderId])
+
+  useEffect(() => {
+    setPlatformValue(platform || 'none')
+  }, [platform])
 
   useEffect(() => {
     if (!noteTouched) {
@@ -80,6 +92,35 @@ export function ConversationSidebar({
     } catch (error) {
       setFolderValue(previous)
       throw error
+    }
+  }
+
+  // Runtime validation for platform values
+  const isValidPlatform = (val: string): val is PlatformType => {
+    return val === 'windows' || val === 'macos' || val === 'both'
+  }
+
+  const handleSelectPlatform = async (value: string) => {
+    if (!onPlatformChange) return
+
+    // Handle "none" by not updating - user must select a valid platform
+    if (value === 'none') {
+      return
+    }
+
+    // Runtime validation before API call
+    if (!isValidPlatform(value)) {
+      console.error('Invalid platform value:', value)
+      return
+    }
+
+    const previous = platformValue
+    setPlatformValue(value)
+    try {
+      await onPlatformChange(value)
+    } catch (error) {
+      setPlatformValue(previous)
+      console.error('Failed to update platform:', error)
     }
   }
 
@@ -167,6 +208,46 @@ export function ConversationSidebar({
           </section>
 
           <Separator />
+
+          {/* Platform Tag Section */}
+          {onPlatformChange && (
+            <>
+              <section className="space-y-2">
+                <Label className="text-sm font-medium">
+                  Platform Tag
+                </Label>
+                <Select value={platformValue} onValueChange={handleSelectPlatform}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select platform" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="none">
+                      <div className="flex items-center gap-2">
+                        <div className="h-3 w-3 rounded-sm bg-gray-400" />
+                        <span className="text-muted-foreground">No platform set</span>
+                      </div>
+                    </SelectItem>
+                    {PLATFORM_OPTIONS.map(opt => (
+                      <SelectItem key={opt.value} value={opt.value}>
+                        <div className="flex items-center gap-2">
+                          {opt.value === 'windows' && <Monitor className="h-3 w-3 text-blue-500" />}
+                          {opt.value === 'macos' && <Apple className="h-3 w-3 text-gray-600" />}
+                          {/* No icon for 'both' - just text label */}
+                          <span>{opt.label}</span>
+                        </div>
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                {isSavingPlatform && (
+                  <p className="flex items-center gap-2 text-xs text-muted-foreground">
+                    <Loader2 className="h-3 w-3 animate-spin" /> Updating platform…
+                  </p>
+                )}
+              </section>
+              <Separator />
+            </>
+          )}
 
           <section className="space-y-2 flex-1">
             <div className="flex items-center justify-between group">

@@ -339,6 +339,9 @@ export interface ApprovalWorkflowStats {
   processing_failed: number
   avg_quality_score?: number
   avg_processing_time_ms?: number
+  // Platform breakdown
+  windows_count?: number
+  macos_count?: number
 }
 
 export interface BulkApprovalRequest {
@@ -377,6 +380,38 @@ export interface ExampleListResponse {
   has_next: boolean
 }
 
+// Platform Types for conversation tagging - re-export from shared types
+export type { PlatformType } from '@/shared/types/feedme'
+import type { PlatformType } from '@/shared/types/feedme'
+
+export const PLATFORM_LABELS: Record<PlatformType, string> = {
+  windows: 'Windows',
+  macos: 'macOS',
+  both: 'Both Windows and macOS'
+}
+
+export const PLATFORM_OPTIONS: { value: PlatformType; label: string }[] = [
+  { value: 'windows', label: 'Windows' },
+  { value: 'macos', label: 'macOS' },
+  { value: 'both', label: 'Both Windows and macOS' }
+]
+
+// Conversation metadata structure
+export interface ConversationMetadataTags {
+  platform?: PlatformType
+  [key: string]: unknown
+}
+
+export interface ConversationMetadata extends Record<string, unknown> {
+  tags?: ConversationMetadataTags
+  ticket_id?: string | number | null
+  processing_tracker?: {
+    progress?: number
+    stage?: ProcessingStatusValue
+    message?: string
+  }
+}
+
 // Conversation Types
 export interface FeedMeConversation {
   id: number
@@ -386,7 +421,7 @@ export interface FeedMeConversation {
   folder_id?: number | null
   created_at: string
   updated_at: string
-  metadata?: Record<string, unknown>
+  metadata?: ConversationMetadata
   approval_status?: 'pending' | 'approved' | 'rejected' | 'awaiting_review'
 }
 
