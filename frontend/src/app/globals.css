@@ -624,27 +624,27 @@
   .dark {
     /* ============================================================
        DARK ACADEMIA - "The Scholar's Study at Night"
-       Deep charcoal with warm accents - ChatGPT-inspired darkness
+       Charcoal gray with warm accents - lighter than pure black
        ============================================================ */
 
-    /* === BACKGROUND SURFACES - Darker, more neutral === */
-    --background: 0 0% 6%;           /* #0f0f0f - ChatGPT dark bg */
+    /* === BACKGROUND SURFACES - Charcoal gray (not too dark) === */
+    --background: 0 0% 13%;          /* #212121 - Charcoal gray */
     --foreground: 40 15% 92%;
-    --card: 0 0% 9%;                 /* #171717 */
+    --card: 0 0% 15%;                /* #262626 */
     --card-foreground: 40 15% 92%;
-    --popover: 0 0% 10%;             /* #1a1a1a */
+    --popover: 0 0% 16%;             /* #292929 */
     --popover-foreground: 40 15% 92%;
 
     /* === TERRACOTTA PRIMARY - Fireplace Warmth === */
     --primary: 200.4 98% 38%;
     --primary-foreground: 40 20% 97%;
 
-    /* === SECONDARY - Darker neutral === */
-    --secondary: 0 0% 12%;
+    /* === SECONDARY - Lighter neutral === */
+    --secondary: 0 0% 18%;
     --secondary-foreground: 40 12% 85%;
 
     /* === MUTED - Neutral gray === */
-    --muted: 0 0% 14%;
+    --muted: 0 0% 20%;
     --muted-foreground: 0 0% 55%;
 
     /* === SAGE ACCENT - Nature's Wisdom === */
@@ -654,8 +654,8 @@
     /* === SEMANTIC COLORS === */
     --destructive: 0 50% 45%;
     --destructive-foreground: 40 20% 97%;
-    --border: 0 0% 16%;               /* Neutral border */
-    --input: 0 0% 10%;                /* Dark input background */
+    --border: 0 0% 22%;               /* Lighter border for contrast */
+    --input: 0 0% 16%;                /* Dark input background */
     --ring: 200.4 98% 38%;
 
     /* === TERRACOTTA SCALE === */
@@ -697,7 +697,7 @@
     --chat-metadata: 0 0% 50%;
 
     /* Code surfaces - Dark background */
-    --code-block-bg: 0 0% 9%;
+    --code-block-bg: 0 0% 15%;
 
     /* Responsive container widths */
     --container-sm: 100%;
@@ -706,14 +706,14 @@
     --container-xl: 80%;
     --container-max: 1400px;
 
-    /* === SIDEBAR - Darker panel === */
-    --sidebar-background: 0 0% 7%;    /* #121212 - dark sidebar */
+    /* === SIDEBAR - Slightly darker than main bg === */
+    --sidebar-background: 0 0% 11%;   /* #1c1c1c - subtle contrast */
     --sidebar-foreground: 40 12% 88%;
     --sidebar-primary: 200.4 98% 38%;
     --sidebar-primary-foreground: 40 20% 97%;
-    --sidebar-accent: 0 0% 12%;
+    --sidebar-accent: 0 0% 18%;
     --sidebar-accent-foreground: 40 12% 88%;
-    --sidebar-border: 0 0% 14%;
+    --sidebar-border: 0 0% 20%;
     --sidebar-ring: 200.4 98% 38%;
 
     /* === SEVERITY - Muted Earth Tones === */
@@ -722,8 +722,8 @@
     --medium: 135 30% 45%;
 
     /* === NEUTRAL BASE === */
-    --neutral-base: 0 0% 8%;
-    --neutral-card: 0 0% 10%;
+    --neutral-base: 0 0% 13%;
+    --neutral-card: 0 0% 15%;
 
     /* === LEGACY COMPATIBILITY === */
     --mb-blue-300: 200.4 98% 39.4%;
