@@ -144,7 +144,7 @@ export function LibreChatView({
         {isLandingPage ? (
           <Landing onStarterClick={handleStarterClick} />
         ) : (
-          <MessageList messages={displayMessages} isStreaming={isStreaming} />
+          <MessageList messages={displayMessages} isStreaming={isStreaming} sessionId={sessionId} />
         )}
 
         {/* Error Display */}

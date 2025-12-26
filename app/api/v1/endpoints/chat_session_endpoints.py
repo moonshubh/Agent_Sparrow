@@ -111,6 +111,11 @@ class ChatMessageAppendRequest(BaseModel):
     delta: str = Field(..., min_length=1, description="Text to append to the message content")
 
 
+class ChatMessageUpdateRequest(BaseModel):
+    """Payload for updating an existing chat message's content"""
+    content: str = Field(..., min_length=1, description="New content for the message")
+
+
 # Database connection setup
 def _has_database_credentials() -> bool:
     """Return True when Supabase/Postgres credentials are available."""
@@ -381,6 +386,36 @@ def append_chat_message_content_in_db(conn, session_id: int, message_id: int, us
             RETURNING *
             """,
             (delta, message_id),
+        )
+        conn.commit()
+        return dict(cur.fetchone())
+
+
+def update_chat_message_content_in_db(conn, session_id: int, message_id: int, user_id: str, content: str) -> Dict[str, Any]:
+    """Update the full content of an existing chat message owned by the user"""
+    with conn.cursor() as cur:
+        # Verify session and message ownership
+        cur.execute(
+            """
+            SELECT cm.id
+            FROM chat_messages cm
+            JOIN chat_sessions cs ON cm.session_id = cs.id
+            WHERE cm.id = %s AND cm.session_id = %s AND cs.user_id = %s
+            """,
+            (message_id, session_id, user_id),
+        )
+        if not cur.fetchone():
+            raise HTTPException(status_code=404, detail="Message not found for this user/session")
+
+        # Update the full content
+        cur.execute(
+            """
+            UPDATE chat_messages
+            SET content = %s
+            WHERE id = %s
+            RETURNING *
+            """,
+            (content, message_id),
         )
         conn.commit()
         return dict(cur.fetchone())
@@ -958,6 +993,65 @@ async def append_chat_message(
         raise
     except Exception as e:
         logger.error(f"[MESSAGE APPEND] Error appending to message {message_id}: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+    finally:
+        if conn:
+            conn.close()
+
+
+@router.put("/chat-sessions/{session_id}/messages/{message_id}", response_model=ChatMessage, tags=["Chat Messages"])
+async def update_chat_message(
+    session_id: int,
+    message_id: int,
+    update_data: "ChatMessageUpdateRequest",
+    request: Request,
+    response: Response,
+    current_user: Optional[TokenPayload] = Depends(get_optional_current_user)
+):
+    """Update the content of an existing chat message (authentication optional)
+
+    This endpoint allows editing a message's content after it has been created.
+    Used by the frontend edit feature to persist changes.
+    """
+    conn = None
+    try:
+        if current_user:
+            user_id = current_user.sub
+        else:
+            user_id = get_or_create_guest_user_id(request, response)
+
+        if not update_data.content or not update_data.content.strip():
+            raise HTTPException(status_code=400, detail="Content cannot be empty")
+
+        logger.debug(f"[MESSAGE UPDATE] Updating message {message_id} in session {session_id}")
+        logger.debug(f"[MESSAGE UPDATE] New content length: {len(update_data.content)}")
+
+        conn = get_db_connection()
+
+        if conn is None:
+            # Local storage fallback
+            messages = LOCAL_CHAT_MESSAGES.get(session_id, [])
+            target = next((m for m in messages if m['id'] == message_id), None)
+            if target is None:
+                raise HTTPException(status_code=404, detail="Message not found")
+
+            target['content'] = update_data.content
+            now = datetime.utcnow()
+            session = _get_local_session(user_id, session_id)
+            if session:
+                session['updated_at'] = now
+                _persist_local_session(user_id, session)
+
+            logger.info(f"[MESSAGE UPDATE] Updated message {message_id} in local storage")
+            return ChatMessage(**target)
+
+        message = update_chat_message_content_in_db(conn, session_id, message_id, user_id, update_data.content)
+        logger.info(f"[MESSAGE UPDATE] Updated message {message_id} in database")
+        return ChatMessage(**message)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[MESSAGE UPDATE] Error updating message {message_id}: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")
     finally:
         if conn:

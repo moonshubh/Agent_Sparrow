@@ -13,7 +13,6 @@ interface MessageItemProps {
   message: Message;
   isLast: boolean;
   isStreaming: boolean;
-  editedContent?: string;
   onEditMessage?: (messageId: string, content: string) => void;
 }
 
@@ -136,7 +135,6 @@ export const MessageItem = memo(function MessageItem({
   message,
   isLast,
   isStreaming,
-  editedContent,
   onEditMessage,
 }: MessageItemProps) {
   const { thinkingTrace, activeTraceStepId, activeTools, messageAttachments, todos, toolEvidence } = useAgent();
@@ -145,8 +143,8 @@ export const MessageItem = memo(function MessageItem({
   const [isUserExpanded, setIsUserExpanded] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
-  const originalContent = typeof message.content === 'string' ? message.content : '';
-  const displayContent = editedContent !== undefined ? editedContent : originalContent;
+  // Content comes directly from message (updated by context)
+  const displayContent = typeof message.content === 'string' ? message.content : '';
   const { thinking, mainContent } = extractThinking(displayContent);
 
   const attachments = messageAttachments[message.id] || [];

@@ -1,12 +1,15 @@
 'use client';
 
-import React, { useEffect, useRef, memo, useState, useCallback } from 'react';
+import React, { useEffect, useRef, memo, useCallback } from 'react';
 import type { Message } from '@/services/ag-ui/client';
 import { MessageItem } from './MessageItem';
+import { useAgent } from '../AgentContext';
+import { sessionsAPI } from '@/services/api/endpoints/sessions';
 
 interface MessageListProps {
   messages: Message[];
   isStreaming: boolean;
+  sessionId?: string;
 }
 
 function stableMessageKey(message: Message, index: number): string {
@@ -23,18 +26,26 @@ function stableMessageKey(message: Message, index: number): string {
   return `msg-${hash.toString(16)}`;
 }
 
-export const MessageList = memo(function MessageList({ messages, isStreaming }: MessageListProps) {
+export const MessageList = memo(function MessageList({ messages, isStreaming, sessionId }: MessageListProps) {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const prevLengthRef = useRef(messages.length);
-  const [editedMessages, setEditedMessages] = useState<Record<string, string>>({});
+  const { updateMessageContent } = useAgent();
 
-  // Handle message edit
-  const handleEditMessage = useCallback((messageId: string, content: string) => {
-    setEditedMessages((prev) => ({
-      ...prev,
-      [messageId]: content,
-    }));
-  }, []);
+  // Handle message edit - updates context immediately and persists to API
+  const handleEditMessage = useCallback(async (messageId: string, content: string) => {
+    // Update in context immediately for responsive UI
+    updateMessageContent(messageId, content);
+
+    // Persist to backend if we have a session
+    if (sessionId) {
+      try {
+        await sessionsAPI.updateMessage(sessionId, messageId, content);
+      } catch (error) {
+        console.error('[MessageList] Failed to persist message edit:', error);
+        // Note: We could add a toast notification here in the future
+      }
+    }
+  }, [sessionId, updateMessageContent]);
 
   // Auto-scroll only when message count changes (not on every content update)
   useEffect(() => {
@@ -58,7 +69,6 @@ export const MessageList = memo(function MessageList({ messages, isStreaming }: 
             message={message}
             isLast={index === messages.length - 1}
             isStreaming={isStreaming}
-            editedContent={editedMessages[message.id]}
             onEditMessage={handleEditMessage}
           />
         ))}

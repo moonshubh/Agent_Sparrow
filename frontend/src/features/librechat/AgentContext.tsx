@@ -92,6 +92,7 @@ interface AgentContextValue {
   resolvedModel?: string;
   resolvedTaskType?: string;
   messageAttachments: Record<string, AttachmentInput[]>;
+  updateMessageContent: (messageId: string, content: string) => void;
 }
 
 const AgentContext = createContext<AgentContextValue | null>(null);
@@ -1267,6 +1268,19 @@ export function AgentProvider({
     setTraceCollapsed(collapsed);
   }, []);
 
+  // Update a message's content in local state (for edit persistence)
+  const updateMessageContent = useCallback((messageId: string, content: string) => {
+    setMessages(prev => prev.map(msg =>
+      msg.id === messageId
+        ? { ...msg, content }
+        : msg
+    ));
+    // Also update ref to keep in sync
+    messagesRef.current = messagesRef.current.map(msg =>
+      msg.id === messageId ? { ...msg, content } : msg
+    );
+  }, []);
+
   // Initialize with agent's existing messages on mount
   useEffect(() => {
     if (agent && agent.messages) {
@@ -1303,6 +1317,7 @@ export function AgentProvider({
         resolvedModel,
         resolvedTaskType,
         messageAttachments,
+        updateMessageContent,
       }}
     >
       {children}
