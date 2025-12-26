@@ -11,8 +11,8 @@ import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { createSparrowAgent, type SparrowAgent, type Message } from '@/services/ag-ui/client';
 import { sessionsAPI, type ChatMessageRecord } from '@/services/api/endpoints/sessions';
 import { modelsAPI, Provider } from '@/services/api/endpoints/models';
-import { AgentProvider } from '@/features/librechat/AgentContext';
-import { ArtifactProvider } from '@/features/librechat/artifacts';
+import { AgentProvider, type SerializedArtifact } from '@/features/librechat/AgentContext';
+import { ArtifactProvider, getGlobalArtifactStore } from '@/features/librechat/artifacts';
 import { LibreChatView } from './components/LibreChatView';
 
 // Convert backend message format to frontend Message format
@@ -25,12 +25,96 @@ function convertToMessage(record: ChatMessageRecord): Message {
   };
 }
 
+/**
+ * Restore artifacts from message metadata into the artifact store.
+ * Used after loading messages from the backend to restore persisted artifacts.
+ */
+function restoreArtifactsFromMessages(messages: Message[]): void {
+  const store = getGlobalArtifactStore();
+  if (!store) {
+    console.debug('[Artifacts] Store not available, skipping restore');
+    return;
+  }
+
+  const state = store.getState();
+
+  // Reset artifacts before loading new ones
+  state.resetArtifacts();
+
+  let restoredCount = 0;
+  let skippedCount = 0;
+
+  for (const message of messages) {
+    const metadata = message.metadata as Record<string, unknown> | undefined;
+    const artifacts = metadata?.artifacts as SerializedArtifact[] | undefined;
+
+    if (!Array.isArray(artifacts) || artifacts.length === 0) continue;
+
+    console.debug('[Artifacts] Found', artifacts.length, 'artifacts in message', message.id);
+
+    for (const artifact of artifacts) {
+      // Validate required fields - image artifacts may have empty content but must have imageData
+      const hasRequiredFields = artifact.id && artifact.type;
+      const hasContent = artifact.content || (artifact.type === 'image' && artifact.imageData);
+      if (!hasRequiredFields || !hasContent) {
+        console.debug('[Artifacts] Skipping invalid artifact:', {
+          id: artifact.id,
+          type: artifact.type,
+          hasContent: Boolean(artifact.content),
+          hasImageData: Boolean(artifact.imageData),
+        });
+        skippedCount += 1;
+        continue;
+      }
+
+      state.addArtifact({
+        id: artifact.id,
+        type: artifact.type,
+        title: artifact.title || 'Untitled',
+        content: artifact.content,
+        messageId: message.id,
+        language: artifact.language,
+        identifier: artifact.identifier,
+        index: artifact.index,
+        imageData: artifact.imageData,
+        mimeType: artifact.mimeType,
+        altText: artifact.altText,
+        aspectRatio: artifact.aspectRatio,
+        resolution: artifact.resolution,
+      });
+      restoredCount += 1;
+    }
+  }
+
+  if (restoredCount > 0 || skippedCount > 0) {
+    console.debug('[Artifacts] Restore complete:', restoredCount, 'restored,', skippedCount, 'skipped');
+  }
+
+  if (restoredCount > 0) {
+    // If artifacts were restored, show the artifact panel with the most recent artifact
+    // Re-fetch state to get updated orderedIds after all addArtifact calls
+    const orderedIds = store.getState().orderedIds;
+    if (orderedIds.length > 0) {
+      const lastArtifactId = orderedIds[orderedIds.length - 1];
+      state.setCurrentArtifact(lastArtifactId);
+      state.setArtifactsVisible(true);
+      console.debug('[Artifacts] Showing artifact panel with:', lastArtifactId);
+    }
+  }
+}
+
 // Default models by provider
 const DEFAULT_MODELS: Record<Provider, string> = {
   google: 'gemini-3-flash-preview',
   xai: 'grok-4-1-fast-reasoning',
   openrouter: 'x-ai/grok-4.1-fast:free',
 };
+
+// Chat configuration constants
+const CHAT_CONFIG = {
+  maxConversations: 10,
+  maxMessagesToLoad: 100,
+} as const;
 
 interface Conversation {
   id: string;
@@ -55,6 +139,7 @@ export default function LibreChatClient() {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [currentConversationId, setCurrentConversationId] = useState<string | undefined>();
   const initializedRef = useRef(false);
+  const artifactRestoreTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const initialize = useCallback(async () => {
     if (initializedRef.current) return;
@@ -90,6 +175,32 @@ export default function LibreChatClient() {
           title: s.title || 'Untitled Chat',
           timestamp: s.created_at ? new Date(s.created_at) : undefined,
         }));
+
+        // Enforce conversation limit on load: delete oldest if over max
+        if (existingSessions.length > CHAT_CONFIG.maxConversations) {
+          // Sort by timestamp (newest first). Treat missing timestamps as newest (Infinity) to preserve them.
+          const sorted = [...existingSessions].sort((a, b) => {
+            const aTime = a.timestamp?.getTime() ?? Infinity;
+            const bTime = b.timestamp?.getTime() ?? Infinity;
+            return bTime - aTime;
+          });
+
+          // Keep only the newest conversations
+          const toKeep = sorted.slice(0, CHAT_CONFIG.maxConversations);
+          const toDelete = sorted.slice(CHAT_CONFIG.maxConversations);
+
+          // Delete excess from backend (parallel deletion for performance)
+          const deleteResults = await Promise.allSettled(
+            toDelete.map((conv) => sessionsAPI.remove(conv.id))
+          );
+          deleteResults.forEach((result, index) => {
+            if (result.status === 'rejected') {
+              console.error('[Persistence] Failed to delete excess conversation:', toDelete[index].id, result.reason);
+            }
+          });
+
+          existingSessions = toKeep;
+        }
       } catch (err) {
         console.debug('Failed to load existing sessions:', err);
       }
@@ -102,7 +213,7 @@ export default function LibreChatClient() {
         // Load messages for the most recent session
         let messages: Message[] = [];
         try {
-          const messageRecords = await sessionsAPI.listMessages(mostRecent.id, 100, 0);
+          const messageRecords = await sessionsAPI.listMessages(mostRecent.id, CHAT_CONFIG.maxMessagesToLoad, 0);
           messages = messageRecords.map(convertToMessage);
         } catch (err) {
           console.debug('Failed to load messages:', err);
@@ -119,6 +230,16 @@ export default function LibreChatClient() {
 
         // Set loaded messages on the agent
         newAgent.messages = messages;
+
+        // Restore artifacts from message metadata (deferred to allow store initialization)
+        // Clear any pending restore timeout before scheduling a new one
+        if (artifactRestoreTimeoutRef.current) {
+          clearTimeout(artifactRestoreTimeoutRef.current);
+        }
+        artifactRestoreTimeoutRef.current = setTimeout(() => {
+          restoreArtifactsFromMessages(messages);
+          artifactRestoreTimeoutRef.current = null;
+        }, 0);
 
         setSessionId(mostRecent.id);
         setTraceId(newTraceId);
@@ -162,6 +283,16 @@ export default function LibreChatClient() {
     void initialize();
   }, [initialize]);
 
+  // Cleanup timeout on unmount to prevent memory leaks
+  useEffect(() => {
+    return () => {
+      if (artifactRestoreTimeoutRef.current) {
+        clearTimeout(artifactRestoreTimeoutRef.current);
+        artifactRestoreTimeoutRef.current = null;
+      }
+    };
+  }, []);
+
   const handleRetry = useCallback(() => {
     initializedRef.current = false;
     setSessionId(null);
@@ -176,6 +307,29 @@ export default function LibreChatClient() {
   // Handle new chat
   const handleNewChat = useCallback(async () => {
     try {
+      // Enforce conversation limit: delete oldest if at max
+      if (conversations.length >= CHAT_CONFIG.maxConversations) {
+        // Sort by timestamp (oldest first). Treat missing timestamps as newest (Infinity) to preserve them.
+        const sortedByOldest = [...conversations].sort((a, b) => {
+          const aTime = a.timestamp?.getTime() ?? Infinity;
+          const bTime = b.timestamp?.getTime() ?? Infinity;
+          return aTime - bTime;
+        });
+        const oldestConversation = sortedByOldest[0];
+
+        if (oldestConversation && oldestConversation.timestamp) {
+          // Delete from backend first, only update state on success
+          try {
+            await sessionsAPI.remove(oldestConversation.id);
+            // Remove from local state only after successful backend deletion
+            setConversations((prev) => prev.filter((c) => c.id !== oldestConversation.id));
+          } catch (err) {
+            console.error('[Persistence] Failed to delete oldest conversation:', err);
+            // Don't remove from local state if backend deletion failed
+          }
+        }
+      }
+
       // Create session in backend and use its ID
       const backendSession = await sessionsAPI.create('primary', 'New Chat');
       const newSessionId = String(backendSession.id);
@@ -189,6 +343,13 @@ export default function LibreChatClient() {
         model,
         agentType: 'primary',
       });
+
+      // Reset artifacts for new chat
+      // Reset artifacts for new chat
+      const store = getGlobalArtifactStore();
+      if (store) {
+        store.getState().resetArtifacts();
+      }
 
       setSessionId(newSessionId);
       setTraceId(newTraceId);
@@ -207,7 +368,7 @@ export default function LibreChatClient() {
     } catch (err) {
       console.error('Failed to create new chat:', err);
     }
-  }, [provider, model]);
+  }, [provider, model, conversations]);
 
   // Handle conversation selection
   const handleSelectConversation = useCallback(async (conversationId: string) => {
@@ -217,7 +378,7 @@ export default function LibreChatClient() {
       // Load messages for the selected conversation
       let messages: Message[] = [];
       try {
-        const messageRecords = await sessionsAPI.listMessages(conversationId, 100, 0);
+        const messageRecords = await sessionsAPI.listMessages(conversationId, CHAT_CONFIG.maxMessagesToLoad, 0);
         messages = messageRecords.map(convertToMessage);
       } catch (err) {
         console.debug('Failed to load messages for conversation:', err);
@@ -235,6 +396,15 @@ export default function LibreChatClient() {
 
       // Set loaded messages on the agent
       newAgent.messages = messages;
+
+      // Restore artifacts from message metadata (deferred to allow store initialization)
+      if (artifactRestoreTimeoutRef.current) {
+        clearTimeout(artifactRestoreTimeoutRef.current);
+      }
+      artifactRestoreTimeoutRef.current = setTimeout(() => {
+        restoreArtifactsFromMessages(messages);
+        artifactRestoreTimeoutRef.current = null;
+      }, 0);
 
       setSessionId(conversationId);
       setTraceId(selectedTraceId);
@@ -354,7 +524,7 @@ export default function LibreChatClient() {
 
   return (
     <ArtifactProvider>
-      <AgentProvider agent={agent}>
+      <AgentProvider agent={agent} sessionId={sessionId || undefined}>
         <LibreChatView
           sessionId={sessionId || undefined}
           onNewChat={handleNewChat}

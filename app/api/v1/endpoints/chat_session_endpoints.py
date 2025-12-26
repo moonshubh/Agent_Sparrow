@@ -8,15 +8,13 @@ Following the established MB-Sparrow patterns from FeedMe endpoints.
 
 import logging
 from typing import List, Optional, Dict, Any
-from datetime import datetime, timedelta
+from datetime import datetime
 from fastapi import APIRouter, HTTPException, Depends, Query, Request, Response
-from fastapi.responses import JSONResponse
 from psycopg2.extras import RealDictCursor
 import psycopg2
 import os
 import uuid
 import hashlib
-import secrets
 import itertools
 from collections import defaultdict
 
@@ -35,11 +33,7 @@ from app.schemas.chat_schemas import (
     ChatMessageListResponse,
     ChatSessionListRequest,
     ChatMessageListRequest,
-    ChatSessionStats,
     UserChatStats,
-    ChatErrorResponse,
-    BulkSessionUpdate,
-    BulkSessionUpdateResponse,
     AgentType,
     MessageType
 )
@@ -519,13 +513,17 @@ def get_or_create_guest_user_id(request: Request, response: Response) -> str:
     if not guest_id or not guest_id.startswith(GUEST_USER_PREFIX):
         # Generate a new secure guest ID
         guest_id = f"{GUEST_USER_PREFIX}{uuid.uuid4().hex}"
+
+        forwarded_proto = (request.headers.get("x-forwarded-proto") or "").split(",")[0].strip().lower()
+        is_https = forwarded_proto == "https" if forwarded_proto else request.url.scheme == "https"
+
         # Set secure HTTP-only cookie
         response.set_cookie(
             key=GUEST_USER_COOKIE_NAME,
             value=guest_id,
             max_age=GUEST_USER_COOKIE_MAX_AGE,
             httponly=True,
-            secure=True,  # Only over HTTPS in production
+            secure=is_https,
             samesite="strict",
             path="/"
         )
@@ -913,7 +911,7 @@ async def create_chat_message(
     finally:
         if conn:
             conn.close()
-            logger.debug(f"[MESSAGE SAVE] Database connection closed")
+            logger.debug("[MESSAGE SAVE] Database connection closed")
 
 
 @router.patch("/chat-sessions/{session_id}/messages/{message_id}/append", response_model=ChatMessage, tags=["Chat Messages"])

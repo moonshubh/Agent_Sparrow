@@ -8,7 +8,7 @@ from datetime import datetime
 from functools import lru_cache
 import json
 import uuid
-from typing import Any, Dict, List, Optional, Annotated, Callable
+from typing import Any, Dict, List, Optional, Annotated, Callable, Literal
 
 import httpx
 from bs4 import BeautifulSoup
@@ -1229,7 +1229,7 @@ def get_registered_tools() -> List[BaseTool]:
     - firecrawl_search: Web search with multiple sources
     """
 
-    return [
+    tools: List[BaseTool] = [
         kb_search_tool,
         grounding_search_tool,
         web_search_tool,
@@ -1249,8 +1249,12 @@ def get_registered_tools() -> List[BaseTool]:
         read_skill_tool,  # Progressive skill disclosure - load full skill on demand
         get_weather,
         generate_task_steps_generative_ui,
-        write_todos,
     ]
+    if settings.trace_mode in {"narrated", "hybrid"}:
+        tools.append(trace_update)
+
+    tools.append(write_todos)
+    return tools
 
 
 def get_registered_support_tools() -> List[BaseTool]:
@@ -1419,6 +1423,63 @@ class WriteTodosInput(BaseModel):
         return value
 
 
+class TraceUpdateInput(BaseModel):
+    """Structured, user-visible narration for the Progress Updates panel.
+
+    This tool is intentionally lightweight and should NOT dump raw tool outputs.
+    """
+
+    title: str = Field(
+        ...,
+        description="Short heading for the trace update (e.g. 'Checking tool configs').",
+    )
+    detail: Optional[str] = Field(
+        default=None,
+        description=(
+            "Optional short detail (1-3 sentences). Do not include raw tool outputs."
+        ),
+    )
+    kind: Literal["thought", "phase"] = Field(
+        default="thought",
+        description="Use 'phase' for major stages (Planning, Working, Writing answer).",
+    )
+    goal_for_next_tool: Optional[str] = Field(
+        default=None,
+        alias="goalForNextTool",
+        description="Optional label describing the goal of the NEXT tool call.",
+    )
+
+    model_config = ConfigDict(populate_by_name=True, extra="allow")
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_shapes(cls, value: Any) -> Any:
+        if isinstance(value, str):
+            text = value.strip()
+            if not text:
+                return {"title": "Update"}
+            return {"title": text}
+
+        if not isinstance(value, dict):
+            return value
+
+        # Flatten common wrappers used by LangChain/LangGraph tool calling
+        for wrapper_key in ("input", "tool_input", "args", "payload"):
+            inner = value.get(wrapper_key)
+            if isinstance(inner, dict):
+                for key, inner_val in inner.items():
+                    if key not in value:
+                        value[key] = inner_val
+
+        # Fallback aliases
+        if "message" in value and "detail" not in value:
+            value["detail"] = value["message"]
+        if "phase" in value and "kind" not in value:
+            value["kind"] = "phase" if value.get("phase") else "thought"
+
+        return value
+
+
 @tool
 def get_weather(location: str):
     """
@@ -1465,6 +1526,19 @@ async def generate_task_steps_generative_ui(
         )
 
     return "Steps generated and executed."
+
+
+@tool("trace_update", args_schema=TraceUpdateInput)
+def trace_update(
+    title: str,
+    detail: Optional[str] = None,
+    kind: str = "thought",
+    goal_for_next_tool: Optional[str] = None,
+    **_: Any,
+) -> Dict[str, bool]:
+    """Emit a user-visible narration/phase update for the Progress Updates panel."""
+
+    return {"ok": True}
 
 
 @tool("write_todos", args_schema=WriteTodosInput)

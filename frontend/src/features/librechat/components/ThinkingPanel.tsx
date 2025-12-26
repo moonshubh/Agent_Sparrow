@@ -1,29 +1,51 @@
 'use client';
 
-import React, { useState, useMemo, useCallback } from 'react';
+import React, { useState, useMemo, useCallback, useEffect, useRef } from 'react';
 import {
+  AlertCircle,
+  Brain,
+  CheckCircle2,
   ChevronDown,
   ChevronRight,
-  Brain,
+  Circle,
+  Clock,
+  Database,
   FileText,
   Globe,
-  Database,
-  Clock,
+  ListChecks,
+  Loader2,
   Search,
-  AlertCircle,
-  CheckCircle2,
 } from 'lucide-react';
-import type { TraceStep } from '@/services/ag-ui/event-types';
+import type { TraceStep, TodoItem, ToolEvidenceUpdateEvent } from '@/services/ag-ui/event-types';
 import { extractTodosFromPayload, parseToolOutput } from '@/features/librechat/utils';
+import { EnhancedMarkdown } from './EnhancedMarkdown';
 
 interface ThinkingPanelProps {
   thinking: string | null;
   traceSteps?: TraceStep[];
+  todos?: TodoItem[];
+  toolEvidence?: Record<string, ToolEvidenceUpdateEvent>;
+  activeStepId?: string;
+  isStreaming?: boolean;
 }
 
 const MAX_ARG_LENGTH = 160;
-const MAX_DETAIL_LENGTH = 480;
+const MAX_DETAIL_LENGTH = 600;
 const DEFAULT_THOUGHT_PLACEHOLDER = 'model reasoning';
+const INTERNAL_TOOL_NAMES = new Set(['write_todos', 'trace_update']);
+
+type TimelineKind = 'thought' | 'tool' | 'todo' | 'result';
+
+type TimelineItem = {
+  id: string;
+  kind: TimelineKind;
+  step?: TraceStep;
+  startStep?: TraceStep;
+  endStep?: TraceStep;
+  toolCallId?: string;
+  toolName?: string;
+  todos?: TodoItem[];
+};
 
 const normalizeWhitespace = (value: string): string => value.replace(/\s+/g, ' ').trim();
 const stripThoughtMarkers = (value: string): string => (
@@ -33,6 +55,7 @@ const stripThoughtMarkers = (value: string): string => (
     .replace(/<\/?(?:thinking|think)>/gi, '')
     .trim()
 );
+
 const hasMeaningfulThought = (step: TraceStep): boolean => {
   if (step.type !== 'thought') return false;
   const raw = typeof step.content === 'string' ? step.content : '';
@@ -162,23 +185,12 @@ const extractErrorMessage = (raw: unknown): string | null => {
 const getThoughtContent = (step: TraceStep): string => {
   const rawContent = typeof step.content === 'string' ? stripThoughtMarkers(step.content) : '';
   const metadata = (step.metadata ?? {}) as Record<string, unknown>;
-  const fallbackContent =
-    (typeof metadata.finalOutput === 'string' && metadata.finalOutput.trim()) ||
-    (typeof metadata.final_output === 'string' && metadata.final_output.trim()) ||
-    (typeof metadata.content === 'string' && stripThoughtMarkers(metadata.content)) ||
-    '';
-  const promptPreview =
-    (typeof metadata.promptPreview === 'string' && metadata.promptPreview.trim()) ||
-    (typeof metadata.prompt_preview === 'string' && metadata.prompt_preview.trim()) ||
-    '';
 
   const normalized = rawContent.replace(/^model reasoning[:\s]*/i, '').trim();
   if (normalized && normalized.toLowerCase() !== DEFAULT_THOUGHT_PLACEHOLDER) {
     return rawContent;
   }
-  if (fallbackContent) return fallbackContent;
-  if (promptPreview) return `Prompt preview:\n${promptPreview}`;
-  return 'No transcript yet';
+  return '';
 };
 
 const getStepToolName = (step: TraceStep): string | undefined => {
@@ -188,20 +200,25 @@ const getStepToolName = (step: TraceStep): string | undefined => {
   return typeof name === 'string' ? name : undefined;
 };
 
+const getStepToolCallId = (step: TraceStep): string | undefined => {
+  const metadata = (step.metadata ?? {}) as Record<string, unknown>;
+  const id = metadata.toolCallId ?? metadata.tool_call_id ?? metadata.tool_callId ?? metadata.toolId ?? metadata.id;
+  return typeof id === 'string' ? id : undefined;
+};
+
 const humanizeToolName = (name?: string): string => {
   if (!name) return '';
   return normalizeWhitespace(name.replace(/[_-]+/g, ' '));
 };
 
-const getStepIcon = (step: TraceStep): React.ReactNode => {
+const getToolIcon = (step: TraceStep): React.ReactNode => {
   if (step.status === 'error') return <AlertCircle className="text-red-400" size={14} />;
-  if (step.type === 'thought') return <Brain className="text-purple-400" size={14} />;
 
   const toolName = (getStepToolName(step) || '').toLowerCase();
   if (toolName.includes('read') || toolName.includes('file')) {
     return <FileText className="text-blue-400" size={14} />;
   }
-  if (toolName.includes('search') || toolName.includes('tavily') || toolName.includes('google')) {
+  if (toolName.includes('search') || toolName.includes('tavily') || toolName.includes('google') || toolName.includes('firecrawl')) {
     return <Globe className="text-green-400" size={14} />;
   }
   if (toolName.includes('sql') || toolName.includes('db') || toolName.includes('database')) {
@@ -210,16 +227,25 @@ const getStepIcon = (step: TraceStep): React.ReactNode => {
   return <Search className="text-slate-400" size={14} />;
 };
 
-const getThoughtSummary = (content: string): string => {
-  const cleaned = content.replace(/^model reasoning[:\s]*/i, '').trim();
-  const lines = cleaned.split('\n').map((line) => line.trim()).filter(Boolean);
-  if (!lines.length) return 'Thought';
-  return truncateLine(lines[0], 120);
+const getThoughtKindLabel = (step: TraceStep): string => {
+  const metadata = (step.metadata ?? {}) as Record<string, unknown>;
+  const kind = typeof metadata.kind === 'string' ? metadata.kind.toLowerCase() : '';
+  if (kind === 'phase') return 'Phase';
+  const source = typeof metadata.source === 'string' ? metadata.source.toLowerCase() : '';
+  if (source === 'provider_reasoning' || source === 'model_reasoning') return 'Model';
+  if (source === 'narration') return 'Narration';
+  return 'Thought';
 };
 
-const getThoughtLabel = (step: TraceStep): string => {
-  const durationLabel = formatDuration(step.duration);
-  return durationLabel ? `Thought for ${durationLabel}` : 'Thought';
+const getTimestampMs = (value?: string): number | null => {
+  if (!value) return null;
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : null;
+};
+
+const getItemTimestampMs = (item: TimelineItem): number | null => {
+  const step = item.step ?? item.startStep ?? item.endStep;
+  return getTimestampMs(step?.timestamp);
 };
 
 const getToolLabel = (step: TraceStep): string => {
@@ -235,7 +261,7 @@ const getToolLabel = (step: TraceStep): string => {
   if (toolNameValue.includes('todo') || lower.includes('todo') || todoBlock) {
     return 'Updating todos';
   }
-  if (lower.includes('search') || lower.includes('tavily') || lower.includes('google')) {
+  if (lower.includes('search') || lower.includes('tavily') || lower.includes('google') || lower.includes('firecrawl')) {
     return `Searching web for "${cleanedPreview ?? 'information'}"`;
   }
   if (lower.includes('read') || lower.includes('file')) {
@@ -254,15 +280,25 @@ const getToolLabel = (step: TraceStep): string => {
   return normalizeWhitespace(step.content || 'Tool action');
 };
 
-const getToolDetail = (step: TraceStep): string | null => {
+const buildToolDetailLines = (step: TraceStep, evidence?: ToolEvidenceUpdateEvent | null): string[] => {
   const metadata = (step.metadata ?? {}) as Record<string, unknown>;
   const rawInput = metadata.input ?? metadata.args ?? metadata.arguments;
   const rawOutput = metadata.output ?? metadata.result ?? metadata.data ?? metadata.value;
   const detailLines: string[] = [];
 
-  const errorMessage = extractErrorMessage(metadata.error ?? rawOutput);
-  if (errorMessage) {
-    detailLines.push(`Error: ${truncateLine(errorMessage, MAX_DETAIL_LENGTH)}`);
+  if (evidence?.summary) {
+    detailLines.push(`Summary: ${evidence.summary}`);
+  }
+
+  if (typeof metadata.goal === 'string' && metadata.goal.trim()) {
+    detailLines.push(`Goal: ${truncateLine(metadata.goal.trim(), MAX_DETAIL_LENGTH)}`);
+  }
+
+  if (step.status === 'error') {
+    const errorMessage = extractErrorMessage(metadata.error ?? rawOutput);
+    if (errorMessage) {
+      detailLines.push(`Error: ${truncateLine(errorMessage, MAX_DETAIL_LENGTH)}`);
+    }
   }
 
   const todoOutput = formatTodosBlock(rawOutput) || formatTodosBlock(rawInput);
@@ -270,22 +306,113 @@ const getToolDetail = (step: TraceStep): string | null => {
     detailLines.push(todoOutput);
   } else {
     const inputLine = formatToolArgs(rawInput);
-    if (inputLine) detailLines.push(`Input: ${truncateLine(inputLine, MAX_ARG_LENGTH)}`);
+    if (inputLine) {
+      detailLines.push(`Input: ${truncateLine(normalizeWhitespace(inputLine), MAX_ARG_LENGTH)}`);
+    }
 
     const outputLine = formatToolArgs(rawOutput);
-    if (outputLine) detailLines.push(`Output: ${truncateLine(outputLine, MAX_ARG_LENGTH)}`);
+    if (outputLine) {
+      detailLines.push(`Output: ${truncateLine(normalizeWhitespace(outputLine), MAX_ARG_LENGTH)}`);
+    }
   }
 
-  if (!detailLines.length) return null;
-  return truncateLine(detailLines.join('\n'), MAX_DETAIL_LENGTH);
+  return detailLines;
 };
 
-export function ThinkingPanel({ thinking, traceSteps = [] }: ThinkingPanelProps) {
-  const [isExpanded, setIsExpanded] = useState(false);
-  const [expandedThoughtIds, setExpandedThoughtIds] = useState<Set<string>>(new Set());
-  const [expandedToolIds, setExpandedToolIds] = useState<Set<string>>(new Set());
+const getToolStatus = (item: TimelineItem): 'running' | 'done' | 'error' => {
+  const step = item.endStep ?? item.startStep ?? item.step;
+  if (step?.status === 'error') return 'error';
+  if (item.endStep) return 'done';
+  return 'running';
+};
 
-  const hasContent = thinking || traceSteps.length > 0;
+const getTodoProgress = (todos: TodoItem[]) => {
+  const total = todos.length;
+  const done = todos.filter((todo) => todo.status === 'done').length;
+  return { done, total };
+};
+
+const safeHost = (url?: string): string | null => {
+  if (!url) return null;
+  try {
+    const parsed = new URL(url);
+    return parsed.host;
+  } catch {
+    return null;
+  }
+};
+
+const buildTimelineItems = (steps: TraceStep[]): TimelineItem[] => {
+  const items: TimelineItem[] = [];
+  const toolItems = new Map<string, TimelineItem>();
+
+  const pushToolItem = (step: TraceStep, toolCallId?: string) => {
+    const toolName = getStepToolName(step);
+    if (toolCallId && toolItems.has(toolCallId)) {
+      const existing = toolItems.get(toolCallId)!;
+      if (step.type === 'result') {
+        existing.endStep = step;
+      } else {
+        existing.startStep = existing.startStep ?? step;
+      }
+      existing.toolName = existing.toolName ?? toolName;
+      return;
+    }
+
+    const item: TimelineItem = {
+      id: step.id,
+      kind: 'tool',
+      startStep: step.type === 'result' ? undefined : step,
+      endStep: step.type === 'result' ? step : undefined,
+      toolCallId,
+      toolName,
+    };
+    if (toolCallId) {
+      toolItems.set(toolCallId, item);
+    }
+    items.push(item);
+  };
+
+  steps.forEach((step) => {
+    if (step.type === 'thought') {
+      items.push({ id: step.id, kind: 'thought', step });
+      return;
+    }
+
+    const toolCallId = getStepToolCallId(step);
+    const toolName = getStepToolName(step);
+    const looksLikeTool = Boolean(toolCallId || toolName || step.type === 'action');
+
+    if (looksLikeTool) {
+      pushToolItem(step, toolCallId);
+      return;
+    }
+
+    if (step.type === 'result') {
+      items.push({ id: step.id, kind: 'result', step });
+      return;
+    }
+
+    items.push({ id: step.id, kind: 'tool', startStep: step, toolName });
+  });
+
+  return items;
+};
+
+export function ThinkingPanel({
+  thinking,
+  traceSteps = [],
+  todos = [],
+  toolEvidence = {},
+  activeStepId,
+  isStreaming = false,
+}: ThinkingPanelProps) {
+  const [isExpanded, setIsExpanded] = useState(() => isStreaming);
+  const [isTodoExpanded, setIsTodoExpanded] = useState(() => isStreaming);
+  const [expandedItemIds, setExpandedItemIds] = useState<Set<string>>(new Set());
+  const contentRef = useRef<HTMLDivElement | null>(null);
+
+  const hasContent = thinking || traceSteps.length > 0 || todos.length > 0;
 
   const mergedTraceSteps = useMemo(() => {
     if (!thinking) return traceSteps;
@@ -302,53 +429,111 @@ export function ThinkingPanel({ thinking, traceSteps = [] }: ThinkingPanelProps)
     return [syntheticStep, ...traceSteps];
   }, [thinking, traceSteps]);
 
-  const groupedSteps = useMemo(() => {
-    const groups: Array<{ id: string; title: string; steps: TraceStep[] }> = [];
-    let currentGroup: { id: string; title: string; steps: TraceStep[] } | null = null;
-
-    mergedTraceSteps.forEach((step) => {
-      const stepType = step.type === 'action' ? 'tool' : step.type;
-      if (stepType === 'thought') {
-        if (currentGroup) groups.push(currentGroup);
-        const thoughtContent = getThoughtContent(step);
-        currentGroup = {
-          id: step.id,
-          title: getThoughtSummary(thoughtContent),
-          steps: [step],
-        };
-        return;
+  const filteredTraceSteps = useMemo(() => {
+    return mergedTraceSteps.filter((step) => {
+      if (step.type === 'thought') {
+        const metadata = (step.metadata ?? {}) as Record<string, unknown>;
+        const kind = typeof metadata.kind === 'string' ? metadata.kind.toLowerCase() : '';
+        const source = typeof metadata.source === 'string' ? metadata.source.toLowerCase() : '';
+        const content = getThoughtContent(step).trim();
+        if (kind === 'phase') return Boolean(step.content?.trim());
+        if (content) return true;
+        // Hide placeholder thought steps created for model runs that never emitted reasoning.
+        return source === 'narration' || source === 'provider_reasoning' || source === 'model_reasoning';
       }
 
-      if (!currentGroup) {
-        currentGroup = {
-          id: step.id,
-          title: getToolLabel(step),
-          steps: [step],
-        };
-        return;
-      }
-
-      currentGroup.steps.push(step);
+      const toolName = (getStepToolName(step) || '').toLowerCase();
+      if (toolName && INTERNAL_TOOL_NAMES.has(toolName)) return false;
+      return true;
     });
-
-    if (currentGroup) groups.push(currentGroup);
-    return groups;
   }, [mergedTraceSteps]);
 
-  const toggleThought = useCallback((id: string) => {
-    setExpandedThoughtIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) {
-        next.delete(id);
-      } else {
-        next.add(id);
-      }
-      return next;
-    });
-  }, []);
+  const timelineItems = useMemo(() => buildTimelineItems(filteredTraceSteps), [filteredTraceSteps]);
 
-  const toggleTool = useCallback((id: string) => {
-    setExpandedToolIds((prev) => {
+  const { done: todosDone, total: todosTotal } = useMemo(() => getTodoProgress(todos), [todos]);
+  const todoPercent = todosTotal > 0 ? Math.round((todosDone / todosTotal) * 100) : 0;
+
+  const activeItemId = useMemo(() => {
+    if (!activeStepId) return undefined;
+    const direct = timelineItems.find((item) => item.id === activeStepId);
+    if (direct) return direct.id;
+    const match = timelineItems.find((item) => (
+      item.kind === 'tool'
+      && (item.startStep?.id === activeStepId || item.endStep?.id === activeStepId)
+    ));
+    return match?.id;
+  }, [activeStepId, timelineItems]);
+
+  const derivedThoughtDurations = useMemo(() => {
+    const durations = new Map<string, number>();
+    const streamingEndMs = isStreaming
+      ? getItemTimestampMs(timelineItems[timelineItems.length - 1] ?? { id: '', kind: 'result' })
+      : null;
+
+    for (let i = 0; i < timelineItems.length; i += 1) {
+      const item = timelineItems[i];
+      if (item.kind !== 'thought' || !item.step) continue;
+      const startMs = getTimestampMs(item.step.timestamp);
+      if (startMs === null) continue;
+
+      let endMs: number | null = null;
+      for (let j = i + 1; j < timelineItems.length; j += 1) {
+        const candidateItem = timelineItems[j];
+        if (candidateItem.kind !== 'thought') continue;
+        const candidate = getItemTimestampMs(candidateItem);
+        if (candidate !== null) {
+          endMs = candidate;
+          break;
+        }
+      }
+
+      const effectiveEnd = endMs ?? streamingEndMs;
+      if (effectiveEnd !== null && effectiveEnd > startMs) {
+        durations.set(item.id, (effectiveEnd - startMs) / 1000);
+      }
+    }
+
+    return durations;
+  }, [isStreaming, timelineItems]);
+
+  const scrollTargetId = useMemo(() => {
+    if (activeItemId) return activeItemId;
+    if (isStreaming) return timelineItems[timelineItems.length - 1]?.id;
+    return undefined;
+  }, [activeItemId, isStreaming, timelineItems]);
+
+  const expandedItemIdsForRender = useMemo(() => {
+    if (!isStreaming || !scrollTargetId) return expandedItemIds;
+    const next = new Set(expandedItemIds);
+    next.add(scrollTargetId);
+    return next;
+  }, [expandedItemIds, isStreaming, scrollTargetId]);
+
+  useEffect(() => {
+    if (!isExpanded) return;
+
+    if (!scrollTargetId) return;
+
+    const rafId = requestAnimationFrame(() => {
+      try {
+        const safeTargetId =
+          typeof CSS !== 'undefined' && typeof CSS.escape === 'function'
+            ? CSS.escape(scrollTargetId)
+            : scrollTargetId;
+        const el = contentRef.current?.querySelector(
+          `[data-step-id="${safeTargetId}"]`
+        );
+        el?.scrollIntoView({ block: 'nearest' });
+      } catch {
+        // noop - selector can fail on unexpected IDs
+      }
+    });
+
+    return () => cancelAnimationFrame(rafId);
+  }, [isExpanded, scrollTargetId]);
+
+  const toggleItem = useCallback((id: string) => {
+    setExpandedItemIds((prev) => {
       const next = new Set(prev);
       if (next.has(id)) {
         next.delete(id);
@@ -368,114 +553,232 @@ export function ThinkingPanel({ thinking, traceSteps = [] }: ThinkingPanelProps)
         onClick={() => setIsExpanded(!isExpanded)}
       >
         <div className="lc-thinking-title">
-          <div className={`lc-thinking-status-icon ${mergedTraceSteps.length > 0 ? 'active' : ''}`}>
-            {mergedTraceSteps.length > 0 ? <Clock size={16} /> : <Brain size={16} />}
+          <div className={`lc-thinking-status-icon ${timelineItems.length > 0 ? 'active' : ''}`}>
+            {timelineItems.length > 0 ? <Clock size={16} /> : <Brain size={16} />}
           </div>
           <span className="font-semibold text-sm">Progress Updates</span>
-          <span className="lc-thinking-count">{mergedTraceSteps.length} steps</span>
+          <span className="lc-thinking-count">{timelineItems.length} steps</span>
         </div>
         {isExpanded ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
       </div>
 
       {isExpanded && (
-        <div className="lc-thinking-content">
-          <div className="lc-steps-list">
-            {groupedSteps.length > 0 ? (
-              groupedSteps.map((group, idx) => (
-                <div key={group.id || idx} className="lc-step-group">
-                  <div className="lc-step-parent">
-                    <span className="lc-step-number">{idx + 1}</span>
-                    <div className="lc-step-body">
-                      <span className="lc-step-text">{group.title}</span>
-                    </div>
-                  </div>
-                  <div className="lc-step-children">
-                    {group.steps.map((step, stepIdx) => {
-                      const stepType = step.type === 'action' ? 'tool' : step.type;
-                      if (stepType === 'thought') {
-                        const isOpen = expandedThoughtIds.has(step.id);
-                        const thoughtContent = getThoughtContent(step);
-                        return (
-                          <div key={step.id || stepIdx} className="lc-step-thought">
-                            <button
-                              type="button"
-                              className="lc-step-row lc-step-thought-row"
-                              onClick={() => toggleThought(step.id)}
-                            >
-                              <span className="lc-step-row-content">
-                                {isOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-                                <span className="lc-step-row-label">{getThoughtLabel(step)}</span>
-                              </span>
-                              <span className="lc-step-row-meta">{getStepIcon(step)}</span>
-                            </button>
-                            {isOpen && (
-                              <div className="lc-thought-content">
-                                {thoughtContent}
-                              </div>
-                            )}
-                          </div>
-                        );
-                      }
-
-                      const toolLabel = getToolLabel(step);
-                      const toolDetail = getToolDetail(step);
-                      const isToolOpen = expandedToolIds.has(step.id);
-                      const errorLabel = step.status === 'error'
-                        ? extractErrorMessage(step.metadata?.error ?? step.metadata?.output ?? step.metadata?.result)
-                        : null;
-                      const statusLabel = step.status === 'error'
-                        ? truncateLine(errorLabel || 'Error', 36)
-                        : stepType === 'result'
-                          ? 'Done'
-                          : 'Running';
-                      const statusClass = step.status === 'error' ? 'error' : 'success';
-
+        <div className="lc-thinking-content" ref={contentRef}>
+          {todosTotal > 0 && (
+            <div className="lc-todo-summary">
+              <button
+                type="button"
+                className="lc-progress-row"
+                onClick={() => setIsTodoExpanded((prev) => !prev)}
+                aria-expanded={isTodoExpanded}
+              >
+                <span className="lc-progress-row-left">
+                  {isTodoExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                  <span className="lc-progress-icon"><ListChecks size={14} /></span>
+                  <span className="lc-progress-label">{`${todosDone}/${todosTotal} tasks done`}</span>
+                </span>
+                <span className="lc-progress-row-right">
+                  <span className="lc-progress-meta">{`${todoPercent}%`}</span>
+                </span>
+              </button>
+              <div className="lc-todo-progress">
+                <div className="lc-todo-progress-fill" style={{ width: `${todoPercent}%` }} />
+              </div>
+              {isTodoExpanded && (
+                <div className="lc-trace-box">
+                  <div className="lc-todo-list">
+                    {todos.map((todo) => {
+                      const status = todo.status || 'pending';
+                      const statusIcon = status === 'done'
+                        ? <CheckCircle2 size={14} />
+                        : status === 'in_progress'
+                          ? <Loader2 size={14} className="lc-spin" />
+                          : <Circle size={14} />;
                       return (
-                        <div key={step.id || stepIdx} className="lc-step-tool">
-                          <div className="lc-step-row">
-                            <span className="lc-step-row-content">
-                              <span className="lc-step-icon">{getStepIcon(step)}</span>
-                              <span className="lc-step-row-label">{toolLabel}</span>
-                            </span>
-                            <span className="lc-step-row-meta">
-                              {toolDetail && step.status === 'error' && (
-                                <span className={`lc-step-status ${statusClass}`}>
-                                  <AlertCircle size={12} />
-                                  {statusLabel}
-                                </span>
-                              )}
-                              {toolDetail ? (
-                                <button
-                                  type="button"
-                                  className="lc-step-view-btn"
-                                  onClick={() => toggleTool(step.id)}
-                                >
-                                  {isToolOpen ? 'Hide' : 'View'}
-                                </button>
-                              ) : stepType === 'result' ? (
-                                <span className={`lc-step-status ${statusClass}`}>
-                                  {step.status === 'error' ? <AlertCircle size={12} /> : <CheckCircle2 size={12} />}
-                                  {statusLabel}
-                                </span>
-                              ) : (
-                                <span className={`lc-step-status ${statusClass}`}>{statusLabel}</span>
-                              )}
-                            </span>
-                          </div>
-                          {toolDetail && isToolOpen && (
-                            <div className="lc-tool-detail">
-                              {toolDetail}
-                            </div>
-                          )}
+                        <div key={todo.id} className={`lc-todo-item ${status}`}>
+                          <span className="lc-todo-status">{statusIcon}</span>
+                          <span className="lc-todo-title">{todo.title}</span>
                         </div>
                       );
                     })}
                   </div>
                 </div>
-              ))
-            ) : (
-              thinking && <div className="lc-step-raw">{thinking}</div>
-            )}
+              )}
+            </div>
+          )}
+          <div className="lc-progress-list">
+            {timelineItems.map((item) => {
+              const isOpen = expandedItemIdsForRender.has(item.id);
+              const itemStep = item.step ?? item.endStep ?? item.startStep;
+              const toolCallId = item.toolCallId ?? (itemStep ? getStepToolCallId(itemStep) : undefined);
+              const evidence = toolCallId ? toolEvidence[toolCallId] : undefined;
+
+              if (item.kind === 'thought' && itemStep) {
+                const thoughtContent = getThoughtContent(itemStep);
+                if (!thoughtContent.trim()) return null;
+                const derivedDuration = derivedThoughtDurations.get(item.id);
+                const durationSeconds = itemStep.duration ?? derivedDuration;
+                const durationLabel = formatDuration(durationSeconds);
+                const label = durationLabel ? `Thought for ${durationLabel}` : getThoughtKindLabel(itemStep);
+                const metaLabel = durationLabel ?? getThoughtKindLabel(itemStep);
+                return (
+                  <div key={item.id} className="lc-progress-item" data-step-id={item.id}>
+                    <button
+                      type="button"
+                      className="lc-progress-row"
+                      onClick={() => toggleItem(item.id)}
+                    >
+                      <span className="lc-progress-row-left">
+                        {isOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                        <span className="lc-progress-icon"><Brain size={14} /></span>
+                        <span className="lc-progress-label">{label}</span>
+                      </span>
+                      <span className="lc-progress-row-right">
+                        <span className="lc-progress-meta">{metaLabel}</span>
+                      </span>
+                    </button>
+                    {isOpen && (
+                      <div className="lc-trace-box">
+                        <EnhancedMarkdown
+                          content={thoughtContent}
+                          variant="librechat"
+                          messageId={item.id}
+                          registerArtifacts={false}
+                        />
+                      </div>
+                    )}
+                  </div>
+                );
+              }
+
+              if (item.kind === 'tool') {
+                const toolStep = itemStep;
+                if (!toolStep) return null;
+                const labelStep = item.startStep ?? toolStep;
+                const toolLabel = getToolLabel(labelStep);
+                const detailStep = item.endStep ?? item.startStep ?? toolStep;
+                const toolDetailLines = buildToolDetailLines(detailStep, evidence);
+                const cards = evidence?.cards ?? [];
+                const toolStatus = getToolStatus(item);
+                const isError = toolStatus === 'error';
+                const statusLabel = isError ? 'Error' : toolStatus === 'done' ? 'Done' : 'Running';
+                const statusClass = isError ? 'error' : toolStatus === 'done' ? 'success' : 'running';
+                const statusIcon = isError
+                  ? <AlertCircle size={12} />
+                  : toolStatus === 'done'
+                    ? <CheckCircle2 size={12} />
+                    : <Loader2 size={12} className="lc-spin" />;
+                const isCollapsible = toolDetailLines.length > 0 || cards.length > 0;
+                return (
+                  <div key={item.id} className="lc-progress-item" data-step-id={item.id}>
+                    <div className="lc-progress-row">
+                      <span className="lc-progress-row-left">
+                        {isCollapsible ? (
+                          <button
+                            type="button"
+                            className="lc-progress-toggle"
+                            onClick={() => toggleItem(item.id)}
+                          >
+                            {isOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                          </button>
+                        ) : (
+                          <span className="lc-progress-toggle-placeholder" />
+                        )}
+                        <span className="lc-progress-icon">{getToolIcon(toolStep)}</span>
+                        <span className="lc-progress-label">{toolLabel}</span>
+                      </span>
+                      <span className="lc-progress-row-right">
+                        <span className={`lc-progress-badge ${statusClass}`}>
+                          {statusIcon}
+                          {statusLabel}
+                        </span>
+                      </span>
+                    </div>
+                    {isCollapsible && isOpen && (
+                      <div className="lc-trace-box">
+                        {toolDetailLines.length > 0 && (
+                          <div className="lc-trace-lines mono">
+                            {toolDetailLines.map((line, idx) => (
+                              <div key={`${item.id}-line-${idx}`} className="lc-trace-line">
+                                {line}
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                        {cards.length > 0 && (
+                          <div className="lc-tool-cards">
+                            {cards.map((card, idx) => {
+                              const hostFromMetadata = typeof card.metadata?.host === 'string' ? card.metadata.host : null;
+                              const host = safeHost(card.url) || hostFromMetadata;
+                              const title = card.title || `Result ${idx + 1}`;
+                              const snippet = card.snippet || '';
+                              const Wrapper: React.ElementType = card.url ? 'a' : 'div';
+                              return (
+                                <Wrapper
+                                  key={`${item.id}-card-${idx}`}
+                                  className="lc-tool-card"
+                                  {...(card.url
+                                    ? { href: card.url, target: '_blank', rel: 'noreferrer' }
+                                    : {})}
+                                >
+                                  <div className="lc-tool-card-title">{title}</div>
+                                  {snippet && <div className="lc-tool-card-snippet">{snippet}</div>}
+                                  {(host || card.type) && (
+                                    <div className="lc-tool-card-meta">
+                                      {host || card.type}
+                                    </div>
+                                  )}
+                                </Wrapper>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                );
+              }
+
+              if (item.kind === 'result' && itemStep) {
+                const isOpenable = Boolean(itemStep.content);
+                return (
+                  <div key={item.id} className="lc-progress-item" data-step-id={item.id}>
+                    <div className="lc-progress-row">
+                      <span className="lc-progress-row-left">
+                        {isOpenable ? (
+                          <button
+                            type="button"
+                            className="lc-progress-toggle"
+                            onClick={() => toggleItem(item.id)}
+                          >
+                            {isOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                          </button>
+                        ) : (
+                          <span className="lc-progress-toggle-placeholder" />
+                        )}
+                        <span className="lc-progress-icon"><CheckCircle2 size={14} /></span>
+                        <span className="lc-progress-label">Final response ready</span>
+                      </span>
+                      <span className="lc-progress-row-right">
+                        <span className="lc-progress-meta">Result</span>
+                      </span>
+                    </div>
+                    {isOpen && itemStep.content && (
+                      <div className="lc-trace-box">
+                        <EnhancedMarkdown
+                          content={itemStep.content}
+                          variant="librechat"
+                          messageId={item.id}
+                          registerArtifacts={false}
+                        />
+                      </div>
+                    )}
+                  </div>
+                );
+              }
+
+              return null;
+            })}
           </div>
         </div>
       )}

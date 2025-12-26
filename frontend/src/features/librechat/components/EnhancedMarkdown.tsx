@@ -98,10 +98,20 @@ export const EnhancedMarkdown = memo(function EnhancedMarkdown({
     return next;
   }, []);
 
-  // Preprocess content for LaTeX
+  // Preprocess content for LaTeX and strip any markdown data URIs
   const processedContent = useMemo(() => {
     if (!content) return '';
-    return preprocessLaTeX(content);
+
+    // CRITICAL: Strip markdown images with data URIs as final safety net.
+    // Pattern: ![alt text](data:image/...) - images are displayed as artifacts, not embedded in chat text.
+    const MARKDOWN_DATA_URI_PATTERN = /!\[[^\]]*\]\(data:image\/[^)]+\)/gi;
+    const replaced = content.replace(MARKDOWN_DATA_URI_PATTERN, '');
+    const sanitized = replaced === content ? content : replaced.trim();
+    if (replaced !== content) {
+      console.debug('[EnhancedMarkdown] Stripped markdown data URI from content');
+    }
+
+    return preprocessLaTeX(sanitized);
   }, [content]);
 
   // Memoize remark plugins (including artifact detection)
@@ -168,7 +178,14 @@ export const EnhancedMarkdown = memo(function EnhancedMarkdown({
       }: any) {
         const match = /language-(\w+)/.exec(codeClassName || '');
         const language = match ? match[1] : '';
-        const codeString = String(children).replace(/\n$/, '');
+        const rawCode = extractContent(children);
+        const codeString = rawCode.replace(/\n$/, '');
+
+        // react-markdown v10 no longer provides `inline`, so infer it reliably.
+        const isInlineCode =
+          typeof inline === 'boolean'
+            ? inline
+            : !codeClassName && !rawCode.includes('\n');
 
         // Check for artifact metadata from the plugin (prefer hProperties over direct props)
         const hProps = node?.data?.hProperties || {};
@@ -176,8 +193,7 @@ export const EnhancedMarkdown = memo(function EnhancedMarkdown({
         const artifactType = (hProps.artifactType || _artifactType) as ArtifactType | undefined;
         const artifactTitle = (hProps.artifactTitle || _artifactTitle) as string | undefined;
 
-        // Inline code
-        if (inline) {
+        if (isInlineCode) {
           if (isLibreChat) {
             return (
               <code {...props} className={codeClassName}>

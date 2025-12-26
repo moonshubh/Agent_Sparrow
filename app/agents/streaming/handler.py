@@ -7,12 +7,14 @@ handling LangGraph streaming events.
 from __future__ import annotations
 
 import hashlib
+import re
 import time
 from contextlib import nullcontext
-from typing import Any, Callable, Dict, List, Optional, TYPE_CHECKING
+from typing import Any, TYPE_CHECKING
 
-from langchain_core.messages import AIMessage, BaseMessage
+from langchain_core.messages import BaseMessage
 from loguru import logger
+import json
 
 try:
     from opentelemetry import trace
@@ -29,14 +31,12 @@ from .normalizers import (
 )
 from .utils import (
     ToolResultEvictionManager,
-    count_tokens_approximately,
-    truncate_if_too_long,
     parse_tool_calls_safely,
     InvalidToolCall,
     retry_with_backoff,
     RetryConfig,
-    TOOL_TOKEN_LIMIT,
 )
+from app.core.settings import settings
 
 if TYPE_CHECKING:
     from langgraph.graph.state import CompiledStateGraph
@@ -49,7 +49,6 @@ if TYPE_CHECKING:
 HELPER_TIMEOUT_SECONDS = 8.0
 
 # Pattern for detecting thinking blocks
-import re
 THINKING_BLOCK_PATTERN = re.compile(
     r":::(?:thinking|think)\s*([\s\S]*?)\s*:::",
     re.IGNORECASE
@@ -57,6 +56,14 @@ THINKING_BLOCK_PATTERN = re.compile(
 THINK_TAG_PATTERN = re.compile(
     r"<(?:thinking|think)>\s*([\s\S]*?)\s*</(?:thinking|think)>",
     re.IGNORECASE
+)
+
+# Pattern for detecting markdown images with data URIs (base64-encoded images)
+# Matches: ![alt text](data:image/...) where the base64 data can be very long.
+# This catches the model outputting embedded images as markdown which should be filtered.
+MARKDOWN_DATA_URI_PATTERN = re.compile(
+    r"!\[[^\]]*\]\(data:image/[^)]+\)",
+    re.IGNORECASE,
 )
 
 
@@ -162,16 +169,16 @@ class ThinkingBlockTracker:
 
     @staticmethod
     def sanitize_final_content(content: str) -> str:
-        """Strip any remaining thinking blocks from final content.
+        """Strip any remaining thinking blocks and markdown data URIs from final content.
 
-        This is a safety net for any thinking content that slipped through
-        during streaming. Should be called on the final message content.
+        This is a safety net for any thinking content or embedded images that
+        slipped through during streaming. Should be called on the final message content.
 
         Args:
             content: The final message content.
 
         Returns:
-            Content with all :::thinking blocks removed.
+            Content with all :::thinking blocks and markdown data URIs removed.
         """
         if not content:
             return content
@@ -189,6 +196,11 @@ class ThinkingBlockTracker:
         # But be careful not to remove ::: in other contexts (like code blocks)
         # Only remove ::: at the start of a line or after whitespace
         sanitized = re.sub(r"(?:^|\n)\s*:::\s*(?=\n|$)", "\n", sanitized)
+
+        # Remove markdown images with data URIs: ![alt](data:image/...)
+        # These are generated when the model tries to embed base64 images in text
+        # The images are already displayed as artifacts, so this is just garbage
+        sanitized = MARKDOWN_DATA_URI_PATTERN.sub("", sanitized)
 
         # Clean up excess whitespace
         sanitized = re.sub(r"\n{3,}", "\n\n", sanitized).strip()
@@ -222,11 +234,11 @@ class StreamEventHandler:
         emitter: StreamEventEmitter,
         config: "RunnableConfig",
         state: "GraphState",
-        messages: List[BaseMessage],
+        messages: list[BaseMessage],
         *,
-        helper: Optional["GemmaHelper"] = None,
-        session_cache: Optional[Dict[str, Dict[str, Any]]] = None,
-        last_user_query: Optional[str] = None,
+        helper: GemmaHelper | None = None,
+        session_cache: dict[str, dict[str, Any]] | None = None,
+        last_user_query: str | None = None,
     ):
         """Initialize the handler.
 
@@ -249,11 +261,11 @@ class StreamEventHandler:
         self.session_cache = session_cache or {}
         self.last_user_query = last_user_query
 
-        self.final_output: Optional[Dict[str, Any]] = None
+        self.final_output: dict[str, Any] | None = None
         # Buffer user-visible text for Gemini thinking models so chain-of-thought
         # stays in the reasoning pane while the main chat only receives the
         # final, sanitized answer.
-        self._gemini_buffer_runs: Dict[str, List[str]] = {}
+        self._gemini_buffer_runs: dict[str, list[str]] = {}
 
         # Get tracer if available
         self._tracer = trace.get_tracer(__name__) if OTEL_AVAILABLE else None
@@ -263,14 +275,26 @@ class StreamEventHandler:
         self._eviction_manager = ToolResultEvictionManager(
             storage_callback=self._store_evicted_result,
         )
+        # Phase emission guards (deterministic trace fallbacks)
+        self._phase_emitted: set[str] = set()
 
-    async def stream_and_process(self) -> Optional[Dict[str, Any]]:
+    async def stream_and_process(self) -> dict[str, Any] | None:
         """Main streaming loop with event processing.
 
         Returns:
             The final agent output, or None if streaming failed.
         """
         try:
+            if settings.trace_mode != "off":
+                planning_detail = self._build_planning_phase_detail()
+                planning_content = "**Planning**"
+                if planning_detail:
+                    planning_content = f"{planning_content}\n\n{planning_detail}"
+                self.emitter.add_trace_step(
+                    step_type="thought",
+                    content=planning_content,
+                    metadata={"kind": "phase", "source": "system_phase"},
+                )
             async for event in self._event_generator():
                 await self._handle_event(event)
         except Exception as e:
@@ -303,12 +327,17 @@ class StreamEventHandler:
             )
 
             try:
+                fallback_inputs = self._agent_inputs()
+
+                async def _fallback_invoke() -> Any:
+                    return await self.agent.ainvoke(
+                        fallback_inputs,
+                        config=self.config,
+                    )
+
                 self.final_output = await retry_with_backoff(
-                    self.agent.ainvoke,
-                    self._agent_inputs(),
+                    _fallback_invoke,
                     config=retry_config,
-                    # Pass original config as keyword arg
-                    **{"config": self.config},
                 )
 
                 # Emit success event after fallback completes
@@ -386,7 +415,7 @@ class StreamEventHandler:
                 logger.error(f"Agent run failed: {str(exc)}", exc_info=True)
                 raise
 
-    def _agent_inputs(self) -> Dict[str, Any]:
+    def _agent_inputs(self) -> dict[str, Any]:
         """Build agent input dict."""
         return {
             "messages": list(self.messages),
@@ -394,7 +423,7 @@ class StreamEventHandler:
             "scratchpad": self.state.scratchpad,
         }
 
-    async def _handle_event(self, event: Dict[str, Any]) -> None:
+    async def _handle_event(self, event: dict[str, Any]) -> None:
         """Route event to appropriate handler."""
         event_type = event.get("event")
         handlers = {
@@ -414,7 +443,7 @@ class StreamEventHandler:
         if handler:
             await handler(event)
 
-    async def _on_tool_start(self, event: Dict[str, Any]) -> None:
+    async def _on_tool_start(self, event: dict[str, Any]) -> None:
         """Handle tool start event."""
         tool_data = event.get("data", {})
         tool_call_id = str(tool_data.get("tool_call_id", "unknown"))
@@ -423,9 +452,81 @@ class StreamEventHandler:
 
         tool_input = tool_data.get("input") or tool_data.get("tool_input")
 
-        self.emitter.start_tool(tool_call_id, tool_name, tool_input)
+        if tool_name == "trace_update":
+            # Narration-only tool: emit a thought step from the tool INPUT (not output),
+            # and store an optional goal to annotate the next real tool call.
+            if settings.trace_mode == "off":
+                return
+
+            payload: dict[str, Any] = {}
+            if isinstance(tool_input, dict):
+                payload = dict(tool_input)
+            elif isinstance(tool_input, str):
+                try:
+                    parsed = json.loads(tool_input)
+                    if isinstance(parsed, dict):
+                        payload = parsed
+                except Exception:
+                    payload = {}
+
+            title = payload.get("title") if isinstance(payload.get("title"), str) else ""
+            detail = payload.get("detail") if isinstance(payload.get("detail"), str) else ""
+            kind = payload.get("kind") if isinstance(payload.get("kind"), str) else "thought"
+            kind = kind.lower().strip() if kind else "thought"
+            if kind not in {"thought", "phase"}:
+                kind = "thought"
+
+            goal = payload.get("goal_for_next_tool") or payload.get("goalForNextTool")
+            if isinstance(goal, str) and goal.strip() and isinstance(self.state.scratchpad, dict):
+                self.state.scratchpad["_next_tool_goal"] = goal.strip()
+
+            heading = title.strip() or "Thought"
+            body = detail.strip()
+            content = f"**{heading}**\n\n{body}" if body else f"**{heading}**"
+            self.emitter.add_trace_step(
+                step_type="thought",
+                content=content,
+                metadata={"source": "narration", "kind": kind},
+            )
+            return
+
+        tool_goal: str | None = None
+        if (
+            tool_name not in {"write_todos", "trace_update"}
+            and isinstance(self.state.scratchpad, dict)
+        ):
+            raw_goal = self.state.scratchpad.pop("_next_tool_goal", None)
+            if isinstance(raw_goal, str) and raw_goal.strip():
+                tool_goal = raw_goal.strip()
+
+        # Deterministic phase fallback on first real tool start
+        if settings.trace_mode != "off" and tool_name not in {"write_todos"}:
+            if "work" not in self._phase_emitted:
+                lower = tool_name.lower()
+                label = "Working"
+                if any(key in lower for key in ("search", "tavily", "firecrawl", "grounding")):
+                    label = "Searching"
+                elif any(key in lower for key in ("read", "fetch", "scrape", "crawl", "map")):
+                    label = "Exploring"
+
+                phase_detail = self._build_tool_phase_detail(
+                    tool_name=tool_name,
+                    tool_input=tool_input,
+                    tool_goal=tool_goal,
+                )
+                phase_content = f"**{label}**"
+                if phase_detail:
+                    phase_content = f"{phase_content}\n\n{phase_detail}"
+                self.emitter.add_trace_step(
+                    step_type="thought",
+                    content=phase_content,
+                    metadata={"kind": "phase", "source": "system_phase"},
+                )
+                self._phase_emitted.add("work")
+
+        self.emitter.start_tool(tool_call_id, tool_name, tool_input, goal=tool_goal)
         # Drive todo status progression when tools start (skip write_todos itself)
-        if tool_name != "write_todos" and hasattr(self.emitter, "start_next_todo"):
+        if tool_name not in {"write_todos", "trace_update"} and hasattr(self.emitter, "start_next_todo"):
             if self.emitter.start_next_todo():
                 todos_dicts = self.emitter.get_todos_as_dicts()
                 self.state.scratchpad["_todos"] = todos_dicts
@@ -434,13 +535,15 @@ class StreamEventHandler:
                 except Exception as exc:  # pragma: no cover - defensive
                     logger.warning("todo_state_set_failed_on_start", error=str(exc))
 
-    async def _on_tool_end(self, event: Dict[str, Any]) -> None:
+    async def _on_tool_end(self, event: dict[str, Any]) -> None:
         """Handle tool end event."""
         tool_data = event.get("data", {})
         output = tool_data.get("output")
         tool_call_id = str(tool_data.get("tool_call_id", "unknown"))
         tool_name = self._extract_tool_name(event.get("name"), tool_call_id)
         event["name"] = tool_name
+        if tool_name == "trace_update":
+            return
 
         # =====================================================================
         # SPECIAL TOOL HANDLING (BEFORE EVICTION)
@@ -498,7 +601,7 @@ class StreamEventHandler:
         self.emitter.end_tool(tool_call_id, tool_name, output, summary, cards=cards)
 
         # Mark active todo as done when a tool finishes (skip write_todos)
-        if tool_name != "write_todos" and hasattr(self.emitter, "complete_active_todo"):
+        if tool_name not in {"write_todos", "trace_update"} and hasattr(self.emitter, "complete_active_todo"):
             if self.emitter.complete_active_todo():
                 todos_dicts = self.emitter.get_todos_as_dicts()
                 self.state.scratchpad["_todos"] = todos_dicts
@@ -507,7 +610,7 @@ class StreamEventHandler:
                 except Exception as exc:  # pragma: no cover - defensive
                     logger.warning("todo_state_set_failed_on_end", error=str(exc))
 
-    async def _on_tool_error(self, event: Dict[str, Any]) -> None:
+    async def _on_tool_error(self, event: dict[str, Any]) -> None:
         """Handle tool error event."""
         tool_data = event.get("data", {}) or {}
         tool_call_id = str(tool_data.get("tool_call_id", "unknown"))
@@ -520,7 +623,7 @@ class StreamEventHandler:
 
         self.emitter.error_tool(tool_call_id, tool_name, raw_error)
 
-    async def _on_model_start(self, event: Dict[str, Any]) -> None:
+    async def _on_model_start(self, event: dict[str, Any]) -> None:
         """Handle chat model start event."""
         data = event.get("data", {})
         run_id = event.get("run_id")
@@ -538,13 +641,14 @@ class StreamEventHandler:
         if isinstance(model_name, str) and "gemini-3" in model_name.lower():
             self._gemini_buffer_runs[str(run_id)] = []
 
-        self.emitter.start_thought(
-            run_id=run_id,
-            model=data.get("model"),
-            prompt_preview=prompt_preview,
-        )
+        if settings.trace_mode != "off":
+            self.emitter.start_thought(
+                run_id=run_id,
+                model=data.get("model"),
+                prompt_preview=prompt_preview,
+            )
 
-    async def _on_model_end(self, event: Dict[str, Any]) -> None:
+    async def _on_model_end(self, event: dict[str, Any]) -> None:
         """Handle chat model end event.
 
         Also monitors Gemini implicit cache hits for cost optimization tracking.
@@ -561,28 +665,23 @@ class StreamEventHandler:
         # =====================================================================
         self._log_cache_metrics(data)
 
+        final_output = data.get("output")
+        has_tool_calls, invalid_tool_calls = self._detect_tool_calls(final_output)
+
         if run_id and run_id in self.emitter.operations:
-            output = data.get("output")
             content = ""
-            if output:
-                # Extract reasoning content from xAI/Grok responses (additional_kwargs.reasoning_content)
-                reasoning_content = self._extract_reasoning_content(output)
-                main_content = self._stringify_message_content(
-                    getattr(output, "content", output)
-                )
+            if final_output:
+                reasoning_content = self._extract_reasoning_content(final_output)
 
-                # Sanitize main_content to remove any leaked thinking blocks
-                # This is a safety net for Gemini models that may include :::thinking in output
-                main_content = ThinkingBlockTracker.sanitize_final_content(main_content)
-
-                # IMPORTANT: Do NOT embed reasoning into message content!
-                # Reasoning goes ONLY to the thinking trace (handled via stream_thought_chunk)
-                # User-facing message content should be clean of reasoning markers
-                content = main_content
+                # Only treat content as user-visible when this model call produced
+                # a final text response (tool-call turns must never reach the main chat).
+                if not has_tool_calls:
+                    content = self._extract_user_visible_text(final_output)
+                    content = ThinkingBlockTracker.sanitize_final_content(content)
 
                 # If we have extracted reasoning, emit it to the thinking trace as a final summary
                 # This ensures the trace panel gets the full reasoning without polluting the message
-                if reasoning_content and run_id:
+                if reasoning_content and run_id and settings.trace_mode in {"hybrid", "provider_reasoning"}:
                     cleaned_reasoning = reasoning_content.strip()
                     updated = self.emitter.update_trace_step(
                         alias=str(run_id),
@@ -597,63 +696,47 @@ class StreamEventHandler:
                         )
 
             # If we buffered Gemini 3 text, emit a single sanitized message now
-            run_id_str = str(run_id) if run_id is not None else None
+            # IMPORTANT: never flush the buffer for tool-call turns.
             if run_id_str and run_id_str in self._gemini_buffer_runs:
                 buffered_text = " ".join(self._gemini_buffer_runs.pop(run_id_str) or [])
                 buffered_text = ThinkingBlockTracker.sanitize_final_content(buffered_text)
-                final_visible = content or buffered_text
 
-                if final_visible:
-                    self.emitter.start_text_message()
-                    self.emitter.emit_text_content(final_visible)
-                    self.emitter.end_text_message()
+                if not has_tool_calls:
+                    final_visible = content or buffered_text
+                    if final_visible:
+                        self.emitter.start_text_message()
+                        self.emitter.emit_text_content(final_visible)
+                        self.emitter.end_text_message()
 
-            self.emitter.end_thought(run_id, content)
+            # Never attach the final user-visible answer to the thought trace step.
+            # Thought steps must represent reasoning/narration only.
+            self.emitter.end_thought(run_id, None)
 
         # Track final output
-        final_output = data.get("output")
         if final_output:
             self.final_output = {"output": final_output}
 
-            # End any open text message stream
-            # Check if this is a final text response (not a tool call)
-            # Uses safe parsing to capture invalid tool calls (LangChain pattern)
-            has_tool_calls = False
-            invalid_tool_calls: List[InvalidToolCall] = []
-
-            raw_tool_calls = None
-            if hasattr(final_output, "tool_calls") and final_output.tool_calls:
-                raw_tool_calls = final_output.tool_calls
-            elif isinstance(final_output, dict) and final_output.get("tool_calls"):
-                raw_tool_calls = final_output.get("tool_calls")
-
-            if raw_tool_calls:
-                # Safe parse to capture any malformed tool calls
-                valid_calls, invalid_calls = parse_tool_calls_safely(raw_tool_calls)
-                has_tool_calls = len(valid_calls) > 0
-
-                # Log and track invalid calls for observability
-                if invalid_calls:
-                    invalid_tool_calls = invalid_calls
-                    for inv in invalid_calls:
-                        logger.warning(
-                            "invalid_tool_call_captured",
-                            tool_name=inv.get("name"),
-                            tool_id=inv.get("id"),
-                            error=inv.get("error"),
-                        )
-                    # Emit trace step for visibility
-                    self.emitter.add_trace_step(
-                        step_type="warning",
-                        content=f"Captured {len(invalid_calls)} invalid tool call(s)",
-                        metadata={"invalid_calls": [dict(c) for c in invalid_calls]},
+            # Log and track invalid calls for observability
+            if invalid_tool_calls:
+                for inv in invalid_tool_calls:
+                    logger.warning(
+                        "invalid_tool_call_captured",
+                        tool_name=inv.get("name"),
+                        tool_id=inv.get("id"),
+                        error=inv.get("error"),
                     )
+                self.emitter.add_trace_step(
+                    step_type="warning",
+                    content=f"Captured {len(invalid_tool_calls)} invalid tool call(s)",
+                    metadata={"invalid_calls": [dict(c) for c in invalid_tool_calls]},
+                )
 
-            if not has_tool_calls and getattr(self.emitter, '_message_started', False):
+            # End any open text message stream (final text response only)
+            if not has_tool_calls and getattr(self.emitter, "_message_started", False):
                 self.emitter.end_text_message()
 
-            # Mark todos complete when the final response is produced
-            if hasattr(self.emitter, "mark_all_todos_done"):
+            # Mark todos complete only when the final response is produced (not tool-call turns)
+            if not has_tool_calls and hasattr(self.emitter, "mark_all_todos_done"):
                 self.emitter.mark_all_todos_done()
                 try:
                     todos_dicts = self.emitter.get_todos_as_dicts()
@@ -663,14 +746,14 @@ class StreamEventHandler:
                     logger.warning("todo_state_update_failed", error=str(exc))
 
         # Fallback: ensure we close any open text stream even if output is missing
-        if getattr(self.emitter, '_message_started', False) and not final_output:
+        if getattr(self.emitter, "_message_started", False) and not final_output:
             self.emitter.end_text_message()
 
         # Clean up thinking tracker for this run
         if run_id_str and hasattr(self, "_thinking_trackers"):
             self._thinking_trackers.pop(run_id_str, None)
 
-    async def _on_model_stream(self, event: Dict[str, Any]) -> None:
+    async def _on_model_stream(self, event: dict[str, Any]) -> None:
         """Handle chat model streaming event.
 
         This method processes streaming text from the model and emits both:
@@ -701,8 +784,23 @@ class StreamEventHandler:
         thinking_text, visible_text = self._extract_thinking_and_text(raw_content)
 
         # Route thinking content to trace (not to main display)
-        if thinking_text:
+        if thinking_text and settings.trace_mode in {"hybrid", "provider_reasoning"}:
             self.emitter.stream_thought_chunk(run_id, thinking_text)
+
+        # Capture provider-specific streamed reasoning (xAI/OpenRouter/etc.)
+        additional_kwargs = getattr(chunk, "additional_kwargs", None)
+        if additional_kwargs is None and isinstance(chunk, dict):
+            additional_kwargs = chunk.get("additional_kwargs")
+        # Some providers surface tool calls via additional_kwargs.function_call
+        if isinstance(additional_kwargs, dict) and (
+            additional_kwargs.get("function_call")
+            or additional_kwargs.get("tool_calls")
+            or additional_kwargs.get("toolCalls")
+        ):
+            has_tool_calls = True
+        kwargs_reasoning = self._extract_reasoning_from_kwargs(additional_kwargs)
+        if kwargs_reasoning and settings.trace_mode in {"hybrid", "provider_reasoning"}:
+            self.emitter.stream_thought_chunk(run_id, kwargs_reasoning)
 
         chunk_text = visible_text
 
@@ -734,7 +832,7 @@ class StreamEventHandler:
 
             # Use a per-run tracker to filter thinking blocks for all providers.
             if not hasattr(self, "_thinking_trackers"):
-                self._thinking_trackers: Dict[str, ThinkingBlockTracker] = {}
+                self._thinking_trackers: dict[str, ThinkingBlockTracker] = {}
             run_id_str = str(run_id)
             if run_id_str not in self._thinking_trackers:
                 self._thinking_trackers[run_id_str] = ThinkingBlockTracker()
@@ -742,18 +840,89 @@ class StreamEventHandler:
 
             visible_content, is_thinking_chunk = tracker.process_chunk(chunk_text)
 
-            # Stream ALL content to thinking trace for observability
-            # This allows the trace panel to show the full model output
-            # The TEXT_MESSAGE_CONTENT below only sends visible_content (not thinking)
-            if chunk_text:
-                self.emitter.stream_thought_chunk(run_id, chunk_text)
+            # Filter markdown data-URI images before any early returns (including Gemini buffering).
+            if visible_content and MARKDOWN_DATA_URI_PATTERN.search(visible_content):
+                cleaned = MARKDOWN_DATA_URI_PATTERN.sub("", visible_content).strip()
+                logger.debug(
+                    "stripped_markdown_data_uri_early",
+                    original_length=len(visible_content),
+                    cleaned_length=len(cleaned),
+                )
+                if not cleaned:
+                    return
+                visible_content = cleaned
+
+            # Skip base64-like blobs that sometimes leak into visible content.
+            if visible_content and len(visible_content) > 500:
+                sample = visible_content.replace("\n", "").replace(" ", "")[:500]
+                stripped = sample.rstrip("=")
+                if stripped and re.match(r"^[A-Za-z0-9+/]+$", stripped):
+                    logger.debug(
+                        "skipping_base64_like_visible_chunk",
+                        length=len(visible_content),
+                    )
+                    return
+
+            # CRITICAL: Filter markdown images with data URIs BEFORE any early returns
+            # (including the Gemini 3 buffer path). The model sometimes outputs
+            # ![alt](data:image/...) despite prompt instructions not to.
+            if visible_content and MARKDOWN_DATA_URI_PATTERN.search(visible_content):
+                cleaned = MARKDOWN_DATA_URI_PATTERN.sub("", visible_content).strip()
+                logger.debug(
+                    "stripped_markdown_data_uri_early",
+                    original_length=len(visible_content),
+                    cleaned_length=len(cleaned),
+                )
+                if not cleaned:
+                    return  # Skip if entire chunk was just a markdown image
+                visible_content = cleaned
 
             # Buffer Gemini 3 visible text so chain-of-thought never hits the
             # main chat stream; we'll emit a single sanitized answer at model_end.
+            # IMPORTANT: never buffer tool-call turns or JSON-y payloads.
             if run_id_str in self._gemini_buffer_runs:
-                if visible_content:
+                looks_like_tool_payload = (
+                    has_tool_calls
+                    or "function_call" in normalized.lower()
+                    or "tool_calls" in normalized.lower()
+                )
+                if visible_content and not looks_like_tool_payload:
                     self._gemini_buffer_runs[run_id_str].append(visible_content)
                 return
+
+            # Skip large content that looks like base64 or binary data
+            # Filter visible_content since that's what gets emitted to the chat
+            # Base64 images are typically 50KB-3MB; normal text chunks are < 8KB
+            if visible_content and len(visible_content) > 8000:
+                logger.debug("skipping_large_visible_chunk", length=len(visible_content))
+                return
+
+            # Also detect base64-like patterns (long strings of alphanumeric + /+=)
+            # Real text has spaces, punctuation, varied patterns - base64 doesn't
+            if visible_content and len(visible_content) > 500:
+                sample = visible_content.replace('\n', '').replace(' ', '')[:500]
+                stripped = sample.rstrip('=')
+                # Check for valid base64 alphabet (no spaces, punctuation, or varied case patterns)
+                if stripped and re.match(r'^[A-Za-z0-9+/]+$', stripped):
+                    logger.debug("skipping_base64_like_visible_chunk", length=len(visible_content))
+                    return
+
+            # Filter markdown images with data URIs: ![alt](data:image/...)
+            # These are generated when the model tries to "embed" images it generated
+            # via the generate_image tool. The image is already displayed as an artifact,
+            # so this markdown just creates garbage in the chat display.
+            if visible_content and MARKDOWN_DATA_URI_PATTERN.search(visible_content):
+                # Strip the markdown data URI from the content
+                cleaned = MARKDOWN_DATA_URI_PATTERN.sub("", visible_content).strip()
+                logger.debug(
+                    "stripped_markdown_data_uri",
+                    original_length=len(visible_content),
+                    cleaned_length=len(cleaned),
+                )
+                if not cleaned:
+                    # If the entire chunk was just a markdown image, skip it
+                    return
+                visible_content = cleaned
 
             looks_like_json = normalized.startswith(("{", "[")) and normalized.endswith(("}", "]"))
 
@@ -772,26 +941,50 @@ class StreamEventHandler:
                 has_tool_calls=has_tool_calls,
             )
 
-    async def _on_genui_state(self, event: Dict[str, Any]) -> None:
+    async def _on_genui_state(self, event: dict[str, Any]) -> None:
         """Handle GenUI state update event."""
         data = event.get("data", {})
         if data:
             self.emitter.emit_genui_state(data)
 
-    async def _on_chain_end(self, event: Dict[str, Any]) -> None:
+    async def _on_chain_end(self, event: dict[str, Any]) -> None:
         """Handle chain/graph end event."""
+        # Only emit a final "result" trace step at the end of the compiled graph.
+        # on_chain_end fires for many nested runnables and will otherwise spam the UI
+        # with internal objects (Overwrite(...), additional_kwargs, tool calls, etc.).
+        event_type = event.get("event")
+        if event_type != "on_graph_end":
+            return
+
         data = event.get("data", {})
         self.emitter.complete_root()
 
+        if settings.trace_mode == "off":
+            output = data.get("output")
+            if isinstance(output, dict):
+                self.final_output = output
+            return
+
         output = data.get("output")
         if output:
-            # Add final result trace step
-            summarized = self._stringify_message_content(output)
-            if summarized:
+            # Deterministic phase fallback before emitting the final result.
+            writing_detail = self._build_writing_phase_detail()
+            writing_content = "**Writing answer**"
+            if writing_detail:
+                writing_content = f"{writing_content}\n\n{writing_detail}"
+            self.emitter.add_trace_step(
+                step_type="thought",
+                content=writing_content,
+                metadata={"kind": "phase", "source": "system_phase"},
+            )
+            final_text = self._extract_final_assistant_text(output)
+            if final_text:
+                # Safety net: strip any stray thinking markers before UI display.
+                final_text = ThinkingBlockTracker.sanitize_final_content(final_text)
                 self.emitter.add_trace_step(
                     step_type="result",
-                    content=summarized,
-                    metadata={"source": event.get("event")},
+                    content=final_text,
+                    metadata={"source": event_type, "final": True},
                 )
 
             if isinstance(output, dict):
@@ -809,6 +1002,72 @@ class StreamEventHandler:
             return tool_call_id
         return "tool"
 
+    def _build_planning_phase_detail(self) -> str:
+        """Build a lightweight planning detail string for the phase step."""
+        user_query = (self.last_user_query or "").strip()
+        if not user_query:
+            return ""
+        user_query = user_query.replace("\n", " ").strip()
+        if len(user_query) > 280:
+            user_query = user_query[:277] + "..."
+        return f"- Task: {user_query}"
+
+    def _build_writing_phase_detail(self) -> str:
+        """Build a lightweight writing detail string for the phase step."""
+        return "- Synthesizing results into a final response."
+
+    def _build_tool_phase_detail(
+        self,
+        *,
+        tool_name: str,
+        tool_input: Any,
+        tool_goal: str | None,
+    ) -> str:
+        """Describe the upcoming tool execution in a user-readable way."""
+        query = self._extract_tool_query_preview(tool_input)
+        lines: list[str] = []
+        if tool_goal and tool_goal.strip():
+            lines.append(f"Goal: {tool_goal.strip()}")
+        if query:
+            lines.append(f'Query: "{query}"')
+        if not lines:
+            return ""
+        return "\n".join(f"- {line}" for line in lines)
+
+    def _extract_tool_query_preview(self, tool_input: Any) -> str:
+        """Extract a short, human-readable query from a tool input payload."""
+        if tool_input is None:
+            return ""
+
+        payload: Any = tool_input
+        if isinstance(tool_input, str):
+            text = tool_input.strip()
+            if not text:
+                return ""
+            try:
+                parsed = json.loads(text)
+                payload = parsed
+            except Exception:
+                payload = tool_input
+
+        if isinstance(payload, dict):
+            for key in ("query", "q", "prompt", "url", "path", "file", "id", "name", "title"):
+                value = payload.get(key)
+                if isinstance(value, str) and value.strip():
+                    return self._truncate_trace_value(value.strip())
+            return ""
+
+        if isinstance(payload, str):
+            return self._truncate_trace_value(payload.strip())
+
+        return ""
+
+    def _truncate_trace_value(self, value: str, max_len: int = 160) -> str:
+        value = value.replace("\n", " ").strip()
+        if len(value) <= max_len:
+            return value
+        return value[: max_len - 3] + "..."
+
     def _extract_prompt_preview(self, prompt_messages: Any) -> str:
         """Extract a preview of the prompt messages."""
         if not isinstance(prompt_messages, list):
@@ -822,6 +1081,126 @@ class StreamEventHandler:
                 preview_chunks.append(self._stringify_message_content(message))
 
         return " ".join(part for part in preview_chunks if part).strip()
+
+    def _detect_tool_calls(self, output: Any) -> tuple[bool, list[InvalidToolCall]]:
+        """Detect tool calls on a model output message.
+
+        Tool-call turns must never emit user-visible text into the main chat stream.
+        We treat both valid and invalid tool-call payloads as tool-call turns.
+        """
+        if output is None:
+            return False, []
+
+        # Some LangChain message types expose tool call chunks rather than tool_calls.
+        if hasattr(output, "tool_call_chunks") and getattr(output, "tool_call_chunks"):
+            return True, []
+
+        raw_tool_calls: Any = None
+
+        if hasattr(output, "tool_calls") and getattr(output, "tool_calls"):
+            raw_tool_calls = getattr(output, "tool_calls")
+        elif isinstance(output, dict) and output.get("tool_calls"):
+            raw_tool_calls = output.get("tool_calls")
+        else:
+            additional_kwargs = getattr(output, "additional_kwargs", None)
+            if additional_kwargs is None and isinstance(output, dict):
+                additional_kwargs = output.get("additional_kwargs")
+            if isinstance(additional_kwargs, dict):
+                raw_tool_calls = (
+                    additional_kwargs.get("tool_calls")
+                    or additional_kwargs.get("toolCalls")
+                    or additional_kwargs.get("function_call")
+                )
+
+        if not raw_tool_calls:
+            return False, []
+
+        if not isinstance(raw_tool_calls, list):
+            raw_tool_calls = [raw_tool_calls]
+
+        valid_calls, invalid_calls = parse_tool_calls_safely(raw_tool_calls)
+        has_tool_calls = bool(valid_calls) or bool(invalid_calls)
+        return has_tool_calls, invalid_calls
+
+    def _extract_user_visible_text(self, output: Any) -> str:
+        """Extract user-visible assistant text from a model output.
+
+        This removes provider-specific thinking blocks and avoids rendering
+        tool-call payloads, signatures, or other metadata-like structures.
+        """
+        if output is None:
+            return ""
+
+        # Prefer message.content when available.
+        if isinstance(output, BaseMessage):
+            raw_content: Any = output.content
+        elif isinstance(output, dict):
+            raw_content = output.get("content", "")
+        else:
+            raw_content = getattr(output, "content", output)
+
+        _, visible_text = self._extract_thinking_and_text(raw_content)
+        if visible_text:
+            return str(visible_text)
+
+        # Fallback to conservative stringification (filters tool calls/signatures).
+        return self._stringify_message_content(raw_content).strip()
+
+    def _extract_final_assistant_text(self, output: Any) -> str:
+        """Extract the final assistant response text from a chain/graph output.
+
+        LangGraph outputs frequently include dict-shaped state with message lists.
+        We never want to stringify the whole state (it becomes JSON-ish dumps).
+        """
+        if output is None:
+            return ""
+        if isinstance(output, str):
+            return output.strip()
+
+        # If the output itself is a message, prefer it (but skip tool-call turns).
+        if isinstance(output, BaseMessage):
+            has_tool_calls, _ = self._detect_tool_calls(output)
+            if has_tool_calls:
+                return ""
+            return self._extract_user_visible_text(output).strip()
+
+        # Dict-shaped outputs (common LangGraph pattern)
+        if isinstance(output, dict):
+            # Prefer an explicit output field.
+            direct_output = output.get("output")
+            if direct_output is not None:
+                return self._extract_final_assistant_text(direct_output)
+
+            messages = output.get("messages")
+            if isinstance(messages, list) and messages:
+                for message in reversed(messages):
+                    # Messages may already be BaseMessage objects or dicts.
+                    if isinstance(message, BaseMessage):
+                        has_tool_calls, _ = self._detect_tool_calls(message)
+                        if has_tool_calls:
+                            continue
+                        text = self._extract_user_visible_text(message).strip()
+                        if text:
+                            return text
+                    elif isinstance(message, dict):
+                        role = str(message.get("role") or message.get("type") or "").lower()
+                        if role not in ("assistant", "ai"):
+                            continue
+                        has_tool_calls, _ = self._detect_tool_calls(message)
+                        if has_tool_calls:
+                            continue
+                        text = self._extract_user_visible_text(message).strip()
+                        if text:
+                            return text
+
+        # List-shaped outputs (rare, but handle defensively)
+        if isinstance(output, list):
+            for item in reversed(output):
+                text = self._extract_final_assistant_text(item)
+                if text:
+                    return text
+
+        return ""
 
     def _stringify_message_content(self, content: Any) -> str:
         """Convert message content to string, filtering out thought signatures.
@@ -845,7 +1224,32 @@ class StreamEventHandler:
         if isinstance(content, BaseMessage):
             return self._stringify_message_content(content.content)
         if isinstance(content, dict):
-            block_type = content.get("type", "")
+            raw_type = content.get("type", "")
+            block_type = raw_type.lower() if isinstance(raw_type, str) else ""
+
+            # Skip tool-call payloads and non-user-visible blocks.
+            if block_type in (
+                "tool",
+                "tool_call",
+                "tool_calls",
+                "tool_use",
+                "function_call",
+                "function",
+                "call",
+            ):
+                return ""
+            if any(
+                key in content
+                for key in (
+                    "function_call",
+                    "tool_calls",
+                    "toolCalls",
+                    "tool_call",
+                    "toolCall",
+                    "arguments",
+                )
+            ):
+                return ""
 
             # =================================================================
             # REASONING BLOCKS - Skip in main content (handled separately)
@@ -866,7 +1270,20 @@ class StreamEventHandler:
             # For other dicts, only include safe fields (avoid signature/extras)
             safe_content = {
                 k: v for k, v in content.items()
-                if k not in ("extras", "signature", "thought_signature", "thoughtSignature", "thinking")
+                if k
+                not in (
+                    "extras",
+                    "signature",
+                    "thought_signature",
+                    "thoughtSignature",
+                    "thinking",
+                    "function_call",
+                    "tool_calls",
+                    "toolCalls",
+                    "tool_call",
+                    "toolCall",
+                    "arguments",
+                )
                 and not (isinstance(v, str) and len(v) > 10000)  # Skip large base64 blobs
             }
             if safe_content:
@@ -916,7 +1333,24 @@ class StreamEventHandler:
 
         # Handle single dict block
         if isinstance(content, dict):
-            block_type = content.get("type", "")
+            raw_type = content.get("type", "")
+            block_type = raw_type.lower() if isinstance(raw_type, str) else ""
+
+            # Tool call blocks should never be treated as visible text.
+            if block_type in ("tool", "tool_use", "tool_call", "tool_calls", "function_call", "function"):
+                return "", ""
+            if any(
+                key in content
+                for key in (
+                    "function_call",
+                    "tool_calls",
+                    "toolCalls",
+                    "tool_call",
+                    "toolCall",
+                    "arguments",
+                )
+            ):
+                return "", ""
 
             # Thinking block types (Gemini 3 format)
             if block_type in ("thinking", "reasoning", "thought"):
@@ -941,13 +1375,13 @@ class StreamEventHandler:
             else:
                 # Check for direct text field
                 text = content.get("text")
-                if isinstance(text, str):
+                if isinstance(text, str) and text:
                     visible_parts.append(text)
                 else:
-                    # Fallback to stringify (filters out thinking types)
-                    visible_str = self._stringify_message_content(content)
-                    if visible_str:
-                        visible_parts.append(visible_str)
+                    # Avoid stringifying unknown dict blocks into JSON dumps.
+                    raw_content = content.get("content")
+                    if isinstance(raw_content, str) and raw_content:
+                        visible_parts.append(raw_content)
 
         # Handle list of content blocks (Gemini 3 format)
         elif isinstance(content, list):
@@ -966,7 +1400,35 @@ class StreamEventHandler:
 
         return " ".join(thinking_parts), " ".join(visible_parts)
 
-    def _extract_reasoning_content(self, message: Any) -> Optional[str]:
+    def _extract_reasoning_from_kwargs(self, additional_kwargs: Any) -> str | None:
+        """Extract reasoning text from additional_kwargs payloads."""
+        if not isinstance(additional_kwargs, dict) or not additional_kwargs:
+            return None
+
+        def _coerce_reasoning(value: Any) -> str | None:
+            if value is None:
+                return None
+            if isinstance(value, str):
+                text = value.strip()
+                return text or None
+            if isinstance(value, list):
+                parts = [str(part).strip() for part in value if part]
+                combined = " ".join(part for part in parts if part)
+                return combined or None
+            if isinstance(value, dict):
+                for key in ("content", "text", "reasoning", "thinking"):
+                    sub = value.get(key)
+                    if isinstance(sub, str) and sub.strip():
+                        return sub.strip()
+            return None
+
+        for key in ("reasoning_content", "reasoning", "thinking"):
+            extracted = _coerce_reasoning(additional_kwargs.get(key))
+            if extracted:
+                return extracted
+        return None
+
+    def _extract_reasoning_content(self, message: Any) -> str | None:
         """Extract reasoning/thinking content from model-specific response formats.
 
         Implements LangChain's multi-provider reasoning extraction pattern:
@@ -1018,23 +1480,11 @@ class StreamEventHandler:
                 logger.debug("extracted_gemini3_thinking", length=len(combined), blocks=len(reasoning_parts))
                 return combined
 
-        # xAI/Grok reasoning content
-        reasoning = additional_kwargs.get("reasoning_content")
-        if reasoning:
-            logger.debug("extracted_xai_reasoning", length=len(str(reasoning)))
-            return str(reasoning)
-
-        # Claude extended thinking
-        thinking = additional_kwargs.get("thinking")
-        if thinking:
-            logger.debug("extracted_claude_thinking", length=len(str(thinking)))
-            return str(thinking)
-
-        # OpenAI-style reasoning field (some models)
-        reasoning_field = additional_kwargs.get("reasoning")
-        if reasoning_field:
-            logger.debug("extracted_openai_reasoning", length=len(str(reasoning_field)))
-            return str(reasoning_field)
+        # Additional kwargs (xAI/OpenRouter/Claude/OpenAI-compatible)
+        kwargs_reasoning = self._extract_reasoning_from_kwargs(additional_kwargs)
+        if kwargs_reasoning:
+            logger.debug("extracted_reasoning_kwargs", length=len(kwargs_reasoning))
+            return kwargs_reasoning
 
         # Check for <think>...</think> tags in content (Anthropic XML style)
         content_str = self._stringify_message_content(content)
@@ -1099,8 +1549,8 @@ class StreamEventHandler:
     def _apply_reranked_results(
         self,
         output: Any,
-        results: List[Dict[str, Any]],
-        reranked_texts: List[str],
+        results: list[dict[str, Any]],
+        reranked_texts: list[str],
     ) -> Any:
         """Apply reranked order to results."""
         snippet_texts = extract_snippet_texts(results)
@@ -1121,7 +1571,7 @@ class StreamEventHandler:
 
         return output
 
-    async def _handle_write_todos(self, output: Any) -> List[Dict[str, Any]]:
+    async def _handle_write_todos(self, output: Any) -> list[dict[str, Any]]:
         """Handle write_todos tool output and return normalized todos."""
         from langchain_core.messages import ToolMessage
 
@@ -1138,7 +1588,7 @@ class StreamEventHandler:
             content_repr_str = repr(raw_output)[:500] if raw_output else "None"
             logger.info(f"write_todos_extracted_from_toolmessage: type={content_type}, repr={content_repr_str}")
 
-        todos = self.emitter.update_todos(raw_output)
+        self.emitter.update_todos(raw_output)
 
         # Update state
         todos_dicts = self.emitter.get_todos_as_dicts()
@@ -1294,7 +1744,7 @@ class StreamEventHandler:
         else:
             logger.warning("article_artifact_skipped: no content or images")
 
-    def _summarize_structured_content(self, content: Any) -> Optional[str]:
+    def _summarize_structured_content(self, content: Any) -> str | None:
         """Create a plain-text summary of structured tool output."""
         import json
         import textwrap
@@ -1342,9 +1792,9 @@ class StreamEventHandler:
 
         return "\n".join(lines)
 
-    def _extract_structured_entries(self, data: Any) -> List[Dict[str, Any]]:
+    def _extract_structured_entries(self, data: Any) -> list[dict[str, Any]]:
         """Extract entries from structured data."""
-        entries: List[Dict[str, Any]] = []
+        entries: list[dict[str, Any]] = []
 
         if isinstance(data, list):
             for item in data:
@@ -1444,7 +1894,7 @@ class StreamEventHandler:
             logger.warning(f"evicted_result_storage_failed: {e}")
             return False
 
-    def _log_cache_metrics(self, data: Dict[str, Any]) -> None:
+    def _log_cache_metrics(self, data: dict[str, Any]) -> None:
         """Log Gemini implicit cache hit metrics for observability.
 
         Gemini 2.5 models support implicit context caching:

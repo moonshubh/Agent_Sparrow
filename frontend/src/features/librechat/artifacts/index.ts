@@ -30,6 +30,7 @@ export {
   useCurrentArtifact,
   useArtifactsVisible,
   useArtifactActions,
+  getGlobalArtifactStore,
 } from './ArtifactContext';
 
 // Plugin

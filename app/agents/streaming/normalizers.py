@@ -7,7 +7,9 @@ normalizing various data formats emitted by tools and middleware.
 from __future__ import annotations
 
 import json
-from typing import Any, Dict, List, Optional
+from datetime import datetime
+from typing import Any
+from urllib.parse import urlparse
 
 from loguru import logger
 from app.agents.log_analysis.log_analysis_agent.utils import extract_json_payload
@@ -15,8 +17,8 @@ from app.agents.log_analysis.log_analysis_agent.utils import extract_json_payloa
 
 def normalize_todos(
     raw: Any,
-    root_operation_id: Optional[str] = None,
-) -> List[Dict[str, Any]]:
+    root_operation_id: str | None = None,
+) -> list[dict[str, Any]]:
     """Normalize various todo input formats to consistent structure.
 
     Accepts several shapes commonly emitted by tools/middleware:
@@ -33,8 +35,13 @@ def normalize_todos(
     Returns:
         List of normalized todo dicts with keys: id, title, status, metadata
     """
-    normalized: List[Dict[str, Any]] = []
+    normalized: list[dict[str, Any]] = []
     prefix = root_operation_id or "todo"
+
+    # LangGraph tools may return a `Command(update={...})` wrapper.
+    update_attr = getattr(raw, "update", None)
+    if isinstance(update_attr, dict):
+        return normalize_todos(update_attr, root_operation_id)
 
     # Handle JSON-encoded payloads
     if isinstance(raw, str):
@@ -62,7 +69,7 @@ def normalize_todos(
     return normalized
 
 
-def _parse_json_string(raw: str) -> Optional[Any]:
+def _parse_json_string(raw: str) -> Any | None:
     """Attempt to parse JSON from a string, handling various formats.
 
     Handles:
@@ -108,10 +115,10 @@ def _unwrap_container(raw: Any) -> Any:
 
 
 def _normalize_single_todo(
-    item: Dict[str, Any],
+    item: dict[str, Any],
     idx: int,
     prefix: str,
-) -> Optional[Dict[str, Any]]:
+) -> dict[str, Any] | None:
     """Normalize a single todo item dict."""
     # Extract title from various possible keys
     title = str(
@@ -181,7 +188,7 @@ def normalize_tool_output_preview(output: Any, max_length: int = 1000) -> str:
         return str(output)[:max_length]
 
 
-def extract_grounding_results(output: Any) -> Optional[List[Dict[str, Any]]]:
+def extract_grounding_results(output: Any) -> list[dict[str, Any]] | None:
     """Extract results list from grounding search output."""
     if not isinstance(output, dict):
         return None
@@ -193,7 +200,7 @@ def extract_grounding_results(output: Any) -> Optional[List[Dict[str, Any]]]:
     return None
 
 
-def extract_snippet_texts(results: List[Dict[str, Any]]) -> List[str]:
+def extract_snippet_texts(results: list[dict[str, Any]]) -> list[str]:
     """Extract snippet/content text from grounding results."""
     texts = []
     for item in results:
@@ -207,9 +214,6 @@ def extract_snippet_texts(results: List[Dict[str, Any]]) -> List[str]:
 
 # --- Evidence card builders ---
 
-from datetime import datetime
-from urllib.parse import urlparse
-
 
 def _shorten(text: str, width: int = 220) -> str:
     """Shorten text to specified width with ellipsis."""
@@ -219,7 +223,7 @@ def _shorten(text: str, width: int = 220) -> str:
     return (text[: width - 1] + "…") if len(text) > width else text
 
 
-def _host(u: Optional[str]) -> Optional[str]:
+def _host(u: str | None) -> str | None:
     """Extract hostname from URL."""
     if not u:
         return None
@@ -229,7 +233,7 @@ def _host(u: Optional[str]) -> Optional[str]:
         return None
 
 
-def _coerce_entries(data: Any) -> List[Dict[str, Any]]:
+def _coerce_entries(data: Any) -> list[dict[str, Any]]:
     """Coerce various data shapes to a list of entry dicts."""
     # Accept {results|items|documents|entries|data}: [...]
     if isinstance(data, list):
@@ -259,7 +263,7 @@ def _infer_type(tool_name: str, output: Any) -> str:
     return "grounding" if isinstance(output, dict) and output.get("results") else "knowledge"
 
 
-def _score(v: Any) -> Optional[int]:
+def _score(v: Any) -> int | None:
     """Normalize score to 0-100 int."""
     try:
         f = float(v)
@@ -272,12 +276,12 @@ def _score(v: Any) -> Optional[int]:
 
 
 def _to_card(
-    entry: Dict[str, Any],
+    entry: dict[str, Any],
     card_type: str,
     *,
     default_title: str,
-    fallback_url: Optional[str] = None,
-) -> Dict[str, Any]:
+    fallback_url: str | None = None,
+) -> dict[str, Any]:
     """Convert a single entry dict to an evidence card."""
     title = (
         entry.get("title")
@@ -312,7 +316,7 @@ def _to_card(
         "host", "collection", "path", "doctype", "author", "tags", "severity",
         "count", "window", "lang", "provider"
     )
-    metadata: Dict[str, Any] = {}
+    metadata: dict[str, Any] = {}
     if url:
         metadata["host"] = _host(url)
     for k in keep_keys:
@@ -341,9 +345,9 @@ def build_tool_evidence_cards(
     output: Any,
     tool_name: str,
     *,
-    user_query: Optional[str] = None,
+    user_query: str | None = None,
     max_items: int = 3,
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """Normalize raw tool output into a small list of 'evidence cards' the UI can render.
 
     Args:
