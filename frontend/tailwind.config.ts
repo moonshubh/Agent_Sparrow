@@ -37,11 +37,11 @@ const config: Config = {
 		   Warm, scholarly aesthetic with organic natural elements
 		   ============================================================ */
 		fontFamily: {
-			// Primary: Inter sans-serif for clean, modern AI interface
-			sans: ['var(--font-inter)', '"Inter"', '-apple-system', 'BlinkMacSystemFont', 'sans-serif'],
+			// Primary: System sans-serif for native look
+			sans: ['-apple-system', 'BlinkMacSystemFont', '"Segoe UI"', 'Roboto', '"Helvetica Neue"', 'Arial', 'sans-serif'],
 			serif: ['"Lora"', '"Source Serif Pro"', 'Georgia', 'serif'],
 			// Fallback sans for UI elements
-			ui: ['var(--font-inter)', '"Inter"', '-apple-system', 'BlinkMacSystemFont', 'sans-serif'],
+			ui: ['-apple-system', 'BlinkMacSystemFont', '"Segoe UI"', 'Roboto', '"Helvetica Neue"', 'Arial', 'sans-serif'],
 			mono: ['"JetBrains Mono"', '"Fira Code"', 'ui-monospace', 'monospace'],
 		},
 		colors: {
