@@ -29,7 +29,7 @@ function stableMessageKey(message: Message, index: number): string {
 export const MessageList = memo(function MessageList({ messages, isStreaming, sessionId }: MessageListProps) {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const prevLengthRef = useRef(messages.length);
-  const { updateMessageContent } = useAgent();
+  const { updateMessageContent, regenerateLastResponse } = useAgent();
 
   // Handle message edit - updates context immediately and persists to API
   const handleEditMessage = useCallback(async (messageId: string, content: string) => {
@@ -63,15 +63,20 @@ export const MessageList = memo(function MessageList({ messages, isStreaming, se
   return (
     <div className="lc-messages" role="log" aria-label="Chat messages" aria-live="polite">
       <div className="lc-messages-inner">
-        {messages.map((message, index) => (
-          <MessageItem
-            key={stableMessageKey(message, index)}
-            message={message}
-            isLast={index === messages.length - 1}
-            isStreaming={isStreaming}
-            onEditMessage={handleEditMessage}
-          />
-        ))}
+        {messages.map((message, index) => {
+          const isLast = index === messages.length - 1;
+          const isLastAssistant = isLast && message.role === 'assistant';
+          return (
+            <MessageItem
+              key={stableMessageKey(message, index)}
+              message={message}
+              isLast={isLast}
+              isStreaming={isStreaming}
+              onEditMessage={handleEditMessage}
+              onRegenerate={isLastAssistant && !isStreaming ? regenerateLastResponse : undefined}
+            />
+          );
+        })}
         <div ref={messagesEndRef} aria-hidden="true" />
       </div>
     </div>

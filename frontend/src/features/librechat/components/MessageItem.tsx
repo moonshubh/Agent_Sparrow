@@ -14,6 +14,7 @@ interface MessageItemProps {
   isLast: boolean;
   isStreaming: boolean;
   onEditMessage?: (messageId: string, content: string) => void;
+  onRegenerate?: () => void;
 }
 
 const LONG_MESSAGE_THRESHOLD = 500;
@@ -136,6 +137,7 @@ export const MessageItem = memo(function MessageItem({
   isLast,
   isStreaming,
   onEditMessage,
+  onRegenerate,
 }: MessageItemProps) {
   const { thinkingTrace, activeTraceStepId, activeTools, messageAttachments, todos, toolEvidence } = useAgent();
   const [isEditing, setIsEditing] = useState(false);
@@ -312,6 +314,7 @@ export const MessageItem = memo(function MessageItem({
           <MessageActions
             content={mainContent}
             onEdit={onEditMessage ? handleStartEdit : undefined}
+            onRegenerate={onRegenerate}
           />
         )}
       </div>

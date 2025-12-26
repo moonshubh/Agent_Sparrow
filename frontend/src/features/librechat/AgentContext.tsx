@@ -93,6 +93,7 @@ interface AgentContextValue {
   resolvedTaskType?: string;
   messageAttachments: Record<string, AttachmentInput[]>;
   updateMessageContent: (messageId: string, content: string) => void;
+  regenerateLastResponse: () => Promise<void>;
 }
 
 const AgentContext = createContext<AgentContextValue | null>(null);
@@ -1281,6 +1282,37 @@ export function AgentProvider({
     );
   }, []);
 
+  // Regenerate the last assistant response
+  const regenerateLastResponse = useCallback(async () => {
+    if (!agent || isStreaming) return;
+
+    // Find the last user message index
+    const lastUserMsgIndex = findLastIndex(
+      messagesRef.current,
+      (msg) => msg.role === 'user'
+    );
+
+    if (lastUserMsgIndex === -1) return;
+
+    const lastUserMessage = messagesRef.current[lastUserMsgIndex];
+    const userContent = typeof lastUserMessage.content === 'string'
+      ? lastUserMessage.content
+      : '';
+
+    if (!userContent.trim()) return;
+
+    // Get any attachments for that message
+    const attachments = messageAttachments[lastUserMessage.id] || [];
+
+    // Truncate messages to only include messages up to (and including) the user message
+    const truncatedMessages = messagesRef.current.slice(0, lastUserMsgIndex + 1);
+    setMessages(truncatedMessages);
+    messagesRef.current = truncatedMessages;
+
+    // Re-send the user message
+    await sendMessage(userContent, attachments);
+  }, [agent, isStreaming, messageAttachments, sendMessage]);
+
   // Initialize with agent's existing messages on mount
   useEffect(() => {
     if (agent && agent.messages) {
@@ -1318,6 +1350,7 @@ export function AgentProvider({
         resolvedTaskType,
         messageAttachments,
         updateMessageContent,
+        regenerateLastResponse,
       }}
     >
       {children}
