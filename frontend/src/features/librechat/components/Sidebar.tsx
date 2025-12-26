@@ -1,7 +1,9 @@
 'use client';
 
 import React, { useState, useCallback, useRef, useEffect, memo } from 'react';
-import { Plus, MessageSquare, Trash2, MoreHorizontal, Pencil, Bird } from 'lucide-react';
+import type { User } from '@supabase/supabase-js';
+import { Plus, MessageSquare, Trash2, MoreHorizontal, Pencil, Bird, PenLine, SquarePen } from 'lucide-react';
+import { useAuth } from '@/shared/contexts/AuthContext';
 
 interface Conversation {
   id: string;
@@ -21,20 +23,51 @@ interface SidebarProps {
   onDeleteConversation?: (id: string) => void;
 }
 
+const getUserDisplayName = (user: User | null): string => {
+  if (!user) return 'Agent Sparrow';
+
+  const meta = (user.user_metadata ?? {}) as Record<string, unknown>;
+  const fullName = typeof meta.full_name === 'string' ? meta.full_name.trim() : '';
+  const name = typeof meta.name === 'string' ? meta.name.trim() : '';
+
+  if (fullName) return fullName;
+  if (name) return name;
+
+  const email = user.email?.trim();
+  if (email) return email.split('@')[0] || email;
+
+  return 'User';
+};
+
+const getUserAvatarUrl = (user: User | null): string => {
+  if (!user) return '/Sparrow_logo_cropped.png';
+
+  const meta = (user.user_metadata ?? {}) as Record<string, unknown>;
+  const avatarUrl = typeof meta.avatar_url === 'string' ? meta.avatar_url.trim() : '';
+  const pictureUrl = typeof meta.picture === 'string' ? meta.picture.trim() : '';
+
+  return avatarUrl || pictureUrl || '/Sparrow_logo_cropped.png';
+};
+
 // Agent Sparrow Logo Component
-const SparrowLogo = memo(function SparrowLogo({ size = 40 }: { size?: number }) {
+const SparrowLogo = memo(function SparrowLogo() {
   return (
     <img
-      src="/Sparrow_logo.png"
+      src="/Sparrow_logo_cropped.png"
       alt="Agent Sparrow"
-      style={{
-        width: size,
-        height: size,
-        objectFit: 'contain',
-      }}
+      className="lc-sidebar-avatar"
     />
   );
 });
+
+// Custom New Chat Icon (Modern Square Pen matching attached image)
+const NewChatIcon = ({ size = 18 }: { size?: number }) => (
+  <SquarePen 
+    size={size} 
+    strokeWidth={2.5}
+    className="lc-new-chat-icon"
+  />
+);
 
 export function Sidebar({
   isOpen,
@@ -47,6 +80,16 @@ export function Sidebar({
   onRenameConversation,
   onDeleteConversation,
 }: SidebarProps) {
+  const { user } = useAuth();
+
+  const userDisplayName = React.useMemo(() => getUserDisplayName(user), [user]);
+  const userAvatarUrl = React.useMemo(() => getUserAvatarUrl(user), [user]);
+  const [avatarSrc, setAvatarSrc] = useState<string>(userAvatarUrl);
+
+  useEffect(() => {
+    setAvatarSrc(userAvatarUrl);
+  }, [userAvatarUrl]);
+
   // Group conversations by date
   const groupedConversations = React.useMemo(() => {
     const groups: Record<string, Conversation[]> = {
@@ -96,7 +139,7 @@ export function Sidebar({
       {/* Header with Logo and New Chat */}
       <div className="lc-sidebar-header">
         <div className="lc-sidebar-brand">
-          <SparrowLogo size={62} />
+          <SparrowLogo />
           <span className="lc-sidebar-brand-text">Agent Sparrow</span>
         </div>
         <button
@@ -104,7 +147,7 @@ export function Sidebar({
           onClick={onNewChat}
           aria-label="Start new chat"
         >
-          <Plus size={18} />
+          <NewChatIcon size={18} />
           <span>New Chat</span>
         </button>
       </div>
@@ -164,7 +207,8 @@ export function Sidebar({
           style={{
             display: 'flex',
             alignItems: 'center',
-            gap: '8px',
+            justifyContent: 'center',
+            gap: '12px',
             padding: '8px 12px',
             borderRadius: '8px',
             cursor: 'pointer',
@@ -173,17 +217,12 @@ export function Sidebar({
           }}
         >
           <img
-            src="/Sparrow_logo.png"
-            alt="Agent Sparrow"
-            style={{
-              width: '62px',
-              height: '62px',
-              borderRadius: '50%',
-              backgroundColor: 'var(--lc-accent)',
-              objectFit: 'contain'
-            }}
+            src={avatarSrc}
+            alt={userDisplayName}
+            onError={() => setAvatarSrc('/Sparrow_logo_cropped.png')}
+            className="lc-sidebar-avatar"
           />
-          <span>Agent Sparrow</span>
+          <span>{userDisplayName}</span>
         </div>
       </div>
     </aside>
@@ -328,7 +367,7 @@ const ConversationItem = memo(function ConversationItem({
       role="listitem"
       aria-current={isActive ? 'page' : undefined}
     >
-      <MessageSquare size={16} style={{ flexShrink: 0, opacity: 0.7 }} aria-hidden="true" />
+      <Bird size={16} style={{ flexShrink: 0, opacity: 0.7 }} aria-hidden="true" />
       <span className="lc-conversation-title">
         {conversation.title}
       </span>

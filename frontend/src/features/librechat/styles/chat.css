@@ -17,8 +17,8 @@
   --lc-user-bg: #2d223f;
   --lc-user-border: #3a2b57;
   --lc-assistant-bg: #444654;
-  --lc-font-sans: 'Inter', 'Poppins', 'SF Pro Text', 'SF Pro Display', system-ui, -apple-system, 'Segoe UI', sans-serif;
-  --lc-font-mono: 'JetBrains Mono', 'Fira Code', ui-monospace, SFMono-Regular, monospace;
+  --lc-font-sans: var(--font-sans);
+  --lc-font-mono: var(--font-mono);
 }
 
 /* Light mode overrides */
@@ -35,8 +35,8 @@
   --lc-user-bg: #eef1f6;
   --lc-user-border: #d5d9e4;
   --lc-assistant-bg: #f7f7f8;
-  --lc-font-sans: 'Inter', 'Poppins', 'SF Pro Text', 'SF Pro Display', system-ui, -apple-system, 'Segoe UI', sans-serif;
-  --lc-font-mono: 'JetBrains Mono', 'Fira Code', ui-monospace, SFMono-Regular, monospace;
+  --lc-font-sans: var(--font-sans);
+  --lc-font-mono: var(--font-mono);
 }
 
 /* Main layout */
@@ -78,8 +78,22 @@
 .lc-sidebar-brand {
   display: flex;
   align-items: center;
-  gap: 10px;
+  justify-content: center;
+  gap: 12px;
   padding: 4px 0;
+}
+
+.lc-sidebar-avatar {
+  width: 58px;
+  height: 58px;
+  min-width: 58px;
+  min-height: 58px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  object-fit: cover;
+  border: 1px solid var(--lc-border-light);
+  background: transparent;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.18);
 }
 
 .lc-sidebar-brand-text {
@@ -92,7 +106,8 @@
 .lc-new-chat-btn {
   display: flex;
   align-items: center;
-  gap: 8px;
+  justify-content: center;
+  gap: 10px;
   width: 100%;
   padding: 10px 12px;
   border-radius: 8px;
@@ -119,6 +134,7 @@
   align-items: center;
   gap: 8px;
   padding: 10px 12px;
+  padding-right: 36px; /* Space for the options menu on hover */
   border-radius: 8px;
   cursor: pointer;
   transition: background-color 0.15s ease;
@@ -256,6 +272,23 @@
 .lc-toggle-sidebar-btn:hover {
   background-color: var(--lc-surface-hover);
   color: var(--lc-text-primary);
+}
+
+.lc-feedme-icon {
+  display: block;
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  object-fit: cover;
+  object-position: 35% 70%;
+  border: 1px solid var(--lc-border-light);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.18);
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+.lc-toggle-sidebar-btn:hover .lc-feedme-icon {
+  transform: translateY(-0.5px);
+  box-shadow: 0 3px 8px rgba(0, 0, 0, 0.18);
 }
 
 .lc-artifact-toggle {
@@ -833,7 +866,7 @@
 }
 
 .lc-landing-logo img {
-  width: 160px;
+  width: 166px;
   height: auto;
   object-fit: contain;
 }

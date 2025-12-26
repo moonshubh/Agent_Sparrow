@@ -3,7 +3,7 @@
 import React, { useState, useCallback, useEffect, useRef } from 'react';
 import Link from 'next/link';
 import { useAgent } from '@/features/librechat/AgentContext';
-import { PanelLeftClose, PanelLeft, ChevronDown, Settings, Check, FileText, Layers } from 'lucide-react';
+import { PanelLeftClose, PanelLeft, ChevronDown, Settings, Check, Layers } from 'lucide-react';
 import { SettingsDialogV2 } from '@/features/settings/components/SettingsDialogV2';
 import { useArtifactActions, useArtifactSelector } from '@/features/librechat/artifacts';
 
@@ -188,7 +188,12 @@ export function Header({ onToggleSidebar, sidebarOpen }: HeaderProps) {
           aria-label="Open FeedMe"
           title="FeedMe - Document Processing"
         >
-          <FileText size={18} />
+          <img
+            src="/feedme_icon.png"
+            alt=""
+            className="lc-feedme-icon"
+            aria-hidden="true"
+          />
         </Link>
 
         {/* Settings button */}

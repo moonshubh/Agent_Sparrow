@@ -38,16 +38,6 @@ export default function FeedMeRevampedPage() {
       },
     },
     {
-      id: 'folders',
-      label: 'Folders',
-      iconSrc: '/feedme-dock/Folders.png',
-      onClick: () => {
-        setShowCenter(false)
-        advanceLogoFrame() // Trigger keyframe change when opening folders
-        setFoldersOpen(true)
-      },
-    },
-    {
       id: 'upload',
       label: 'Upload',
       iconSrc: '/feedme-dock/Upload.png',
@@ -65,6 +55,16 @@ export default function FeedMeRevampedPage() {
         setShowCenter(false)
         advanceLogoFrame() // Trigger keyframe change when opening unassigned
         setUnassignedOpen(true)
+      },
+    },
+    {
+      id: 'folders',
+      label: 'Folders',
+      iconSrc: '/feedme-dock/Folders.png',
+      onClick: () => {
+        setShowCenter(false)
+        advanceLogoFrame() // Trigger keyframe change when opening folders
+        setFoldersOpen(true)
       },
     },
     {
