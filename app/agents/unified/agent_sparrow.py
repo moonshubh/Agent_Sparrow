@@ -1231,7 +1231,7 @@ async def run_unified_agent(state: GraphState, config: Optional[RunnableConfig] 
                     runtime = AgentRuntimeConfig(provider=runtime.provider, model=fallback_model, task_type=runtime.task_type)
                     state.model = fallback_model
                 else:
-                    raise RateLimitExceededException(f"Gemini rate limit reached for {runtime.model}; try again shortly")
+                    raise GeminiQuotaExhaustedException(runtime.model)
 
         # 4. Build agent and config
         agent = _build_deep_agent(state, runtime)
