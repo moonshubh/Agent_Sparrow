@@ -72,6 +72,12 @@ def merge_forwarded_props(
 class Attachment(BaseModel):
     """Represents an attachment provided via the AG-UI or SSE frontends."""
 
+    IMAGE_MIME_PREFIX: ClassVar[str] = "image/"
+    IMAGE_MIME_ALIASES: ClassVar[Dict[str, str]] = {
+        "image/jpg": "image/jpeg",
+        "image/pjpeg": "image/jpeg",
+        "image/x-png": "image/png",
+    }
     ALLOWED_MIME_TYPES: ClassVar[Set[str]] = {
         # Text formats (full log file support)
         "text/plain",
@@ -84,11 +90,6 @@ class Attachment(BaseModel):
         "application/xml",
         # Documents
         "application/pdf",
-        # Images (vision API support for Gemini, Grok, OpenRouter)
-        "image/png",
-        "image/jpeg",
-        "image/gif",
-        "image/webp",
         # Fallback
         "application/octet-stream",
     }
@@ -120,10 +121,22 @@ class Attachment(BaseModel):
     def _validate_mime_type(cls, value: Optional[str]) -> Optional[str]:
         if value is None:
             return value
-        if value not in cls.ALLOWED_MIME_TYPES:
+        normalized = value.strip().lower().split(";", 1)[0]
+        normalized = cls.IMAGE_MIME_ALIASES.get(normalized, normalized)
+        if normalized.startswith(cls.IMAGE_MIME_PREFIX):
+            subtype = normalized.split("/", 1)[1] if "/" in normalized else ""
+            if not subtype or subtype == "*":
+                raise ValueError(
+                    f"Attachment mime_type must be an image/* with a subtype or one of: "
+                    f"{', '.join(sorted(cls.ALLOWED_MIME_TYPES))}."
+                )
+            return normalized
+        if normalized not in cls.ALLOWED_MIME_TYPES:
             allowed = ", ".join(sorted(cls.ALLOWED_MIME_TYPES))
-            raise ValueError(f"Attachment mime_type must be one of: {allowed}.")
-        return value
+            raise ValueError(
+                f"Attachment mime_type must be an image/* or one of: {allowed}."
+            )
+        return normalized
 
     @field_validator("size")
     @classmethod

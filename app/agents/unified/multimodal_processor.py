@@ -9,10 +9,12 @@ from __future__ import annotations
 import base64
 import re
 import urllib.parse
+from io import BytesIO
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
 from loguru import logger
+from PIL import Image, ImageOps
 from app.agents.unified.attachment_utils import is_text_mime, TEXT_EXTENSIONS, TEXT_MIME_TYPES
 
 if TYPE_CHECKING:
@@ -20,7 +22,14 @@ if TYPE_CHECKING:
 
 
 # MIME type categories
-IMAGE_MIME_TYPES = {"image/png", "image/jpeg", "image/gif", "image/webp"}
+IMAGE_MIME_PREFIX = "image/"
+IMAGE_MIME_ALIASES = {
+    "image/jpg": "image/jpeg",
+    "image/pjpeg": "image/jpeg",
+    "image/x-png": "image/png",
+}
+NATIVE_IMAGE_MIME_TYPES = {"image/png", "image/jpeg", "image/gif", "image/webp"}
+IMAGE_MIME_TYPES = NATIVE_IMAGE_MIME_TYPES
 PDF_MIME_TYPES = {"application/pdf"}
 
 # Size limits
@@ -126,7 +135,7 @@ class MultimodalProcessor:
         text_parts: List[str] = []
 
         for att in in_scope:
-            mime = self._get_mime(att)
+            mime = self._normalize_image_mime(self._get_mime(att))
             name = self._get_attr(att, "name") or "attachment"
             data_url = self._get_attr(att, "data_url")
             size = self._get_attr(att, "size") or 0
@@ -134,6 +143,9 @@ class MultimodalProcessor:
             if not data_url:
                 result.skipped.append({"name": name, "reason": "missing_data_url"})
                 continue
+
+            if not mime:
+                mime = self._normalize_image_mime(self._detect_mime_from_data_url(data_url))
 
             # Categorize by MIME type
             if self._is_image_mime(mime):
@@ -195,6 +207,8 @@ class MultimodalProcessor:
         Returns:
             LangChain image_url content block, or None if processing failed.
         """
+        normalized_mime = self._normalize_image_mime(mime)
+
         # Size check
         if size > self.max_image_size:
             logger.warning(
@@ -211,20 +225,29 @@ class MultimodalProcessor:
             logger.warning("image_base64_extraction_failed", name=name)
             return None
 
-        # Validate base64 length
-        if len(base64_data) > self.max_base64_chars:
-            logger.warning(
-                "image_base64_too_large",
-                name=name,
-                length=len(base64_data),
-            )
-            return None
+        needs_reencode = (
+            normalized_mime not in NATIVE_IMAGE_MIME_TYPES
+            or len(base64_data) > self.max_base64_chars
+        )
 
-        logger.info("image_processed", name=name, mime=mime)
+        if needs_reencode:
+            reencoded = self._reencode_image(name, base64_data)
+            if reencoded:
+                normalized_mime = "image/jpeg"
+                base64_data = reencoded
+            elif len(base64_data) > self.max_base64_chars:
+                logger.warning(
+                    "image_base64_too_large",
+                    name=name,
+                    length=len(base64_data),
+                )
+                return None
+
+        logger.info("image_processed", name=name, mime=normalized_mime)
 
         return {
             "type": "image_url",
-            "image_url": {"url": f"data:{mime};base64,{base64_data}"},
+            "image_url": {"url": f"data:{normalized_mime};base64,{base64_data}"},
         }
 
     def _process_pdf(
@@ -358,11 +381,94 @@ class MultimodalProcessor:
         # Assume raw base64
         return data_url.strip()
 
+    def _decode_base64(self, base64_data: str) -> Optional[bytes]:
+        """Decode base64 string into raw bytes."""
+        if not base64_data:
+            return None
+        cleaned = re.sub(r"[\r\n\t ]+", "", base64_data)
+        padding_needed = (-len(cleaned)) % 4
+        padded = cleaned + ("=" * padding_needed)
+        try:
+            return base64.b64decode(padded, validate=False)
+        except Exception as exc:
+            logger.warning("image_base64_decode_failed", error=str(exc))
+            return None
+
+    def _detect_mime_from_data_url(self, data_url: str) -> str:
+        """Extract MIME type from a data URL header."""
+        if not data_url.startswith("data:"):
+            return ""
+        header = data_url.split(",", 1)[0]
+        if not header.startswith("data:"):
+            return ""
+        mime = header[5:].split(";", 1)[0]
+        return mime.strip().lower()
+
+    def _normalize_image_mime(self, mime: Optional[str]) -> str:
+        """Normalize MIME type values for images and common aliases."""
+        if not mime:
+            return ""
+        normalized = str(mime).strip().lower().split(";", 1)[0]
+        return IMAGE_MIME_ALIASES.get(normalized, normalized)
+
+    def _reencode_image(self, name: str, base64_data: str) -> Optional[str]:
+        """Re-encode an image as JPEG, shrinking if needed to fit limits."""
+        raw = self._decode_base64(base64_data)
+        if not raw:
+            return None
+
+        try:
+            image = Image.open(BytesIO(raw))
+            image = ImageOps.exif_transpose(image)
+        except Exception as exc:
+            logger.warning("image_decode_failed", name=name, error=str(exc))
+            return None
+
+        if image.mode in ("RGBA", "LA") or (image.mode == "P" and "transparency" in image.info):
+            background = Image.new("RGB", image.size, (255, 255, 255))
+            background.paste(image, mask=image.split()[-1])
+            image = background
+        else:
+            image = image.convert("RGB")
+
+        quality = 85
+        scale = 1.0
+        for attempt in range(6):
+            if scale < 1.0:
+                new_size = (
+                    max(1, int(image.width * scale)),
+                    max(1, int(image.height * scale)),
+                )
+                resized = image.resize(new_size, Image.LANCZOS)
+            else:
+                resized = image
+
+            buffer = BytesIO()
+            resized.save(buffer, format="JPEG", quality=quality, optimize=True)
+            encoded = base64.b64encode(buffer.getvalue()).decode("ascii")
+
+            if len(encoded) <= self.max_base64_chars:
+                logger.info(
+                    "image_reencoded",
+                    name=name,
+                    quality=quality,
+                    scale=round(scale, 2),
+                )
+                return encoded
+
+            if attempt < 2:
+                quality = max(60, quality - 10)
+            else:
+                scale *= 0.85
+
+        logger.warning("image_reencode_too_large", name=name, length=len(encoded))
+        return None
+
     def _is_image_mime(self, mime: Optional[str]) -> bool:
         """Check if MIME type is an image."""
         if not mime:
             return False
-        return mime.lower() in IMAGE_MIME_TYPES
+        return mime.lower().startswith(IMAGE_MIME_PREFIX)
 
     def _is_pdf_mime(self, mime: Optional[str]) -> bool:
         """Check if MIME type is PDF."""

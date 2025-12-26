@@ -29,7 +29,7 @@ function stableMessageKey(message: Message, index: number): string {
 export const MessageList = memo(function MessageList({ messages, isStreaming, sessionId }: MessageListProps) {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const prevLengthRef = useRef(messages.length);
-  const { updateMessageContent, regenerateLastResponse } = useAgent();
+  const { updateMessageContent, regenerateLastResponse, resolvePersistedMessageId } = useAgent();
 
   // Handle message edit - updates context immediately and persists to API
   const handleEditMessage = useCallback(async (messageId: string, content: string) => {
@@ -39,13 +39,18 @@ export const MessageList = memo(function MessageList({ messages, isStreaming, se
     // Persist to backend if we have a session
     if (sessionId) {
       try {
-        await sessionsAPI.updateMessage(sessionId, messageId, content);
+        const persistedId = resolvePersistedMessageId(messageId);
+        if (!persistedId) {
+          console.debug('[MessageList] Skipping persist for non-persisted message', messageId);
+          return;
+        }
+        await sessionsAPI.updateMessage(sessionId, persistedId, content);
       } catch (error) {
         console.error('[MessageList] Failed to persist message edit:', error);
         // Note: We could add a toast notification here in the future
       }
     }
-  }, [sessionId, updateMessageContent]);
+  }, [resolvePersistedMessageId, sessionId, updateMessageContent]);
 
   // Auto-scroll only when message count changes (not on every content update)
   useEffect(() => {

@@ -50,9 +50,9 @@ type TimelineItem = {
 const normalizeWhitespace = (value: string): string => value.replace(/\s+/g, ' ').trim();
 const stripThoughtMarkers = (value: string): string => (
   value
-    .replace(/:::(?:thinking|think)\s*/gi, '')
+    .replace(/:::\s*(?:thinking|think|analysis|reasoning)\s*/gi, '')
     .replace(/:::\s*/g, '')
-    .replace(/<\/?(?:thinking|think)>/gi, '')
+    .replace(/<\/?\s*(?:thinking|think|analysis|reasoning)\s*>/gi, '')
     .trim()
 );
 

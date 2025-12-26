@@ -30,10 +30,17 @@ SKILL_TRIGGERS: dict[str, list[str]] = {
     # Methodology skills
     "brainstorming": [r"brainstorm", r"ideate", r"generate.*ideas", r"explore.*options", r"think.*through"],
     "root-cause-tracing": [r"root cause", r"trace.*error", r"debug.*chain", r"error.*chain", r"why.*fail"],
-    "lead-research-assistant": [r"research.*company", r"lead.*research", r"competitive.*analysis", r"prospect"],
+    "lead-research-assistant": [
+        r"research.*company",
+        r"lead.*research",
+        r"competitive.*analysis",
+        r"prospect",
+        r"research.*topic",
+        r"find.*information",
+        r"look.*up",
+        r"search.*for",
+    ],
     "content-research-writer": [r"write.*article", r"research.*write", r"kb.*article", r"blog.*post", r"documentation"],
-    # Research (existing)
-    "research": [r"research.*topic", r"find.*information", r"look.*up", r"search.*for"],
     # KB creator (existing)
     "kb-creator": [r"create.*kb", r"knowledge.*base", r"kb.*draft", r"support.*article"],
 }

@@ -112,8 +112,9 @@ class ChatMessageAppendRequest(BaseModel):
 
 
 class ChatMessageUpdateRequest(BaseModel):
-    """Payload for updating an existing chat message's content"""
-    content: str = Field(..., min_length=1, description="New content for the message")
+    """Payload for updating an existing chat message's content and metadata"""
+    content: Optional[str] = Field(None, min_length=1, description="New content for the message")
+    metadata: Optional[Dict[str, Any]] = Field(default=None, description="Metadata updates for the message")
 
 
 # Database connection setup
@@ -391,8 +392,15 @@ def append_chat_message_content_in_db(conn, session_id: int, message_id: int, us
         return dict(cur.fetchone())
 
 
-def update_chat_message_content_in_db(conn, session_id: int, message_id: int, user_id: str, content: str) -> Dict[str, Any]:
-    """Update the full content of an existing chat message owned by the user"""
+def update_chat_message_in_db(
+    conn,
+    session_id: int,
+    message_id: int,
+    user_id: str,
+    content: Optional[str] = None,
+    metadata: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Update content and/or metadata of an existing chat message owned by the user"""
     with conn.cursor() as cur:
         # Verify session and message ownership
         cur.execute(
@@ -407,16 +415,31 @@ def update_chat_message_content_in_db(conn, session_id: int, message_id: int, us
         if not cur.fetchone():
             raise HTTPException(status_code=404, detail="Message not found for this user/session")
 
-        # Update the full content
-        cur.execute(
-            """
+        updates: list[str] = []
+        values: list[Any] = []
+
+        if content is not None:
+            updates.append("content = %s")
+            values.append(content)
+
+        if metadata is not None:
+            import json
+
+            metadata_json = json.dumps(metadata) if isinstance(metadata, dict) else metadata
+            updates.append("metadata = COALESCE(metadata, '{}'::jsonb) || %s::jsonb")
+            values.append(metadata_json)
+
+        if not updates:
+            raise HTTPException(status_code=400, detail="No updates provided")
+
+        query = f"""
             UPDATE chat_messages
-            SET content = %s
+            SET {', '.join(updates)}
             WHERE id = %s
             RETURNING *
-            """,
-            (content, message_id),
-        )
+        """
+        values.append(message_id)
+        cur.execute(query, values)
         conn.commit()
         return dict(cur.fetchone())
 
@@ -1020,11 +1043,18 @@ async def update_chat_message(
         else:
             user_id = get_or_create_guest_user_id(request, response)
 
-        if not update_data.content or not update_data.content.strip():
+        content = update_data.content
+        metadata = update_data.metadata
+
+        if content is None and metadata is None:
+            raise HTTPException(status_code=400, detail="No updates provided")
+
+        if content is not None and not content.strip():
             raise HTTPException(status_code=400, detail="Content cannot be empty")
 
         logger.debug(f"[MESSAGE UPDATE] Updating message {message_id} in session {session_id}")
-        logger.debug(f"[MESSAGE UPDATE] New content length: {len(update_data.content)}")
+        if content is not None:
+            logger.debug(f"[MESSAGE UPDATE] New content length: {len(content)}")
 
         conn = get_db_connection()
 
@@ -1035,7 +1065,14 @@ async def update_chat_message(
             if target is None:
                 raise HTTPException(status_code=404, detail="Message not found")
 
-            target['content'] = update_data.content
+            if content is not None:
+                target['content'] = content
+            if metadata is not None:
+                existing_meta = target.get('metadata') or {}
+                if not isinstance(existing_meta, dict):
+                    existing_meta = {}
+                target['metadata'] = {**existing_meta, **metadata}
+
             now = datetime.utcnow()
             session = _get_local_session(user_id, session_id)
             if session:
@@ -1045,7 +1082,7 @@ async def update_chat_message(
             logger.info(f"[MESSAGE UPDATE] Updated message {message_id} in local storage")
             return ChatMessage(**target)
 
-        message = update_chat_message_content_in_db(conn, session_id, message_id, user_id, update_data.content)
+        message = update_chat_message_in_db(conn, session_id, message_id, user_id, content, metadata)
         logger.info(f"[MESSAGE UPDATE] Updated message {message_id} in database")
         return ChatMessage(**message)
     except HTTPException:

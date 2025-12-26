@@ -74,6 +74,11 @@ from .subagents import get_subagent_specs, get_subagent_by_name
 from .prompts import get_coordinator_prompt, TODO_PROMPT
 from app.agents.skills import get_skills_registry
 
+try:
+    from google.api_core.exceptions import ResourceExhausted
+except Exception:  # pragma: no cover - optional dependency
+    ResourceExhausted = None
+
 # Constants
 MEMORY_AGENT_ID = "sparrow"
 MEMORY_SYSTEM_NAME = "server_memory_context"
@@ -95,6 +100,22 @@ PROVIDER_TOKEN_LIMITS: Dict[str, int] = {
     "openrouter": 50000,  # OpenRouter 262K context → 50K summarization threshold
 }
 DEFAULT_TOKEN_LIMIT = 50000  # Conservative default for unknown providers
+
+
+def _is_quota_exhausted(exc: Exception) -> bool:
+    """Best-effort detection for Gemini quota exhaustion errors."""
+    if ResourceExhausted is not None and isinstance(exc, ResourceExhausted):
+        return True
+    message = str(exc).lower()
+    return any(
+        token in message
+        for token in (
+            "resourceexhausted",
+            "quota",
+            "rate limit",
+            "429",
+        )
+    )
 
 # -----------------------------------------------------------------------------
 # Fast Task Classification (keyword-based, <5ms vs ~200ms for attachment scan)
@@ -1281,10 +1302,59 @@ async def run_unified_agent(state: GraphState, config: Optional[RunnableConfig] 
 
         # 10. Fallback if streaming returned nothing
         if final_output is None:
-            final_output = await agent.ainvoke(
-                {"messages": list(messages), "attachments": state.attachments, "scratchpad": state.scratchpad},
-                config=run_config,
-            )
+            try:
+                final_output = await agent.ainvoke(
+                    {"messages": list(messages), "attachments": state.attachments, "scratchpad": state.scratchpad},
+                    config=run_config,
+                )
+            except Exception as exc:
+                if runtime.provider == "google" and _is_quota_exhausted(exc):
+                    fallback_model = model_router.fallback_chain.get(runtime.model)
+                    if fallback_model and fallback_model != runtime.model:
+                        logger.warning(
+                            "gemini_quota_fallback",
+                            primary=runtime.model,
+                            fallback=fallback_model,
+                            error=str(exc),
+                        )
+                        if limiter and reserved_slots:
+                            for model_name, token_identifier in reserved_slots:
+                                try:
+                                    await limiter.release_slot(model_name, token_identifier)
+                                except Exception as release_exc:
+                                    logger.warning(
+                                        "rate_limit_slot_release_failed",
+                                        model=model_name,
+                                        error=str(release_exc),
+                                    )
+                            reserved_slots.clear()
+                        if await _reserve_model_slot(fallback_model):
+                            runtime = AgentRuntimeConfig(
+                                provider=runtime.provider,
+                                model=fallback_model,
+                                task_type=runtime.task_type,
+                            )
+                            state.model = fallback_model
+                            agent = _build_deep_agent(state, runtime)
+                            run_config = _build_runnable_config(state, config, runtime)
+                            final_output = await agent.ainvoke(
+                                {
+                                    "messages": list(messages),
+                                    "attachments": state.attachments,
+                                    "scratchpad": state.scratchpad,
+                                },
+                                config=run_config,
+                            )
+                        else:
+                            raise RateLimitExceededException(
+                                f"Gemini rate limit reached for {runtime.model}; try again shortly"
+                            ) from exc
+                    else:
+                        raise RateLimitExceededException(
+                            f"Gemini rate limit reached for {runtime.model}; try again shortly"
+                        ) from exc
+                else:
+                    raise
 
         # 11. Normalize outputs
         messages_payload = _extract_messages_from_output(state, final_output)

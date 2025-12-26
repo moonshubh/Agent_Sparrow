@@ -17,16 +17,35 @@ from app.agents.harness._stats import RateLimitStats
 if TYPE_CHECKING:
     from langgraph.config import RunnableConfig
 
+try:
+    from langchain.agents.middleware import AgentMiddleware
+    from langchain.agents.middleware.types import ModelRequest, ModelResponse
+    AGENT_MIDDLEWARE_AVAILABLE = True
+except ImportError:  # pragma: no cover - optional dependency
+    AgentMiddleware = object  # type: ignore[assignment]
+    ModelRequest = Any  # type: ignore[misc,assignment]
+    ModelResponse = Any  # type: ignore[misc,assignment]
+    AGENT_MIDDLEWARE_AVAILABLE = False
+
+try:
+    from google.api_core.exceptions import ResourceExhausted
+except Exception:  # pragma: no cover - optional dependency
+    ResourceExhausted = None
+
 
 # Fallback chain for model degradation
 FALLBACK_CHAIN: Dict[str, Optional[str]] = {
+    "gemini-3-pro-preview": "gemini-2.5-pro",
+    "gemini-3-pro": "gemini-2.5-pro",
+    "gemini-3-flash": "gemini-2.5-flash",
+    "gemini-3-flash-lite": "gemini-2.5-flash-lite",
     "gemini-2.5-pro": "gemini-2.5-flash",
     "gemini-2.5-flash": "gemini-2.5-flash-lite",
     "gemini-2.5-flash-lite": None,  # Terminal - no more fallbacks
 }
 
 
-class SparrowRateLimitMiddleware:
+class SparrowRateLimitMiddleware(AgentMiddleware if AGENT_MIDDLEWARE_AVAILABLE else object):
     """Middleware for Gemini quota management and model fallback.
 
     This middleware integrates with the rate limiter to:
@@ -177,6 +196,34 @@ class SparrowRateLimitMiddleware:
 
         return fallback
 
+    def _resolve_model_name(self, model_obj: Any) -> Optional[str]:
+        """Best-effort extraction of model name from a chat model instance."""
+        if isinstance(model_obj, str):
+            return model_obj
+        for attr in ("model", "model_name", "model_id"):
+            value = getattr(model_obj, attr, None)
+            if isinstance(value, str) and value:
+                return value
+        return None
+
+    def _apply_fallback_model(self, model_obj: Any, fallback_model: str) -> bool:
+        """Attempt to update the model object in-place for fallback."""
+        for attr in ("model", "model_name"):
+            value = getattr(model_obj, attr, None)
+            if isinstance(value, str):
+                try:
+                    setattr(model_obj, attr, fallback_model)
+                    return True
+                except Exception:  # pragma: no cover - defensive
+                    continue
+        return False
+
+    def _is_quota_exhausted(self, exc: Exception) -> bool:
+        if ResourceExhausted is not None and isinstance(exc, ResourceExhausted):
+            return True
+        message = str(exc).lower()
+        return any(token in message for token in ("resourceexhausted", "quota", "rate limit", "429"))
+
     async def release_slots(self) -> None:
         """Release all reserved rate limit slots.
 
@@ -197,49 +244,54 @@ class SparrowRateLimitMiddleware:
 
         self._reserved_slots.clear()
 
-    def wrap_model_call(
-        self,
-        handler: Callable,
-        model_kwarg: str = "model",
-    ) -> Callable:
-        """Wrap a model call with rate limit handling.
+    def wrap_model_call(self, request: ModelRequest, handler: Callable) -> ModelResponse:
+        """Sync wrapper for model calls (no-op rate limiting if async required)."""
+        return handler(request)
 
-        This decorator catches quota exceptions and retries with fallback.
-        The fallback model is injected into kwargs so the handler uses it.
-
-        Args:
-            handler: Original model call handler.
-            model_kwarg: The kwarg name used to specify the model (default: "model").
-
-        Returns:
-            Wrapped handler with retry logic.
-        """
-        from functools import wraps
-
+    async def awrap_model_call(self, request: ModelRequest, handler: Callable) -> ModelResponse:
+        """Async wrapper for model calls with quota checks and fallback."""
         from app.core.rate_limiting.exceptions import RateLimitExceededException
 
-        @wraps(handler)
-        async def wrapped(*args, **kwargs):
-            try:
-                return await handler(*args, **kwargs)
-            except RateLimitExceededException:
-                # Try to get fallback from current model
-                current_model = self._current_model
-                if current_model:
-                    fallback = self.get_fallback(current_model)
-                    if fallback:
-                        logger.info(
-                            "retrying_with_fallback",
-                            primary=current_model,
-                            fallback=fallback,
-                        )
-                        # Update tracking and inject fallback model into kwargs
-                        self._current_model = fallback
-                        kwargs[model_kwarg] = fallback
-                        return await handler(*args, **kwargs)
-                raise
+        model_name = self._resolve_model_name(getattr(request, "model", None))
+        if not model_name:
+            return await handler(request)
 
-        return wrapped
+        self._current_model = model_name
+
+        try:
+            if self.rate_limiter:
+                result = await self.rate_limiter.check_and_consume(model_name)
+                if not getattr(result, "allowed", False):
+                    metadata = getattr(result, "metadata", None)
+                    limits = metadata.dict() if hasattr(metadata, "dict") else (
+                        metadata if isinstance(metadata, dict) else None
+                    )
+                    raise RateLimitExceededException(
+                        f"Rate limit exceeded for {model_name}",
+                        retry_after=getattr(result, "retry_after", None),
+                        limits=limits,
+                        model=model_name,
+                    )
+                self._reserved_slots.append(
+                    (model_name, getattr(result, "token_identifier", None))
+                )
+        except RateLimitExceededException:
+            fallback = self.get_fallback(model_name)
+            if fallback and self._apply_fallback_model(request.model, fallback):
+                logger.info("retrying_with_fallback", primary=model_name, fallback=fallback)
+                self._current_model = fallback
+                return await handler(request)
+            raise
+
+        try:
+            return await handler(request)
+        except Exception as exc:
+            if self._is_quota_exhausted(exc):
+                raise RateLimitExceededException(
+                    f"Rate limit exceeded for {model_name}",
+                    model=model_name,
+                ) from exc
+            raise
 
     def set_current_model(self, model: str) -> None:
         """Set the current model being used (for tracking fallback context).

@@ -1,12 +1,17 @@
 'use client';
 
-import React, { useState, useCallback, useMemo, useRef, useEffect } from 'react';
-import { Eye, Edit3, Save, RotateCcw, FileText, Image as ImageIcon, Link, Bold, Italic, Heading1, Heading2, List, ListOrdered, Quote, Code, Maximize2 } from 'lucide-react';
+import React, { useState, useCallback, useMemo, useRef } from 'react';
+import { Eye, Edit3, FileText, Image as ImageIcon, Maximize2 } from 'lucide-react';
 import ReactMarkdown, { type Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { cn } from '@/shared/lib/utils';
 import type { Artifact } from './types';
 import { useArtifactStore } from './ArtifactContext';
+import { useAgent } from '@/features/librechat/AgentContext';
+import { sessionsAPI } from '@/services/api/endpoints/sessions';
+import { TipTapEditor } from '@/features/librechat/components/tiptap/TipTapEditor';
+import { serializeArtifact } from './serialization';
+import { findImageByTitle, resolveArtifactImageByRef, resolveImageSrc } from './imageUtils';
 
 /**
  * Check if content has actual text beyond just markdown images and separators.
@@ -26,45 +31,6 @@ function hasTextContent(content: string): boolean {
   return withoutImages.length > 0;
 }
 
-function normalizeImageRef(value: string): string {
-  return value.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
-}
-
-function resolveImageMarkdown(artifact: Artifact, altText: string): string | null {
-  if (artifact.imageData) {
-    const mimeType = artifact.mimeType || 'image/png';
-    return `![${altText}](data:${mimeType};base64,${artifact.imageData})`;
-  }
-
-  if (artifact.content) {
-    return `![${altText}](${artifact.content})`;
-  }
-
-  return null;
-}
-
-function findImageByTitle(artifactsById: Record<string, Artifact>, title: string): Artifact | undefined {
-  const normalizedTitle = normalizeImageRef(title);
-  if (!normalizedTitle) return undefined;
-
-  const imageArtifacts = Object.values(artifactsById).filter((a) => a.type === 'image');
-
-  const exactMatch = imageArtifacts.find(
-    (a) => normalizeImageRef(a.title || '') === normalizedTitle
-  );
-  if (exactMatch) return exactMatch;
-
-  const partialMatch = imageArtifacts.find((a) => {
-    const normalizedCandidate = normalizeImageRef(a.title || '');
-    return normalizedCandidate.includes(normalizedTitle) || normalizedTitle.includes(normalizedCandidate);
-  });
-  if (partialMatch) return partialMatch;
-
-  return imageArtifacts.find(
-    (a) => (a.title || '').toLowerCase().includes(title.toLowerCase())
-  );
-}
-
 /**
  * Parses ::artifact{type="image" title="..."} syntax and replaces with actual images
  * from the artifact store
@@ -81,8 +47,11 @@ function useInlineArtifacts(content: string): string {
 
     const replaceWithImage = (title: string, imageArtifact?: Artifact) => {
       if (imageArtifact) {
-        const markdown = resolveImageMarkdown(imageArtifact, title || imageArtifact.title || 'Image');
-        if (markdown) return markdown;
+        const src = resolveImageSrc(imageArtifact);
+        if (src) {
+          const altText = title || imageArtifact.title || 'Image';
+          return `![${altText}](${src})`;
+        }
       }
 
       return `\n\n> 📷 *[Image: ${title || 'Unknown'}]*\n\n`;
@@ -95,14 +64,7 @@ function useInlineArtifacts(content: string): string {
 
     updated = updated.replace(artifactIdRegex, (match, alt, ref) => {
       const normalizedRef = String(ref || '').trim();
-      const directMatch = artifactsById[normalizedRef];
-      const imageArtifact = directMatch?.type === 'image'
-        ? directMatch
-        : Object.values(artifactsById).find((a) =>
-            a.type === 'image' &&
-            (a.id.toLowerCase() === normalizedRef.toLowerCase() ||
-              a.id.toLowerCase().includes(normalizedRef.toLowerCase()))
-          ) || findImageByTitle(artifactsById, alt || normalizedRef);
+      const imageArtifact = resolveArtifactImageByRef(artifactsById, normalizedRef, alt || normalizedRef);
 
       return replaceWithImage(alt || normalizedRef, imageArtifact);
     });
@@ -115,141 +77,73 @@ interface ArticleEditorProps {
   artifact: Artifact;
 }
 
-const TOOLBAR_ACTIONS = [
-  { icon: Bold, label: 'Bold (Ctrl+B)', before: '**', after: '**', placeholder: 'bold text' },
-  { icon: Italic, label: 'Italic (Ctrl+I)', before: '*', after: '*', placeholder: 'italic text' },
-  { icon: Heading1, label: 'Heading 1', before: '\n# ', after: '\n', placeholder: 'Heading' },
-  { icon: Heading2, label: 'Heading 2', before: '\n## ', after: '\n', placeholder: 'Subheading' },
-  { icon: List, label: 'Bullet List', before: '\n- ', after: '\n', placeholder: 'List item' },
-  { icon: ListOrdered, label: 'Numbered List', before: '\n1. ', after: '\n', placeholder: 'List item' },
-  { icon: Quote, label: 'Quote', before: '\n> ', after: '\n', placeholder: 'Quote' },
-  { icon: Code, label: 'Code', before: '`', after: '`', placeholder: 'code' },
-  { icon: Link, label: 'Link', before: '[', after: '](url)', placeholder: 'link text' },
-  { icon: ImageIcon, label: 'Image', before: '![', after: '](image-url)', placeholder: 'alt text' },
-];
-
-/**
- * Toolbar button component for the editor
- */
-function ToolbarButton({
-  icon: Icon,
-  label,
-  onClick,
-  active = false,
-}: {
-  icon: React.ElementType;
-  label: string;
-  onClick: () => void;
-  active?: boolean;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={cn(
-        'p-1.5 rounded hover:bg-secondary/80 transition-colors',
-        active ? 'bg-primary/20 text-primary' : 'text-muted-foreground hover:text-foreground'
-      )}
-      title={label}
-    >
-      <Icon className="h-4 w-4" />
-    </button>
-  );
-}
 
 /**
  * ArticleEditor - Rich article editor with markdown support
  *
  * Features:
  * - Toggle between edit and preview modes
- * - Markdown toolbar for formatting
+ * - WYSIWYG editing with TipTap
  * - Live preview with rendered markdown
- * - Auto-save changes to artifact store
+ * - Auto-save on blur/click-away
  * - Support for embedded images
  */
 export function ArticleEditor({ artifact }: ArticleEditorProps) {
-  const { addArtifact } = useArtifactStore();
+  const { addArtifact, getArtifact, getArtifactsByMessage } = useArtifactStore();
+  const { sessionId, updateMessageMetadata, resolvePersistedMessageId } = useAgent();
   const [isEditing, setIsEditing] = useState(false);
   const [content, setContent] = useState(() => artifact.content);
-  const [hasChanges, setHasChanges] = useState(false);
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const originalContent = useRef(artifact.content);
+  const lastSavedRef = useRef(artifact.content);
 
   // Transform content with inline artifacts for preview
   const processedContent = useInlineArtifacts(content);
 
-  // Handle content changes
-  const handleContentChange = useCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
-    const newContent = e.target.value;
-    setContent(newContent);
-    setHasChanges(newContent !== originalContent.current);
-  }, []);
+  const persistArtifacts = useCallback(async (messageId: string) => {
+    if (!sessionId || !messageId) return;
+    const artifacts = getArtifactsByMessage(messageId).filter((item) =>
+      item.type === 'article' || item.type === 'kb-article' || item.type === 'image'
+    );
+    if (!artifacts.length) return;
+    const serialized = artifacts.map(serializeArtifact);
 
-  // Save changes to artifact store
-  const handleSave = useCallback(() => {
+    const persistedId = resolvePersistedMessageId(messageId);
+    if (!persistedId) return;
+
+    await sessionsAPI.updateMessage(sessionId, persistedId, {
+      metadata: { artifacts: serialized },
+    });
+    updateMessageMetadata(messageId, { artifacts: serialized });
+  }, [getArtifactsByMessage, resolvePersistedMessageId, sessionId, updateMessageMetadata]);
+
+  const handleSave = useCallback(async (markdown: string) => {
+    if (markdown === lastSavedRef.current) return;
+
+    const previousContent = lastSavedRef.current;
+    const previousArtifact = getArtifact(artifact.id);
+
+    setContent(markdown);
     addArtifact({
       ...artifact,
-      content,
+      content: markdown,
       lastUpdateTime: Date.now(),
     });
-    originalContent.current = content;
-    setHasChanges(false);
-  }, [addArtifact, artifact, content]);
 
-  // Revert to original content
-  const handleRevert = useCallback(() => {
-    setContent(originalContent.current);
-    setHasChanges(false);
-  }, []);
-
-  // Insert markdown formatting at cursor position
-  const insertFormatting = useCallback((before: string, after: string = '', placeholder: string = '') => {
-    const textarea = textareaRef.current;
-    if (!textarea) return;
-
-    const start = textarea.selectionStart;
-    const end = textarea.selectionEnd;
-    const selectedText = content.substring(start, end);
-    const textToInsert = selectedText || placeholder;
-
-    const newContent =
-      content.substring(0, start) +
-      before + textToInsert + after +
-      content.substring(end);
-
-    setContent(newContent);
-    setHasChanges(newContent !== originalContent.current);
-
-    // Restore focus and selection
-    setTimeout(() => {
-      textarea.focus();
-      const newCursorPos = start + before.length + textToInsert.length;
-      textarea.setSelectionRange(
-        selectedText ? newCursorPos + after.length : start + before.length,
-        selectedText ? newCursorPos + after.length : start + before.length + placeholder.length
-      );
-    }, 0);
-  }, [content]);
-
-  // Handle keyboard shortcuts
-  const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.ctrlKey || e.metaKey) {
-      switch (e.key.toLowerCase()) {
-        case 'b':
-          e.preventDefault();
-          insertFormatting('**', '**', 'bold text');
-          break;
-        case 'i':
-          e.preventDefault();
-          insertFormatting('*', '*', 'italic text');
-          break;
-        case 's':
-          e.preventDefault();
-          handleSave();
-          break;
+    try {
+      await persistArtifacts(artifact.messageId);
+      lastSavedRef.current = markdown;
+    } catch (error) {
+      setContent(previousContent);
+      if (previousArtifact) {
+        addArtifact(previousArtifact);
       }
+      console.error('[ArticleEditor] Failed to persist artifact edits', error);
+      throw error;
     }
-  }, [insertFormatting, handleSave]);
+  }, [addArtifact, artifact, getArtifact, persistArtifacts]);
+
+  const handleExitEditing = useCallback(() => {
+    setIsEditing(false);
+  }, []);
 
   // State for image lightbox
   const [lightboxImage, setLightboxImage] = useState<{ src: string; alt: string } | null>(null);
@@ -537,80 +431,30 @@ export function ArticleEditor({ artifact }: ArticleEditorProps) {
             </button>
           </div>
 
-          {/* Formatting toolbar (only in edit mode) */}
-          {isEditing && (
-            <div className="flex items-center gap-0.5 border-l border-border pl-3">
-              {TOOLBAR_ACTIONS.map(({ icon, label, before, after, placeholder }) => (
-                <ToolbarButton
-                  key={label}
-                  icon={icon}
-                  label={label}
-                  onClick={() => insertFormatting(before, after, placeholder)}
-                />
-              ))}
-            </div>
-          )}
         </div>
-
-        {/* Save/Revert buttons */}
-        {isEditing && hasChanges && (
-          <div className="flex items-center gap-2">
-            <button
-              onClick={handleRevert}
-              className="flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-medium text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
-            >
-              <RotateCcw className="h-3.5 w-3.5" />
-              Revert
-            </button>
-            <button
-              onClick={handleSave}
-              className="flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-medium bg-terracotta-500 text-white hover:bg-terracotta-600 transition-colors"
-            >
-              <Save className="h-3.5 w-3.5" />
-              Save
-            </button>
-          </div>
-        )}
-
-        {/* Unsaved indicator */}
-        {hasChanges && (
-          <span className="text-xs text-amber-400 ml-2">Unsaved changes</span>
-        )}
       </div>
 
       {/* Content area */}
       <div className="flex-1 overflow-auto">
         {isEditing ? (
-          /* Edit mode - Markdown textarea */
-          <textarea
-            ref={textareaRef}
-            value={content}
-            onChange={handleContentChange}
-            onKeyDown={handleKeyDown}
-            className={cn(
-              'w-full h-full p-4 bg-background text-foreground font-mono text-sm',
-              'resize-none focus:outline-none focus:ring-0',
-              'placeholder:text-muted-foreground'
-            )}
-            placeholder="Write your article in Markdown...
-
-# Heading 1
-## Heading 2
-
-**Bold text** and *italic text*
-
-- Bullet point
-1. Numbered list
-
-> Blockquote
-
-![Image alt text](image-url)
-[Link text](url)"
-            spellCheck="true"
+          <TipTapEditor
+            initialContent={content}
+            onSave={handleSave}
+            onExit={handleExitEditing}
+            onCancel={handleExitEditing}
+            placeholder={
+              artifact.type === 'kb-article'
+                ? 'Write your knowledge base article...'
+                : 'Write your article...'
+            }
+            className="lc-article-editor"
           />
         ) : (
           /* Preview mode - Rendered markdown with inline artifacts */
-          <div className="p-6 max-w-3xl mx-auto overflow-auto">
+          <div
+            className="p-6 max-w-3xl mx-auto overflow-auto"
+            onDoubleClick={() => setIsEditing(true)}
+          >
             {content ? (
               <article className="prose prose-invert prose-sm max-w-none">
                 {/* Show informative message for images-only articles */}

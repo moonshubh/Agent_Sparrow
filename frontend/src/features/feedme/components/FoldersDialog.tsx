@@ -12,7 +12,7 @@ import {
 import { Button } from '@/shared/ui/button'
 import { Input } from '@/shared/ui/input'
 import { Separator } from '@/shared/ui/separator'
-import { FolderPlus, Trash2 } from 'lucide-react'
+import { FolderPlus, Trash2, Palette } from 'lucide-react'
 import FolderBits from './FolderBits'
 import FolderConversationsDialog from './FolderConversationsDialog'
 import { SpatialColorPicker } from './SpatialColorPicker'
@@ -43,6 +43,7 @@ const FoldersDialog = React.memo(function FoldersDialog({ isOpen, onClose, onFra
   const [selectedFolder, setSelectedFolder] = useState<Folder | null>(null)
   const [conversationsOpen, setConversationsOpen] = useState(false)
   const [clickedFolderId, setClickedFolderId] = useState<number | null>(null)
+  const [colorEditingId, setColorEditingId] = useState<number | null>(null)
 
   const renameInputRef = useRef<HTMLInputElement | null>(null)
   const renamingRef = useRef(false)
@@ -126,6 +127,21 @@ const FoldersDialog = React.memo(function FoldersDialog({ isOpen, onClose, onFra
       renamingRef.current = false
     }
   }, [editingId, editingName, actions, flatList, cancelRename, showToast])
+
+  const handleColorChange = useCallback(async (folderId: number, newColor: string) => {
+    try {
+      await actions.updateFolder(folderId, { color: newColor })
+      setColorEditingId(null)
+    } catch (error) {
+      console.error('Failed to update folder color', error)
+      showToast({
+        type: 'error',
+        title: 'Color update failed',
+        message: 'Could not update folder color. Please try again.',
+        duration: 4200,
+      })
+    }
+  }, [actions, showToast])
 
   return (
     <Dialog open={isOpen} onOpenChange={onClose}>
@@ -243,12 +259,44 @@ const FoldersDialog = React.memo(function FoldersDialog({ isOpen, onClose, onFra
                         />
                       ) : (
                         <span
+                          onClick={(e) => e.stopPropagation()}
                           onDoubleClick={() => startRename(folder)}
-                          title="Click to view conversations • Double-click to rename"
+                          title="Double-click to rename"
                           className="cursor-text text-sm font-semibold text-foreground/90 transition hover:text-foreground"
                         >
                           {folder.name}
                         </span>
+                      )}
+                    </div>
+
+                    {/* Color edit button - bottom right, appears on hover */}
+                    <div className={cn(
+                      "absolute bottom-4 right-4",
+                      colorEditingId === folder.id ? "z-[100]" : "z-20"
+                    )}>
+                      {colorEditingId === folder.id ? (
+                        <div onClick={e => e.stopPropagation()}>
+                          <SpatialColorPicker
+                            selectedColor={folderColor}
+                            onChange={(newColor) => handleColorChange(folder.id, newColor)}
+                            initialOpen={true}
+                            compact={true}
+                            onClose={() => setColorEditingId(null)}
+                          />
+                        </div>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={event => {
+                            event.stopPropagation()
+                            setColorEditingId(folder.id)
+                          }}
+                          className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-background/80 text-muted-foreground opacity-0 transition hover:text-foreground focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40 group-hover:opacity-100"
+                          style={{ borderColor: folderColor, borderWidth: 2 }}
+                          aria-label={`Change color for ${folder.name}`}
+                        >
+                          <Palette className="h-4 w-4" />
+                        </button>
                       )}
                     </div>
                   </li>

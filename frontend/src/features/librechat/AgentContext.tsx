@@ -5,7 +5,6 @@ import type { Message, RunAgentInput } from '@/services/ag-ui/client';
 import type { DocumentPointer, AttachmentInput, InterruptPayload } from '@/services/ag-ui/types';
 import {
   isAgentCustomEvent,
-  type ImageArtifactEvent,
   type TimelineOperation,
   type TraceStep,
   type TodoItem,
@@ -13,7 +12,7 @@ import {
   type ToolEvidenceUpdateEvent,
 } from '@/services/ag-ui/event-types';
 import { sessionsAPI, type AgentType as PersistedAgentType } from '@/services/api/endpoints/sessions';
-import { getGlobalArtifactStore } from './artifacts/ArtifactContext';
+import { getGlobalArtifactStore } from './artifacts';
 import type { Artifact } from './artifacts/types';
 import { formatLogAnalysisResult } from './formatters/logFormatter';
 import {
@@ -71,6 +70,7 @@ export interface AgentEventHandlers {
 
 interface AgentContextValue {
   agent: AbstractAgent | null;
+  sessionId?: string;
   messages: Message[];
   isStreaming: boolean;
   error: Error | null;
@@ -93,6 +93,8 @@ interface AgentContextValue {
   resolvedTaskType?: string;
   messageAttachments: Record<string, AttachmentInput[]>;
   updateMessageContent: (messageId: string, content: string) => void;
+  updateMessageMetadata: (messageId: string, metadata: Record<string, unknown>) => void;
+  resolvePersistedMessageId: (messageId: string | number) => string | number | null;
   regenerateLastResponse: () => Promise<void>;
 }
 
@@ -258,6 +260,100 @@ const looksLikeJsonPayload = (text: string): boolean => {
   if (!(trimmed.startsWith('{') || trimmed.startsWith('['))) return false;
   return trimmed.length > 80;
 };
+
+const estimateAttachmentSizeFromDataUrl = (dataUrl: string): number | null => {
+  const commaIndex = dataUrl.indexOf(',');
+  if (commaIndex === -1) return null;
+  const base64 = dataUrl.slice(commaIndex + 1).trim();
+  if (!base64) return null;
+  return Math.floor((base64.length * 3) / 4);
+};
+
+const normalizeAttachmentForMetadata = (attachment: AttachmentInput): AttachmentInput | null => {
+  const name = typeof attachment.name === 'string' ? attachment.name.trim() : '';
+  const mimeType = typeof attachment.mime_type === 'string' ? attachment.mime_type.trim() : '';
+  const dataUrl = typeof attachment.data_url === 'string' ? attachment.data_url.trim() : '';
+  const sizeValue = attachment.size;
+  const size =
+    typeof sizeValue === 'number' && Number.isFinite(sizeValue)
+      ? sizeValue
+      : dataUrl
+        ? estimateAttachmentSizeFromDataUrl(dataUrl)
+        : null;
+
+  if (!name || !mimeType || !dataUrl || !dataUrl.startsWith('data:')) {
+    return null;
+  }
+
+  return {
+    name,
+    mime_type: mimeType,
+    data_url: dataUrl,
+    size: size ?? 0,
+  };
+};
+
+const normalizePersistedAttachments = (attachments?: AttachmentInput[]): AttachmentInput[] => {
+  if (!attachments || attachments.length === 0) return [];
+  return attachments
+    .map((attachment) => normalizeAttachmentForMetadata(attachment))
+    .filter((attachment): attachment is AttachmentInput => Boolean(attachment));
+};
+
+const normalizeAttachmentFromMetadata = (raw: unknown): AttachmentInput | null => {
+  if (!isRecord(raw)) return null;
+  const name = typeof raw.name === 'string' ? raw.name.trim() : '';
+  const mimeType = typeof raw.mime_type === 'string' ? raw.mime_type.trim() : '';
+  const dataUrl = typeof raw.data_url === 'string' ? raw.data_url.trim() : '';
+  const sizeValue = raw.size;
+  const size =
+    typeof sizeValue === 'number' && Number.isFinite(sizeValue)
+      ? sizeValue
+      : dataUrl
+        ? estimateAttachmentSizeFromDataUrl(dataUrl)
+        : null;
+
+  if (!name || !mimeType || !dataUrl || !dataUrl.startsWith('data:')) {
+    return null;
+  }
+
+  return {
+    name,
+    mime_type: mimeType,
+    data_url: dataUrl,
+    size: size ?? 0,
+  };
+};
+
+const extractPersistedAttachments = (metadata: Record<string, unknown> | undefined): AttachmentInput[] => {
+  if (!metadata) return [];
+  const rawAttachments = metadata.attachments;
+  if (!Array.isArray(rawAttachments)) return [];
+  return rawAttachments
+    .map((attachment) => normalizeAttachmentFromMetadata(attachment))
+    .filter((attachment): attachment is AttachmentInput => Boolean(attachment));
+};
+
+const stripLargeMetadata = (
+  metadata: Record<string, unknown>
+): Record<string, unknown> | undefined => {
+  if (!('attachments' in metadata) && !('artifacts' in metadata)) {
+    return metadata;
+  }
+  const { attachments: _attachments, artifacts: _artifacts, ...rest } = metadata;
+  return Object.keys(rest).length > 0 ? rest : undefined;
+};
+
+const sanitizeMessagesForRun = (currentMessages: Message[]): Message[] =>
+  currentMessages.map((message) => {
+    if (!isRecord(message.metadata)) return message;
+    const sanitizedMetadata = stripLargeMetadata(message.metadata);
+    if (sanitizedMetadata === message.metadata) return message;
+    if (!sanitizedMetadata) {
+      return { ...message, metadata: undefined };
+    }
+    return { ...message, metadata: sanitizedMetadata };
+  });
 
 const normalizeTextFromContentParts = (raw: unknown): string | null => {
   if (typeof raw === 'string') return raw;
@@ -507,6 +603,32 @@ const inferLogAnalysisFromMessages = (messages: Message[]): string | null => {
   return null;
 };
 
+const hydrateMessagesForSession = (
+  incomingMessages: Message[]
+): { sanitizedMessages: Message[]; attachmentsByMessage: Record<string, AttachmentInput[]> } => {
+  const attachmentsByMessage: Record<string, AttachmentInput[]> = {};
+
+  const sanitizedMessages = incomingMessages.map((message) => {
+    if (!isRecord(message.metadata)) return message;
+
+    if (message.role === 'user') {
+      const attachments = extractPersistedAttachments(message.metadata);
+      if (attachments.length > 0) {
+        attachmentsByMessage[message.id] = attachments;
+      }
+    }
+
+    const sanitizedMetadata = stripLargeMetadata(message.metadata);
+    if (sanitizedMetadata === message.metadata) return message;
+    if (!sanitizedMetadata) {
+      return { ...message, metadata: undefined };
+    }
+    return { ...message, metadata: sanitizedMetadata };
+  });
+
+  return { sanitizedMessages, attachmentsByMessage };
+};
+
 export function AgentProvider({
   children,
   agent,
@@ -534,66 +656,88 @@ export function AgentProvider({
   const assistantPersistedRef = useRef(false);
   const lastPersistedAssistantIdBySessionRef = useRef<Record<string, string>>({});
   const lastRunUserMessageIdRef = useRef<string | null>(null);
+  const persistedMessageIdRef = useRef<Record<string, string>>({});
   // Track artifacts created during the current run for persistence
   const pendingArtifactsRef = useRef<SerializedArtifact[]>([]);
+  const sendMessage = useCallback(async (content: string, attachments?: AttachmentInput[]) => {
+    if (!agent || isStreaming) return;
 
-	  const sendMessage = useCallback(async (content: string, attachments?: AttachmentInput[]) => {
-	    if (!agent || isStreaming) return;
-
-	    setIsStreaming(true);
-	    setError(null);
+    setIsStreaming(true);
+    setError(null);
     // Reset per-run UI state
     setTimelineOperations([]);
     setCurrentOperationId(undefined);
     setToolEvidence({});
     setTodos([]);
     setThinkingTrace([]);
-	    setActiveTraceStepId(undefined);
-	    toolNameByIdRef.current = {};
-	    assistantPersistedRef.current = false;
-	    lastRunUserMessageIdRef.current = null;
-	    pendingArtifactsRef.current = [];
+    setActiveTraceStepId(undefined);
+    toolNameByIdRef.current = {};
+    assistantPersistedRef.current = false;
+    lastRunUserMessageIdRef.current = null;
+    pendingArtifactsRef.current = [];
 
-	    try {
-	      // Create abort controller for this request
-	      abortControllerRef.current = new AbortController();
-	      try {
-	        agent.messages = messagesRef.current;
-	      } catch {
-	        // ignore
-	      }
+    try {
+      // Create abort controller for this request
+      abortControllerRef.current = new AbortController();
+      try {
+        const sanitizedMessages = sanitizeMessagesForRun(messagesRef.current);
+        agent.messages = sanitizedMessages;
+      } catch {
+        // ignore
+      }
 
-	      // Add user message to local state immediately (without metadata to avoid backend validation errors)
-	      const userMessage: Message = {
-	        id: crypto.randomUUID(),
-	        role: 'user',
-	        content,
-	      };
-	      lastRunUserMessageIdRef.current = userMessage.id;
+      const trimmedContent = content.trim();
+      const persistableAttachments = normalizePersistedAttachments(attachments);
+      const hasPersistableAttachments = persistableAttachments.length > 0;
 
-	      // Store attachments separately by message ID for UI display (backend doesn't accept metadata)
-	      if (attachments && attachments.length > 0) {
-	        setMessageAttachments(prev => ({
-	          ...prev,
-	          [userMessage.id]: attachments,
-	        }));
-	      }
+      // Add user message to local state immediately (without metadata to avoid backend validation errors)
+      const userMessage: Message = {
+        id: crypto.randomUUID(),
+        role: 'user',
+        content,
+      };
+      lastRunUserMessageIdRef.current = userMessage.id;
 
-	      setMessages((prev) => {
-	        const next = [...prev, userMessage];
-	        messagesRef.current = next;
-	        return next;
-	      });
+      // Store attachments separately by message ID for UI display
+      if (attachments && attachments.length > 0) {
+        setMessageAttachments((prev) => ({
+          ...prev,
+          [userMessage.id]: attachments,
+        }));
+      }
 
-	      // Add user message to agent's message list
-	      agent.addMessage(userMessage);
+      setMessages((prev) => {
+        const next = [...prev, userMessage];
+        messagesRef.current = next;
+        return next;
+      });
+
+      // Add user message to agent's message list
+      agent.addMessage(userMessage);
 
       // Persist user message to backend database (best-effort)
-      if (sessionId && content.trim()) {
+      if (sessionId && (trimmedContent || hasPersistableAttachments)) {
+        const metadata: Record<string, unknown> = {};
+        if (hasPersistableAttachments) {
+          metadata.attachments = persistableAttachments;
+        }
+        if (!trimmedContent && hasPersistableAttachments) {
+          metadata.attachments_only = true;
+        }
+        const contentToPersist = trimmedContent
+          || (hasPersistableAttachments
+            ? `Uploaded ${persistableAttachments.length} attachment${persistableAttachments.length === 1 ? '' : 's'}.`
+            : content);
+
         // Fire-and-forget but with error logging - user experience is not blocked
         sessionsAPI.postMessage(sessionId, {
           message_type: 'user',
-          content: content.trim(),
+          content: contentToPersist,
+          metadata: Object.keys(metadata).length > 0 ? metadata : undefined,
+        }).then((record) => {
+          if (record?.id !== undefined && record?.id !== null) {
+            persistedMessageIdRef.current[userMessage.id] = String(record.id);
+          }
         }).catch((err) => {
           console.error('[Persistence] Failed to persist user message:', err);
         });
@@ -615,21 +759,21 @@ export function AgentProvider({
         });
       }
 
-	      // No need for placeholder - streaming will handle assistant messages
+        // No need for placeholder - streaming will handle assistant messages
 
-	      // Build forwardedProps to influence backend orchestration
-	      const stateProvider = getStringFromRecord(agent.state, 'provider');
-	      const stateModel = getStringFromRecord(agent.state, 'model');
-	      const stateAgentType = getAgentTypeFromState(agent.state);
-	      const forwardedProps: Record<string, unknown> = {
-	        // Prefer richer answers by default
-	        force_websearch: true,
-	        // Pass through provider/model to avoid backend defaulting to Gemini
-	        provider: stateProvider || 'google',
-	        model: stateModel || 'gemini-3-flash-preview',
-	        agent_type: hasLogAttachment(attachments) ? 'log_analysis' : stateAgentType,
-	        attachments: attachments && attachments.length > 0 ? attachments : undefined,
-	      };
+      // Build forwardedProps to influence backend orchestration
+      const stateProvider = getStringFromRecord(agent.state, 'provider');
+      const stateModel = getStringFromRecord(agent.state, 'model');
+      const stateAgentType = getAgentTypeFromState(agent.state);
+      const forwardedProps: Record<string, unknown> = {
+        // Prefer richer answers by default
+        force_websearch: true,
+        // Pass through provider/model to avoid backend defaulting to Gemini
+        provider: stateProvider || 'google',
+        model: stateModel || 'gemini-3-flash-preview',
+        agent_type: hasLogAttachment(attachments) ? 'log_analysis' : stateAgentType,
+        attachments: attachments && attachments.length > 0 ? attachments : undefined,
+      };
 
       // Run agent with streaming updates
       await agent.runAgent(
@@ -637,16 +781,16 @@ export function AgentProvider({
           forwardedProps,
         },
         {
-	          signal: abortControllerRef.current.signal,
+            signal: abortControllerRef.current.signal,
 
-	          // Handle streaming text content
-	          onTextMessageContentEvent: ({ event, textMessageBuffer }: { event: unknown; textMessageBuffer?: string }) => {
-	            const agentType = getAgentTypeFromState(agent.state);
-	            const delta = isRecord(event) && typeof event.delta === 'string' ? event.delta : '';
-	            let buffer = typeof textMessageBuffer === 'string' ? textMessageBuffer : delta;
-	            if (!buffer) {
-	              return;
-	            }
+            // Handle streaming text content
+            onTextMessageContentEvent: ({ event, textMessageBuffer }: { event: unknown; textMessageBuffer?: string }) => {
+              const agentType = getAgentTypeFromState(agent.state);
+              const delta = isRecord(event) && typeof event.delta === 'string' ? event.delta : '';
+              let buffer = typeof textMessageBuffer === 'string' ? textMessageBuffer : delta;
+              if (!buffer) {
+                return;
+              }
 
             // CRITICAL: Strip markdown images with data URIs - safety filter
             // Pattern: ![alt text](data:image/...)
@@ -657,487 +801,487 @@ export function AgentProvider({
               buffer = cleaned;
             }
 
-	            if (agentType === 'log_analysis') {
-	              const formatted = formatIfStructuredLog(buffer);
-	              if (formatted) {
-	                buffer = formatted;
-	              } else if (looksLikeJsonPayload(buffer)) {
-	                buffer = '';
-	              }
-	            }
-		            setMessages((prev) => {
-		              const lastMsg = prev[prev.length - 1];
-		              const next: Message[] = (() => {
-		                if (lastMsg && lastMsg.role === 'assistant') {
-		                  return [...prev.slice(0, -1), { ...lastMsg, content: buffer }];
-		                }
+              if (agentType === 'log_analysis') {
+                const formatted = formatIfStructuredLog(buffer);
+                if (formatted) {
+                  buffer = formatted;
+                } else if (looksLikeJsonPayload(buffer)) {
+                  buffer = '';
+                }
+              }
+                setMessages((prev) => {
+                  const lastMsg = prev[prev.length - 1];
+                  const next: Message[] = (() => {
+                    if (lastMsg && lastMsg.role === 'assistant') {
+                      return [...prev.slice(0, -1), { ...lastMsg, content: buffer }];
+                    }
 
-		                const assistantMessage: Message = {
-		                  id: crypto.randomUUID(),
-		                  role: 'assistant',
-		                  content: buffer,
-		                };
-		                return [...prev, assistantMessage];
-		              })();
+                    const assistantMessage: Message = {
+                      id: crypto.randomUUID(),
+                      role: 'assistant',
+                      content: buffer,
+                    };
+                    return [...prev, assistantMessage];
+                  })();
 
-		              messagesRef.current = next;
-		              return next;
-		            });
-	          },
+                  messagesRef.current = next;
+                  return next;
+                });
+            },
 
-	          // Handle complete message updates
-	          onMessagesChanged: ({ messages: agentMessages }: { messages: unknown[] }) => {
-	            // Log summary only to avoid RangeError with large content
-	            console.debug('[AG-UI] onMessagesChanged received:', agentMessages.length, 'messages');
+            // Handle complete message updates
+            onMessagesChanged: ({ messages: agentMessages }: { messages: unknown[] }) => {
+              // Log summary only to avoid RangeError with large content
+              console.debug('[AG-UI] onMessagesChanged received:', agentMessages.length, 'messages');
 
-	            let messagesWithIds = agentMessages
-	              .map((msg, idx) => normalizeIncomingMessage(msg, idx))
-	              .filter((msg): msg is Message => Boolean(msg));
+              let messagesWithIds = agentMessages
+                .map((msg, idx) => normalizeIncomingMessage(msg, idx))
+                .filter((msg): msg is Message => Boolean(msg));
 
-	            // CRITICAL: Strip markdown data URIs from all assistant messages.
-	            messagesWithIds = messagesWithIds.map((msg) => {
-	              if (msg.role !== 'assistant') return msg;
-	              const cleaned = stripMarkdownDataUriImages(msg.content);
-	              if (cleaned === msg.content) return msg;
-	              return { ...msg, content: cleaned };
-	            });
+              // CRITICAL: Strip markdown data URIs from all assistant messages.
+              messagesWithIds = messagesWithIds.map((msg) => {
+                if (msg.role !== 'assistant') return msg;
+                const cleaned = stripMarkdownDataUriImages(msg.content);
+                if (cleaned === msg.content) return msg;
+                return { ...msg, content: cleaned };
+              });
 
-	            try {
-	              agent.messages = messagesWithIds;
-	            } catch {
-	              // ignore
-	            }
+              try {
+                agent.messages = messagesWithIds;
+              } catch {
+                // ignore
+              }
 
-	            // If running log analysis (explicitly or inferred) and the stream ended with a tool result, surface a readable assistant reply.
-	            const explicitAgentType = getAgentTypeFromState(agent.state);
-	            const inferredLogAnalysis =
-	              explicitAgentType === 'log_analysis'
-	                ? null
-	                : inferLogAnalysisFromMessages(messagesWithIds);
-	            const isLogAnalysis = explicitAgentType === 'log_analysis' || Boolean(inferredLogAnalysis);
+              // If running log analysis (explicitly or inferred) and the stream ended with a tool result, surface a readable assistant reply.
+              const explicitAgentType = getAgentTypeFromState(agent.state);
+              const inferredLogAnalysis =
+                explicitAgentType === 'log_analysis'
+                  ? null
+                  : inferLogAnalysisFromMessages(messagesWithIds);
+              const isLogAnalysis = explicitAgentType === 'log_analysis' || Boolean(inferredLogAnalysis);
 
-	            // If we inferred log analysis while in auto mode, tag the agent state so downstream formatting stays consistent.
-	            if (!explicitAgentType && inferredLogAnalysis) {
-	              agent.setState({
-	                ...agent.state,
-	                agent_type: 'log_analysis',
-	              });
-	            }
+              // If we inferred log analysis while in auto mode, tag the agent state so downstream formatting stays consistent.
+              if (!explicitAgentType && inferredLogAnalysis) {
+                agent.setState({
+                  ...agent.state,
+                  agent_type: 'log_analysis',
+                });
+              }
 
-	            if (isLogAnalysis) {
-	              const lastToolFormatted = (() => {
-	                for (let i = messagesWithIds.length - 1; i >= 0; i -= 1) {
-	                  const msg = messagesWithIds[i];
-	                  if (msg.role !== 'tool') continue;
-	                  const formatted =
-	                    inferredLogAnalysis ||
-	                    formatLogAnalysisResult(msg.content) ||
-	                    formatIfStructuredLog(msg.content);
-	                  if (formatted) return formatted;
-	                }
-	                return null;
-	              })();
+              if (isLogAnalysis) {
+                const lastToolFormatted = (() => {
+                  for (let i = messagesWithIds.length - 1; i >= 0; i -= 1) {
+                    const msg = messagesWithIds[i];
+                    if (msg.role !== 'tool') continue;
+                    const formatted =
+                      inferredLogAnalysis ||
+                      formatLogAnalysisResult(msg.content) ||
+                      formatIfStructuredLog(msg.content);
+                    if (formatted) return formatted;
+                  }
+                  return null;
+                })();
 
-	              if (lastToolFormatted) {
-	                const lastAssistantIdx = findLastIndex(messagesWithIds, (m) => m.role === 'assistant');
+                if (lastToolFormatted) {
+                  const lastAssistantIdx = findLastIndex(messagesWithIds, (m) => m.role === 'assistant');
 
-	                if (lastAssistantIdx >= 0) {
-	                  const existing = messagesWithIds[lastAssistantIdx];
-	                  const existingText = existing.content.trim();
-	                  if (!existingText || looksLikeJsonPayload(existingText)) {
-	                    const next = [...messagesWithIds];
-	                    next[lastAssistantIdx] = {
-	                      ...existing,
-	                      content: lastToolFormatted,
-	                      metadata: { ...(existing.metadata ?? {}), structured_log: false },
-	                    };
-	                    messagesWithIds = next;
-	                  }
-	                } else {
-	                  messagesWithIds = [
-	                    ...messagesWithIds,
-	                    {
-	                      id: crypto.randomUUID(),
-	                      role: 'assistant',
-	                      content: lastToolFormatted,
-	                    },
-	                  ];
-	                }
-	              }
-	            }
+                  if (lastAssistantIdx >= 0) {
+                    const existing = messagesWithIds[lastAssistantIdx];
+                    const existingText = existing.content.trim();
+                    if (!existingText || looksLikeJsonPayload(existingText)) {
+                      const next = [...messagesWithIds];
+                      next[lastAssistantIdx] = {
+                        ...existing,
+                        content: lastToolFormatted,
+                        metadata: { ...(existing.metadata ?? {}), structured_log: false },
+                      };
+                      messagesWithIds = next;
+                    }
+                  } else {
+                    messagesWithIds = [
+                      ...messagesWithIds,
+                      {
+                        id: crypto.randomUUID(),
+                        role: 'assistant',
+                        content: lastToolFormatted,
+                      },
+                    ];
+                  }
+                }
+              }
 
-	            // Format or hide raw structured-log dumps for log-analysis runs
-	            if (isLogAnalysis) {
-	              messagesWithIds = messagesWithIds.map((msg) => {
-	                if (msg.role !== 'assistant') return msg;
-	                const formatted = formatIfStructuredLog(msg.content);
-	                if (!formatted) return msg;
-	                return {
-	                  ...msg,
-	                  content: formatted,
-	                  metadata: { ...(msg.metadata ?? {}), structured_log: true },
-	                };
-	              });
+              // Format or hide raw structured-log dumps for log-analysis runs
+              if (isLogAnalysis) {
+                messagesWithIds = messagesWithIds.map((msg) => {
+                  if (msg.role !== 'assistant') return msg;
+                  const formatted = formatIfStructuredLog(msg.content);
+                  if (!formatted) return msg;
+                  return {
+                    ...msg,
+                    content: formatted,
+                    metadata: { ...(msg.metadata ?? {}), structured_log: true },
+                  };
+                });
 
-	              const hasReadableAssistant = messagesWithIds.some(
-	                (msg) => msg.role === 'assistant' && msg.metadata?.structured_log !== true,
-	              );
-	              if (hasReadableAssistant) {
-	                messagesWithIds = messagesWithIds.filter(
-	                  (msg) => !(msg.role === 'assistant' && msg.metadata?.structured_log === true),
-	                );
-	              }
-	            }
+                const hasReadableAssistant = messagesWithIds.some(
+                  (msg) => msg.role === 'assistant' && msg.metadata?.structured_log !== true,
+                );
+                if (hasReadableAssistant) {
+                  messagesWithIds = messagesWithIds.filter(
+                    (msg) => !(msg.role === 'assistant' && msg.metadata?.structured_log === true),
+                  );
+                }
+              }
 
-	            if (messagesWithIds.length > 0) {
-	              const last = messagesWithIds[messagesWithIds.length - 1];
-	              console.debug('[AG-UI] onMessagesChanged last message:', {
-	                role: last.role,
-	                preview: last.content.slice(0, 120),
-	              });
-	            }
+              if (messagesWithIds.length > 0) {
+                const last = messagesWithIds[messagesWithIds.length - 1];
+                console.debug('[AG-UI] onMessagesChanged last message:', {
+                  role: last.role,
+                  preview: last.content.slice(0, 120),
+                });
+              }
 
-	            // Preserve/derive an assistant reply for log analysis when the backend sends only tool/user messages.
-	            let nextMessages = messagesWithIds;
-	            if (isLogAnalysis) {
-	              const hasAssistant = nextMessages.some((m) => m.role === 'assistant');
-	              if (!hasAssistant) {
-	                // Prefer a formatted tool payload from the latest tool message
-	                const formattedFromTool = (() => {
-	                  for (let i = nextMessages.length - 1; i >= 0; i -= 1) {
-	                    const msg = nextMessages[i];
-	                    if (msg.role !== 'tool') continue;
-	                    const formatted =
-	                      formatLogAnalysisResult(msg.content) ||
-	                      formatIfStructuredLog(msg.content);
-	                    if (formatted) return formatted;
-	                  }
-	                  return null;
-	                })();
+              // Preserve/derive an assistant reply for log analysis when the backend sends only tool/user messages.
+              let nextMessages = messagesWithIds;
+              if (isLogAnalysis) {
+                const hasAssistant = nextMessages.some((m) => m.role === 'assistant');
+                if (!hasAssistant) {
+                  // Prefer a formatted tool payload from the latest tool message
+                  const formattedFromTool = (() => {
+                    for (let i = nextMessages.length - 1; i >= 0; i -= 1) {
+                      const msg = nextMessages[i];
+                      if (msg.role !== 'tool') continue;
+                      const formatted =
+                        formatLogAnalysisResult(msg.content) ||
+                        formatIfStructuredLog(msg.content);
+                      if (formatted) return formatted;
+                    }
+                    return null;
+                  })();
 
-	                if (formattedFromTool) {
-	                  nextMessages = [
-	                    ...nextMessages,
-	                    {
-	                      id: crypto.randomUUID(),
-	                      role: 'assistant',
-	                      content: formattedFromTool,
-	                    },
-	                  ];
-	                } else {
-	                  // Fall back to the last assistant we already showed (e.g., from streaming buffer)
-	                  const lastAssistantIdx = findLastIndex(messagesRef.current, (m) => m.role === 'assistant');
-	                  if (lastAssistantIdx >= 0) {
-	                    nextMessages = [...nextMessages, messagesRef.current[lastAssistantIdx]];
-	                  }
-	                }
-	              }
-	            }
+                  if (formattedFromTool) {
+                    nextMessages = [
+                      ...nextMessages,
+                      {
+                        id: crypto.randomUUID(),
+                        role: 'assistant',
+                        content: formattedFromTool,
+                      },
+                    ];
+                  } else {
+                    // Fall back to the last assistant we already showed (e.g., from streaming buffer)
+                    const lastAssistantIdx = findLastIndex(messagesRef.current, (m) => m.role === 'assistant');
+                    if (lastAssistantIdx >= 0) {
+                      nextMessages = [...nextMessages, messagesRef.current[lastAssistantIdx]];
+                    }
+                  }
+                }
+              }
 
-	            const uiLastMessage = messagesRef.current[messagesRef.current.length - 1];
-	            const uiLastAssistant =
-	              uiLastMessage && uiLastMessage.role === 'assistant' && uiLastMessage.content.trim()
-	                ? uiLastMessage
-	                : null;
+              const uiLastMessage = messagesRef.current[messagesRef.current.length - 1];
+              const uiLastAssistant =
+                uiLastMessage && uiLastMessage.role === 'assistant' && uiLastMessage.content.trim()
+                  ? uiLastMessage
+                  : null;
 
-	            if (uiLastAssistant) {
-	              const uiText = uiLastAssistant.content;
-	              const uiTrimmed = uiText.trim();
-	              if (uiTrimmed && !looksLikeJsonPayload(uiTrimmed)) {
-	                const lastAssistantIdx = findLastIndex(nextMessages, (m) => m.role === 'assistant');
+              if (uiLastAssistant) {
+                const uiText = uiLastAssistant.content;
+                const uiTrimmed = uiText.trim();
+                if (uiTrimmed && !looksLikeJsonPayload(uiTrimmed)) {
+                  const lastAssistantIdx = findLastIndex(nextMessages, (m) => m.role === 'assistant');
 
-	                if (lastAssistantIdx >= 0) {
-	                  const snapText = nextMessages[lastAssistantIdx]?.content ?? '';
-	                  const snapTrimmed = snapText.trim();
-	                  if (!snapTrimmed || (uiTrimmed.length > snapTrimmed.length && uiTrimmed.startsWith(snapTrimmed))) {
-	                    const next = [...nextMessages];
-	                    next[lastAssistantIdx] = {
-	                      ...next[lastAssistantIdx],
-	                      content: uiText,
-	                    };
-	                    nextMessages = next;
-	                  }
-	                } else {
-	                  nextMessages = [
-	                    ...nextMessages,
-	                    {
-	                      ...uiLastAssistant,
-	                      content: uiText,
-	                    },
-	                  ];
-	                }
-	              }
-	            }
+                  if (lastAssistantIdx >= 0) {
+                    const snapText = nextMessages[lastAssistantIdx]?.content ?? '';
+                    const snapTrimmed = snapText.trim();
+                    if (!snapTrimmed || (uiTrimmed.length > snapTrimmed.length && uiTrimmed.startsWith(snapTrimmed))) {
+                      const next = [...nextMessages];
+                      next[lastAssistantIdx] = {
+                        ...next[lastAssistantIdx],
+                        content: uiText,
+                      };
+                      nextMessages = next;
+                    }
+                  } else {
+                    nextMessages = [
+                      ...nextMessages,
+                      {
+                        ...uiLastAssistant,
+                        content: uiText,
+                      },
+                    ];
+                  }
+                }
+              }
 
-	            try {
-	              agent.messages = nextMessages;
-	            } catch {
-	              // ignore
-	            }
+              try {
+                agent.messages = nextMessages;
+              } catch {
+                // ignore
+              }
 
-	            // CRITICAL: Update messagesRef synchronously before setMessages
-	            // This ensures the finally block sees the latest messages.
-	            messagesRef.current = nextMessages;
+              // CRITICAL: Update messagesRef synchronously before setMessages
+              // This ensures the finally block sees the latest messages.
+              messagesRef.current = nextMessages;
 
-	            // Note: Persistence moved to finally block to ensure all artifacts are collected
-	            // before persisting (custom events like article_artifact arrive after onMessagesChanged)
-	            setMessages(nextMessages);
-	          },
+              // Note: Persistence moved to finally block to ensure all artifacts are collected
+              // before persisting (custom events like article_artifact arrive after onMessagesChanged)
+              setMessages(nextMessages);
+            },
 
-	          // Handle custom events (interrupts, timeline updates, tool evidence)
-	          onCustomEvent: ({ event }: { event: unknown }) => {
-	            if (!isRecord(event) || typeof event.name !== 'string') return undefined;
+            // Handle custom events (interrupts, timeline updates, tool evidence)
+            onCustomEvent: ({ event }: { event: unknown }) => {
+              if (!isRecord(event) || typeof event.name !== 'string') return undefined;
 
-	            const payloadValue =
-	              'value' in event
-	                ? event.value
-	                : 'data' in event
-	                  ? event.data
-	                  : undefined;
+              const payloadValue =
+                'value' in event
+                  ? event.value
+                  : 'data' in event
+                    ? event.data
+                    : undefined;
 
-	            if (event.name === 'interrupt' || event.name === 'human_input_required') {
-	              if (isRecord(payloadValue)) {
-	                setInterrupt(payloadValue as InterruptPayload);
-	              }
+              if (event.name === 'interrupt' || event.name === 'human_input_required') {
+                if (isRecord(payloadValue)) {
+                  setInterrupt(payloadValue as InterruptPayload);
+                }
 
-	              // Return a promise that will be resolved by user action
-	              return new Promise<string>((resolve) => {
-	                interruptResolverRef.current = resolve;
-	              });
-	            }
+                // Return a promise that will be resolved by user action
+                return new Promise<string>((resolve) => {
+                  interruptResolverRef.current = resolve;
+                });
+              }
 
-	            const maybeAgentEvent: unknown = { name: event.name, value: payloadValue };
-	            if (isAgentCustomEvent(maybeAgentEvent)) {
-	              if (maybeAgentEvent.name === 'agent_timeline_update') {
-	                const operations = Array.isArray(maybeAgentEvent.value.operations)
-	                  ? maybeAgentEvent.value.operations
-	                  : [];
-	                setTimelineOperations(operations);
-	                if (typeof maybeAgentEvent.value.currentOperationId === 'string') {
-	                  setCurrentOperationId(maybeAgentEvent.value.currentOperationId);
-	                }
+              const maybeAgentEvent: unknown = { name: event.name, value: payloadValue };
+              if (isAgentCustomEvent(maybeAgentEvent)) {
+                if (maybeAgentEvent.name === 'agent_timeline_update') {
+                  const operations = Array.isArray(maybeAgentEvent.value.operations)
+                    ? maybeAgentEvent.value.operations
+                    : [];
+                  setTimelineOperations(operations);
+                  if (typeof maybeAgentEvent.value.currentOperationId === 'string') {
+                    setCurrentOperationId(maybeAgentEvent.value.currentOperationId);
+                  }
 
-	                // Fallback: extract todos from timeline operations (type === 'todo')
-	                const timelineTodos = operations
-	                  .filter((op) => op.type === 'todo')
-	                  .map((op) => (isRecord(op.metadata) ? op.metadata.todo : undefined))
-	                  .map(normalizeTodoItem)
-	                  .filter((todo): todo is TodoItem => Boolean(todo));
-	                if (timelineTodos.length) {
-	                  setTodos(timelineTodos);
-	                }
-	              } else if (maybeAgentEvent.name === 'tool_evidence_update') {
-	                const normalizedEvidence = normalizeToolEvidenceUpdateEvent(maybeAgentEvent.value);
-	                if (!normalizedEvidence) return undefined;
+                  // Fallback: extract todos from timeline operations (type === 'todo')
+                  const timelineTodos = operations
+                    .filter((op) => op.type === 'todo')
+                    .map((op) => (isRecord(op.metadata) ? op.metadata.todo : undefined))
+                    .map(normalizeTodoItem)
+                    .filter((todo): todo is TodoItem => Boolean(todo));
+                  if (timelineTodos.length) {
+                    setTodos(timelineTodos);
+                  }
+                } else if (maybeAgentEvent.name === 'tool_evidence_update') {
+                  const normalizedEvidence = normalizeToolEvidenceUpdateEvent(maybeAgentEvent.value);
+                  if (!normalizedEvidence) return undefined;
 
-	                setToolEvidence((prev) => ({
-	                  ...prev,
-	                  [normalizedEvidence.toolCallId]: normalizedEvidence,
-	                }));
+                  setToolEvidence((prev) => ({
+                    ...prev,
+                    [normalizedEvidence.toolCallId]: normalizedEvidence,
+                  }));
 
-	                if (normalizedEvidence.toolName === 'write_todos') {
-	                  const extracted = extractTodosFromPayload(
-	                    normalizedEvidence.output ??
-	                      normalizedEvidence.result ??
-	                      normalizedEvidence.data ??
-	                      normalizedEvidence.value,
-	                  );
-	                  const nextTodos = normalizeTodoItems(extracted);
-	                  if (nextTodos.length) {
-	                    setTodos(nextTodos);
-	                  }
-	                }
-	              } else if (maybeAgentEvent.name === 'agent_thinking_trace') {
-	                const value = maybeAgentEvent.value;
-	                console.debug('[AG-UI] Thinking trace update:', value);
-	                setThinkingTrace((prev) => {
-	                  if (Array.isArray(value.thinkingTrace)) {
-	                    return mapTraceList(value.thinkingTrace);
-	                  }
-	                  if (value.latestStep) {
-	                    const latest = normalizeTraceStep(value.latestStep);
-	                    const next = [...prev];
-	                    const idx = next.findIndex((step) => step.id === latest.id);
-	                    if (idx >= 0) {
-	                      next[idx] = latest;
-	                      return next;
-	                    }
-	                    next.push(latest);
-	                    return next;
-	                  }
-	                  return prev;
-	                });
-	                if (typeof value.activeStepId === 'string') {
-	                  setActiveTraceStepId(value.activeStepId);
-	                } else if (value.latestStep?.id) {
-	                  setActiveTraceStepId(String(value.latestStep.id));
-	                }
-	              } else if (maybeAgentEvent.name === 'agent_todos_update') {
-	                const nextTodos = normalizeTodoItems(maybeAgentEvent.value.todos);
-	                console.debug('[AG-UI] Todos update:', nextTodos.length, 'items');
-	                setTodos(nextTodos);
-	              } else if (maybeAgentEvent.name === 'image_artifact') {
-	                const payload = maybeAgentEvent.value;
-	                // Log summary only (avoid logging large base64 imageData)
-	                console.debug('[AG-UI] Image artifact event:', payload?.title, 'imageData length:', payload?.imageData?.length);
-	                if (payload?.imageData) {
-	                  const store = getGlobalArtifactStore();
-	                  if (store) {
-	                    const state = store.getState();
-	                    state.addArtifact({
-	                      id: payload.id,
-	                      type: 'image',
-	                      title: payload.title || 'Generated Image',
-	                      content: payload.content || '',
-	                      messageId: payload.messageId,
-	                      imageData: payload.imageData,
-	                      mimeType: payload.mimeType || 'image/png',
-	                      altText: payload.altText,
-	                      aspectRatio: payload.aspectRatio,
-	                      resolution: payload.resolution,
-	                    });
-	                    state.setCurrentArtifact(payload.id);
-	                    state.setArtifactsVisible(true);
-	                  }
-	                  // Track for persistence (exclude messageId - will be set on restore)
-	                  pendingArtifactsRef.current.push({
-	                    id: payload.id,
-	                    type: 'image',
-	                    title: payload.title || 'Generated Image',
-	                    content: payload.content || '',
-	                    imageData: payload.imageData,
-	                    mimeType: payload.mimeType || 'image/png',
-	                    altText: payload.altText,
-	                    aspectRatio: payload.aspectRatio,
-	                    resolution: payload.resolution,
-	                  });
-	                }
-	              }
-	              return undefined;
-	            }
+                  if (normalizedEvidence.toolName === 'write_todos') {
+                    const extracted = extractTodosFromPayload(
+                      normalizedEvidence.output ??
+                        normalizedEvidence.result ??
+                        normalizedEvidence.data ??
+                        normalizedEvidence.value,
+                    );
+                    const nextTodos = normalizeTodoItems(extracted);
+                    if (nextTodos.length) {
+                      setTodos(nextTodos);
+                    }
+                  }
+                } else if (maybeAgentEvent.name === 'agent_thinking_trace') {
+                  const value = maybeAgentEvent.value;
+                  console.debug('[AG-UI] Thinking trace update:', value);
+                  setThinkingTrace((prev) => {
+                    if (Array.isArray(value.thinkingTrace)) {
+                      return mapTraceList(value.thinkingTrace);
+                    }
+                    if (value.latestStep) {
+                      const latest = normalizeTraceStep(value.latestStep);
+                      const next = [...prev];
+                      const idx = next.findIndex((step) => step.id === latest.id);
+                      if (idx >= 0) {
+                        next[idx] = latest;
+                        return next;
+                      }
+                      next.push(latest);
+                      return next;
+                    }
+                    return prev;
+                  });
+                  if (typeof value.activeStepId === 'string') {
+                    setActiveTraceStepId(value.activeStepId);
+                  } else if (value.latestStep?.id) {
+                    setActiveTraceStepId(String(value.latestStep.id));
+                  }
+                } else if (maybeAgentEvent.name === 'agent_todos_update') {
+                  const nextTodos = normalizeTodoItems(maybeAgentEvent.value.todos);
+                  console.debug('[AG-UI] Todos update:', nextTodos.length, 'items');
+                  setTodos(nextTodos);
+                } else if (maybeAgentEvent.name === 'image_artifact') {
+                  const payload = maybeAgentEvent.value;
+                  // Log summary only (avoid logging large base64 imageData)
+                  console.debug('[AG-UI] Image artifact event:', payload?.title, 'imageData length:', payload?.imageData?.length);
+                  if (payload?.imageData) {
+                    const store = getGlobalArtifactStore();
+                    if (store) {
+                      const state = store.getState();
+                      state.addArtifact({
+                        id: payload.id,
+                        type: 'image',
+                        title: payload.title || 'Generated Image',
+                        content: payload.content || '',
+                        messageId: payload.messageId,
+                        imageData: payload.imageData,
+                        mimeType: payload.mimeType || 'image/png',
+                        altText: payload.altText,
+                        aspectRatio: payload.aspectRatio,
+                        resolution: payload.resolution,
+                      });
+                      state.setCurrentArtifact(payload.id);
+                      state.setArtifactsVisible(true);
+                    }
+                    // Track for persistence (exclude messageId - will be set on restore)
+                    pendingArtifactsRef.current.push({
+                      id: payload.id,
+                      type: 'image',
+                      title: payload.title || 'Generated Image',
+                      content: payload.content || '',
+                      imageData: payload.imageData,
+                      mimeType: payload.mimeType || 'image/png',
+                      altText: payload.altText,
+                      aspectRatio: payload.aspectRatio,
+                      resolution: payload.resolution,
+                    });
+                  }
+                }
+                return undefined;
+              }
 
-	            // Custom (non-AG-UI) events
-	            if (event.name === 'article_artifact' && isRecord(payloadValue)) {
-	              const id = payloadValue.id;
-	              const content = payloadValue.content;
-	              if (typeof id === 'string' && typeof content === 'string') {
-	                const title = typeof payloadValue.title === 'string' ? payloadValue.title : 'Article';
-	                const messageId = typeof payloadValue.messageId === 'string' ? payloadValue.messageId : '';
-	                console.debug('[AG-UI] Article artifact event:', title, 'length:', content.length);
+              // Custom (non-AG-UI) events
+              if (event.name === 'article_artifact' && isRecord(payloadValue)) {
+                const id = payloadValue.id;
+                const content = payloadValue.content;
+                if (typeof id === 'string' && typeof content === 'string') {
+                  const title = typeof payloadValue.title === 'string' ? payloadValue.title : 'Article';
+                  const messageId = typeof payloadValue.messageId === 'string' ? payloadValue.messageId : '';
+                  console.debug('[AG-UI] Article artifact event:', title, 'length:', content.length);
 
-	                const store = getGlobalArtifactStore();
-	                if (store) {
-	                  const state = store.getState();
-	                  state.addArtifact({
-	                    id,
-	                    type: 'article',
-	                    title,
-	                    content,
-	                    messageId,
-	                  });
-	                  state.setCurrentArtifact(id);
-	                  state.setArtifactsVisible(true);
-	                }
+                  const store = getGlobalArtifactStore();
+                  if (store) {
+                    const state = store.getState();
+                    state.addArtifact({
+                      id,
+                      type: 'article',
+                      title,
+                      content,
+                      messageId,
+                    });
+                    state.setCurrentArtifact(id);
+                    state.setArtifactsVisible(true);
+                  }
 
-	                // Track for persistence (exclude messageId - will be set on restore)
-	                pendingArtifactsRef.current.push({
-	                  id,
-	                  type: 'article',
-	                  title,
-	                  content,
-	                });
-	              }
-	            }
+                  // Track for persistence (exclude messageId - will be set on restore)
+                  pendingArtifactsRef.current.push({
+                    id,
+                    type: 'article',
+                    title,
+                    content,
+                  });
+                }
+              }
 
-	            return undefined;
-	          },
+              return undefined;
+            },
 
-	          // Handle state changes (for debugging)
-	          onStateChanged: ({ state }: { state: unknown }) => {
-	            // Log summary only to avoid RangeError with large state objects
-	            const keys = isRecord(state) ? Object.keys(state).join(', ') : '';
-	            console.debug('[AG-UI] State changed:', keys);
-	            try {
-	              const meta = (() => {
-	                if (!isRecord(state)) return null;
-	                const config = state.config;
-	                if (!isRecord(config)) return null;
-	                const configurable = config.configurable;
-	                if (!isRecord(configurable)) return null;
-	                const metadata = configurable.metadata;
-	                if (!isRecord(metadata)) return null;
-	                return metadata;
-	              })();
-	              if (meta && typeof meta.resolved_model === 'string') {
-	                setResolvedModel(meta.resolved_model);
-	              }
-	              if (meta && typeof meta.resolved_task_type === 'string') {
-	                setResolvedTaskType(meta.resolved_task_type);
-	              }
-	            } catch (err) {
-	              console.debug('[AG-UI] meta parse failed:', err);
-	            }
-	          },
+            // Handle state changes (for debugging)
+            onStateChanged: ({ state }: { state: unknown }) => {
+              // Log summary only to avoid RangeError with large state objects
+              const keys = isRecord(state) ? Object.keys(state).join(', ') : '';
+              console.debug('[AG-UI] State changed:', keys);
+              try {
+                const meta = (() => {
+                  if (!isRecord(state)) return null;
+                  const config = state.config;
+                  if (!isRecord(config)) return null;
+                  const configurable = config.configurable;
+                  if (!isRecord(configurable)) return null;
+                  const metadata = configurable.metadata;
+                  if (!isRecord(metadata)) return null;
+                  return metadata;
+                })();
+                if (meta && typeof meta.resolved_model === 'string') {
+                  setResolvedModel(meta.resolved_model);
+                }
+                if (meta && typeof meta.resolved_task_type === 'string') {
+                  setResolvedTaskType(meta.resolved_task_type);
+                }
+              } catch (err) {
+                console.debug('[AG-UI] meta parse failed:', err);
+              }
+            },
 
-	          // Handle tool calls (for debugging + UI visibility)
-	          onToolCallStartEvent: ({ event }: { event: unknown }) => {
-	            const toolCallId =
-	              isRecord(event) && typeof event.toolCallId === 'string'
-	                ? event.toolCallId
-	                : isRecord(event) && typeof event.tool_call_id === 'string'
-	                  ? event.tool_call_id
-	                  : crypto.randomUUID();
-	            const toolCallName =
-	              isRecord(event) && typeof event.toolCallName === 'string'
-	                ? event.toolCallName
-	                : isRecord(event) && typeof event.tool_call_name === 'string'
-	                  ? event.tool_call_name
-	                  : toolCallId;
+            // Handle tool calls (for debugging + UI visibility)
+            onToolCallStartEvent: ({ event }: { event: unknown }) => {
+              const toolCallId =
+                isRecord(event) && typeof event.toolCallId === 'string'
+                  ? event.toolCallId
+                  : isRecord(event) && typeof event.tool_call_id === 'string'
+                    ? event.tool_call_id
+                    : crypto.randomUUID();
+              const toolCallName =
+                isRecord(event) && typeof event.toolCallName === 'string'
+                  ? event.toolCallName
+                  : isRecord(event) && typeof event.tool_call_name === 'string'
+                    ? event.tool_call_name
+                    : toolCallId;
 
-	            console.debug('[AG-UI] Tool call started:', toolCallName, toolCallId);
-	            toolNameByIdRef.current[toolCallId] = toolCallName;
-	            setActiveTools((prev) => (prev.includes(toolCallName) ? prev : [...prev, toolCallName]));
-	          },
+              console.debug('[AG-UI] Tool call started:', toolCallName, toolCallId);
+              toolNameByIdRef.current[toolCallId] = toolCallName;
+              setActiveTools((prev) => (prev.includes(toolCallName) ? prev : [...prev, toolCallName]));
+            },
 
-	          onToolCallResultEvent: ({ event }: { event: unknown }) => {
-	            const id =
-	              isRecord(event) && typeof event.toolCallId === 'string'
-	                ? event.toolCallId
-	                : isRecord(event) && typeof event.tool_call_id === 'string'
-	                  ? event.tool_call_id
-	                  : undefined;
-	            const name =
-	              (id ? toolNameByIdRef.current[id] : undefined) ||
-	              (isRecord(event) && typeof event.toolCallName === 'string' ? event.toolCallName : undefined) ||
-	              (isRecord(event) && typeof event.tool_call_name === 'string' ? event.tool_call_name : undefined);
+            onToolCallResultEvent: ({ event }: { event: unknown }) => {
+              const id =
+                isRecord(event) && typeof event.toolCallId === 'string'
+                  ? event.toolCallId
+                  : isRecord(event) && typeof event.tool_call_id === 'string'
+                    ? event.tool_call_id
+                    : undefined;
+              const name =
+                (id ? toolNameByIdRef.current[id] : undefined) ||
+                (isRecord(event) && typeof event.toolCallName === 'string' ? event.toolCallName : undefined) ||
+                (isRecord(event) && typeof event.tool_call_name === 'string' ? event.tool_call_name : undefined);
 
-	            console.debug('[AG-UI] Tool call result:', id);
+              console.debug('[AG-UI] Tool call result:', id);
 
-	            // Try to extract todos from the result payload even if it arrives as a JSON string
-	            const output = isRecord(event)
-	              ? (event.result ?? event.output ?? event.data ?? {})
-	              : {};
-	            const extracted = extractTodosFromPayload(output);
-	            if (name === 'write_todos') {
-	              const nextTodos = normalizeTodoItems(extracted);
-	              if (nextTodos.length) setTodos(nextTodos);
-	            }
+              // Try to extract todos from the result payload even if it arrives as a JSON string
+              const output = isRecord(event)
+                ? (event.result ?? event.output ?? event.data ?? {})
+                : {};
+              const extracted = extractTodosFromPayload(output);
+              if (name === 'write_todos') {
+                const nextTodos = normalizeTodoItems(extracted);
+                if (nextTodos.length) setTodos(nextTodos);
+              }
 
-		            if (name) {
-		              if (id) {
-		                delete toolNameByIdRef.current[id];
-		              }
-		              setActiveTools((prev) => prev.filter((n) => n !== name));
-		            }
-		          },
+                if (name) {
+                  if (id) {
+                    delete toolNameByIdRef.current[id];
+                  }
+                  setActiveTools((prev) => prev.filter((n) => n !== name));
+                }
+              },
 
-	          // Handle errors
-	          onRunFailed: ({ error: runError }: { error: unknown }) => {
-	            console.error('[AG-UI] Run failed:', runError);
-	            setError(runError instanceof Error ? runError : new Error('Agent run failed'));
-	          },
-	        },
-	      );
+            // Handle errors
+            onRunFailed: ({ error: runError }: { error: unknown }) => {
+              console.error('[AG-UI] Run failed:', runError);
+              setError(runError instanceof Error ? runError : new Error('Agent run failed'));
+            },
+          },
+        );
 
       // Clear attachments after sending
       if (attachments && attachments.length > 0) {
@@ -1152,87 +1296,90 @@ export function AgentProvider({
         console.error('[AG-UI] Error sending message:', err);
         setError(err);
       }
-	    } finally {
-	      setIsStreaming(false);
-	      abortControllerRef.current = null;
-	      setActiveTools([]);
+      } finally {
+        setIsStreaming(false);
+        abortControllerRef.current = null;
+        setActiveTools([]);
 
-	      // Persist final assistant message after run completes so all artifacts/custom events are captured.
-	      if (sessionId && !assistantPersistedRef.current) {
-	        const sessionKey = String(sessionId);
-	        const currentMessages = messagesRef.current;
+        // Persist final assistant message after run completes so all artifacts/custom events are captured.
+        if (sessionId && !assistantPersistedRef.current) {
+          const sessionKey = String(sessionId);
+          const currentMessages = messagesRef.current;
 
-	        // Only persist an assistant message if it happened AFTER the user message in this run.
-	        const runUserMessageId = lastRunUserMessageIdRef.current;
-	        const runUserIndex = runUserMessageId
-	          ? findLastIndex(currentMessages, (msg) => msg.id === runUserMessageId)
-	          : -1;
+          // Only persist an assistant message if it happened AFTER the user message in this run.
+          const runUserMessageId = lastRunUserMessageIdRef.current;
+          const runUserIndex = runUserMessageId
+            ? findLastIndex(currentMessages, (msg) => msg.id === runUserMessageId)
+            : -1;
 
-	        const candidateIndex = findLastIndex(
-	          currentMessages,
-	          (msg) => msg.role === 'assistant' && msg.content.trim().length > 0,
-	        );
+          const candidateIndex = findLastIndex(
+            currentMessages,
+            (msg) => msg.role === 'assistant' && msg.content.trim().length > 0,
+          );
 
-	        // Early exit conditions - use nested if instead of return to avoid masking exceptions
-	        const shouldPersist = runUserIndex >= 0 && candidateIndex > runUserIndex;
+          // Early exit conditions - use nested if instead of return to avoid masking exceptions
+          const shouldPersist = runUserIndex >= 0 && candidateIndex > runUserIndex;
 
-	        // Only continue with persistence if conditions are met
-	        if (shouldPersist && candidateIndex >= 0) {
-	          const candidate = currentMessages[candidateIndex];
+          // Only continue with persistence if conditions are met
+          if (shouldPersist && candidateIndex >= 0) {
+            const candidate = currentMessages[candidateIndex];
 
-	          const lastPersistedId = lastPersistedAssistantIdBySessionRef.current[sessionKey];
-	          const lastPersistedIndex = lastPersistedId
-	            ? findLastIndex(currentMessages, (msg) => msg.id === lastPersistedId)
-	            : -1;
+            const lastPersistedId = lastPersistedAssistantIdBySessionRef.current[sessionKey];
+            const lastPersistedIndex = lastPersistedId
+              ? findLastIndex(currentMessages, (msg) => msg.id === lastPersistedId)
+              : -1;
 
-	          // Only persist if we've advanced beyond the last successfully persisted assistant message.
-	          if (candidateIndex > lastPersistedIndex) {
-	            const artifacts = pendingArtifactsRef.current.length > 0
-	              ? pendingArtifactsRef.current
-	              : undefined;
-	            const mergedMetadata = artifacts
-	              ? { ...(candidate.metadata ?? {}), artifacts }
-	              : candidate.metadata;
-	            const metadataToPersist =
-	              mergedMetadata && Object.keys(mergedMetadata).length ? mergedMetadata : undefined;
+            // Only persist if we've advanced beyond the last successfully persisted assistant message.
+            if (candidateIndex > lastPersistedIndex) {
+              const artifacts = pendingArtifactsRef.current.length > 0
+                ? pendingArtifactsRef.current
+                : undefined;
+              const mergedMetadata = artifacts
+                ? { ...(candidate.metadata ?? {}), artifacts }
+                : candidate.metadata;
+              const metadataToPersist =
+                mergedMetadata && Object.keys(mergedMetadata).length ? mergedMetadata : undefined;
 
-	            assistantPersistedRef.current = true;
-	            const agentType = getPersistedAgentTypeFromState(agent.state);
+              assistantPersistedRef.current = true;
+              const agentType = getPersistedAgentTypeFromState(agent.state);
 
-	            console.debug(
-	              '[Persistence] Persisting assistant message',
-	              { id: candidate.id, artifacts: artifacts?.length || 0 },
-	            );
+              console.debug(
+                '[Persistence] Persisting assistant message',
+                { id: candidate.id, artifacts: artifacts?.length || 0 },
+              );
 
-	            sessionsAPI.postMessage(sessionId, {
-	              message_type: 'assistant',
-	              content: candidate.content,
-	              agent_type: agentType,
-	              metadata: metadataToPersist,
-	            }).then(() => {
-	              const latestMessages = messagesRef.current;
-	              const currentLastId = lastPersistedAssistantIdBySessionRef.current[sessionKey];
-	              const currentLastIndex = currentLastId
-	                ? findLastIndex(latestMessages, (msg) => msg.id === currentLastId)
-	                : -1;
-	              const candidateIndexNow = findLastIndex(latestMessages, (msg) => msg.id === candidate.id);
+            sessionsAPI.postMessage(sessionId, {
+              message_type: 'assistant',
+              content: candidate.content,
+              agent_type: agentType,
+              metadata: metadataToPersist,
+            }).then((record) => {
+              if (record?.id !== undefined && record?.id !== null) {
+                persistedMessageIdRef.current[candidate.id] = String(record.id);
+              }
+              const latestMessages = messagesRef.current;
+              const currentLastId = lastPersistedAssistantIdBySessionRef.current[sessionKey];
+              const currentLastIndex = currentLastId
+                ? findLastIndex(latestMessages, (msg) => msg.id === currentLastId)
+                : -1;
+                const candidateIndexNow = findLastIndex(latestMessages, (msg) => msg.id === candidate.id);
 
-	              if (candidateIndexNow >= 0 && candidateIndexNow > currentLastIndex) {
-	                lastPersistedAssistantIdBySessionRef.current[sessionKey] = candidate.id;
-	              } else if (candidateIndexNow < 0 && currentLastIndex < 0) {
-	                lastPersistedAssistantIdBySessionRef.current[sessionKey] = candidate.id;
-	              }
+                if (candidateIndexNow >= 0 && candidateIndexNow > currentLastIndex) {
+                  lastPersistedAssistantIdBySessionRef.current[sessionKey] = candidate.id;
+                } else if (candidateIndexNow < 0 && currentLastIndex < 0) {
+                  lastPersistedAssistantIdBySessionRef.current[sessionKey] = candidate.id;
+                }
 
-	              console.debug('[Persistence] Assistant message persisted successfully');
-	            }).catch((err) => {
-	              console.error('[Persistence] Failed to persist assistant message:', err);
-	              assistantPersistedRef.current = false;
-	            });
-	          }
-	        }
-	      }
-	    }
-	  }, [agent, isStreaming, sessionId]);
+                console.debug('[Persistence] Assistant message persisted successfully');
+              }).catch((err) => {
+                console.error('[Persistence] Failed to persist assistant message:', err);
+                assistantPersistedRef.current = false;
+              });
+            }
+          }
+        }
+      }
+    }, [agent, isStreaming, sessionId]);
 
   const abortRun = useCallback(() => {
     if (abortControllerRef.current) {
@@ -1286,6 +1433,31 @@ export function AgentProvider({
     );
   }, []);
 
+  const updateMessageMetadata = useCallback((messageId: string, metadata: Record<string, unknown>) => {
+    setMessages(prev => prev.map(msg =>
+      msg.id === messageId
+        ? { ...msg, metadata: { ...(msg.metadata ?? {}), ...metadata } }
+        : msg
+    ));
+    messagesRef.current = messagesRef.current.map(msg =>
+      msg.id === messageId
+        ? { ...msg, metadata: { ...(msg.metadata ?? {}), ...metadata } }
+        : msg
+    );
+  }, []);
+
+  const resolvePersistedMessageId = useCallback((messageId: string | number) => {
+    if (typeof messageId === 'number' && Number.isFinite(messageId)) {
+      return messageId;
+    }
+    if (typeof messageId !== 'string') return null;
+    const trimmed = messageId.trim();
+    if (!trimmed) return null;
+    if (/^\d+$/.test(trimmed)) return trimmed;
+    const mapped = persistedMessageIdRef.current[trimmed];
+    return mapped ?? null;
+  }, []);
+
   // Regenerate the last assistant response
   const regenerateLastResponse = useCallback(async () => {
     if (!agent || isStreaming) return;
@@ -1317,11 +1489,18 @@ export function AgentProvider({
     await sendMessage(userContent, attachments);
   }, [agent, isStreaming, messageAttachments, sendMessage]);
 
-  // Initialize with agent's existing messages on mount
+  // Initialize with agent's existing messages on mount or session switch
   useEffect(() => {
-    if (agent && agent.messages) {
-      setMessages(agent.messages);
+    if (!agent || !agent.messages) return;
+    const { sanitizedMessages, attachmentsByMessage } = hydrateMessagesForSession(agent.messages);
+    try {
+      agent.messages = sanitizedMessages;
+    } catch {
+      // ignore
     }
+    setMessages(sanitizedMessages);
+    messagesRef.current = sanitizedMessages;
+    setMessageAttachments(attachmentsByMessage);
   }, [agent]);
 
   useEffect(() => {
@@ -1332,6 +1511,7 @@ export function AgentProvider({
     <AgentContext.Provider
       value={{
         agent,
+        sessionId,
         messages,
         isStreaming,
         error,
@@ -1354,6 +1534,8 @@ export function AgentProvider({
         resolvedTaskType,
         messageAttachments,
         updateMessageContent,
+        updateMessageMetadata,
+        resolvePersistedMessageId,
         regenerateLastResponse,
       }}
     >

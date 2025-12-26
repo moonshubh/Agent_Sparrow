@@ -49,13 +49,30 @@ if TYPE_CHECKING:
 HELPER_TIMEOUT_SECONDS = 8.0
 
 # Pattern for detecting thinking blocks
+THINKING_TOKEN_PATTERN = r"(?:thinking|think|analysis|reasoning|thought)"
 THINKING_BLOCK_PATTERN = re.compile(
-    r":::(?:thinking|think)\s*([\s\S]*?)\s*:::",
-    re.IGNORECASE
+    rf":::\s*{THINKING_TOKEN_PATTERN}\s*([\s\S]*?)\s*:::",
+    re.IGNORECASE,
 )
 THINK_TAG_PATTERN = re.compile(
-    r"<(?:thinking|think)>\s*([\s\S]*?)\s*</(?:thinking|think)>",
-    re.IGNORECASE
+    rf"<\s*{THINKING_TOKEN_PATTERN}\s*>\s*([\s\S]*?)\s*<\s*/\s*{THINKING_TOKEN_PATTERN}\s*>",
+    re.IGNORECASE,
+)
+THINK_FENCE_PATTERN = re.compile(
+    rf"```\s*{THINKING_TOKEN_PATTERN}\s*([\s\S]*?)\s*```",
+    re.IGNORECASE,
+)
+THINKING_BLOCK_START_RE = re.compile(
+    rf":::\s*{THINKING_TOKEN_PATTERN}\b",
+    re.IGNORECASE,
+)
+THINKING_TAG_START_RE = re.compile(
+    rf"<\s*({THINKING_TOKEN_PATTERN})\s*>",
+    re.IGNORECASE,
+)
+THINKING_FENCE_START_RE = re.compile(
+    rf"```\s*({THINKING_TOKEN_PATTERN})\b",
+    re.IGNORECASE,
 )
 
 # Pattern for detecting markdown images with data URIs (base64-encoded images)
@@ -79,6 +96,30 @@ class ThinkingBlockTracker:
         self.buffer = ""
         self.in_thinking = False
         self.emitted_content = ""
+        self._end_marker: str | None = None
+        self._search_start = 0
+
+    def _find_start_marker(self, lower_buffer: str) -> tuple[int, str, int] | None:
+        """Find the earliest thinking block start marker."""
+        candidates: list[tuple[int, str, int]] = []
+
+        block_match = THINKING_BLOCK_START_RE.search(lower_buffer)
+        if block_match:
+            candidates.append((block_match.start(), ":::", block_match.end()))
+
+        fence_match = THINKING_FENCE_START_RE.search(lower_buffer)
+        if fence_match:
+            candidates.append((fence_match.start(), "```", fence_match.end()))
+
+        tag_match = THINKING_TAG_START_RE.search(lower_buffer)
+        if tag_match:
+            token = tag_match.group(1)
+            candidates.append((tag_match.start(), f"</{token}>", tag_match.end()))
+
+        if not candidates:
+            return None
+
+        return min(candidates, key=lambda item: item[0])
 
     def process_chunk(self, chunk: str) -> tuple[str, bool]:
         """Process a chunk and return (user_visible_content, is_thinking).
@@ -96,19 +137,16 @@ class ThinkingBlockTracker:
 
         # Check if we're starting a thinking block
         if not self.in_thinking:
-            # Look for start marker
-            start_idx = lower_buffer.find(":::thinking")
-            if start_idx == -1:
-                start_idx = lower_buffer.find(":::think\n")
-            if start_idx == -1 and lower_buffer.startswith(":::"):
-                # Treat as start only when the marker is followed by a thinking token
-                remainder = lower_buffer[3:].lstrip()
-                if remainder.startswith("thinking") or remainder.startswith("think"):
-                    start_idx = 0
+            start_info = self._find_start_marker(lower_buffer)
+            start_idx = start_info[0] if start_info else -1
 
             if start_idx >= 0:
                 # Found start of thinking block
                 # Emit anything before the block as user content
+                if start_info is not None:
+                    _, end_marker, search_start = start_info
+                    self._end_marker = end_marker
+                    self._search_start = max(0, search_start - start_idx)
                 pre_thinking = self.buffer[:start_idx].strip()
                 self.in_thinking = True
                 self.buffer = self.buffer[start_idx:]
@@ -120,27 +158,25 @@ class ThinkingBlockTracker:
             else:
                 # Not in thinking block, safe to emit
                 # But keep a small tail in case we're about to hit a marker
-                if len(self.buffer) > 20:
-                    safe_content = self.buffer[:-20]
-                    self.buffer = self.buffer[-20:]
+                if len(self.buffer) > 64:
+                    safe_content = self.buffer[:-64]
+                    self.buffer = self.buffer[-64:]
                     self.emitted_content += safe_content
                     return (safe_content, False)
                 return ("", False)
         else:
             # We're inside a thinking block - look for end marker
-            # Find closing ::: that's not the opening marker
-            end_idx = -1
-            search_start = 12 if lower_buffer.startswith(":::thinking") else 10
-
-            # Look for standalone ::: on its own or followed by newline
-            remaining = lower_buffer[search_start:]
-            close_match = remaining.find(":::")
-            if close_match >= 0:
-                end_idx = search_start + close_match + 3
+            end_marker = self._end_marker or ":::"
+            search_start = self._search_start
+            end_idx = lower_buffer.find(end_marker, search_start)
+            if end_idx >= 0:
+                end_idx += len(end_marker)
 
             if end_idx >= 0:
                 # Found end of thinking block
                 self.in_thinking = False
+                self._end_marker = None
+                self._search_start = 0
                 # Everything after the closing ::: is user content
                 post_thinking = self.buffer[end_idx:].strip()
                 self.buffer = ""
@@ -186,11 +222,28 @@ class ThinkingBlockTracker:
         # Remove complete thinking blocks
         sanitized = THINKING_BLOCK_PATTERN.sub("", content)
         sanitized = THINK_TAG_PATTERN.sub("", sanitized)
+        sanitized = THINK_FENCE_PATTERN.sub("", sanitized)
 
         # Also handle malformed/partial blocks
         # Remove any orphaned :::thinking markers
-        sanitized = re.sub(r":::(?:thinking|think)\s*", "", sanitized, flags=re.IGNORECASE)
-        sanitized = re.sub(r"</?(?:thinking|think)>", "", sanitized, flags=re.IGNORECASE)
+        sanitized = re.sub(
+            rf":::\s*{THINKING_TOKEN_PATTERN}\s*",
+            "",
+            sanitized,
+            flags=re.IGNORECASE,
+        )
+        sanitized = re.sub(
+            rf"</?\s*{THINKING_TOKEN_PATTERN}\s*>",
+            "",
+            sanitized,
+            flags=re.IGNORECASE,
+        )
+        sanitized = re.sub(
+            rf"```\s*{THINKING_TOKEN_PATTERN}\s*",
+            "",
+            sanitized,
+            flags=re.IGNORECASE,
+        )
 
         # Remove any orphaned closing ::: that might be left
         # But be careful not to remove ::: in other contexts (like code blocks)

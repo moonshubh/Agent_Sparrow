@@ -180,6 +180,7 @@ const MermaidPreview = memo(function MermaidPreview({ content, id, onSvgReady }:
 interface MermaidEditorProps {
   artifact: Artifact;
   onContentChange?: (content: string) => void;
+  onContentBlur?: (content: string) => void;
 }
 
 /**
@@ -190,7 +191,11 @@ interface MermaidEditorProps {
  * - Right panel: Live preview with zoom/pan
  * - Export to SVG and PNG
  */
-export const MermaidEditor = memo(function MermaidEditor({ artifact, onContentChange }: MermaidEditorProps) {
+export const MermaidEditor = memo(function MermaidEditor({
+  artifact,
+  onContentChange,
+  onContentBlur,
+}: MermaidEditorProps) {
   const [editedContent, setEditedContent] = useState(artifact.content);
   const [currentSvg, setCurrentSvg] = useState<string>('');
   const [viewMode, setViewMode] = useState<'split' | 'code' | 'preview'>('split');
@@ -206,6 +211,11 @@ export const MermaidEditor = memo(function MermaidEditor({ artifact, onContentCh
     setEditedContent(newContent);
     onContentChange?.(newContent);
   }, [onContentChange]);
+
+  const handleContentBlur = useCallback(() => {
+    if (!onContentBlur) return;
+    onContentBlur(editedContent);
+  }, [editedContent, onContentBlur]);
 
   const handleSvgReady = useCallback((svg: string) => {
     setCurrentSvg(svg);
@@ -394,6 +404,7 @@ export const MermaidEditor = memo(function MermaidEditor({ artifact, onContentCh
             <textarea
               value={editedContent}
               onChange={handleContentChange}
+              onBlur={handleContentBlur}
               className={cn(
                 'flex-1 p-4 font-mono text-sm resize-none',
                 'bg-[hsl(var(--code-block-bg))] text-foreground',

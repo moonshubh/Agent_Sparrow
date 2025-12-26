@@ -1,14 +1,16 @@
 'use client';
 
 import React, { memo, useEffect, useRef, useState, useCallback } from 'react';
-import { X, Copy, Check, Download, Maximize2, Minimize2, Code, Eye, GripVertical, ChevronLeft, ChevronRight, Trash2 } from 'lucide-react';
+import { X, Copy, Check, Download, Maximize2, Minimize2, Code, Eye, GripVertical, ChevronLeft, ChevronRight, Trash2, Edit3 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import mermaid from 'mermaid';
 import { cn } from '@/shared/lib/utils';
 import { useCurrentArtifact, useArtifactsVisible, useArtifactStore, useArtifactSelector } from './ArtifactContext';
 import { MermaidEditor } from './MermaidEditor';
 import { ArticleEditor } from './ArticleEditor';
-import type { Artifact, ArtifactType } from './types';
+import type { Artifact } from './types';
+import { useAgent } from '@/features/librechat/AgentContext';
+import { sessionsAPI } from '@/services/api/endpoints/sessions';
 
 interface ResizeHandleProps {
   direction: string;
@@ -195,6 +197,143 @@ const CodeRenderer = memo(function CodeRenderer({ content, language }: { content
   );
 });
 
+const ARTIFACT_MARKER_PATTERN = /^(?:\/\/|\/\*|#)\s*artifact(?:\s*\*\/)?/i;
+const ARTIFACT_DIRECTIVE_PATTERN = /^[ \t]*::artifact\{[^}]+\}[^\n]*$/gm;
+const CODE_FENCE_PATTERN = /^```([^\n]*)\n([\s\S]*?)^```/gm;
+
+const normalizeFenceContent = (value: string): string => value.replace(/\n+$/, '');
+
+const ensureArtifactMarker = (content: string, markerLine: string | null): string => {
+  if (!markerLine) return content;
+  const firstLine = content.split('\n')[0] ?? '';
+  if (ARTIFACT_MARKER_PATTERN.test(firstLine.trim())) {
+    return content;
+  }
+  const trimmed = content.replace(/^\n+/, '');
+  return `${markerLine}\n${trimmed}`;
+};
+
+const updateArtifactInMarkdown = (
+  markdown: string,
+  targetIndex: number,
+  nextContent: string
+): string | null => {
+  if (!Number.isFinite(targetIndex)) return null;
+
+  const matches: Array<{
+    kind: 'directive' | 'code';
+    index: number;
+    raw: string;
+    lang?: string;
+    content?: string;
+  }> = [];
+
+  for (const match of markdown.matchAll(ARTIFACT_DIRECTIVE_PATTERN)) {
+    matches.push({
+      kind: 'directive',
+      index: match.index ?? 0,
+      raw: match[0],
+    });
+  }
+
+  for (const match of markdown.matchAll(CODE_FENCE_PATTERN)) {
+    matches.push({
+      kind: 'code',
+      index: match.index ?? 0,
+      raw: match[0],
+      lang: match[1] ?? '',
+      content: match[2] ?? '',
+    });
+  }
+
+  matches.sort((a, b) => a.index - b.index);
+
+  let cursor = 0;
+  let artifactIndex = 0;
+  let didUpdate = false;
+  const chunks: string[] = [];
+
+  for (const match of matches) {
+    chunks.push(markdown.slice(cursor, match.index));
+
+    if (match.kind === 'directive') {
+      chunks.push(match.raw);
+      artifactIndex += 1;
+    } else {
+      const langInfo = match.lang ?? '';
+      const lang = langInfo.trim().split(/\s+/)[0]?.toLowerCase() ?? '';
+      const content = match.content ?? '';
+      const firstLine = content.split('\n')[0] ?? '';
+      const hasMarker = ARTIFACT_MARKER_PATTERN.test(firstLine.trim());
+      const isArtifact = lang === 'mermaid' || hasMarker;
+
+      if (isArtifact) {
+        if (artifactIndex === targetIndex && !didUpdate) {
+          const markerLine = hasMarker ? firstLine : null;
+          const updated = ensureArtifactMarker(nextContent, markerLine);
+          const normalized = normalizeFenceContent(updated);
+          const fence = langInfo ? `\`\`\`${langInfo}` : '```';
+          chunks.push(`${fence}\n${normalized}\n\`\`\``);
+          didUpdate = true;
+        } else {
+          chunks.push(match.raw);
+        }
+        artifactIndex += 1;
+      } else {
+        chunks.push(match.raw);
+      }
+    }
+
+    cursor = match.index + match.raw.length;
+  }
+
+  chunks.push(markdown.slice(cursor));
+
+  return didUpdate ? chunks.join('') : null;
+};
+
+const getDefaultViewMode = (type?: Artifact['type']): 'preview' | 'code' | 'editor' => {
+  if (type === 'react' || type === 'code') return 'code';
+  return 'preview';
+};
+
+interface CodeEditorProps {
+  value: string;
+  language?: string;
+  placeholder?: string;
+  onChange: (value: string) => void;
+  onBlur?: () => void;
+}
+
+const CodeEditor = memo(function CodeEditor({
+  value,
+  language,
+  placeholder,
+  onChange,
+  onBlur,
+}: CodeEditorProps) {
+  return (
+    <div className="flex flex-col h-full">
+      <div className="px-3 py-1.5 text-xs font-medium text-muted-foreground bg-secondary/50 border-b border-border">
+        {language ? `${language} source` : 'Source'}
+      </div>
+      <textarea
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        onBlur={onBlur}
+        className={cn(
+          'flex-1 p-4 font-mono text-sm resize-none',
+          'bg-[hsl(var(--code-block-bg))] text-foreground',
+          'focus:outline-none focus:ring-2 focus:ring-primary/20',
+          'placeholder:text-muted-foreground/50'
+        )}
+        placeholder={placeholder}
+        spellCheck={false}
+      />
+    </div>
+  );
+});
+
 // Default panel dimensions and position
 const DEFAULT_WIDTH = 800;
 const DEFAULT_HEIGHT = 600;
@@ -239,14 +378,33 @@ function useIsMobile(): boolean {
 export const ArtifactPanel = memo(function ArtifactPanel() {
   const artifact = useCurrentArtifact();
   const isVisible = useArtifactsVisible();
-  const { setCurrentArtifact, setArtifactsVisible, removeArtifact } = useArtifactStore();
+  const { addArtifact, setCurrentArtifact, setArtifactsVisible, removeArtifact } = useArtifactStore();
   const orderedIds = useArtifactSelector((s) => s.orderedIds);
-  const artifactsById = useArtifactSelector((s) => s.artifactsById);
+  const { sessionId, messages, updateMessageContent, resolvePersistedMessageId } = useAgent();
   const isMobile = useIsMobile();
   
   const [copied, setCopied] = useState(false);
-  const [viewMode, setViewMode] = useState<'preview' | 'code' | 'editor'>('preview');
+  const [viewModeById, setViewModeById] = useState<Record<string, 'preview' | 'code' | 'editor'>>({});
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [draftById, setDraftById] = useState<Record<string, string>>({});
+
+  const viewMode = artifact
+    ? viewModeById[artifact.id] ?? getDefaultViewMode(artifact.type)
+    : 'preview';
+  const codeDraft = artifact ? draftById[artifact.id] ?? artifact.content : '';
+  const isCodeDirty = artifact ? codeDraft !== artifact.content : false;
+
+  const setViewMode = useCallback((mode: 'preview' | 'code' | 'editor') => {
+    if (!artifact) return;
+    setViewModeById((prev) => ({ ...prev, [artifact.id]: mode }));
+    if (mode !== 'editor') {
+      setDraftById((prev) => {
+        if (!(artifact.id in prev)) return prev;
+        const { [artifact.id]: _removed, ...rest } = prev;
+        return rest;
+      });
+    }
+  }, [artifact]);
 
   const getCenteredPosition = () => {
     if (typeof window === 'undefined') {
@@ -277,6 +435,9 @@ export const ArtifactPanel = memo(function ArtifactPanel() {
   // Calculate current artifact index for navigation
   const currentIndex = artifact ? orderedIds.indexOf(artifact.id) : -1;
   const hasMultipleArtifacts = orderedIds.length > 1;
+  const isMermaid = artifact?.type === 'mermaid';
+  const isHtml = artifact?.type === 'html';
+  const isCodeArtifact = artifact?.type === 'react' || artifact?.type === 'code';
 
   // Navigate to previous/next artifact
   const handlePrevArtifact = useCallback(() => {
@@ -417,6 +578,64 @@ export const ArtifactPanel = memo(function ArtifactPanel() {
     URL.revokeObjectURL(url);
   }, [artifact]);
 
+  const commitArtifactEdit = useCallback(async (target: Artifact, nextContent: string) => {
+    if (nextContent === target.content) return;
+
+    addArtifact({
+      ...target,
+      content: nextContent,
+      lastUpdateTime: Date.now(),
+    });
+
+    if (typeof target.index !== 'number') {
+      console.warn('[ArtifactPanel] Missing artifact index; cannot persist changes', target.id);
+      return;
+    }
+
+    const message = messages.find((msg) => String(msg.id) === String(target.messageId));
+    const messageContent = typeof message?.content === 'string' ? message.content : null;
+    if (!messageContent) {
+      console.warn('[ArtifactPanel] Message content not found for artifact', target.id);
+      return;
+    }
+
+    const updatedContent = updateArtifactInMarkdown(messageContent, target.index, nextContent);
+    if (!updatedContent) {
+      console.warn('[ArtifactPanel] Unable to locate artifact in message content', target.id);
+      return;
+    }
+
+    updateMessageContent(target.messageId, updatedContent);
+
+    if (sessionId) {
+      const persistedId = resolvePersistedMessageId(target.messageId);
+      if (!persistedId) {
+        console.warn('[ArtifactPanel] Skipping persist for non-persisted message', target.messageId);
+        return;
+      }
+      try {
+        await sessionsAPI.updateMessage(sessionId, persistedId, updatedContent);
+      } catch (error) {
+        console.error('[ArtifactPanel] Failed to persist artifact changes', error);
+      }
+    }
+  }, [addArtifact, messages, resolvePersistedMessageId, sessionId, updateMessageContent]);
+
+  const handleCodeChange = useCallback((value: string) => {
+    if (!artifact) return;
+    setDraftById((prev) => ({ ...prev, [artifact.id]: value }));
+  }, [artifact]);
+
+  const handleCodeBlur = useCallback(() => {
+    if (!artifact || !isCodeDirty) return;
+    void commitArtifactEdit(artifact, codeDraft);
+  }, [artifact, codeDraft, commitArtifactEdit, isCodeDirty]);
+
+  const handleMermaidBlur = useCallback((value: string) => {
+    if (!artifact || artifact.type !== 'mermaid') return;
+    void commitArtifactEdit(artifact, value);
+  }, [artifact, commitArtifactEdit]);
+
   // Handle drag start
   const handleDragStart = useCallback((e: React.MouseEvent) => {
     if (isFullscreen) return;
@@ -513,40 +732,59 @@ export const ArtifactPanel = memo(function ArtifactPanel() {
   // Render content based on artifact type
   const renderContent = () => {
     if (!artifact) return null;
-
-    // Editor mode for mermaid - full split view editor
-    if (viewMode === 'editor' && artifact.type === 'mermaid') {
-      return <MermaidEditor artifact={artifact} />;
+    if (artifact.type === 'mermaid') {
+      if (viewMode === 'editor') {
+        return <MermaidEditor artifact={artifact} onContentBlur={handleMermaidBlur} />;
+      }
+      if (viewMode === 'code') {
+        return <CodeRenderer content={artifact.content} language={artifact.language || artifact.type} />;
+      }
+      return <MermaidRenderer content={artifact.content} id={artifact.id} />;
     }
 
-    // In code view mode, always show code
-    if (viewMode === 'code') {
+    if (artifact.type === 'html') {
+      if (viewMode === 'editor') {
+        return (
+          <CodeEditor
+            value={codeDraft}
+            language={artifact.type}
+            onChange={handleCodeChange}
+            onBlur={handleCodeBlur}
+            placeholder="Edit HTML markup..."
+          />
+        );
+      }
+      return (
+        <iframe
+          srcDoc={artifact.content}
+          className="w-full h-full min-h-[400px] bg-white rounded-lg"
+          sandbox="allow-scripts"
+          title={artifact.title}
+        />
+      );
+    }
+
+    if (artifact.type === 'react' || artifact.type === 'code') {
+      if (viewMode === 'editor') {
+        return (
+          <CodeEditor
+            value={codeDraft}
+            language={artifact.language || artifact.type}
+            onChange={handleCodeChange}
+            onBlur={handleCodeBlur}
+            placeholder="Edit code..."
+          />
+        );
+      }
       return <CodeRenderer content={artifact.content} language={artifact.language || artifact.type} />;
     }
 
-    // Preview mode
     switch (artifact.type) {
-      case 'mermaid':
-        return <MermaidRenderer content={artifact.content} id={artifact.id} />;
-
-      case 'html':
-        // Sandbox HTML preview
-        return (
-          <iframe
-            srcDoc={artifact.content}
-            className="w-full h-full min-h-[400px] bg-white rounded-lg"
-            sandbox="allow-scripts"
-            title={artifact.title}
-          />
-        );
-
-      case 'image':
-        // Image artifact with full resolution display
+      case 'image': {
         const imageSrc = artifact.imageData
           ? `data:${artifact.mimeType || 'image/png'};base64,${artifact.imageData}`
-          : artifact.content || null; // Fallback to content, or null if not available
+          : artifact.content || null;
 
-        // Don't render img with empty src - show placeholder instead
         if (!imageSrc) {
           return (
             <div className="flex flex-col items-center justify-center h-full gap-4 text-muted-foreground">
@@ -590,28 +828,16 @@ export const ArtifactPanel = memo(function ArtifactPanel() {
             )}
           </div>
         );
+      }
 
       case 'kb-article':
-        // KB article preview - render as styled markdown/HTML
-        return (
-          <div className="prose prose-invert prose-sm max-w-none p-6 overflow-auto">
-            <div dangerouslySetInnerHTML={{ __html: artifact.content }} />
-          </div>
-        );
-
       case 'article':
-        // Article with images - uses ArticleEditor with built-in edit/preview
         return <ArticleEditor key={artifact.id} artifact={artifact} />;
 
-      case 'react':
-      case 'code':
       default:
         return <CodeRenderer content={artifact.content} language={artifact.language || artifact.type} />;
     }
   };
-
-  // Check if current artifact supports editor mode (article has its own built-in editor)
-  const supportsEditor = artifact?.type === 'mermaid';
 
   return (
     <AnimatePresence>
@@ -780,8 +1006,7 @@ export const ArtifactPanel = memo(function ArtifactPanel() {
               </div>
 
               <div className="flex items-center gap-1" onMouseDown={(e) => e.stopPropagation()}>
-                {/* View mode toggle (for mermaid with preview + code + editor) */}
-                {supportsEditor && (
+                {isMermaid && (
                   <div className="flex items-center bg-secondary rounded-lg p-0.5 mr-2">
                     <button
                       onClick={() => setViewMode('preview')}
@@ -805,7 +1030,7 @@ export const ArtifactPanel = memo(function ArtifactPanel() {
                       )}
                       title="Edit"
                     >
-                      <span className="text-[10px] font-semibold">Edit</span>
+                      <Edit3 className="h-3.5 w-3.5" />
                     </button>
                     <button
                       onClick={() => setViewMode('code')}
@@ -821,9 +1046,8 @@ export const ArtifactPanel = memo(function ArtifactPanel() {
                     </button>
                   </div>
                 )}
-                
-                {/* Simple preview/code toggle for non-mermaid */}
-                {artifact.type === 'html' && (
+
+                {isHtml && (
                   <div className="flex items-center bg-secondary rounded-lg p-0.5 mr-2">
                     <button
                       onClick={() => setViewMode('preview')}
@@ -833,9 +1057,27 @@ export const ArtifactPanel = memo(function ArtifactPanel() {
                           ? 'bg-primary text-primary-foreground'
                           : 'text-muted-foreground hover:text-foreground'
                       )}
+                      title="Preview"
                     >
                       <Eye className="h-3.5 w-3.5" />
                     </button>
+                    <button
+                      onClick={() => setViewMode('editor')}
+                      className={cn(
+                        'px-2 py-1 rounded text-xs font-medium transition-colors',
+                        viewMode === 'editor'
+                          ? 'bg-primary text-primary-foreground'
+                          : 'text-muted-foreground hover:text-foreground'
+                      )}
+                      title="Edit"
+                    >
+                      <Edit3 className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                )}
+
+                {isCodeArtifact && (
+                  <div className="flex items-center bg-secondary rounded-lg p-0.5 mr-2">
                     <button
                       onClick={() => setViewMode('code')}
                       className={cn(
@@ -844,8 +1086,21 @@ export const ArtifactPanel = memo(function ArtifactPanel() {
                           ? 'bg-primary text-primary-foreground'
                           : 'text-muted-foreground hover:text-foreground'
                       )}
+                      title="Code"
                     >
                       <Code className="h-3.5 w-3.5" />
+                    </button>
+                    <button
+                      onClick={() => setViewMode('editor')}
+                      className={cn(
+                        'px-2 py-1 rounded text-xs font-medium transition-colors',
+                        viewMode === 'editor'
+                          ? 'bg-primary text-primary-foreground'
+                          : 'text-muted-foreground hover:text-foreground'
+                      )}
+                      title="Edit"
+                    >
+                      <Edit3 className="h-3.5 w-3.5" />
                     </button>
                   </div>
                 )}
