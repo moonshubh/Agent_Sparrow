@@ -42,6 +42,11 @@ interface ChatMessageListResponse {
   items?: ChatMessageRecord[]
 }
 
+export interface ChatMessageUpdatePayload {
+  content?: string
+  metadata?: Record<string, unknown>
+}
+
 export const sessionsAPI = {
   async list(limit = 20, offset = 0): Promise<ChatSession[]> {
     const qs = new URLSearchParams({ limit: String(limit), offset: String(offset) })
@@ -115,5 +120,17 @@ export const sessionsAPI = {
 
   async postMessage(sessionId: string | number, data: ChatMessagePayload) {
     return apiClient.post(`/api/v1/chat-sessions/${sessionId}/messages`, data)
+  },
+
+  async updateMessage(
+    sessionId: string | number,
+    messageId: string | number,
+    payload: string | ChatMessageUpdatePayload
+  ): Promise<ChatMessageRecord> {
+    const body = typeof payload === 'string' ? { content: payload } : payload
+    return apiClient.put<ChatMessageRecord>(
+      `/api/v1/chat-sessions/${sessionId}/messages/${messageId}`,
+      body
+    )
   },
 }

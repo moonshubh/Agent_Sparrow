@@ -1,12 +1,15 @@
 'use client';
 
-import React, { useEffect, useRef, memo, useState, useCallback } from 'react';
+import React, { useEffect, useRef, memo, useCallback } from 'react';
 import type { Message } from '@/services/ag-ui/client';
 import { MessageItem } from './MessageItem';
+import { useAgent } from '../AgentContext';
+import { sessionsAPI } from '@/services/api/endpoints/sessions';
 
 interface MessageListProps {
   messages: Message[];
   isStreaming: boolean;
+  sessionId?: string;
 }
 
 function stableMessageKey(message: Message, index: number): string {
@@ -23,18 +26,31 @@ function stableMessageKey(message: Message, index: number): string {
   return `msg-${hash.toString(16)}`;
 }
 
-export const MessageList = memo(function MessageList({ messages, isStreaming }: MessageListProps) {
+export const MessageList = memo(function MessageList({ messages, isStreaming, sessionId }: MessageListProps) {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const prevLengthRef = useRef(messages.length);
-  const [editedMessages, setEditedMessages] = useState<Record<string, string>>({});
+  const { updateMessageContent, regenerateLastResponse, resolvePersistedMessageId } = useAgent();
 
-  // Handle message edit
-  const handleEditMessage = useCallback((messageId: string, content: string) => {
-    setEditedMessages((prev) => ({
-      ...prev,
-      [messageId]: content,
-    }));
-  }, []);
+  // Handle message edit - updates context immediately and persists to API
+  const handleEditMessage = useCallback(async (messageId: string, content: string) => {
+    // Update in context immediately for responsive UI
+    updateMessageContent(messageId, content);
+
+    // Persist to backend if we have a session
+    if (sessionId) {
+      try {
+        const persistedId = resolvePersistedMessageId(messageId);
+        if (!persistedId) {
+          console.debug('[MessageList] Skipping persist for non-persisted message', messageId);
+          return;
+        }
+        await sessionsAPI.updateMessage(sessionId, persistedId, content);
+      } catch (error) {
+        console.error('[MessageList] Failed to persist message edit:', error);
+        // Note: We could add a toast notification here in the future
+      }
+    }
+  }, [resolvePersistedMessageId, sessionId, updateMessageContent]);
 
   // Auto-scroll only when message count changes (not on every content update)
   useEffect(() => {
@@ -52,16 +68,21 @@ export const MessageList = memo(function MessageList({ messages, isStreaming }: 
   return (
     <div className="lc-messages" role="log" aria-label="Chat messages" aria-live="polite">
       <div className="lc-messages-inner">
-        {messages.map((message, index) => (
-          <MessageItem
-            key={stableMessageKey(message, index)}
-            message={message}
-            isLast={index === messages.length - 1}
-            isStreaming={isStreaming}
-            editedContent={editedMessages[message.id]}
-            onEditMessage={handleEditMessage}
-          />
-        ))}
+        {messages.map((message, index) => {
+          const isLast = index === messages.length - 1;
+          const isLastAssistant = isLast && message.role === 'assistant';
+          return (
+            <MessageItem
+              key={stableMessageKey(message, index)}
+              message={message}
+              isLast={isLast}
+              isStreaming={isStreaming}
+              sessionId={sessionId}
+              onEditMessage={handleEditMessage}
+              onRegenerate={isLastAssistant && !isStreaming ? regenerateLastResponse : undefined}
+            />
+          );
+        })}
         <div ref={messagesEndRef} aria-hidden="true" />
       </div>
     </div>

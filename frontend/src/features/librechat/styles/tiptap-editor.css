@@ -1,0 +1,117 @@
+.lc-tiptap-wrapper {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.lc-tiptap-editor {
+  min-height: 120px;
+  padding: 12px 14px;
+  border: 1px solid var(--lc-accent);
+  border-radius: 8px;
+  background: var(--lc-surface-secondary);
+  color: var(--lc-text-primary);
+  font-family: var(--lc-font-sans);
+  outline: none;
+}
+
+.lc-tiptap-editor:focus,
+.lc-tiptap-editor:focus-visible {
+  outline: 2px solid var(--lc-accent);
+  outline-offset: 2px;
+}
+
+.lc-tiptap-editor:focus:not(:focus-visible) {
+  outline: none;
+}
+
+.lc-tiptap-editor p {
+  margin: 0 0 10px;
+}
+
+.lc-tiptap-editor p:last-child {
+  margin-bottom: 0;
+}
+
+.lc-tiptap-editor table {
+  border-collapse: separate;
+  border-spacing: 0;
+  width: 100%;
+  margin: 12px 0;
+  border: 1px solid var(--lc-border);
+  border-radius: 10px;
+  background-color: var(--lc-surface-secondary);
+  overflow: hidden;
+}
+
+.lc-tiptap-editor th,
+.lc-tiptap-editor td {
+  border-right: 1px solid var(--lc-border-light);
+  border-bottom: 1px solid var(--lc-border-light);
+  padding: 10px 12px;
+  vertical-align: top;
+  line-height: 1.5;
+}
+
+.lc-tiptap-editor th {
+  background: var(--lc-surface-tertiary);
+  font-weight: 600;
+  text-align: center;
+}
+
+.lc-tiptap-editor td {
+  text-align: left;
+}
+
+.lc-tiptap-editor tr:last-child td {
+  border-bottom: none;
+}
+
+.lc-tiptap-editor th:last-child,
+.lc-tiptap-editor td:last-child {
+  border-right: none;
+}
+
+.lc-tiptap-editor img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin: 10px 0 14px;
+  border-radius: 8px;
+  border: 1px solid var(--lc-border-light);
+}
+
+.lc-tiptap-editor pre {
+  background: var(--lc-surface-tertiary);
+  border-radius: 8px;
+  padding: 12px 16px;
+  overflow-x: auto;
+}
+
+.lc-tiptap-status {
+  font-size: 12px;
+  color: var(--lc-text-tertiary);
+}
+
+.lc-tiptap-status-error {
+  color: var(--lc-error);
+}
+
+.lc-tiptap-artifact-directive {
+  border: 1px dashed var(--lc-border);
+  border-radius: 8px;
+  padding: 8px 10px;
+  background: var(--lc-surface-tertiary);
+  color: var(--lc-text-secondary);
+  font-size: 12px;
+}
+
+.lc-tiptap-artifact-directive-image {
+  padding: 6px;
+}
+
+.lc-tiptap-artifact-directive-image img {
+  display: block;
+  max-width: 100%;
+  border-radius: 6px;
+}

@@ -7,6 +7,7 @@ for all pre-agent message transformations.
 from __future__ import annotations
 
 import asyncio
+import re
 import time
 from typing import Any, Dict, List, Optional, Tuple, TYPE_CHECKING
 
@@ -26,6 +27,7 @@ if TYPE_CHECKING:
 HELPER_TIMEOUT_SECONDS = 8.0
 LONG_HISTORY_THRESHOLD = 8  # Number of messages before summarization
 TOKEN_LIMIT_BEFORE_COMPACT = 9000  # Estimated tokens before compaction
+_BASE64_SAMPLE_RE = re.compile(r"^[A-Za-z0-9+/]+$")
 
 
 class MessagePreparer:
@@ -387,21 +389,45 @@ class MessagePreparer:
             content = getattr(msg, "content", "")
 
             if isinstance(content, str):
-                total_tokens += len(content) // 4
+                total_tokens += self._estimate_text_tokens(content)
             elif isinstance(content, list):
                 for part in content:
                     if isinstance(part, dict):
                         if part.get("type") == "text":
-                            total_tokens += len(str(part.get("text", ""))) // 4
+                            total_tokens += self._estimate_text_tokens(
+                                str(part.get("text", ""))
+                            )
                         elif part.get("type") == "image_url":
                             # Conservative estimate: ~1000 tokens per image/PDF
                             total_tokens += 1000
                     else:
-                        total_tokens += len(str(part)) // 4
+                        total_tokens += self._estimate_text_tokens(str(part))
             else:
-                total_tokens += len(str(content)) // 4 if content else 0
+                total_tokens += self._estimate_text_tokens(str(content)) if content else 0
 
         return total_tokens
+
+    def _estimate_text_tokens(self, text: str) -> int:
+        """Estimate tokens for text content with base64-aware heuristics."""
+        if self._looks_like_base64(text):
+            return max(1, len(text))
+        return max(1, len(text) // 4)
+
+    @staticmethod
+    def _looks_like_base64(text: str) -> bool:
+        """Detect base64-like blobs to avoid undercounting tokens."""
+        if not text or len(text) < 2000:
+            return False
+
+        sample = text.strip().replace("\n", "").replace(" ", "")
+        if len(sample) < 2000:
+            return False
+
+        sample = sample[:2000].rstrip("=")
+        if not sample:
+            return False
+
+        return bool(_BASE64_SAMPLE_RE.match(sample))
 
     def _context_threshold(self, state: "GraphState") -> int:
         """Compute a dynamic compaction threshold based on model context window."""

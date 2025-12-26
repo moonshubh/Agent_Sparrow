@@ -62,12 +62,17 @@ const SparrowLogo = memo(function SparrowLogo() {
 
 // Custom New Chat Icon (Modern Square Pen matching attached image)
 const NewChatIcon = ({ size = 18 }: { size?: number }) => (
-  <SquarePen 
-    size={size} 
+  <SquarePen
+    size={size}
     strokeWidth={2.5}
     className="lc-new-chat-icon"
   />
 );
+
+const RESIZE_MIN = 260;
+const RESIZE_MAX = 600;
+const COLLAPSE_THRESHOLD = 150;
+const RESIZE_STEP = 20;
 
 export function Sidebar({
   isOpen,
@@ -130,18 +135,124 @@ export function Sidebar({
     return groups;
   }, [conversations]);
 
+  // Resizing Logic
+  const [sidebarWidth, setSidebarWidth] = useState(280);
+  const [isResizing, setIsResizing] = useState(false);
+  const sidebarRef = useRef<HTMLElement>(null);
+
+  const startResizing = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    setIsResizing(true);
+  }, []);
+
+  const stopResizing = useCallback(() => {
+    setIsResizing(false);
+  }, []);
+
+  const resize = useCallback(
+    (event: PointerEvent) => {
+      if (!isResizing) return;
+      let newWidth = event.clientX;
+      if (newWidth < COLLAPSE_THRESHOLD) {
+        // Collapse threshold
+        if (!isCollapsed) onToggle();
+        setIsResizing(false);
+        return;
+      }
+      if (newWidth < RESIZE_MIN) newWidth = RESIZE_MIN;
+      if (newWidth > RESIZE_MAX) newWidth = RESIZE_MAX;
+      setSidebarWidth(newWidth);
+      if (isCollapsed && newWidth >= RESIZE_MIN) onToggle();
+    },
+    [isResizing, isCollapsed, onToggle]
+  );
+
+  const handleResizeKeyDown = useCallback((event: React.KeyboardEvent<HTMLDivElement>) => {
+    switch (event.key) {
+      case 'ArrowLeft': {
+        event.preventDefault();
+        if (isCollapsed) return;
+        const nextWidth = sidebarWidth - RESIZE_STEP;
+        if (nextWidth < COLLAPSE_THRESHOLD) {
+          onToggle();
+          return;
+        }
+        setSidebarWidth(Math.max(nextWidth, RESIZE_MIN));
+        break;
+      }
+      case 'ArrowRight': {
+        event.preventDefault();
+        if (isCollapsed) {
+          onToggle();
+          setSidebarWidth(RESIZE_MIN);
+          return;
+        }
+        setSidebarWidth(Math.min(sidebarWidth + RESIZE_STEP, RESIZE_MAX));
+        break;
+      }
+      case 'Home': {
+        event.preventDefault();
+        if (isCollapsed) onToggle();
+        setSidebarWidth(RESIZE_MIN);
+        break;
+      }
+      case 'End': {
+        event.preventDefault();
+        if (isCollapsed) onToggle();
+        setSidebarWidth(RESIZE_MAX);
+        break;
+      }
+      default:
+        break;
+    }
+  }, [isCollapsed, onToggle, sidebarWidth]);
+
+  useEffect(() => {
+    window.addEventListener('pointermove', resize);
+    window.addEventListener('pointerup', stopResizing);
+    window.addEventListener('pointercancel', stopResizing);
+    return () => {
+      window.removeEventListener('pointermove', resize);
+      window.removeEventListener('pointerup', stopResizing);
+      window.removeEventListener('pointercancel', stopResizing);
+    };
+  }, [resize, stopResizing]);
+
   if (!isOpen) {
     return null;
   }
 
   return (
-    <aside className={`lc-sidebar ${isCollapsed ? 'collapsed' : ''}`} role="complementary" aria-label="Conversation sidebar">
+    <aside
+      ref={sidebarRef}
+      className={`lc-sidebar ${isCollapsed ? 'collapsed' : ''}`}
+      role="complementary"
+      aria-label="Conversation sidebar"
+      style={{ width: isCollapsed ? 0 : sidebarWidth, minWidth: isCollapsed ? 0 : sidebarWidth }}
+    >
+      <div
+        className="lc-sidebar-resizer"
+        onPointerDown={startResizing}
+        onKeyDown={handleResizeKeyDown}
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="Resize sidebar"
+        aria-valuemin={RESIZE_MIN}
+        aria-valuemax={RESIZE_MAX}
+        aria-valuenow={isCollapsed ? 0 : sidebarWidth}
+        tabIndex={0}
+      />
+
       {/* Header with Logo and New Chat */}
       <div className="lc-sidebar-header">
         <div className="lc-sidebar-brand">
           <SparrowLogo />
           <span className="lc-sidebar-brand-text">Agent Sparrow</span>
         </div>
+      </div>
+
+      <div className="lc-new-chat-container">
         <button
           className="lc-new-chat-btn"
           onClick={onNewChat}
@@ -196,26 +307,8 @@ export function Sidebar({
       </div>
 
       {/* Footer */}
-      <div
-        style={{
-          padding: '12px',
-          borderTop: '1px solid var(--lc-border-light)',
-          marginTop: 'auto',
-        }}
-      >
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            gap: '12px',
-            padding: '8px 12px',
-            borderRadius: '8px',
-            cursor: 'pointer',
-            color: 'var(--lc-text-secondary)',
-            fontSize: '14px',
-          }}
-        >
+      <div className="lc-sidebar-footer">
+        <div className="lc-user-profile">
           <img
             src={avatarSrc}
             alt={userDisplayName}
@@ -367,7 +460,7 @@ const ConversationItem = memo(function ConversationItem({
       role="listitem"
       aria-current={isActive ? 'page' : undefined}
     >
-      <Bird size={16} style={{ flexShrink: 0, opacity: 0.7 }} aria-hidden="true" />
+
       <span className="lc-conversation-title">
         {conversation.title}
       </span>

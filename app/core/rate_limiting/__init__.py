@@ -10,9 +10,10 @@ from .redis_limiter import RedisRateLimiter
 from .circuit_breaker import CircuitBreaker
 from .gemini_limiter import GeminiRateLimiter
 from .exceptions import (
-    RateLimitExceededException,
     CircuitBreakerOpenException,
-    GeminiServiceUnavailableException
+    GeminiQuotaExhaustedException,
+    GeminiServiceUnavailableException,
+    RateLimitExceededException,
 )
 from .schemas import (
     RateLimitResult, 
@@ -26,12 +27,13 @@ from .config import RateLimitConfig
 __all__ = [
     "TokenBucket",
     "RedisRateLimiter",
-    "CircuitBreaker", 
+    "CircuitBreaker",
     "GeminiRateLimiter",
     "CircuitState",
-    "RateLimitExceededException",
-    "CircuitBreakerOpenException", 
+    "CircuitBreakerOpenException",
+    "GeminiQuotaExhaustedException",
     "GeminiServiceUnavailableException",
+    "RateLimitExceededException",
     "RateLimitResult",
     "RateLimitMetadata",
     "CircuitBreakerStatus",

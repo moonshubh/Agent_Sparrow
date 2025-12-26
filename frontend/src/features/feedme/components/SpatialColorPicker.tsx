@@ -1,6 +1,6 @@
 "use client"
 
-import React, { useState } from 'react'
+import React, { useCallback, useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { cn } from '@/shared/lib/utils'
 import { Check } from 'lucide-react'
@@ -10,6 +10,12 @@ interface SpatialColorPickerProps {
     onChange: (color: string) => void
     // We ignore the passed colors prop now to enforce our specific multi-layer design
     colors?: string[]
+    // Optional: start with picker already open
+    initialOpen?: boolean
+    // Optional: callback when picker closes
+    onClose?: () => void
+    // Optional: compact mode for inline use
+    compact?: boolean
 }
 
 // Define layers
@@ -68,22 +74,30 @@ const describeColor = (hex: string): string => COLOR_LABELS[hex.toLowerCase()] |
 export const SpatialColorPicker = ({
     selectedColor,
     onChange,
+    initialOpen = false,
+    onClose,
+    compact = false,
 }: SpatialColorPickerProps) => {
-    const [isOpen, setIsOpen] = useState(false)
+    const [isOpen, setIsOpen] = useState(initialOpen)
 
-    // Configuration
-    const centerSize = 42 // Size of the main trigger button
-    const nodeSize = 26   // Size of the color nodes
-    const innerRadius = 36
-    const outerRadius = 66
+    // Configuration - use smaller sizes in compact mode
+    const centerSize = compact ? 32 : 42
+    const nodeSize = compact ? 20 : 26
+    const innerRadius = compact ? 28 : 36
+    const outerRadius = compact ? 50 : 66
+
+    const handleClose = useCallback(() => {
+        setIsOpen(false)
+        onClose?.()
+    }, [onClose])
 
     return (
-        <div className="relative flex items-center justify-center w-14 h-14 overflow-visible">
+        <div className="relative flex items-center justify-center overflow-visible" style={{ width: compact ? 40 : 56, height: compact ? 40 : 56 }}>
             {/* Backdrop to close when clicking outside */}
             {isOpen && (
                 <div
                     className="fixed inset-0 z-40"
-                    onClick={() => setIsOpen(false)}
+                    onClick={handleClose}
                 />
             )}
 
@@ -132,7 +146,7 @@ export const SpatialColorPicker = ({
                     onClick={() => {
                         if (isOpen) {
                             onChange(CENTER_COLOR)
-                            setIsOpen(false)
+                            handleClose()
                         } else {
                             setIsOpen(true)
                         }
@@ -172,7 +186,7 @@ export const SpatialColorPicker = ({
                                         isSelected={selectedColor === color}
                                         onClick={() => {
                                             onChange(color)
-                                            setIsOpen(false)
+                                            handleClose()
                                         }}
                                         delay={index * 0.02}
                                         size={nodeSize}
@@ -197,7 +211,7 @@ export const SpatialColorPicker = ({
                                         isSelected={selectedColor === color}
                                         onClick={() => {
                                             onChange(color)
-                                            setIsOpen(false)
+                                            handleClose()
                                         }}
                                         delay={0.1 + index * 0.02}
                                         size={nodeSize}

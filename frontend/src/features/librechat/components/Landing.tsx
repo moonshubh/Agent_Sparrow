@@ -32,8 +32,28 @@ export function Landing({ onStarterClick }: LandingProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const inferMimeType = useCallback((file: globalThis.File): string => {
-    if (file.type) return file.type;
+    if (file.type) {
+      const normalized = file.type.toLowerCase();
+      if (normalized === 'image/jpg' || normalized === 'image/pjpeg') {
+        return 'image/jpeg';
+      }
+      if (normalized === 'image/x-png') {
+        return 'image/png';
+      }
+      return normalized;
+    }
     const lower = file.name.toLowerCase();
+    if (lower.endsWith('.png')) return 'image/png';
+    if (lower.endsWith('.jpg') || lower.endsWith('.jpeg') || lower.endsWith('.jfif')) return 'image/jpeg';
+    if (lower.endsWith('.gif')) return 'image/gif';
+    if (lower.endsWith('.webp')) return 'image/webp';
+    if (lower.endsWith('.bmp')) return 'image/bmp';
+    if (lower.endsWith('.tif') || lower.endsWith('.tiff')) return 'image/tiff';
+    if (lower.endsWith('.heic')) return 'image/heic';
+    if (lower.endsWith('.heif')) return 'image/heif';
+    if (lower.endsWith('.avif')) return 'image/avif';
+    if (lower.endsWith('.svg')) return 'image/svg+xml';
+    if (lower.endsWith('.ico')) return 'image/x-icon';
     if (lower.endsWith('.log')) return 'text/plain';
     if (lower.endsWith('.txt')) return 'text/plain';
     if (lower.endsWith('.md')) return 'text/markdown';
@@ -178,7 +198,7 @@ export function Landing({ onStarterClick }: LandingProps) {
                 ref={fileInputRef}
                 type="file"
                 multiple
-                accept="image/*,.pdf,.txt,.log,.md,.json,.csv,text/plain"
+                accept="image/*,.png,.jpg,.jpeg,.jfif,.gif,.webp,.bmp,.tif,.tiff,.heic,.heif,.avif,.svg,.ico,.pdf,.txt,.log,.md,.json,.csv,text/plain"
                 onChange={(e) => {
                   handleFileSelect(e.target.files);
                   e.target.value = '';

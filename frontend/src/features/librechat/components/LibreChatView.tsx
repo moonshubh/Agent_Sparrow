@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useCallback, useMemo, useEffect, useRef } from 'react';
+import type { Message } from '@/services/ag-ui/client';
 import { useAgent } from '@/features/librechat/AgentContext';
 import { MessageList } from './MessageList';
 import { ChatInput } from './ChatInput';
@@ -105,11 +106,13 @@ export function LibreChatView({
     });
 
     if (isStreaming && filtered.length > 0 && filtered[filtered.length - 1].role === 'user') {
-      filtered.push({
+      // Streaming placeholder message while waiting for assistant response
+      const placeholderMessage: Message = {
         id: 'streaming-placeholder',
         role: 'assistant',
         content: '',
-      } as any);
+      };
+      filtered.push(placeholderMessage);
     }
 
     return filtered;
@@ -144,7 +147,7 @@ export function LibreChatView({
         {isLandingPage ? (
           <Landing onStarterClick={handleStarterClick} />
         ) : (
-          <MessageList messages={displayMessages} isStreaming={isStreaming} />
+          <MessageList messages={displayMessages} isStreaming={isStreaming} sessionId={sessionId} />
         )}
 
         {/* Error Display */}

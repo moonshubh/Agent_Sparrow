@@ -55,7 +55,7 @@ def _to_jpeg_bytes(img: Image.Image, width: int = 1024, quality: int = 80) -> by
     if w > width:
         scale = width / float(w)
         new_h = int(h * scale)
-        img = img.resize((width, new_h), Image.LANCZOS)
+        img = img.resize((width, new_h), Image.Resampling.LANCZOS)
     buf = io.BytesIO()
     img.convert("RGB").save(buf, format="JPEG", quality=quality, optimize=True)
     return buf.getvalue()

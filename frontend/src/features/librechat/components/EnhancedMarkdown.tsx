@@ -121,7 +121,7 @@ export const EnhancedMarkdown = memo(function EnhancedMarkdown({
       remarkDirective,
       artifactPlugin,
       remarkSupersub,  // Superscript/subscript support (e.g., H₂O, E=mc²)
-      [remarkMath, { singleDollarTextMath: false }],
+      [remarkMath, { singleDollarTextMath: true }],
     ],
     []
   );
@@ -472,7 +472,7 @@ export const EnhancedMarkdown = memo(function EnhancedMarkdown({
                 src={src}
                 alt={alt || 'Generated image'}
                 loading="lazy"
-                className={cn('lc-generated-image', props.className)}
+                className={cn('lc-markdown-image', 'lc-generated-image', props.className)}
                 onClick={handleImageClick}
               />
             );
@@ -520,6 +520,7 @@ export const EnhancedMarkdown = memo(function EnhancedMarkdown({
               src={src}
               alt={alt || ''}
               loading="lazy"
+              className={cn('lc-markdown-image', props.className)}
             />
           );
         }
@@ -535,6 +536,55 @@ export const EnhancedMarkdown = memo(function EnhancedMarkdown({
               'border border-border shadow-academia-sm'
             )}
           />
+        );
+      },
+
+      // Tables with enhanced styling
+      table({ children, className: tableClassName, ...props }: any) {
+        const wrapperClassName = isLibreChat
+          ? 'lc-markdown-table-wrapper'
+          : 'my-4 overflow-x-auto rounded-lg border border-border';
+        const tableClasses = isLibreChat
+          ? 'lc-markdown-table'
+          : 'w-full text-sm border-collapse';
+
+        return (
+          <div className={wrapperClassName}>
+            <table {...props} className={cn(tableClasses, tableClassName)}>
+              {children}
+            </table>
+          </div>
+        );
+      },
+
+      thead({ children, className: headClassName, ...props }: any) {
+        const classes = isLibreChat ? 'lc-markdown-thead' : 'bg-secondary/50';
+        return (
+          <thead {...props} className={cn(classes, headClassName)}>
+            {children}
+          </thead>
+        );
+      },
+
+      th({ children, className: thClassName, ...props }: any) {
+        const classes = isLibreChat
+          ? 'lc-markdown-th'
+          : 'px-4 py-3 text-left font-semibold text-foreground border-b border-border';
+        return (
+          <th {...props} className={cn(classes, thClassName)}>
+            {children}
+          </th>
+        );
+      },
+
+      td({ children, className: tdClassName, ...props }: any) {
+        const classes = isLibreChat
+          ? 'lc-markdown-td'
+          : 'px-4 py-3 border-b border-border/50 text-muted-foreground';
+        return (
+          <td {...props} className={cn(classes, tdClassName)}>
+            {children}
+          </td>
         );
       },
     };
@@ -604,42 +654,6 @@ export const EnhancedMarkdown = memo(function EnhancedMarkdown({
           </a>
         );
       };
-
-      // Tables with enhanced styling
-      baseComponents.table = ({ children, ...props }: any) => (
-        <div className="my-4 overflow-x-auto rounded-lg border border-border">
-          <table
-            {...props}
-            className="w-full text-sm border-collapse"
-          >
-            {children}
-          </table>
-        </div>
-      );
-
-      baseComponents.thead = ({ children, ...props }: any) => (
-        <thead {...props} className="bg-secondary/50">
-          {children}
-        </thead>
-      );
-
-      baseComponents.th = ({ children, ...props }: any) => (
-        <th
-          {...props}
-          className="px-4 py-3 text-left font-semibold text-foreground border-b border-border"
-        >
-          {children}
-        </th>
-      );
-
-      baseComponents.td = ({ children, ...props }: any) => (
-        <td
-          {...props}
-          className="px-4 py-3 border-b border-border/50 text-muted-foreground"
-        >
-          {children}
-        </td>
-      );
 
       // Lists - tighter spacing like LibreChat
       baseComponents.ul = ({ children, ...props }: any) => (

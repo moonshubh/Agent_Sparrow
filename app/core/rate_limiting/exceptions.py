@@ -42,6 +42,18 @@ class RateLimitExceededException(RateLimitException):
         }
 
 
+class GeminiQuotaExhaustedException(RateLimitExceededException):
+    """
+    Raised when Gemini API quota is exhausted.
+
+    Provides a standardized message for quota exhaustion scenarios.
+    """
+
+    def __init__(self, model: str, retry_after: Optional[int] = None):
+        message = f"Gemini quota exhausted for {model}; try again shortly"
+        super().__init__(message=message, retry_after=retry_after, model=model)
+
+
 class CircuitBreakerOpenException(RateLimitException):
     """
     Raised when circuit breaker is in OPEN state.

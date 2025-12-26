@@ -111,6 +111,12 @@ class ChatMessageAppendRequest(BaseModel):
     delta: str = Field(..., min_length=1, description="Text to append to the message content")
 
 
+class ChatMessageUpdateRequest(BaseModel):
+    """Payload for updating an existing chat message's content and metadata"""
+    content: Optional[str] = Field(None, min_length=1, description="New content for the message")
+    metadata: Optional[Dict[str, Any]] = Field(default=None, description="Metadata updates for the message")
+
+
 # Database connection setup
 def _has_database_credentials() -> bool:
     """Return True when Supabase/Postgres credentials are available."""
@@ -382,6 +388,58 @@ def append_chat_message_content_in_db(conn, session_id: int, message_id: int, us
             """,
             (delta, message_id),
         )
+        conn.commit()
+        return dict(cur.fetchone())
+
+
+def update_chat_message_in_db(
+    conn,
+    session_id: int,
+    message_id: int,
+    user_id: str,
+    content: Optional[str] = None,
+    metadata: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Update content and/or metadata of an existing chat message owned by the user"""
+    with conn.cursor() as cur:
+        # Verify session and message ownership
+        cur.execute(
+            """
+            SELECT cm.id
+            FROM chat_messages cm
+            JOIN chat_sessions cs ON cm.session_id = cs.id
+            WHERE cm.id = %s AND cm.session_id = %s AND cs.user_id = %s
+            """,
+            (message_id, session_id, user_id),
+        )
+        if not cur.fetchone():
+            raise HTTPException(status_code=404, detail="Message not found for this user/session")
+
+        updates: list[str] = []
+        values: list[Any] = []
+
+        if content is not None:
+            updates.append("content = %s")
+            values.append(content)
+
+        if metadata is not None:
+            import json
+
+            metadata_json = json.dumps(metadata) if isinstance(metadata, dict) else metadata
+            updates.append("metadata = COALESCE(metadata, '{}'::jsonb) || %s::jsonb")
+            values.append(metadata_json)
+
+        if not updates:
+            raise HTTPException(status_code=400, detail="No updates provided")
+
+        query = f"""
+            UPDATE chat_messages
+            SET {', '.join(updates)}
+            WHERE id = %s
+            RETURNING *
+        """
+        values.append(message_id)
+        cur.execute(query, values)
         conn.commit()
         return dict(cur.fetchone())
 
@@ -937,6 +995,11 @@ async def append_chat_message(
         conn = get_db_connection()
 
         if conn is None:
+            # Local storage fallback - verify session ownership first
+            session = _get_local_session(user_id, session_id)
+            if session is None:
+                raise HTTPException(status_code=404, detail="Session not found")
+
             messages = LOCAL_CHAT_MESSAGES.get(session_id, [])
             target = next((m for m in messages if m['id'] == message_id), None)
             if target is None:
@@ -944,11 +1007,9 @@ async def append_chat_message(
 
             target['content'] = f"{target.get('content', '')}{append_data.delta}"
             now = datetime.utcnow()
-            session = _get_local_session(user_id, session_id)
-            if session:
-                session['last_message_at'] = now
-                session['updated_at'] = now
-                _persist_local_session(user_id, session)
+            session['last_message_at'] = now
+            session['updated_at'] = now
+            _persist_local_session(user_id, session)
 
             return ChatMessage(**target)
 
@@ -958,6 +1019,81 @@ async def append_chat_message(
         raise
     except Exception as e:
         logger.error(f"[MESSAGE APPEND] Error appending to message {message_id}: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+    finally:
+        if conn:
+            conn.close()
+
+
+@router.put("/chat-sessions/{session_id}/messages/{message_id}", response_model=ChatMessage, tags=["Chat Messages"])
+async def update_chat_message(
+    session_id: int,
+    message_id: int,
+    update_data: "ChatMessageUpdateRequest",
+    request: Request,
+    response: Response,
+    current_user: Optional[TokenPayload] = Depends(get_optional_current_user)
+):
+    """Update the content of an existing chat message (authentication optional)
+
+    This endpoint allows editing a message's content after it has been created.
+    Used by the frontend edit feature to persist changes.
+    """
+    conn = None
+    try:
+        if current_user:
+            user_id = current_user.sub
+        else:
+            user_id = get_or_create_guest_user_id(request, response)
+
+        content = update_data.content
+        metadata = update_data.metadata
+
+        if content is None and metadata is None:
+            raise HTTPException(status_code=400, detail="No updates provided")
+
+        if content is not None and not content.strip():
+            raise HTTPException(status_code=400, detail="Content cannot be empty")
+
+        logger.debug(f"[MESSAGE UPDATE] Updating message {message_id} in session {session_id}")
+        if content is not None:
+            logger.debug(f"[MESSAGE UPDATE] New content length: {len(content)}")
+
+        conn = get_db_connection()
+
+        if conn is None:
+            # Local storage fallback - verify session ownership first
+            session = _get_local_session(user_id, session_id)
+            if session is None:
+                raise HTTPException(status_code=404, detail="Session not found")
+
+            messages = LOCAL_CHAT_MESSAGES.get(session_id, [])
+            target = next((m for m in messages if m['id'] == message_id), None)
+            if target is None:
+                raise HTTPException(status_code=404, detail="Message not found")
+
+            if content is not None:
+                target['content'] = content
+            if metadata is not None:
+                existing_meta = target.get('metadata') or {}
+                if not isinstance(existing_meta, dict):
+                    existing_meta = {}
+                target['metadata'] = {**existing_meta, **metadata}
+
+            now = datetime.utcnow()
+            session['updated_at'] = now
+            _persist_local_session(user_id, session)
+
+            logger.info(f"[MESSAGE UPDATE] Updated message {message_id} in local storage")
+            return ChatMessage(**target)
+
+        message = update_chat_message_in_db(conn, session_id, message_id, user_id, content, metadata)
+        logger.info(f"[MESSAGE UPDATE] Updated message {message_id} in database")
+        return ChatMessage(**message)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[MESSAGE UPDATE] Error updating message {message_id}: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")
     finally:
         if conn:

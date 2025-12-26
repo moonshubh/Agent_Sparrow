@@ -54,6 +54,7 @@ from app.api.v1.endpoints import agent_interrupt_endpoints  # HITL interrupt con
 from app.api.v1.endpoints import (
     global_knowledge_observability,  # Global knowledge observability APIs
     global_knowledge_feedback,  # Global knowledge submission APIs
+    message_feedback_endpoints,  # Message thumbs up/down feedback
 )
 from app.api.v1.websocket import feedme_websocket  # FeedMe WebSocket endpoints
 from app.core.settings import settings
@@ -222,6 +223,7 @@ app.include_router(agents_endpoints.router, prefix="/api/v1", tags=["Agents"])  
 app.include_router(metadata_endpoints.router, prefix="/api/v1", tags=["Metadata"])  # /api/v1/metadata - Phase 6
 app.include_router(global_knowledge_observability.router, prefix="/api/v1", tags=["Global Knowledge"])
 app.include_router(global_knowledge_feedback.router, prefix="/api/v1", tags=["Global Knowledge"])
+app.include_router(message_feedback_endpoints.router, prefix="/api/v1", tags=["Message Feedback"])  # /api/v1/feedback/message
 # Register FeedMe routes (modular package)
 app.include_router(feedme.router, prefix="/api/v1", tags=["FeedMe"])
 # Register FeedMe Text Approval routes  

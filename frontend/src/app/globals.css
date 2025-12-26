@@ -523,7 +523,7 @@
 
     /* === TYPOGRAPHY === */
     --font-serif: var(--font-lora), 'Source Serif Pro', Georgia, 'Times New Roman', serif;
-    --font-sans: var(--font-poppins), -apple-system, BlinkMacSystemFont, sans-serif;
+    --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
     --font-mono: 'JetBrains Mono', 'Fira Code', ui-monospace, monospace;
 
     /* Type Scale - Slightly larger for serif readability */
@@ -624,28 +624,28 @@
   .dark {
     /* ============================================================
        DARK ACADEMIA - "The Scholar's Study at Night"
-       Deep warm charcoal with candlelit warmth
+       Charcoal gray with warm accents - lighter than pure black
        ============================================================ */
 
-    /* === BACKGROUND SURFACES - Warm Stone === */
-    --background: 30 8% 8%;
+    /* === BACKGROUND SURFACES - Charcoal gray (not too dark) === */
+    --background: 0 0% 13%;          /* #212121 - Charcoal gray */
     --foreground: 40 15% 92%;
-    --card: 30 6% 12%;
+    --card: 0 0% 15%;                /* #262626 */
     --card-foreground: 40 15% 92%;
-    --popover: 30 6% 14%;
+    --popover: 0 0% 16%;             /* #292929 */
     --popover-foreground: 40 15% 92%;
 
     /* === TERRACOTTA PRIMARY - Fireplace Warmth === */
     --primary: 200.4 98% 38%;
     --primary-foreground: 40 20% 97%;
 
-    /* === SECONDARY - Warm Stone === */
-    --secondary: 30 5% 16%;
+    /* === SECONDARY - Lighter neutral === */
+    --secondary: 0 0% 18%;
     --secondary-foreground: 40 12% 85%;
 
-    /* === MUTED - Soft Stone === */
-    --muted: 30 4% 18%;
-    --muted-foreground: 35 8% 55%;
+    /* === MUTED - Neutral gray === */
+    --muted: 0 0% 20%;
+    --muted-foreground: 0 0% 55%;
 
     /* === SAGE ACCENT - Nature's Wisdom === */
     --accent: 135 25% 45%;
@@ -654,8 +654,8 @@
     /* === SEMANTIC COLORS === */
     --destructive: 0 50% 45%;
     --destructive-foreground: 40 20% 97%;
-    --border: 30 5% 18%;
-    --input: 30 5% 14%;
+    --border: 0 0% 22%;               /* Lighter border for contrast */
+    --input: 0 0% 16%;                /* Dark input background */
     --ring: 200.4 98% 38%;
 
     /* === TERRACOTTA SCALE === */
@@ -686,18 +686,18 @@
     --cream-50: 40 20% 97%;
     --cream-100: 40 15% 92%;
 
-    /* === CHAT COLORS - Dark Academia === */
-    --chat-background: 30 8% 8%;
+    /* === CHAT COLORS - Darker neutral === */
+    --chat-background: 0 0% 6%;
     --chat-user-bg: 200.4 98% 28%;
     --chat-user-text: 40 20% 97%;
-    --chat-agent-bg: 30 5% 12%;
+    --chat-agent-bg: 0 0% 9%;
     --chat-agent-text: 40 15% 92%;
-    --chat-input-bg: 30 5% 11%;
+    --chat-input-bg: 0 0% 8%;
     --chat-input-text: 40 15% 92%;
-    --chat-metadata: 35 8% 50%;
+    --chat-metadata: 0 0% 50%;
 
-    /* Code surfaces - Warmer, darker background */
-    --code-block-bg: 30 6% 12%;
+    /* Code surfaces - Dark background */
+    --code-block-bg: 0 0% 15%;
 
     /* Responsive container widths */
     --container-sm: 100%;
@@ -706,14 +706,14 @@
     --container-xl: 80%;
     --container-max: 1400px;
 
-    /* === SIDEBAR - Scholarly Panel === */
-    --sidebar-background: 30 6% 11%;
+    /* === SIDEBAR - Slightly darker than main bg === */
+    --sidebar-background: 0 0% 11%;   /* #1c1c1c - subtle contrast */
     --sidebar-foreground: 40 12% 88%;
     --sidebar-primary: 200.4 98% 38%;
     --sidebar-primary-foreground: 40 20% 97%;
-    --sidebar-accent: 30 5% 16%;
+    --sidebar-accent: 0 0% 18%;
     --sidebar-accent-foreground: 40 12% 88%;
-    --sidebar-border: 30 5% 16%;
+    --sidebar-border: 0 0% 20%;
     --sidebar-ring: 200.4 98% 38%;
 
     /* === SEVERITY - Muted Earth Tones === */
@@ -722,12 +722,12 @@
     --medium: 135 30% 45%;
 
     /* === NEUTRAL BASE === */
-    --neutral-base: 30 8% 10%;
-    --neutral-card: 30 6% 14%;
+    --neutral-base: 0 0% 13%;
+    --neutral-card: 0 0% 15%;
 
     /* === LEGACY COMPATIBILITY === */
     --mb-blue-300: 200.4 98% 39.4%;
-    --brand-surface: 30 6% 12%;
+    --brand-surface: 0 0% 9%;
 
     /* === SHADOWS - Warm Undertones === */
     --shadow-color: 30 15% 5%;
