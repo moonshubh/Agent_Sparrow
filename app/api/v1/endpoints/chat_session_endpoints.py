@@ -546,11 +546,12 @@ def get_chat_messages_for_session(conn, session_id: int, user_id: str, request: 
             messages.append(msg_dict)
         
         # Still return pagination info for compatibility, but send all messages
+        # Use max(total_count, 1) to satisfy page_size >= 1 validation
         return {
             "messages": messages,
             "total_count": total_count,
             "page": 1,
-            "page_size": total_count,  # All messages
+            "page_size": max(total_count, 1),  # All messages, min 1 for validation
             "has_next": False,
             "has_previous": False
         }
@@ -984,6 +985,7 @@ async def append_chat_message(
     """Append text to an existing chat message (authentication optional)"""
     conn = None
     try:
+        use_database = current_user is not None
         if current_user:
             user_id = current_user.sub
         else:
@@ -992,7 +994,7 @@ async def append_chat_message(
         if not append_data.delta or not append_data.delta.strip():
             raise HTTPException(status_code=400, detail="Delta cannot be empty")
 
-        conn = get_db_connection()
+        conn = get_db_connection() if use_database else None
 
         if conn is None:
             # Local storage fallback - verify session ownership first
@@ -1041,6 +1043,7 @@ async def update_chat_message(
     """
     conn = None
     try:
+        use_database = current_user is not None
         if current_user:
             user_id = current_user.sub
         else:
@@ -1059,7 +1062,7 @@ async def update_chat_message(
         if content is not None:
             logger.debug(f"[MESSAGE UPDATE] New content length: {len(content)}")
 
-        conn = get_db_connection()
+        conn = get_db_connection() if use_database else None
 
         if conn is None:
             # Local storage fallback - verify session ownership first
@@ -1114,12 +1117,13 @@ async def list_chat_messages(
     conn = None
     try:
         # Use authenticated user ID if available, otherwise use guest ID from cookie
+        use_database = current_user is not None
         if current_user:
             user_id = current_user.sub
         else:
             user_id = get_or_create_guest_user_id(request, response)
-        
-        conn = get_db_connection()
+
+        conn = get_db_connection() if use_database else None
 
         if conn is None:
             session = _get_local_session(user_id, session_id)
