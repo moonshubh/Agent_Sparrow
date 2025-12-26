@@ -728,7 +728,7 @@
   transition: opacity 0.15s ease;
 }
 
-.lc-message:hover .lc-message-actions {
+.lc-message-canvas:hover .lc-message-actions {
   opacity: 1;
 }
 
