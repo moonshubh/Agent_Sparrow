@@ -72,8 +72,23 @@ interface MessageActionsProps {
 const MessageActions = memo(function MessageActions({ content, messageId, sessionId, onRegenerate, onEdit }: MessageActionsProps) {
   const [copied, setCopied] = useState(false);
   const [copyError, setCopyError] = useState(false);
+  const copyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Cleanup timeout on unmount to prevent memory leak
+  useEffect(() => {
+    return () => {
+      if (copyTimeoutRef.current) {
+        clearTimeout(copyTimeoutRef.current);
+      }
+    };
+  }, []);
 
   const handleCopy = useCallback(async () => {
+    // Clear any existing timeout
+    if (copyTimeoutRef.current) {
+      clearTimeout(copyTimeoutRef.current);
+    }
+
     try {
       if (!navigator.clipboard) {
         const textArea = document.createElement('textarea');
@@ -85,18 +100,18 @@ const MessageActions = memo(function MessageActions({ content, messageId, sessio
         document.execCommand('copy');
         document.body.removeChild(textArea);
         setCopied(true);
-        setTimeout(() => setCopied(false), 2000);
+        copyTimeoutRef.current = setTimeout(() => setCopied(false), 2000);
         return;
       }
 
       await navigator.clipboard.writeText(content);
       setCopied(true);
       setCopyError(false);
-      setTimeout(() => setCopied(false), 2000);
+      copyTimeoutRef.current = setTimeout(() => setCopied(false), 2000);
     } catch (err) {
       console.error('Failed to copy to clipboard:', err);
       setCopyError(true);
-      setTimeout(() => setCopyError(false), 2000);
+      copyTimeoutRef.current = setTimeout(() => setCopyError(false), 2000);
     }
   }, [content]);
 

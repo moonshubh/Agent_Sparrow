@@ -11,11 +11,20 @@ from app.db.supabase.client import get_supabase_client
 
 logger = logging.getLogger(__name__)
 
+from app.core.settings import settings
+
 try:
     from app.api.v1.endpoints.auth import get_current_user_id
-except Exception:
+except ImportError:
+    # Only allow fallback in development mode - fail loudly in production
+    if settings.is_production_mode():
+        raise ImportError(
+            "Authentication module required in production. "
+            "Cannot import get_current_user_id from app.api.v1.endpoints.auth"
+        )
+
     async def get_current_user_id() -> str:
-        from app.core.settings import settings
+        """Development-only fallback for auth."""
         return getattr(settings, "development_user_id", "dev-user-12345")
 
 
@@ -70,7 +79,7 @@ async def submit_message_feedback(
 
         if not result.data:
             raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY,
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Failed to save feedback"
             )
 
@@ -86,6 +95,6 @@ async def submit_message_feedback(
     except Exception as exc:
         logger.error("Failed to submit message feedback: %s", exc, exc_info=True)
         raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to submit feedback"
         ) from exc

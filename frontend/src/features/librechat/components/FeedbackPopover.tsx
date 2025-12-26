@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useCallback, memo } from 'react';
+import React, { useState, useCallback, memo, useEffect, useRef } from 'react';
 import { ThumbsUp, ThumbsDown, ChevronDown, Check } from 'lucide-react';
 import * as Popover from '@radix-ui/react-popover';
 
@@ -38,6 +38,16 @@ export const FeedbackPopover = memo(function FeedbackPopover({
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitted, setSubmitted] = useState(false);
   const [isOpen, setIsOpen] = useState(false);
+  const closeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Cleanup timeouts on unmount to prevent memory leaks
+  useEffect(() => {
+    return () => {
+      if (closeTimeoutRef.current) {
+        clearTimeout(closeTimeoutRef.current);
+      }
+    };
+  }, []);
 
   const handleFeedbackClick = useCallback((type: FeedbackType) => {
     if (submitted) return;
@@ -59,8 +69,8 @@ export const FeedbackPopover = memo(function FeedbackPopover({
         await submitFeedback(messageId, sessionId, feedbackType, category);
       }
       setSubmitted(true);
-      // Close popover after short delay
-      setTimeout(() => setIsOpen(false), 800);
+      // Close popover after short delay (with cleanup ref to prevent memory leak)
+      closeTimeoutRef.current = setTimeout(() => setIsOpen(false), 800);
     } catch (error) {
       console.error('[FeedbackPopover] Failed to submit feedback:', error);
     } finally {

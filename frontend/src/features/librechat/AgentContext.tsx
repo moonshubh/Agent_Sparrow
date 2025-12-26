@@ -1167,65 +1167,69 @@ export function AgentProvider({
 	        const runUserIndex = runUserMessageId
 	          ? findLastIndex(currentMessages, (msg) => msg.id === runUserMessageId)
 	          : -1;
-	        if (runUserIndex < 0) return;
 
 	        const candidateIndex = findLastIndex(
 	          currentMessages,
 	          (msg) => msg.role === 'assistant' && msg.content.trim().length > 0,
 	        );
-	        if (candidateIndex <= runUserIndex) return;
 
-	        const candidate = currentMessages[candidateIndex];
+	        // Early exit conditions - use nested if instead of return to avoid masking exceptions
+	        const shouldPersist = runUserIndex >= 0 && candidateIndex > runUserIndex;
 
-	        const lastPersistedId = lastPersistedAssistantIdBySessionRef.current[sessionKey];
-	        const lastPersistedIndex = lastPersistedId
-	          ? findLastIndex(currentMessages, (msg) => msg.id === lastPersistedId)
-	          : -1;
+	        // Only continue with persistence if conditions are met
+	        if (shouldPersist && candidateIndex >= 0) {
+	          const candidate = currentMessages[candidateIndex];
 
-	        // Skip if we haven't advanced beyond the last successfully persisted assistant message.
-	        if (candidateIndex <= lastPersistedIndex) return;
-
-	        const artifacts = pendingArtifactsRef.current.length > 0
-	          ? pendingArtifactsRef.current
-	          : undefined;
-	        const mergedMetadata = artifacts
-	          ? { ...(candidate.metadata ?? {}), artifacts }
-	          : candidate.metadata;
-	        const metadataToPersist =
-	          mergedMetadata && Object.keys(mergedMetadata).length ? mergedMetadata : undefined;
-
-	        assistantPersistedRef.current = true;
-	        const agentType = getPersistedAgentTypeFromState(agent.state);
-
-	        console.debug(
-	          '[Persistence] Persisting assistant message',
-	          { id: candidate.id, artifacts: artifacts?.length || 0 },
-	        );
-
-	        sessionsAPI.postMessage(sessionId, {
-	          message_type: 'assistant',
-	          content: candidate.content,
-	          agent_type: agentType,
-	          metadata: metadataToPersist,
-	        }).then(() => {
-	          const latestMessages = messagesRef.current;
-	          const currentLastId = lastPersistedAssistantIdBySessionRef.current[sessionKey];
-	          const currentLastIndex = currentLastId
-	            ? findLastIndex(latestMessages, (msg) => msg.id === currentLastId)
+	          const lastPersistedId = lastPersistedAssistantIdBySessionRef.current[sessionKey];
+	          const lastPersistedIndex = lastPersistedId
+	            ? findLastIndex(currentMessages, (msg) => msg.id === lastPersistedId)
 	            : -1;
-	          const candidateIndexNow = findLastIndex(latestMessages, (msg) => msg.id === candidate.id);
 
-	          if (candidateIndexNow >= 0 && candidateIndexNow > currentLastIndex) {
-	            lastPersistedAssistantIdBySessionRef.current[sessionKey] = candidate.id;
-	          } else if (candidateIndexNow < 0 && currentLastIndex < 0) {
-	            lastPersistedAssistantIdBySessionRef.current[sessionKey] = candidate.id;
+	          // Only persist if we've advanced beyond the last successfully persisted assistant message.
+	          if (candidateIndex > lastPersistedIndex) {
+	            const artifacts = pendingArtifactsRef.current.length > 0
+	              ? pendingArtifactsRef.current
+	              : undefined;
+	            const mergedMetadata = artifacts
+	              ? { ...(candidate.metadata ?? {}), artifacts }
+	              : candidate.metadata;
+	            const metadataToPersist =
+	              mergedMetadata && Object.keys(mergedMetadata).length ? mergedMetadata : undefined;
+
+	            assistantPersistedRef.current = true;
+	            const agentType = getPersistedAgentTypeFromState(agent.state);
+
+	            console.debug(
+	              '[Persistence] Persisting assistant message',
+	              { id: candidate.id, artifacts: artifacts?.length || 0 },
+	            );
+
+	            sessionsAPI.postMessage(sessionId, {
+	              message_type: 'assistant',
+	              content: candidate.content,
+	              agent_type: agentType,
+	              metadata: metadataToPersist,
+	            }).then(() => {
+	              const latestMessages = messagesRef.current;
+	              const currentLastId = lastPersistedAssistantIdBySessionRef.current[sessionKey];
+	              const currentLastIndex = currentLastId
+	                ? findLastIndex(latestMessages, (msg) => msg.id === currentLastId)
+	                : -1;
+	              const candidateIndexNow = findLastIndex(latestMessages, (msg) => msg.id === candidate.id);
+
+	              if (candidateIndexNow >= 0 && candidateIndexNow > currentLastIndex) {
+	                lastPersistedAssistantIdBySessionRef.current[sessionKey] = candidate.id;
+	              } else if (candidateIndexNow < 0 && currentLastIndex < 0) {
+	                lastPersistedAssistantIdBySessionRef.current[sessionKey] = candidate.id;
+	              }
+
+	              console.debug('[Persistence] Assistant message persisted successfully');
+	            }).catch((err) => {
+	              console.error('[Persistence] Failed to persist assistant message:', err);
+	              assistantPersistedRef.current = false;
+	            });
 	          }
-
-	          console.debug('[Persistence] Assistant message persisted successfully');
-	        }).catch((err) => {
-	          console.error('[Persistence] Failed to persist assistant message:', err);
-	          assistantPersistedRef.current = false;
-	        });
+	        }
 	      }
 	    }
 	  }, [agent, isStreaming, sessionId]);
