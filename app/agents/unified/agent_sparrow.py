@@ -55,8 +55,9 @@ from app.memory import memory_service
 from app.core.rate_limiting.agent_wrapper import get_rate_limiter
 from app.core.rate_limiting.exceptions import (
     CircuitBreakerOpenException,
-    RateLimitExceededException,
+    GeminiQuotaExhaustedException,
     GeminiServiceUnavailableException,
+    RateLimitExceededException,
 )
 from app.agents.unified.cache import configure_llm_cache
 from app.agents.helpers.gemma_helper import GemmaHelper
@@ -1346,13 +1347,9 @@ async def run_unified_agent(state: GraphState, config: Optional[RunnableConfig] 
                                 config=run_config,
                             )
                         else:
-                            raise RateLimitExceededException(
-                                f"Gemini rate limit reached for {runtime.model}; try again shortly"
-                            ) from exc
+                            raise GeminiQuotaExhaustedException(runtime.model) from exc
                     else:
-                        raise RateLimitExceededException(
-                            f"Gemini rate limit reached for {runtime.model}; try again shortly"
-                        ) from exc
+                        raise GeminiQuotaExhaustedException(runtime.model) from exc
                 else:
                     raise
 

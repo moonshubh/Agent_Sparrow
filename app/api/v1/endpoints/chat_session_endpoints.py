@@ -995,6 +995,11 @@ async def append_chat_message(
         conn = get_db_connection()
 
         if conn is None:
+            # Local storage fallback - verify session ownership first
+            session = _get_local_session(user_id, session_id)
+            if session is None:
+                raise HTTPException(status_code=404, detail="Session not found")
+
             messages = LOCAL_CHAT_MESSAGES.get(session_id, [])
             target = next((m for m in messages if m['id'] == message_id), None)
             if target is None:
@@ -1002,11 +1007,9 @@ async def append_chat_message(
 
             target['content'] = f"{target.get('content', '')}{append_data.delta}"
             now = datetime.utcnow()
-            session = _get_local_session(user_id, session_id)
-            if session:
-                session['last_message_at'] = now
-                session['updated_at'] = now
-                _persist_local_session(user_id, session)
+            session['last_message_at'] = now
+            session['updated_at'] = now
+            _persist_local_session(user_id, session)
 
             return ChatMessage(**target)
 
@@ -1059,7 +1062,11 @@ async def update_chat_message(
         conn = get_db_connection()
 
         if conn is None:
-            # Local storage fallback
+            # Local storage fallback - verify session ownership first
+            session = _get_local_session(user_id, session_id)
+            if session is None:
+                raise HTTPException(status_code=404, detail="Session not found")
+
             messages = LOCAL_CHAT_MESSAGES.get(session_id, [])
             target = next((m for m in messages if m['id'] == message_id), None)
             if target is None:
@@ -1074,10 +1081,8 @@ async def update_chat_message(
                 target['metadata'] = {**existing_meta, **metadata}
 
             now = datetime.utcnow()
-            session = _get_local_session(user_id, session_id)
-            if session:
-                session['updated_at'] = now
-                _persist_local_session(user_id, session)
+            session['updated_at'] = now
+            _persist_local_session(user_id, session)
 
             logger.info(f"[MESSAGE UPDATE] Updated message {message_id} in local storage")
             return ChatMessage(**target)

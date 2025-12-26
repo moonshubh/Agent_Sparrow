@@ -424,7 +424,13 @@ class MultimodalProcessor:
             logger.warning("image_decode_failed", name=name, error=str(exc))
             return None
 
-        if image.mode in ("RGBA", "LA") or (image.mode == "P" and "transparency" in image.info):
+        if image.mode in ("RGBA", "LA"):
+            background = Image.new("RGB", image.size, (255, 255, 255))
+            background.paste(image, mask=image.split()[-1])
+            image = background
+        elif image.mode == "P" and "transparency" in image.info:
+            # P-mode stores transparency as color index, not alpha band - convert first
+            image = image.convert("RGBA")
             background = Image.new("RGB", image.size, (255, 255, 255))
             background.paste(image, mask=image.split()[-1])
             image = background
@@ -439,7 +445,7 @@ class MultimodalProcessor:
                     max(1, int(image.width * scale)),
                     max(1, int(image.height * scale)),
                 )
-                resized = image.resize(new_size, Image.LANCZOS)
+                resized = image.resize(new_size, Image.Resampling.LANCZOS)
             else:
                 resized = image
 
