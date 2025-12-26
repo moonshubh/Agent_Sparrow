@@ -260,33 +260,38 @@ export function ArticleEditor({ artifact }: ArticleEditorProps) {
   // Custom markdown components for preview
   const markdownComponents = useMemo((): Partial<Components> => ({
     // Style images with proper sizing and click-to-zoom
-    // Note: Returns a <span> wrapper (inline) with display:block styling to avoid <p><figure></p> hydration errors
-    img: ({ src, alt, ...props }) => {
-      // Normalize src to string (react-markdown types allow Blob, but in practice it's always string)
+    img: ({
+      node: _node,
+      src,
+      alt,
+      className,
+      ...props
+    }: React.ImgHTMLAttributes<HTMLImageElement> & { node?: unknown }) => {
       const srcString = typeof src === 'string' ? src : undefined;
-      const altString = alt ?? 'Article image';
-      const isBase64 = srcString?.startsWith('data:');
-      const hasFailed = srcString && failedImages.has(srcString);
+      const caption = typeof alt === 'string' ? alt : '';
+      const displayAlt = caption || 'Article image';
+      const isBase64 = srcString?.startsWith('data:') ?? false;
+      const hasFailed = Boolean(srcString && failedImages.has(srcString));
+      const isMissing = !srcString;
+      const shouldShowCaption = caption && caption !== 'Article image';
 
-      // Handle image load error
       const handleImageError = () => {
         if (srcString) {
-          setFailedImages(prev => new Set(prev).add(srcString));
+          setFailedImages((prev) => new Set(prev).add(srcString));
         }
       };
 
-      // Show error state for failed images
-      if (hasFailed) {
+      if (isMissing || hasFailed) {
         return (
           <span className="block my-6 mx-auto max-w-full">
             <span className="block relative rounded-xl border border-border/50 bg-secondary/30 p-8 text-center">
               <ImageIcon className="h-12 w-12 mx-auto mb-3 text-muted-foreground/50" />
               <span className="block text-sm text-muted-foreground">
-                Image failed to load
+                {isMissing ? 'Image unavailable' : 'Image failed to load'}
               </span>
-              {altString !== 'Article image' && (
+              {shouldShowCaption && (
                 <span className="block text-xs text-muted-foreground/70 mt-1 italic">
-                  {altString}
+                  {caption}
                 </span>
               )}
             </span>
@@ -294,105 +299,205 @@ export function ArticleEditor({ artifact }: ArticleEditorProps) {
         );
       }
 
-      // Use <span> with display:block to avoid <p><figure></p> nesting issues
+      const openLightbox = () => {
+        setLightboxImage({ src: srcString, alt: displayAlt });
+      };
+
       return (
         <span className="block my-6 mx-auto max-w-full">
           <span
             className="block relative group cursor-pointer"
-            onClick={() => srcString && setLightboxImage({ src: srcString, alt: altString })}
+            onClick={openLightbox}
+            role="button"
+            tabIndex={0}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                openLightbox();
+              }
+            }}
           >
             <img
               src={srcString}
-              alt={altString}
+              alt={displayAlt}
               className={cn(
                 'w-full h-auto rounded-xl shadow-lg',
                 'border border-border/50',
                 'transition-all duration-200 group-hover:shadow-xl',
-                isBase64 && 'bg-secondary/20' // Background for generated images
+                isBase64 && 'bg-secondary/20',
+                className
               )}
               loading="lazy"
               onError={handleImageError}
               {...props}
             />
             <span className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity bg-black/20 rounded-xl">
-              <span className="bg-background/90 backdrop-blur-sm px-3 py-1.5 rounded-lg text-xs font-medium text-foreground flex items-center gap-1.5">
+              <span className="bg-background/90 backdrop-blur-sm px-3 py-1.5 rounded-lg text-xs font-medium text-foreground inline-flex items-center gap-1.5">
                 <Maximize2 className="h-3.5 w-3.5" />
                 Click to enlarge
               </span>
             </span>
           </span>
-          {altString !== 'Article image' && (
+          {shouldShowCaption && (
             <span className="block text-center text-sm text-muted-foreground mt-2 italic">
-              {altString}
+              {caption}
             </span>
           )}
         </span>
       );
     },
     // Style headings
-    h1: ({ children, ...props }) => (
-      <h1 className="text-2xl font-bold mt-6 mb-3 text-foreground border-b border-border pb-2" {...props}>
+    h1: ({
+      node: _node,
+      children,
+      className,
+      ...props
+    }: React.HTMLAttributes<HTMLHeadingElement> & { node?: unknown }) => (
+      <h1
+        {...props}
+        className={cn(
+          'text-2xl font-bold mt-6 mb-3 text-foreground border-b border-border pb-2',
+          className
+        )}
+      >
         {children}
       </h1>
     ),
-    h2: ({ children, ...props }) => (
-      <h2 className="text-xl font-semibold mt-5 mb-2 text-foreground" {...props}>
+    h2: ({
+      node: _node,
+      children,
+      className,
+      ...props
+    }: React.HTMLAttributes<HTMLHeadingElement> & { node?: unknown }) => (
+      <h2
+        {...props}
+        className={cn('text-xl font-semibold mt-5 mb-2 text-foreground', className)}
+      >
         {children}
       </h2>
     ),
-    h3: ({ children, ...props }) => (
-      <h3 className="text-lg font-medium mt-4 mb-2 text-foreground" {...props}>
+    h3: ({
+      node: _node,
+      children,
+      className,
+      ...props
+    }: React.HTMLAttributes<HTMLHeadingElement> & { node?: unknown }) => (
+      <h3
+        {...props}
+        className={cn('text-lg font-medium mt-4 mb-2 text-foreground', className)}
+      >
         {children}
       </h3>
     ),
     // Style paragraphs
-    p: ({ children, ...props }) => (
-      <p className="my-3 text-foreground/90 leading-relaxed" {...props}>
+    p: ({
+      node: _node,
+      children,
+      className,
+      ...props
+    }: React.HTMLAttributes<HTMLParagraphElement> & { node?: unknown }) => (
+      <p
+        {...props}
+        className={cn('my-3 text-foreground/90 leading-relaxed', className)}
+      >
         {children}
       </p>
     ),
     // Style blockquotes
-    blockquote: ({ children, ...props }) => (
+    blockquote: ({
+      node: _node,
+      children,
+      className,
+      ...props
+    }: React.BlockquoteHTMLAttributes<HTMLQuoteElement> & { node?: unknown }) => (
       <blockquote
-        className="border-l-4 border-terracotta-400 pl-4 my-4 italic text-muted-foreground bg-secondary/30 py-2 rounded-r"
         {...props}
+        className={cn(
+          'border-l-4 border-terracotta-400 pl-4 my-4 italic text-muted-foreground bg-secondary/30 py-2 rounded-r',
+          className
+        )}
       >
         {children}
       </blockquote>
     ),
     // Style lists
-    ul: ({ children, ...props }) => (
-      <ul className="list-disc list-inside my-3 space-y-1 text-foreground/90" {...props}>
+    ul: ({
+      node: _node,
+      children,
+      className,
+      ...props
+    }: React.HTMLAttributes<HTMLUListElement> & { node?: unknown }) => (
+      <ul
+        {...props}
+        className={cn('list-disc list-inside my-3 space-y-1 text-foreground/90', className)}
+      >
         {children}
       </ul>
     ),
-    ol: ({ children, ...props }) => (
-      <ol className="list-decimal list-inside my-3 space-y-1 text-foreground/90" {...props}>
+    ol: ({
+      node: _node,
+      children,
+      className,
+      ...props
+    }: React.HTMLAttributes<HTMLOListElement> & { node?: unknown }) => (
+      <ol
+        {...props}
+        className={cn(
+          'list-decimal list-inside my-3 space-y-1 text-foreground/90',
+          className
+        )}
+      >
         {children}
       </ol>
     ),
-    // Style code - react-markdown v9+ uses className prop to indicate code block vs inline
-    code: ({ className, children, ...props }) => {
-      // If className contains 'language-', it's a code block
-      const isInline = !className?.includes('language-');
-      return isInline ? (
-        <code className="px-1.5 py-0.5 rounded bg-secondary text-terracotta-300 text-sm font-mono" {...props}>
+    // Style code
+    code: ({
+      node: _node,
+      inline,
+      children,
+      className,
+      ...props
+    }: React.HTMLAttributes<HTMLElement> & { inline?: boolean; node?: unknown }) => {
+      const isInlineCode = inline ?? !String(className ?? '').includes('language-');
+      return isInlineCode ? (
+        <code
+          {...props}
+          className={cn(
+            'px-1.5 py-0.5 rounded bg-secondary text-terracotta-300 text-sm font-mono',
+            className
+          )}
+        >
           {children}
         </code>
       ) : (
-        <code className="block p-3 rounded-lg bg-secondary text-sm font-mono overflow-x-auto" {...props}>
+        <code
+          {...props}
+          className={cn(
+            'block p-3 rounded-lg bg-secondary text-sm font-mono overflow-x-auto',
+            className
+          )}
+        >
           {children}
         </code>
       );
     },
     // Style links
-    a: ({ href, children, ...props }) => (
+    a: ({
+      node: _node,
+      href,
+      children,
+      className,
+      ...props
+    }: React.AnchorHTMLAttributes<HTMLAnchorElement> & { node?: unknown }) => (
       <a
         href={href}
         target="_blank"
         rel="noopener noreferrer"
-        className="text-terracotta-400 hover:text-terracotta-300 underline underline-offset-2"
         {...props}
+        className={cn(
+          'text-terracotta-400 hover:text-terracotta-300 underline underline-offset-2',
+          className
+        )}
       >
         {children}
       </a>

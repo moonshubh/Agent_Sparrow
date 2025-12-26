@@ -27,8 +27,7 @@ function convertToMessage(record: ChatMessageRecord): Message {
 
 /**
  * Restore artifacts from message metadata into the artifact store.
- * This is called after loading messages from the backend to restore
- * any artifacts that were persisted with the messages.
+ * Used after loading messages from the backend to restore persisted artifacts.
  */
 function restoreArtifactsFromMessages(messages: Message[]): void {
   const store = getGlobalArtifactStore();
@@ -49,7 +48,7 @@ function restoreArtifactsFromMessages(messages: Message[]): void {
     const metadata = message.metadata as Record<string, unknown> | undefined;
     const artifacts = metadata?.artifacts as SerializedArtifact[] | undefined;
 
-    if (!artifacts || !Array.isArray(artifacts)) continue;
+    if (!Array.isArray(artifacts) || artifacts.length === 0) continue;
 
     console.debug('[Artifacts] Found', artifacts.length, 'artifacts in message', message.id);
 
@@ -61,20 +60,19 @@ function restoreArtifactsFromMessages(messages: Message[]): void {
         console.debug('[Artifacts] Skipping invalid artifact:', {
           id: artifact.id,
           type: artifact.type,
-          hasContent: !!artifact.content,
-          hasImageData: !!artifact.imageData,
+          hasContent: Boolean(artifact.content),
+          hasImageData: Boolean(artifact.imageData),
         });
-        skippedCount++;
+        skippedCount += 1;
         continue;
       }
 
-      // Restore the artifact with the current message ID
       state.addArtifact({
         id: artifact.id,
         type: artifact.type,
         title: artifact.title || 'Untitled',
         content: artifact.content,
-        messageId: message.id, // Use the loaded message's ID
+        messageId: message.id,
         language: artifact.language,
         identifier: artifact.identifier,
         index: artifact.index,
@@ -84,7 +82,7 @@ function restoreArtifactsFromMessages(messages: Message[]): void {
         aspectRatio: artifact.aspectRatio,
         resolution: artifact.resolution,
       });
-      restoredCount++;
+      restoredCount += 1;
     }
   }
 
@@ -92,13 +90,11 @@ function restoreArtifactsFromMessages(messages: Message[]): void {
     console.debug('[Artifacts] Restore complete:', restoredCount, 'restored,', skippedCount, 'skipped');
   }
 
-  // If artifacts were restored, show the artifact panel with the most recent artifact
-  // Re-fetch state to get updated orderedIds after all addArtifact calls
   if (restoredCount > 0) {
-    const updatedState = store.getState();
-    const orderedIds = updatedState.orderedIds;
+    // If artifacts were restored, show the artifact panel with the most recent artifact
+    // Re-fetch state to get updated orderedIds after all addArtifact calls
+    const orderedIds = store.getState().orderedIds;
     if (orderedIds.length > 0) {
-      // Set the last (most recent) artifact as current
       const lastArtifactId = orderedIds[orderedIds.length - 1];
       state.setCurrentArtifact(lastArtifactId);
       state.setArtifactsVisible(true);
@@ -349,6 +345,7 @@ export default function LibreChatClient() {
       });
 
       // Reset artifacts for new chat
+      // Reset artifacts for new chat
       const store = getGlobalArtifactStore();
       if (store) {
         store.getState().resetArtifacts();
@@ -400,7 +397,7 @@ export default function LibreChatClient() {
       // Set loaded messages on the agent
       newAgent.messages = messages;
 
-      // Restore artifacts from message metadata (deferred for consistency)
+      // Restore artifacts from message metadata (deferred to allow store initialization)
       if (artifactRestoreTimeoutRef.current) {
         clearTimeout(artifactRestoreTimeoutRef.current);
       }

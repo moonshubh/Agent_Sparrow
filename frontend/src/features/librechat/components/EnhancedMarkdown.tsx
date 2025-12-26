@@ -102,13 +102,12 @@ export const EnhancedMarkdown = memo(function EnhancedMarkdown({
   const processedContent = useMemo(() => {
     if (!content) return '';
 
-    // CRITICAL: Strip markdown images with data URIs as final safety net
-    // Pattern: ![alt text](data:image/...) - these should never reach markdown rendering
-    // Images are displayed as artifacts, not embedded in chat text
+    // CRITICAL: Strip markdown images with data URIs as final safety net.
+    // Pattern: ![alt text](data:image/...) - images are displayed as artifacts, not embedded in chat text.
     const MARKDOWN_DATA_URI_PATTERN = /!\[[^\]]*\]\(data:image\/[^)]+\)/gi;
-    let sanitized = content;
-    if (MARKDOWN_DATA_URI_PATTERN.test(content)) {
-      sanitized = content.replace(MARKDOWN_DATA_URI_PATTERN, '').trim();
+    const replaced = content.replace(MARKDOWN_DATA_URI_PATTERN, '');
+    const sanitized = replaced === content ? content : replaced.trim();
+    if (replaced !== content) {
       console.debug('[EnhancedMarkdown] Stripped markdown data URI from content');
     }
 
@@ -179,7 +178,14 @@ export const EnhancedMarkdown = memo(function EnhancedMarkdown({
       }: any) {
         const match = /language-(\w+)/.exec(codeClassName || '');
         const language = match ? match[1] : '';
-        const codeString = String(children).replace(/\n$/, '');
+        const rawCode = extractContent(children);
+        const codeString = rawCode.replace(/\n$/, '');
+
+        // react-markdown v10 no longer provides `inline`, so infer it reliably.
+        const isInlineCode =
+          typeof inline === 'boolean'
+            ? inline
+            : !codeClassName && !rawCode.includes('\n');
 
         // Check for artifact metadata from the plugin (prefer hProperties over direct props)
         const hProps = node?.data?.hProperties || {};
@@ -187,12 +193,7 @@ export const EnhancedMarkdown = memo(function EnhancedMarkdown({
         const artifactType = (hProps.artifactType || _artifactType) as ArtifactType | undefined;
         const artifactTitle = (hProps.artifactTitle || _artifactTitle) as string | undefined;
 
-        // Inline code detection for react-markdown v9+
-        // The `inline` prop was removed in v9, so we detect by absence of language class
-        // Inline code has no language-* class, block code does
-        const isInline = inline || !codeClassName?.includes('language-');
-
-        if (isInline) {
+        if (isInlineCode) {
           if (isLibreChat) {
             return (
               <code {...props} className={codeClassName}>

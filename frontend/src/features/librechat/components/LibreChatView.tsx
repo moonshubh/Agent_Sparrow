@@ -71,7 +71,6 @@ export function LibreChatView({
 
   // Note: Artifact reset/restore is handled by LibreChatClient.tsx
   // when switching conversations via restoreArtifactsFromMessages()
-
   const toggleSidebar = useCallback(() => {
     setSidebarOpen((prev) => !prev);
   }, []);

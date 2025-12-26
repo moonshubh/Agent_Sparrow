@@ -3,7 +3,16 @@
 import React, { createContext, useContext, useState, useCallback, useRef, useEffect } from 'react';
 import type { Message, RunAgentInput } from '@/services/ag-ui/client';
 import type { DocumentPointer, AttachmentInput, InterruptPayload } from '@/services/ag-ui/types';
+import type { ImageArtifactEvent, TimelineOperation, TraceStep } from '@/services/ag-ui/event-types';
+import { sessionsAPI } from '@/services/api/endpoints/sessions';
+import { getGlobalArtifactStore } from './artifacts/ArtifactContext';
 import type { Artifact } from './artifacts/types';
+import { formatLogAnalysisResult } from './formatters/logFormatter';
+import {
+  stripCodeFence,
+  extractTodosFromPayload,
+  formatIfStructuredLog,
+} from './utils';
 
 /**
  * Serializable artifact data for persistence in message metadata.
@@ -34,10 +43,7 @@ export interface AbstractAgent {
   state: Record<string, unknown>;
   addMessage: (message: Message) => void;
   setState: (state: Record<string, unknown>) => void;
-  runAgent: (
-    input: Partial<RunAgentInput>,
-    handlers: AgentEventHandlers
-  ) => Promise<void>;
+  runAgent: (input: Partial<RunAgentInput>, handlers: AgentEventHandlers) => Promise<void>;
   abortRun: () => void;
 }
 
@@ -54,16 +60,6 @@ export interface AgentEventHandlers {
   onToolCallResultEvent?: (params: { event: unknown }) => void;
   onRunFailed?: (params: { error: unknown }) => void;
 }
-import type { TimelineOperation, TraceStep } from '@/services/ag-ui/event-types';
-import { formatLogAnalysisResult } from './formatters/logFormatter';
-import { getGlobalArtifactStore } from './artifacts/ArtifactContext';
-import type { ImageArtifactEvent } from '@/services/ag-ui/event-types';
-import {
-  stripCodeFence,
-  extractTodosFromPayload,
-  formatIfStructuredLog,
-} from './utils';
-import { sessionsAPI } from '@/services/api/endpoints/sessions';
 
 interface AgentContextValue {
   agent: AbstractAgent | null;
@@ -99,6 +95,16 @@ interface AgentProviderProps {
 }
 
 // Utility functions moved to ./utils
+
+const MARKDOWN_DATA_URI_PATTERN = /!\[[^\]]*\]\(data:image\/[^)]+\)/gi;
+
+const stripMarkdownDataUriImages = (text: string): string => {
+  const replaced = text.replace(MARKDOWN_DATA_URI_PATTERN, '');
+  return replaced === text ? text : replaced.trim();
+};
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 
 const normalizeTraceType = (rawType: unknown, content: string): TraceStep['type'] => {
   const value = typeof rawType === 'string' ? rawType.toLowerCase() : '';
@@ -192,21 +198,50 @@ const looksLikeJsonPayload = (text: string): boolean => {
   return trimmed.length > 80;
 };
 
-const normalizeTextFromContentParts = (raw: any): string | null => {
+const normalizeTextFromContentParts = (raw: unknown): string | null => {
   if (typeof raw === 'string') return raw;
+
+  const isNonVisibleBlockType = (value: unknown): boolean => {
+    if (!isRecord(value)) return false;
+    const typeValue = value.type;
+    const type = typeof typeValue === 'string' ? typeValue.toLowerCase() : '';
+    return [
+      'thinking',
+      'reasoning',
+      'thought',
+      'signature',
+      'thought_signature',
+      'tool',
+      'tool_use',
+      'tool_call',
+      'tool_calls',
+      'function_call',
+      'function',
+    ].includes(type);
+  };
+
   if (Array.isArray(raw)) {
     const text = raw
       .map((part) => {
         if (typeof part === 'string') return part;
-        if (part && typeof part === 'object' && typeof (part as any).text === 'string') return (part as any).text;
+        if (isNonVisibleBlockType(part)) return '';
+        if (isRecord(part)) {
+          const textValue = part.text;
+          if (typeof textValue === 'string') return textValue;
+          const contentValue = part.content;
+          if (typeof contentValue === 'string') return contentValue;
+        }
         return '';
       })
       .join('');
     return text || null;
   }
-  if (raw && typeof raw === 'object') {
-    if (typeof (raw as any).text === 'string') return (raw as any).text;
-    if (typeof (raw as any).content === 'string') return (raw as any).content;
+  if (isRecord(raw)) {
+    if (isNonVisibleBlockType(raw)) return null;
+    const textValue = raw.text;
+    if (typeof textValue === 'string') return textValue;
+    const contentValue = raw.content;
+    if (typeof contentValue === 'string') return contentValue;
   }
   return null;
 };
@@ -295,7 +330,7 @@ export function AgentProvider({
       // Add user message to agent's message list
       agent.addMessage(userMessage);
 
-      // Persist user message to backend database
+      // Persist user message to backend database (best-effort)
       if (sessionId && content.trim()) {
         // Fire-and-forget but with error logging - user experience is not blocked
         sessionsAPI.postMessage(sessionId, {
@@ -361,15 +396,10 @@ export function AgentProvider({
 
             // CRITICAL: Strip markdown images with data URIs - safety filter
             // Pattern: ![alt text](data:image/...)
-            // The model sometimes outputs these despite prompt instructions not to.
             // Images are already displayed as artifacts, so this is just garbage in chat.
-            const MARKDOWN_DATA_URI_PATTERN = /!\[[^\]]*\]\(data:image\/[^)]+\)/gi;
-            if (MARKDOWN_DATA_URI_PATTERN.test(buffer)) {
-              const cleaned = buffer.replace(MARKDOWN_DATA_URI_PATTERN, '').trim();
-              console.debug('[AG-UI] Stripped markdown data URI from buffer, original:', buffer.length, 'cleaned:', cleaned.length);
-              if (!cleaned) {
-                return; // Skip if entire buffer was just a markdown image
-              }
+            const cleaned = stripMarkdownDataUriImages(buffer);
+            if (cleaned !== buffer) {
+              if (!cleaned) return;
               buffer = cleaned;
             }
 
@@ -441,15 +471,36 @@ export function AgentProvider({
             });
 
             // CRITICAL: Strip markdown data URIs from all assistant messages
-            // Pattern: ![alt text](data:image/...) - safety filter for final messages
-            const MARKDOWN_DATA_URI_FILTER = /!\[[^\]]*\]\(data:image\/[^)]+\)/gi;
+            // Pattern: ![alt text](data:image/...) - safety filter for final messages.
             messagesWithIds = messagesWithIds.map((msg) => {
               if (msg.role !== 'assistant') return msg;
               if (typeof msg.content !== 'string') return msg;
-              if (!MARKDOWN_DATA_URI_FILTER.test(msg.content)) return msg;
-              const cleaned = msg.content.replace(MARKDOWN_DATA_URI_FILTER, '').trim();
-              console.debug('[AG-UI] Stripped markdown data URI from final message');
+              const cleaned = stripMarkdownDataUriImages(msg.content);
+              if (cleaned === msg.content) return msg;
               return { ...msg, content: cleaned };
+            });
+
+            // Remove assistant tool-call placeholder messages (no user-visible content).
+            messagesWithIds = messagesWithIds.filter((msg) => {
+              if (msg.role !== 'assistant') return true;
+              if (!msg || typeof msg !== 'object') return true;
+              const msgRecord = msg as Record<string, unknown>;
+              const toolCalls = msgRecord.tool_calls ?? msgRecord.toolCalls;
+              const additional = msgRecord.additional_kwargs ?? msgRecord.additionalKwargs;
+              const additionalRecord = isRecord(additional)
+                ? (additional as Record<string, unknown>)
+                : null;
+              const hasToolCallData =
+                (Array.isArray(toolCalls) && toolCalls.length > 0) ||
+                Boolean(
+                  additionalRecord &&
+                    (additionalRecord.function_call ||
+                      additionalRecord.tool_calls ||
+                      additionalRecord.toolCalls),
+                );
+              if (!hasToolCallData) return true;
+              const text = typeof msg.content === 'string' ? msg.content.trim() : '';
+              return Boolean(text);
             });
 
             if (agent) {
@@ -874,22 +925,23 @@ export function AgentProvider({
 
       // Persist final assistant message AFTER run completes
       // This ensures all custom events (artifacts) have been processed
+      // Persist final assistant message after run completes so all artifacts/custom events are captured.
       if (sessionId && !assistantPersistedRef.current) {
         const currentMessages = messagesRef.current;
         const lastAssistantMessage = [...currentMessages].reverse().find(
           (msg) => msg.role === 'assistant' && typeof msg.content === 'string' && msg.content.trim()
         );
-        if (lastAssistantMessage) {
+        if (lastAssistantMessage && typeof lastAssistantMessage.content === 'string') {
           assistantPersistedRef.current = true;
-          const agentType = (agent?.state as any)?.agent_type || (agent?.state as any)?.agentType || 'primary';
-
-          // Include artifacts in metadata for persistence
+          const agentType =
+            (agent?.state as any)?.agent_type ||
+            (agent?.state as any)?.agentType ||
+            'primary';
           const artifacts = pendingArtifactsRef.current.length > 0
             ? pendingArtifactsRef.current
             : undefined;
 
           console.debug('[Persistence] Persisting assistant message with', artifacts?.length || 0, 'artifacts');
-
           sessionsAPI.postMessage(sessionId, {
             message_type: 'assistant',
             content: lastAssistantMessage.content,

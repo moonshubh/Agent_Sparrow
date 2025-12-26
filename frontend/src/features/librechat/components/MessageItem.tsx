@@ -139,7 +139,7 @@ export const MessageItem = memo(function MessageItem({
   editedContent,
   onEditMessage,
 }: MessageItemProps) {
-  const { thinkingTrace, activeTools, messageAttachments } = useAgent();
+  const { thinkingTrace, activeTraceStepId, activeTools, messageAttachments, todos, toolEvidence } = useAgent();
   const [isEditing, setIsEditing] = useState(false);
   const [editValue, setEditValue] = useState('');
   const [isUserExpanded, setIsUserExpanded] = useState(false);
@@ -247,6 +247,10 @@ export const MessageItem = memo(function MessageItem({
             <ThinkingPanel
               thinking={thinking}
               traceSteps={isLast ? thinkingTrace : undefined}
+              todos={isLast ? todos : undefined}
+              toolEvidence={isLast ? toolEvidence : undefined}
+              activeStepId={isLast ? activeTraceStepId : undefined}
+              isStreaming={isLast && isStreaming}
             />
           </div>
         )}
