@@ -1708,3 +1708,130 @@
   color: var(--lc-text-tertiary);
   text-align: right;
 }
+
+/* Feedback popover */
+.lc-feedback-buttons {
+  display: inline-flex;
+  gap: 4px;
+}
+
+.lc-feedback-submitted .lc-feedback-positive {
+  color: var(--lc-accent);
+}
+
+.lc-feedback-submitted .lc-feedback-negative {
+  color: var(--lc-error);
+}
+
+.lc-feedback-popover {
+  background-color: var(--lc-surface-secondary);
+  border: 1px solid var(--lc-border);
+  border-radius: 10px;
+  padding: 12px;
+  min-width: 200px;
+  max-width: 280px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+  z-index: 100;
+  animation: lc-popover-in 0.15s ease;
+}
+
+@keyframes lc-popover-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.lc-feedback-arrow {
+  fill: var(--lc-surface-secondary);
+}
+
+.lc-feedback-success {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0;
+  color: var(--lc-accent);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.lc-feedback-check {
+  color: var(--lc-accent);
+}
+
+.lc-feedback-categories {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.lc-feedback-prompt {
+  font-size: 12px;
+  color: var(--lc-text-secondary);
+  margin: 0 0 4px;
+  line-height: 1.4;
+}
+
+.lc-feedback-category-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.lc-feedback-category {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--lc-border-light);
+  border-radius: 6px;
+  background-color: transparent;
+  color: var(--lc-text-primary);
+  font-size: 13px;
+  cursor: pointer;
+  transition: background-color 0.12s ease, border-color 0.12s ease;
+  text-align: left;
+}
+
+.lc-feedback-category:hover {
+  background-color: var(--lc-surface-hover);
+  border-color: var(--lc-border);
+}
+
+.lc-feedback-category:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.lc-feedback-category.selected {
+  background-color: var(--lc-surface-hover);
+  border-color: var(--lc-accent);
+}
+
+.lc-feedback-spinner {
+  width: 12px;
+  height: 12px;
+  border: 2px solid var(--lc-border);
+  border-top-color: var(--lc-accent);
+  border-radius: 50%;
+  animation: lc-spin 0.6s linear infinite;
+}
+
+@keyframes lc-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.lc-feedback-instructions {
+  font-size: 12px;
+  color: var(--lc-text-tertiary);
+  text-align: center;
+  padding: 4px 0;
+}

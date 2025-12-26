@@ -72,6 +72,7 @@ export const MessageList = memo(function MessageList({ messages, isStreaming, se
               message={message}
               isLast={isLast}
               isStreaming={isStreaming}
+              sessionId={sessionId}
               onEditMessage={handleEditMessage}
               onRegenerate={isLastAssistant && !isStreaming ? regenerateLastResponse : undefined}
             />

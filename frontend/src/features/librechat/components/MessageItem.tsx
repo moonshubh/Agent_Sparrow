@@ -8,11 +8,13 @@ import { ToolIndicator } from './ToolIndicator';
 import { Copy, Check, RefreshCw, Pencil, X } from 'lucide-react';
 import { AttachmentPreviewList } from '@/features/librechat/components/AttachmentPreview';
 import { EnhancedMarkdown } from '@/features/librechat/components/EnhancedMarkdown';
+import { FeedbackPopover } from './FeedbackPopover';
 
 interface MessageItemProps {
   message: Message;
   isLast: boolean;
   isStreaming: boolean;
+  sessionId?: string;
   onEditMessage?: (messageId: string, content: string) => void;
   onRegenerate?: () => void;
 }
@@ -61,11 +63,13 @@ const MessageAvatar = memo(function MessageAvatar({ role }: { role: 'user' | 'as
 
 interface MessageActionsProps {
   content: string;
+  messageId: string;
+  sessionId?: string;
   onRegenerate?: () => void;
   onEdit?: () => void;
 }
 
-const MessageActions = memo(function MessageActions({ content, onRegenerate, onEdit }: MessageActionsProps) {
+const MessageActions = memo(function MessageActions({ content, messageId, sessionId, onRegenerate, onEdit }: MessageActionsProps) {
   const [copied, setCopied] = useState(false);
   const [copyError, setCopyError] = useState(false);
 
@@ -98,6 +102,7 @@ const MessageActions = memo(function MessageActions({ content, onRegenerate, onE
 
   return (
     <div className="lc-message-actions" role="group" aria-label="Message actions">
+      <FeedbackPopover messageId={messageId} sessionId={sessionId} />
       {onEdit && (
         <button className="lc-action-btn" onClick={onEdit} aria-label="Edit response">
           <Pencil size={14} />
@@ -136,6 +141,7 @@ export const MessageItem = memo(function MessageItem({
   message,
   isLast,
   isStreaming,
+  sessionId,
   onEditMessage,
   onRegenerate,
 }: MessageItemProps) {
@@ -313,6 +319,8 @@ export const MessageItem = memo(function MessageItem({
         {!isUserMessage && mainContent && !isStreaming && !isEditing && (
           <MessageActions
             content={mainContent}
+            messageId={message.id}
+            sessionId={sessionId}
             onEdit={onEditMessage ? handleStartEdit : undefined}
             onRegenerate={onRegenerate}
           />
