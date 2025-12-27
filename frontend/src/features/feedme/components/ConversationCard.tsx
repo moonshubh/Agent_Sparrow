@@ -14,27 +14,30 @@ import React from 'react'
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from '@/shared/ui/card'
 import { Button } from '@/shared/ui/button'
 import { Badge } from '@/shared/ui/badge'
-import { 
-  DropdownMenu, 
-  DropdownMenuContent, 
-  DropdownMenuItem, 
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
   DropdownMenuTrigger,
   DropdownMenuSeparator
 } from '@/shared/ui/dropdown-menu'
-import { 
-  MoreHorizontal, 
-  MessageCircle, 
+import {
+  MoreHorizontal,
+  MessageCircle,
   Calendar,
   User,
   CheckCircle,
   Clock,
   AlertCircle,
-  Loader2
+  Loader2,
+  Monitor,
+  Apple
 } from 'lucide-react'
 import { FolderIcon } from '@/shared/ui/FolderIcon'
 import { cn } from '@/shared/lib/utils'
 import { useFolders } from '@/state/stores/folders-store'
 import { formatDistanceToNow } from 'date-fns'
+import { type PlatformType, PLATFORM_LABELS, type ConversationMetadata } from '@/features/feedme/services/feedme-api'
 
 export interface Conversation {
   id: number
@@ -45,6 +48,7 @@ export interface Conversation {
   uploaded_by?: string
   created_at: string
   updated_at: string
+  metadata?: ConversationMetadata
 }
 
 interface ConversationCardProps {
@@ -88,6 +92,7 @@ export function ConversationCard({
 
   const currentFolder = conversation.folder_id ? folders[conversation.folder_id] : null
   const availableFolders = Object.values(folders).filter(f => f.id !== conversation.folder_id)
+  const platform = conversation.metadata?.tags?.platform as PlatformType | undefined
 
   const formatDate = (dateString: string) => {
     if (!dateString) return 'Unknown'
@@ -159,12 +164,26 @@ export function ConversationCard({
 
       <CardContent className="pb-2" onClick={handleCardClick}>
         <div className="space-y-2">
-          {/* Status Badge */}
-          <div className="flex items-center gap-2">
+          {/* Status and Platform Badges */}
+          <div className="flex items-center gap-2 flex-wrap">
             <div className={cn("flex items-center gap-1 px-2 py-1 rounded-md text-xs", statusInfo.bg)}>
               <StatusIcon className={cn("h-3 w-3", statusInfo.color, conversation.processing_status === 'processing' && "animate-spin")} />
               <span className={statusInfo.color}>{statusInfo.label}</span>
             </div>
+            {/* Platform Badge */}
+            {platform && (
+              <div className={cn(
+                "flex items-center gap-1 px-2 py-1 rounded-md text-xs",
+                platform === 'windows' && "bg-blue-50 text-blue-600",
+                platform === 'macos' && "bg-gray-100 text-gray-600",
+                platform === 'both' && "bg-purple-50 text-purple-600"
+              )}>
+                {platform === 'windows' && <Monitor className="h-3 w-3" />}
+                {platform === 'macos' && <Apple className="h-3 w-3" />}
+                {/* No icon for 'both' - just text label */}
+                <span>{PLATFORM_LABELS[platform]}</span>
+              </div>
+            )}
           </div>
 
           {/* Folder Info */}

@@ -76,11 +76,11 @@ export function SettingsDialogV2({ isOpen, onClose, defaultTab = "general" }: Se
                     className={cn(
                       "flex items-center gap-2 px-4 py-2 text-sm",
                       "hover:bg-secondary/50 transition-colors",
-                      isActive && "text-accent bg-secondary/60"
+                      isActive && "text-primary bg-primary/10 font-medium"
                     )}
                     data-testid={`nav-${id}`}
                   >
-                    <Icon className={cn("h-4 w-4", isActive && "text-accent")} />
+                    <Icon className={cn("h-4 w-4", isActive && "text-primary")} />
                     {label}
                   </button>
                 )

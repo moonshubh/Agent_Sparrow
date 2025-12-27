@@ -1,4 +1,8 @@
-export type PlatformTag = 'windows' | 'macos'
+/** Platform tag type for conversation tagging */
+export type PlatformTag = 'windows' | 'macos' | 'both'
+
+/** @deprecated Use PlatformTag instead - kept for backwards compatibility */
+export type PlatformType = PlatformTag
 
 export interface ConversationMetadata {
   tags?: string[]

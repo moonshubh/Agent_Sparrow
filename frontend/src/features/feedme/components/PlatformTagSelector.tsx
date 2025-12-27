@@ -32,10 +32,17 @@ const PLATFORM_OPTIONS = {
     icon: MacOSIcon,
     color: 'text-[#555555]',
   },
+  both: {
+    label: 'Both',
+    icon: null, // Will render both icons
+    color: 'text-purple-600',
+  },
 } as const
 
+type PlatformKey = keyof typeof PLATFORM_OPTIONS
+
 function isPlatformTag(tag: string): tag is PlatformTag {
-  return tag === 'windows' || tag === 'macos'
+  return tag === 'windows' || tag === 'macos' || tag === 'both'
 }
 
 export default function PlatformTagSelector({
@@ -112,8 +119,20 @@ export default function PlatformTagSelector({
   }, [])
 
   const selectedValue = currentPlatform || 'none'
-  const selectedOption = currentPlatform ? PLATFORM_OPTIONS[currentPlatform] : undefined
+  const selectedOption = currentPlatform ? PLATFORM_OPTIONS[currentPlatform as PlatformKey] : undefined
   const SelectedIcon = selectedOption?.icon
+
+  // Helper to render platform icon(s)
+  const renderPlatformIcon = (key: string, option: typeof PLATFORM_OPTIONS[PlatformKey], size = 'h-4 w-4') => {
+    // No icon for 'both' - just use text label
+    if (key === 'both') {
+      return null
+    }
+    const OptionIcon = option.icon
+    return OptionIcon ? (
+      <OptionIcon className={cn(size, option.color)} aria-hidden="true" />
+    ) : null
+  }
 
   return (
     <div className={cn('relative', className)}>
@@ -124,7 +143,7 @@ export default function PlatformTagSelector({
       >
         <SelectTrigger
           className={cn(
-            'w-[140px] h-9',
+            'w-[160px] h-9',
             error && 'border-destructive',
             isUpdating && 'opacity-70'
           )}
@@ -136,19 +155,12 @@ export default function PlatformTagSelector({
             <SelectValue placeholder="Tags">
               {selectedValue === 'none' ? (
                 <span className="text-muted-foreground">No tag</span>
-              ) : (
+              ) : selectedOption ? (
                 <div className="flex items-center gap-2">
-                  {SelectedIcon && selectedOption && (
-                    <>
-                      <SelectedIcon
-                        className={cn('h-4 w-4', selectedOption.color)}
-                        aria-hidden="true"
-                      />
-                      <span>{selectedOption.label}</span>
-                    </>
-                  )}
+                  {renderPlatformIcon(selectedValue, selectedOption)}
+                  <span>{selectedOption.label}</span>
                 </div>
-              )}
+              ) : null}
             </SelectValue>
           </div>
         </SelectTrigger>
@@ -159,20 +171,14 @@ export default function PlatformTagSelector({
               <span>Clear tag</span>
             </div>
           </SelectItem>
-          {Object.entries(PLATFORM_OPTIONS).map(([key, option]) => {
-            const OptionIcon = option.icon
-            return (
-              <SelectItem key={key} value={key}>
-                <div className="flex items-center gap-2">
-                  <OptionIcon
-                    className={cn('h-4 w-4', option.color)}
-                    aria-hidden="true"
-                  />
-                  <span>{option.label}</span>
-                </div>
-              </SelectItem>
-            )
-          })}
+          {(Object.entries(PLATFORM_OPTIONS) as [PlatformKey, typeof PLATFORM_OPTIONS[PlatformKey]][]).map(([key, option]) => (
+            <SelectItem key={key} value={key}>
+              <div className="flex items-center gap-2">
+                {renderPlatformIcon(key, option)}
+                <span>{key === 'both' ? 'Both Windows and macOS' : option.label}</span>
+              </div>
+            </SelectItem>
+          ))}
         </SelectContent>
       </Select>
       {error && (

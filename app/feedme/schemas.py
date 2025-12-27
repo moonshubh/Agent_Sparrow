@@ -516,6 +516,9 @@ class ApprovalWorkflowStats(BaseModel):
     processing_failed: int = Field(..., description="Conversations with processing failures")
     avg_quality_score: Optional[float] = Field(None, description="Average quality score")
     avg_processing_time_ms: Optional[float] = Field(None, description="Average processing time")
+    # Platform breakdown
+    windows_count: int = Field(0, description="Conversations tagged as Windows")
+    macos_count: int = Field(0, description="Conversations tagged as macOS")
 
 
 class BulkApprovalRequest(BaseModel):

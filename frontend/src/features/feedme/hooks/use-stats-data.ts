@@ -26,6 +26,7 @@ export interface ConversationStats {
   byStatus: {
     pending: number
     processing: number
+    awaitingReview: number  // Conversations processed and ready for review
     completed: number
     failed: number
     approved: number
@@ -146,10 +147,18 @@ export function useStatsData(options: UseStatsDataOptions = {}): UseStatsDataRet
       ? workflowStats.avg_processing_time_ms / 1000 // Convert to seconds
       : 0 // No default, show actual data only
 
-    const totalProcessed = (workflowStats.approved || 0) + (workflowStats.rejected || 0) + (workflowStats.published || 0)
-    const totalAttempted = totalProcessed + (workflowStats.processing_failed || 0)
+    // Success rate is based on processing completion (not approval status)
+    // Completed = successfully processed (regardless of approval status)
+    // Failed = processing failed
+    // "Processed" approval_status means processing completed successfully
+    const totalSuccessfullyProcessed =
+      (workflowStats.approved || 0) +
+      (workflowStats.rejected || 0) +
+      (workflowStats.awaiting_review || 0) // 'processed' conversations
+    const totalFailed = workflowStats.processing_failed || 0
+    const totalAttempted = totalSuccessfullyProcessed + totalFailed
     const successRate = totalAttempted > 0
-      ? ((totalProcessed / totalAttempted) * 100)
+      ? ((totalSuccessfullyProcessed / totalAttempted) * 100)
       : 0 // Show 0% when there's no data, not 100%
 
     // System health calculation
@@ -207,7 +216,8 @@ export function useStatsData(options: UseStatsDataOptions = {}): UseStatsDataRet
         byStatus: {
           pending: workflowStats.pending_approval || 0,
           processing: workflowStats.currently_processing || 0,
-          completed: workflowStats.approved || 0,
+          awaitingReview: workflowStats.awaiting_review || 0,  // Processed, ready for review
+          completed: (workflowStats.approved || 0) + (workflowStats.rejected || 0),  // Terminal states
           failed: workflowStats.processing_failed || 0,
           approved: workflowStats.approved || 0,
           rejected: workflowStats.rejected || 0
@@ -326,8 +336,9 @@ export function useStatsData(options: UseStatsDataOptions = {}): UseStatsDataRet
               ? (listRes.value.total_conversations ?? listRes.value.total_count ?? 0)
               : undefined,
           platformCounts: {
-            windows: 0, // Platform counts no longer available (feedme_examples table removed)
-            macos: 0,
+            // Platform counts now available from metadata tags via RPC
+            windows: workflow.windows_count ?? 0,
+            macos: workflow.macos_count ?? 0,
           }
         }
       )

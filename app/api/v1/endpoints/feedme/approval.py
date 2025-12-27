@@ -175,20 +175,34 @@ async def get_approval_workflow_stats():
 
         stats_data = await client.get_approval_workflow_stats()
 
-        conversation_approval = stats_data.get('conversation_approval', {})
-        status_breakdown = conversation_approval.get('status_breakdown', {})
+        # The RPC returns conversation_stats (not conversation_approval)
+        conversation_stats = stats_data.get('conversation_stats', {})
+
+        # Map status values correctly:
+        # - 'processed' = conversations that completed processing and are awaiting review
+        # - 'pending' = conversations with approval_status pending (not yet processed)
+        # - 'processing' = conversations currently being processed (processing_status)
+        # - 'failed' = conversations that failed processing (processing_status)
+        # - 'completed' = conversations with processing_status completed
 
         return ApprovalWorkflowStats(
-            total_conversations=conversation_approval.get('total', 0),
-            pending_approval=status_breakdown.get('pending', 0),
-            awaiting_review=status_breakdown.get('awaiting_review', 0),
-            approved=status_breakdown.get('approved', 0),
-            rejected=status_breakdown.get('rejected', 0),
-            published=status_breakdown.get('published', 0),
-            currently_processing=status_breakdown.get('processing', 0),
-            processing_failed=status_breakdown.get('failed', 0),
+            total_conversations=conversation_stats.get('total', 0),
+            # pending_approval = approval_status 'pending' (not yet started)
+            pending_approval=conversation_stats.get('pending', 0),
+            # awaiting_review = approval_status 'processed' (completed, ready for review)
+            awaiting_review=conversation_stats.get('processed', 0),
+            approved=conversation_stats.get('approved', 0),
+            rejected=conversation_stats.get('rejected', 0),
+            published=0,  # Not used in current workflow
+            # currently_processing = processing_status 'processing'
+            currently_processing=conversation_stats.get('processing', 0),
+            # processing_failed = processing_status 'failed'
+            processing_failed=conversation_stats.get('failed', 0),
             avg_quality_score=None,
-            avg_processing_time_ms=None
+            avg_processing_time_ms=stats_data.get('avg_processing_time_ms'),
+            # Platform breakdown from metadata tags
+            windows_count=conversation_stats.get('windows_count', 0),
+            macos_count=conversation_stats.get('macos_count', 0)
         )
 
     except Exception as e:
