@@ -7,6 +7,7 @@ conversation persistence, and example synchronization.
 
 import os
 import logging
+import threading
 from typing import Dict, List, Optional, Any, Tuple
 from datetime import datetime, timezone
 import asyncio
@@ -2209,18 +2210,36 @@ class SupabaseClient:
             }
 
 
-# Global client instance
+# Global client instance with thread-safe initialization
 _supabase_client: Optional[SupabaseClient] = None
+_supabase_client_lock = threading.Lock()
 
 
 def get_supabase_client() -> SupabaseClient:
-    """Get or create global Supabase client instance"""
+    """Get or create global Supabase client instance (thread-safe).
+
+    Uses double-checked locking pattern to ensure thread-safe singleton
+    initialization while minimizing lock contention for normal access.
+    """
     global _supabase_client
-    
-    if _supabase_client is None:
-        _supabase_client = SupabaseClient()
-    
+
+    # Fast path - no lock needed if already initialized
+    if _supabase_client is not None:
+        return _supabase_client
+
+    # Slow path - double-checked locking for thread safety
+    with _supabase_client_lock:
+        if _supabase_client is None:
+            _supabase_client = SupabaseClient()
+
     return _supabase_client
+
+
+def clear_supabase_client() -> None:
+    """Clear the global Supabase client for shutdown cleanup."""
+    global _supabase_client
+    with _supabase_client_lock:
+        _supabase_client = None
 
 
 @asynccontextmanager
@@ -2243,5 +2262,6 @@ __all__ = [
     'SupabaseClient',
     'SupabaseConfig',
     'get_supabase_client',
+    'clear_supabase_client',
     'supabase_transaction'
 ]

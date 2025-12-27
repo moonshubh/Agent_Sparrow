@@ -12,10 +12,15 @@ Budget controls:
 - Pages per call (default: 3)
 - Simple per-minute and daily pacing via gemini_tracker
 
+Memory optimization:
+- Pages are streamed in batches instead of loading all at once
+- Explicit cleanup of image buffers after processing
+
 Note: This module is best-effort and aims to stay within free-tier quotas.
 """
 
 import base64
+import gc
 import io
 import logging
 from typing import List, Dict, Any, Optional, Tuple
@@ -50,15 +55,32 @@ _genai_client_api_key: Optional[str] = None
 
 
 def _to_jpeg_bytes(img: Image.Image, width: int = 1024, quality: int = 80) -> bytes:
-    # downscale maintaining aspect
-    w, h = img.size
-    if w > width:
-        scale = width / float(w)
-        new_h = int(h * scale)
-        img = img.resize((width, new_h), Image.Resampling.LANCZOS)
+    """Convert PIL Image to JPEG bytes with explicit resource cleanup."""
+    resized = None
+    rgb_img = None
     buf = io.BytesIO()
-    img.convert("RGB").save(buf, format="JPEG", quality=quality, optimize=True)
-    return buf.getvalue()
+    try:
+        # Downscale maintaining aspect ratio
+        w, h = img.size
+        if w > width:
+            scale = width / float(w)
+            new_h = int(h * scale)
+            resized = img.resize((width, new_h), Image.Resampling.LANCZOS)
+            rgb_img = resized.convert("RGB")
+        else:
+            rgb_img = img.convert("RGB")
+
+        rgb_img.save(buf, format="JPEG", quality=quality, optimize=True)
+        return buf.getvalue()
+    finally:
+        # Explicitly close buffer to release memory
+        buf.close()
+        # Close rgb_img if it's a new object (convert() creates new image)
+        if rgb_img is not None and rgb_img is not img:
+            rgb_img.close()
+        # Close resized image if created
+        if resized is not None:
+            resized.close()
 
 
 def _mk_image_part(jpeg_bytes: bytes) -> Dict[str, Any]:
@@ -188,23 +210,61 @@ def process_pdf_to_markdown(
     model_name = _ensure_model(api_key)
     tracker = get_tracker(daily_limit=rpd, rpm_limit=rpm)
 
-    # Render pages
-    images = convert_from_bytes(pdf_bytes, dpi=144)
-    total_pages = len(images)
+    # Get page count without loading all images into memory
+    # Try pypdf first for efficiency, fallback to pdf2image
+    try:
+        from pypdf import PdfReader
+        reader = PdfReader(io.BytesIO(pdf_bytes))
+        total_pages = len(reader.pages)
+        del reader  # Release reader
+    except Exception:
+        # Fallback: load first page to validate PDF and estimate
+        try:
+            test_images = convert_from_bytes(pdf_bytes, dpi=72, first_page=1, last_page=1)
+            total_pages = 1  # We'll discover more as we go
+            for img in test_images:
+                img.close()
+            del test_images
+        except Exception as e:
+            logger.error(f"Failed to read PDF: {e}")
+            raise ValueError(f"Invalid PDF: {e}")
+
     use_pages = min(total_pages, max_pages)
-    images = images[:use_pages]
     truncated = total_pages > use_pages
 
-    # Prepare JPEG parts
+    # Stream pages in batches to reduce peak memory usage
+    # Instead of loading all pages at once, load only pages_per_call at a time
     jpeg_parts: List[Dict[str, Any]] = []
-    for i, img in enumerate(images):
+    for batch_start in range(1, use_pages + 1, pages_per_call):
+        batch_end = min(batch_start + pages_per_call - 1, use_pages)
+
+        # Load only the pages needed for this batch
         try:
-            jpeg = _to_jpeg_bytes(img)
-            jpeg_parts.append(_mk_image_part(jpeg))
+            batch_images = convert_from_bytes(
+                pdf_bytes,
+                dpi=144,
+                first_page=batch_start,
+                last_page=batch_end
+            )
         except Exception as e:
-            logger.warning(f"Failed to convert page {i+1} to JPEG: {e}")
+            logger.warning(f"Failed to load pages {batch_start}-{batch_end}: {e}")
             continue
 
+        for i, img in enumerate(batch_images):
+            try:
+                jpeg = _to_jpeg_bytes(img)
+                jpeg_parts.append(_mk_image_part(jpeg))
+            except Exception as e:
+                logger.warning(f"Failed to convert page {batch_start + i} to JPEG: {e}")
+            finally:
+                # Explicitly close image to release memory immediately
+                img.close()
+
+        # Clear batch and trigger garbage collection
+        del batch_images
+        gc.collect()
+
+    # Group jpeg_parts into chunks for API calls
     chunks: List[List[Dict[str, Any]]] = []
     for i in range(0, len(jpeg_parts), pages_per_call):
         chunks.append(jpeg_parts[i:i + pages_per_call])

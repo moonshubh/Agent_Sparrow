@@ -79,8 +79,11 @@ celery_app.conf.update(
     task_soft_time_limit=300,  # 5 minutes
     task_time_limit=600,       # 10 minutes
     
-    # Worker configuration
-    worker_max_tasks_per_child=1000,
+    # Worker configuration - Memory optimization
+    # Restart worker after 50 tasks to prevent memory accumulation from PDF processing
+    worker_max_tasks_per_child=50,
+    # Restart worker if memory exceeds 512MB (in KB) - Celery 5.2+ feature
+    worker_max_memory_per_child=512000,
     worker_disable_rate_limits=True,
     
     # Monitoring
@@ -166,11 +169,49 @@ def worker_init_handler(sender=None, **kwargs):
 
 @worker_shutdown.connect
 def worker_shutdown_handler(sender=None, **kwargs):
-    """Clean up worker resources on shutdown"""
+    """Clean up worker resources on shutdown to prevent memory leaks."""
     logger.info(f"Celery worker shutting down: {sender}")
-    
-    # Supabase client cleanup handled automatically
-    logger.info("Worker shutdown complete")
+
+    # Clear Gemini client singleton from tasks.py
+    try:
+        from app.feedme import tasks
+        if hasattr(tasks, '_genai_client') and tasks._genai_client is not None:
+            tasks._genai_client = None
+            logger.info("Cleared tasks Gemini client")
+    except Exception as e:
+        logger.warning(f"Failed to clear tasks Gemini client: {e}")
+
+    # Clear Gemini client singleton from gemini_pdf_processor
+    try:
+        from app.feedme.processors import gemini_pdf_processor
+        if hasattr(gemini_pdf_processor, '_genai_client') and gemini_pdf_processor._genai_client is not None:
+            gemini_pdf_processor._genai_client = None
+            gemini_pdf_processor._genai_client_api_key = None
+            logger.info("Cleared PDF processor Gemini client")
+    except Exception as e:
+        logger.warning(f"Failed to clear PDF processor Gemini client: {e}")
+
+    # Clear embedding model LRU cache
+    try:
+        from app.db.embedding.utils import get_embedding_model
+        get_embedding_model.cache_clear()
+        logger.info("Cleared embedding model cache")
+    except Exception as e:
+        logger.warning(f"Failed to clear embedding model cache: {e}")
+
+    # Clear rate tracker singletons
+    try:
+        from app.feedme.rate_limiting import gemini_tracker
+        gemini_tracker._tracker = None
+        gemini_tracker._embed_tracker = None
+        logger.info("Cleared rate tracker singletons")
+    except Exception as e:
+        logger.warning(f"Failed to clear rate trackers: {e}")
+
+    # Force garbage collection to release memory
+    import gc
+    gc.collect()
+    logger.info("Worker shutdown complete with memory cleanup")
 
 
 # Health check for Celery application

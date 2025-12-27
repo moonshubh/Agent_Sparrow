@@ -234,7 +234,7 @@ class ToolResultEvictionMiddleware(AgentMiddleware if AGENT_MIDDLEWARE_AVAILABLE
         async with self._stats_lock:
             self._stats.results_evicted += 1
             self._stats.total_chars_evicted += original_size
-            self._stats.evicted_paths.append(path)
+            self._stats.add_evicted_path(path)
 
         logger.info(
             "evict_large_result_success",
@@ -504,7 +504,7 @@ class ToolResultEvictionMiddleware(AgentMiddleware if AGENT_MIDDLEWARE_AVAILABLE
         # Update stats (not thread-safe in sync version)
         self._stats.results_evicted += 1
         self._stats.total_chars_evicted += len(content)
-        self._stats.evicted_paths.append(path)
+        self._stats.add_evicted_path(path)
 
         return self._create_pointer_message(
             tool_call_id, tool_name, content, path
@@ -582,7 +582,7 @@ class ToolResultEvictionMiddleware(AgentMiddleware if AGENT_MIDDLEWARE_AVAILABLE
         async with self._stats_lock:
             self._stats.results_evicted += 1
             self._stats.total_chars_evicted += original_size
-            self._stats.evicted_paths.append(path)
+            self._stats.add_evicted_path(path)
 
         return self._create_pointer_message(
             tool_call_id, tool_name, content, path, original_size, was_truncated

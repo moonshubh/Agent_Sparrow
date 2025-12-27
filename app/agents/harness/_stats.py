@@ -13,8 +13,9 @@ These dataclasses are extracted from individual middleware files to:
 
 from __future__ import annotations
 
+from collections import deque
 from dataclasses import dataclass, field, asdict
-from typing import Any, Dict, List, Optional
+from typing import Any, Deque, Dict, List, Optional
 
 
 @dataclass
@@ -67,16 +68,37 @@ class EvictionStats:
 
     Tracks tool result eviction to prevent context overflow.
     Used by ToolResultEvictionMiddleware for monitoring large outputs.
+
+    Note: evicted_paths uses a bounded deque (max 100 entries) to prevent
+    unbounded memory growth in long-running workers.
     """
 
     total_tool_results: int = 0
     results_evicted: int = 0
     total_chars_evicted: int = 0
-    evicted_paths: List[str] = field(default_factory=list)
+    # Use bounded deque to prevent unbounded memory growth
+    # Keep last 100 paths for debugging while limiting memory usage
+    _evicted_paths: Deque[str] = field(default_factory=lambda: deque(maxlen=100))
+
+    @property
+    def evicted_paths(self) -> List[str]:
+        """Return evicted paths as list for backward compatibility."""
+        return list(self._evicted_paths)
+
+    def add_evicted_path(self, path: str) -> None:
+        """Add a path to the bounded eviction history."""
+        self._evicted_paths.append(path)
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dict for observability."""
-        return asdict(self)
+        # Convert deque to list for serialization
+        data = {
+            "total_tool_results": self.total_tool_results,
+            "results_evicted": self.results_evicted,
+            "total_chars_evicted": self.total_chars_evicted,
+            "evicted_paths": list(self._evicted_paths),
+        }
+        return data
 
 
 @dataclass
