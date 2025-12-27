@@ -17,7 +17,9 @@ cd "$PROJECT_ROOT"
 LOG_DIR="$PROJECT_ROOT/system_logs/celery"
 mkdir -p "$LOG_DIR"
 
-# Start Celery worker and write logs into system_logs/celery/celery_worker.log
+# Start Celery worker with memory optimization flags
+# --max-tasks-per-child: Restart worker after 50 tasks to prevent memory accumulation
+# --max-memory-per-child: Restart worker if memory exceeds 512MB (in KB)
 celery -A app.feedme.celery_app worker \
   --loglevel=info \
   --concurrency=2 \
@@ -25,6 +27,8 @@ celery -A app.feedme.celery_app worker \
   --without-heartbeat \
   --without-gossip \
   --without-mingle \
+  --max-tasks-per-child=50 \
+  --max-memory-per-child=524288 \
   > "$LOG_DIR/celery_worker.log" 2>&1 &
 
 echo "Celery worker started. Logs: $LOG_DIR/celery_worker.log"

@@ -308,6 +308,48 @@ async def startup_event():
     except Exception as e:  # pragma: no cover
         logging.error("Failed to start Zendesk scheduler: %s", e)
 
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """Clean up resources on application shutdown to prevent memory leaks."""
+    logging.info("=== MB-Sparrow Shutdown Initiated ===")
+
+    # Clear rate limiters and stop cleanup tasks
+    try:
+        from app.core.rate_limiting.memory_limiter import get_rate_limiter, get_gemini_limiter
+        rate_limiter = get_rate_limiter()
+        if hasattr(rate_limiter, 'stop'):
+            await rate_limiter.stop()
+        gemini_limiter = get_gemini_limiter()
+        if hasattr(gemini_limiter, 'stop'):
+            await gemini_limiter.stop()
+        logging.info("Rate limiters stopped")
+    except Exception as e:
+        logging.warning(f"Rate limiter cleanup failed: {e}")
+
+    # Clear Supabase client singleton (thread-safe)
+    try:
+        from app.db.supabase.client import clear_supabase_client
+        clear_supabase_client()
+        logging.info("Supabase client cleared")
+    except Exception as e:
+        logging.warning(f"Supabase cleanup failed: {e}")
+
+    # Clear Redis cache client
+    try:
+        from app.cache import redis_cache
+        if hasattr(redis_cache, '_redis_client') and redis_cache._redis_client:
+            redis_cache._redis_client = None
+        logging.info("Redis cache client cleared")
+    except Exception as e:
+        logging.warning(f"Redis cache cleanup failed: {e}")
+
+    # Force garbage collection
+    import gc
+    gc.collect()
+    logging.info("=== MB-Sparrow Shutdown Complete ===")
+
+
 # Global exception handlers for rate limiting
 
 @app.exception_handler(RateLimitExceeded)
