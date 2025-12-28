@@ -21,15 +21,18 @@ from .tools import (
     kb_search_tool,
     log_diagnoser_tool,
     web_search_tool,
+    tavily_extract_tool,
     feedme_search_tool,
     supabase_query_tool,
     get_db_retrieval_tools,
-    # Firecrawl tools for enhanced web scraping
+    # Firecrawl tools for enhanced web scraping (MCP-backed)
     firecrawl_fetch_tool,
     firecrawl_map_tool,
     firecrawl_crawl_tool,
     firecrawl_extract_tool,
     firecrawl_search_tool,
+    firecrawl_agent_tool,       # NEW: Autonomous data gathering
+    firecrawl_agent_status_tool,  # NEW: Check agent job status
 )
 from .model_router import model_router
 
@@ -259,21 +262,26 @@ def _research_subagent(provider: str = "google") -> Dict[str, Any]:
         "description": (
             "Deep research agent with access to KB, FeedMe documents, web search, and "
             "Firecrawl for advanced web scraping. Use for gathering evidence, fact-checking, "
-            "extracting structured data, and finding relevant information from any website."
+            "extracting structured data, autonomous web research, and finding relevant "
+            "information from any website. Can autonomously gather data without knowing URLs."
         ),
         "system_prompt": RESEARCH_PROMPT,
         "tools": [
             kb_search_tool,
             feedme_search_tool,
             supabase_query_tool,
-            # Prefer Tavily first for fast web context, then Firecrawl for deep pages, grounding as last resort
-            web_search_tool,
-            # Firecrawl tools for advanced web research
-            firecrawl_fetch_tool,      # Single-page scrape with screenshots/actions
+            # Prefer Firecrawl first for web scraping (MCP-backed with full feature support)
+            firecrawl_fetch_tool,      # Single-page scrape with screenshots/actions/mobile/geo
             firecrawl_map_tool,        # Discover all URLs on a website
             firecrawl_crawl_tool,      # Multi-page extraction
             firecrawl_extract_tool,    # AI-powered structured data extraction
             firecrawl_search_tool,     # Enhanced web search (web/images/news)
+            firecrawl_agent_tool,      # NEW: Autonomous data gathering without knowing URLs
+            firecrawl_agent_status_tool,  # NEW: Check agent job status for async operations
+            # Tavily as secondary for quick web search
+            web_search_tool,
+            tavily_extract_tool,
+            # Grounding as last resort for quick factual lookups
             grounding_search_tool,
         ],
         "model": model,

@@ -55,10 +55,19 @@ class Settings(BaseSettings):
     openrouter_api_key: Optional[str] = Field(default=None, alias="OPENROUTER_API_KEY")
     openrouter_base_url: str = Field(default="https://openrouter.ai/api/v1", alias="OPENROUTER_BASE_URL")
     openrouter_default_model: str = Field(
-        default="x-ai/grok-4.1-fast:free", alias="OPENROUTER_DEFAULT_MODEL"
+        default="x-ai/grok-4.1-fast", alias="OPENROUTER_DEFAULT_MODEL"
     )
     openrouter_app_name: str = Field(default="Agent Sparrow", alias="OPENROUTER_APP_NAME")
     openrouter_referer: Optional[str] = Field(default=None, alias="OPENROUTER_REFERER")
+
+    @field_validator("openrouter_default_model")
+    @classmethod
+    def normalize_openrouter_default_model(cls, value: str) -> str:
+        # Legacy OpenRouter model IDs used a ":free" suffix; OpenRouter now exposes
+        # this model as `x-ai/grok-4.1-fast`.
+        if value == "x-ai/grok-4.1-fast:free":
+            return "x-ai/grok-4.1-fast"
+        return value
 
     # LangSmith tracing configuration
     langsmith_tracing_enabled: bool = Field(default=False, alias="LANGSMITH_TRACING_ENABLED")
@@ -84,6 +93,24 @@ class Settings(BaseSettings):
     grounding_snippet_chars: int = Field(default=480, alias="GROUNDING_SNIPPET_CHARS")
     grounding_minute_limit: int = Field(default=30, alias="GROUNDING_MINUTE_LIMIT")
     grounding_daily_limit: int = Field(default=1000, alias="GROUNDING_DAILY_LIMIT")
+
+    # MCP (Model Context Protocol) Configuration for Firecrawl
+    firecrawl_mcp_enabled: bool = Field(default=True, alias="FIRECRAWL_MCP_ENABLED")
+    firecrawl_mcp_endpoint: str = Field(
+        default="https://mcp.firecrawl.dev/{FIRECRAWL_API_KEY}/v2/mcp",
+        alias="FIRECRAWL_MCP_ENDPOINT",
+    )
+    firecrawl_api_key: Optional[str] = Field(default=None, alias="FIRECRAWL_API_KEY")
+    firecrawl_default_max_age_ms: int = Field(default=172800000, alias="FIRECRAWL_DEFAULT_MAX_AGE_MS")  # 48 hours
+    firecrawl_default_timeout_sec: float = Field(default=60.0, alias="FIRECRAWL_DEFAULT_TIMEOUT_SEC")
+    firecrawl_rate_limit_rpm: int = Field(default=60, alias="FIRECRAWL_RATE_LIMIT_RPM")
+
+    # Enhanced Tavily Configuration
+    tavily_api_key: Optional[str] = Field(default=None, alias="TAVILY_API_KEY")
+    tavily_default_search_depth: str = Field(default="advanced", alias="TAVILY_DEFAULT_SEARCH_DEPTH")
+    tavily_default_max_results: int = Field(default=10, alias="TAVILY_DEFAULT_MAX_RESULTS")
+    tavily_include_images: bool = Field(default=True, alias="TAVILY_INCLUDE_IMAGES")
+
     router_model: str = Field(default="gemini-2.5-flash-lite-preview-09-2025", alias="ROUTER_MODEL")
     node_timeout_sec: float = Field(default=30.0, alias="NODE_TIMEOUT_SEC")
     use_enhanced_log_analysis: bool = Field(default=True, alias="USE_ENHANCED_LOG_ANALYSIS")
@@ -133,7 +160,7 @@ class Settings(BaseSettings):
     
     # FeedMe PDF Support Configuration
     feedme_pdf_enabled: bool = Field(default=True, alias="FEEDME_PDF_ENABLED")
-    feedme_max_pdf_size_mb: int = Field(default=20, alias="FEEDME_MAX_PDF_SIZE_MB")
+    feedme_max_pdf_size_mb: int = Field(default=50, alias="FEEDME_MAX_PDF_SIZE_MB")
     feedme_pdf_processing_timeout: int = Field(default=30, alias="FEEDME_PDF_PROCESSING_TIMEOUT")
     feedme_pdf_concurrent_limit: int = Field(default=5, alias="FEEDME_PDF_CONCURRENT_LIMIT")
     
@@ -235,7 +262,6 @@ class Settings(BaseSettings):
     feedme_ai_pdf_enabled: bool = Field(default=True, alias="FEEDME_AI_PDF_ENABLED")
     feedme_ai_max_pages: int = Field(default=10, alias="FEEDME_AI_MAX_PAGES")
     feedme_ai_pages_per_call: int = Field(default=3, alias="FEEDME_AI_PAGES_PER_CALL")
-    feedme_max_pdf_size_mb: int = Field(default=50, alias="FEEDME_MAX_PDF_SIZE_MB")
 
     # Global Knowledge / Store integration (Phase 0)
     enable_global_knowledge_injection: bool = Field(

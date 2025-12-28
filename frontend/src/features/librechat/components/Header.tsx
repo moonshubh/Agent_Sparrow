@@ -6,6 +6,7 @@ import { useAgent } from '@/features/librechat/AgentContext';
 import { PanelLeftClose, PanelLeft, ChevronDown, Settings, Check, Layers } from 'lucide-react';
 import { SettingsDialogV2 } from '@/features/settings/components/SettingsDialogV2';
 import { useArtifactActions, useArtifactSelector } from '@/features/librechat/artifacts';
+import { modelsAPI, PROVIDER_LABELS, type ModelTier, type Provider as ProviderId } from '@/services/api/endpoints/models';
 
 interface HeaderProps {
   onToggleSidebar: () => void;
@@ -31,10 +32,10 @@ interface ProviderInfo {
   readonly models: readonly ModelInfo[];
 }
 
-const PROVIDERS: ProviderInfo[] = [
+const FALLBACK_PROVIDERS: ProviderInfo[] = [
   {
     id: 'google',
-    name: 'Google',
+    name: 'Gemini',
     icon: '/icons/google.svg',
     models: [
       { id: 'gemini-3-flash-preview', name: 'Gemini 3.0 Flash' },
@@ -44,7 +45,7 @@ const PROVIDERS: ProviderInfo[] = [
   },
   {
     id: 'xai',
-    name: 'xAI',
+    name: 'Grok',
     icon: '/icons/xai.svg',
     models: [
       { id: 'grok-4-1-fast-reasoning', name: 'Grok 4.1 Fast' },
@@ -55,14 +56,18 @@ const PROVIDERS: ProviderInfo[] = [
     name: 'OpenRouter',
     icon: '/icons/openrouter.svg',
     models: [
-      { id: 'minimax-01', name: 'MiniMax' },
+      { id: 'x-ai/grok-4.1-fast', name: 'Grok 4.1 Fast' },
+      { id: 'minimax/minimax-m2.1', name: 'MiniMax M2.1' },
     ],
   },
 ];
 
 // Helper to find model info from nested structure
-function findModelInfo(modelId: string): { model: ModelInfo; provider: ProviderInfo } | null {
-  for (const provider of PROVIDERS) {
+function findModelInfo(
+  modelId: string,
+  providers: readonly ProviderInfo[]
+): { model: ModelInfo; provider: ProviderInfo } | null {
+  for (const provider of providers) {
     const model = provider.models.find((m) => m.id === modelId);
     if (model) {
       return { model, provider };
@@ -70,6 +75,14 @@ function findModelInfo(modelId: string): { model: ModelInfo; provider: ProviderI
   }
   return null;
 }
+
+const PROVIDER_ICONS: Record<ProviderId, string> = {
+  google: '/icons/google.svg',
+  xai: '/icons/xai.svg',
+  openrouter: '/icons/openrouter.svg',
+};
+
+const TIER_ORDER: Record<ModelTier, number> = { pro: 0, standard: 1, lite: 2 };
 
 export function Header({ onToggleSidebar, sidebarOpen }: HeaderProps) {
   const { agent, resolvedModel } = useAgent();
@@ -84,11 +97,54 @@ export function Header({ onToggleSidebar, sidebarOpen }: HeaderProps) {
   const triggerRef = useRef<HTMLButtonElement>(null);
   const providerButtonRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const modelButtonRefs = useRef<Record<string, Array<HTMLButtonElement | null>>>({});
+  const [providers, setProviders] = useState<ProviderInfo[]>(FALLBACK_PROVIDERS);
 
   const agentState = agent?.state as AgentState | undefined;
   const currentModel = resolvedModel || agentState?.model || 'gemini-3-flash-preview';
-  const currentModelData = findModelInfo(currentModel);
-  const currentModelName = currentModelData?.model.name || 'Gemini 3.0 Flash';
+  const currentModelData = findModelInfo(currentModel, providers);
+  const currentModelName = currentModelData?.model.name || modelsAPI.getDisplayName(currentModel);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const config = await modelsAPI.getConfig();
+        const providerOrder: ProviderId[] = ['google', 'xai', 'openrouter'];
+
+        const nextProviders: ProviderInfo[] = providerOrder
+          .filter((id) => Boolean(config.available_providers[id]))
+          .map((id) => {
+            const models = Object.entries(config.models)
+              .filter(([, info]) => info.provider === id)
+              .sort((a, b) => {
+                const tierA = TIER_ORDER[a[1].tier];
+                const tierB = TIER_ORDER[b[1].tier];
+                if (tierA !== tierB) return tierA - tierB;
+                return a[1].display_name.localeCompare(b[1].display_name);
+              })
+              .map(([modelId, info]) => ({ id: modelId, name: info.display_name }));
+
+            return {
+              id,
+              name: PROVIDER_LABELS[id] || id,
+              icon: PROVIDER_ICONS[id],
+              models,
+            };
+          })
+          .filter((p) => p.models.length > 0);
+
+        if (!cancelled && nextProviders.length > 0) {
+          setProviders(nextProviders);
+        }
+      } catch {
+        // Keep fallback providers.
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const closeDropdown = useCallback((returnFocus = false) => {
     setShowModelDropdown(false);
@@ -101,19 +157,19 @@ export function Header({ onToggleSidebar, sidebarOpen }: HeaderProps) {
   }, []);
 
   const focusProviderByIndex = useCallback((index: number) => {
-    const count = PROVIDERS.length;
+    const count = providers.length;
     if (!count) return;
     const nextIndex = (index + count) % count;
     providerButtonRefs.current[nextIndex]?.focus();
-  }, []);
+  }, [providers.length]);
 
   const focusProviderById = useCallback((providerId: string | null) => {
     if (!providerId) return;
-    const index = PROVIDERS.findIndex((provider) => provider.id === providerId);
+    const index = providers.findIndex((provider) => provider.id === providerId);
     if (index >= 0) {
       providerButtonRefs.current[index]?.focus();
     }
-  }, []);
+  }, [providers]);
 
   const focusModelByIndex = useCallback((providerId: string, index: number) => {
     const models = modelButtonRefs.current[providerId] ?? [];
@@ -165,15 +221,6 @@ export function Header({ onToggleSidebar, sidebarOpen }: HeaderProps) {
       document.removeEventListener('keydown', handleEscape);
     };
   }, [closeDropdown, showModelDropdown]);
-
-  useEffect(() => {
-    if (!showModelDropdown) return;
-    const selectedProviderId = currentModelData?.provider.id ?? PROVIDERS[0]?.id ?? null;
-    if (selectedProviderId) {
-      setActiveProviderId(selectedProviderId);
-      focusProviderById(selectedProviderId);
-    }
-  }, [currentModelData?.provider.id, focusProviderById, showModelDropdown]);
 
   const handleModelSelect = useCallback(
     (modelId: string, providerId: string, options?: { returnFocus?: boolean }) => {
@@ -227,7 +274,7 @@ export function Header({ onToggleSidebar, sidebarOpen }: HeaderProps) {
           break;
         case 'End':
           event.preventDefault();
-          focusProviderByIndex(PROVIDERS.length - 1);
+          focusProviderByIndex(providers.length - 1);
           break;
         case 'ArrowRight':
         case 'Enter':
@@ -248,7 +295,7 @@ export function Header({ onToggleSidebar, sidebarOpen }: HeaderProps) {
           break;
       }
     },
-    [closeDropdown, focusFirstModel, focusProviderByIndex]
+    [closeDropdown, focusFirstModel, focusProviderByIndex, providers.length]
   );
 
   const handleModelKeyDown = useCallback(
@@ -317,7 +364,24 @@ export function Header({ onToggleSidebar, sidebarOpen }: HeaderProps) {
           <button
             className="lc-model-selector"
             ref={triggerRef}
-            onClick={() => setShowModelDropdown(!showModelDropdown)}
+            onClick={() => {
+              const next = !showModelDropdown;
+              setShowModelDropdown(next);
+
+              if (!next) {
+                setActiveProviderId(null);
+                return;
+              }
+
+              const selectedProviderId =
+                currentModelData?.provider.id ?? providers[0]?.id ?? null;
+              setActiveProviderId(selectedProviderId);
+              if (selectedProviderId) {
+                requestAnimationFrame(() => {
+                  focusProviderById(selectedProviderId);
+                });
+              }
+            }}
             aria-haspopup="menu"
             aria-expanded={showModelDropdown}
             aria-label={`Current model: ${currentModelName}. Click to change.`}
@@ -332,7 +396,7 @@ export function Header({ onToggleSidebar, sidebarOpen }: HeaderProps) {
               role="menu"
               aria-label="Select model provider"
             >
-              {PROVIDERS.map((provider, providerIndex) => (
+              {providers.map((provider, providerIndex) => (
                 <div
                   key={provider.id}
                   className="lc-provider-item-wrapper"

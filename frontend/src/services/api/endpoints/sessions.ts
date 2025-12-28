@@ -118,8 +118,14 @@ export const sessionsAPI = {
     return []
   },
 
-  async postMessage(sessionId: string | number, data: ChatMessagePayload) {
-    return apiClient.post(`/api/v1/chat-sessions/${sessionId}/messages`, data)
+  async postMessage(
+    sessionId: string | number,
+    data: ChatMessagePayload
+  ): Promise<ChatMessageRecord> {
+    return apiClient.post<ChatMessageRecord>(
+      `/api/v1/chat-sessions/${sessionId}/messages`,
+      data
+    )
   },
 
   async updateMessage(

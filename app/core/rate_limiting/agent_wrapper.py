@@ -7,8 +7,7 @@ to existing agent implementations without major code changes.
 
 import asyncio
 import functools
-from typing import Any, Callable, Optional, Union, TypeVar, Dict
-from langchain_core.messages import BaseMessage
+from typing import Any, Callable, Optional, TypeVar, Dict
 
 from app.core.logging_config import get_logger
 from .gemini_limiter import GeminiRateLimiter
@@ -69,6 +68,12 @@ def rate_limited(model: str, fail_gracefully: bool = False):
                 if fail_gracefully:
                     return None
                 raise
+            except GeminiServiceUnavailableException as e:
+                logger.error(f"Rate limiting service unavailable for {model}: {e.message}")
+                if fail_gracefully:
+                    # Fail open when rate limiting infrastructure is unavailable (e.g., Redis down).
+                    return await func(*args, **kwargs) if asyncio.iscoroutinefunction(func) else func(*args, **kwargs)
+                raise
             except Exception as e:
                 logger.error(f"Rate limiter error for {model}: {e}")
                 if fail_gracefully:
@@ -82,7 +87,6 @@ def rate_limited(model: str, fail_gracefully: bool = False):
                 # Check if there is a running event loop
                 loop = asyncio.get_running_loop()
                 # If running loop exists, we can't use run_until_complete
-                import threading
                 import concurrent.futures
                 
                 # Run in thread pool to avoid blocking running event loop

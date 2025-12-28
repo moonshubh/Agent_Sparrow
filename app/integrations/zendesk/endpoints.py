@@ -269,7 +269,7 @@ ZENDESK_MODEL_OPTIONS = {
     ],
     "openrouter": [
         # Vision-capable models via OpenRouter
-        {"id": "x-ai/grok-4.1-fast:free", "name": "Grok 4.1 Fast (Free)"},
+        {"id": "x-ai/grok-4.1-fast", "name": "Grok 4.1 Fast"},
         {"id": "google/gemini-2.5-flash-preview", "name": "Gemini 2.5 Flash (Vision)"},
         {"id": "anthropic/claude-3.5-sonnet", "name": "Claude 3.5 Sonnet (Vision)"},
         {"id": "openai/gpt-4o", "name": "GPT-4o (Vision)"},

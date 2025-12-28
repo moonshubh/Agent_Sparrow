@@ -18,9 +18,8 @@ import json
 import math
 import random
 import re
-import time
-from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, TypedDict
+from dataclasses import dataclass
+from typing import Any, Callable, Optional, Sequence, TypedDict
 
 from loguru import logger
 from app.agents.log_analysis.log_analysis_agent.utils import extract_json_payload
@@ -82,7 +81,7 @@ class ToolResultEvictionManager:
         self.token_limit = token_limit
         self.eviction_threshold = 4 * token_limit  # Character threshold
         self.storage_callback = storage_callback
-        self._evicted_results: Dict[str, EvictedToolResult] = {}
+        self._evicted_results: dict[str, EvictedToolResult] = {}
 
     def should_evict(self, content: str) -> bool:
         """Check if content exceeds eviction threshold."""
@@ -93,7 +92,7 @@ class ToolResultEvictionManager:
         tool_call_id: str,
         tool_name: str,
         content: str,
-    ) -> Tuple[str, bool]:
+    ) -> tuple[str, bool]:
         """Evict large tool result if it exceeds threshold.
 
         Args:
@@ -122,7 +121,7 @@ class ToolResultEvictionManager:
             try:
                 self.storage_callback(evicted_path, content)
             except Exception as e:
-                logger.warning(f"tool_result_eviction_storage_failed: {e}")
+                logger.warning("tool_result_eviction_storage_failed: {}", e)
 
         # Track eviction
         from datetime import datetime, timezone
@@ -162,11 +161,11 @@ Preview (first 10 lines):
 # Shared safe JSON helpers
 # =============================================================================
 
-def safe_metadata(metadata: Dict[str, Any]) -> Dict[str, Any]:
+def safe_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
     """Ensure metadata values are JSON-serializable."""
     import json
 
-    safe: Dict[str, Any] = {}
+    safe: dict[str, Any] = {}
     for key, value in metadata.items():
         try:
             json.dumps(value)
@@ -204,7 +203,7 @@ def safe_json_value(value: Any) -> Any:
 # =============================================================================
 
 def count_tokens_approximately(
-    content: str | List[Any],
+    content: str | list[Any],
     *,
     chars_per_token: float = CHARS_PER_TOKEN,
     extra_tokens_per_message: float = EXTRA_TOKENS_PER_MESSAGE,
@@ -244,7 +243,7 @@ def count_tokens_approximately(
 
 
 def count_message_tokens_approximately(
-    messages: Sequence[Dict[str, Any]],
+    messages: Sequence[dict[str, Any]],
     *,
     chars_per_token: float = CHARS_PER_TOKEN,
 ) -> int:
@@ -303,8 +302,8 @@ class InvalidToolCall(TypedDict):
 
 
 def parse_tool_calls_safely(
-    raw_tool_calls: List[Dict[str, Any]],
-) -> Tuple[List[Dict[str, Any]], List[InvalidToolCall]]:
+    raw_tool_calls: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[InvalidToolCall]]:
     """Parse tool calls with graceful error handling.
 
     Based on LangChain's default_tool_parser pattern.
@@ -316,8 +315,8 @@ def parse_tool_calls_safely(
     Returns:
         Tuple of (valid_calls, invalid_calls)
     """
-    valid_calls: List[Dict[str, Any]] = []
-    invalid_calls: List[InvalidToolCall] = []
+    valid_calls: list[dict[str, Any]] = []
+    invalid_calls: list[InvalidToolCall] = []
 
     for idx, raw_call in enumerate(raw_tool_calls):
         try:
@@ -377,8 +376,8 @@ class WriteDeduplicator:
     """
 
     def __init__(self):
-        self._pending_writes: Dict[str, Tuple[str, str, Any]] = {}
-        self._write_order: List[str] = []
+        self._pending_writes: dict[str, tuple[str, str, Any]] = {}
+        self._write_order: list[str] = []
 
     def add_write(self, task_id: str, channel: str, value: Any) -> None:
         """Add a write, replacing any previous write to same channel."""
@@ -389,7 +388,7 @@ class WriteDeduplicator:
 
         self._pending_writes[key] = (task_id, channel, value)
 
-    def get_deduplicated_writes(self) -> List[Tuple[str, str, Any]]:
+    def get_deduplicated_writes(self) -> list[tuple[str, str, Any]]:
         """Get deduplicated writes in submission order."""
         return [self._pending_writes[key] for key in self._write_order if key in self._pending_writes]
 
@@ -419,7 +418,7 @@ class RetryConfig:
     max_interval: float = DEFAULT_MAX_INTERVAL
     backoff_factor: float = DEFAULT_BACKOFF_FACTOR
     jitter: float = DEFAULT_JITTER
-    retry_exceptions: Tuple[type, ...] = (Exception,)
+    retry_exceptions: tuple[type, ...] = (Exception,)
 
 
 def calculate_retry_delay(
@@ -590,9 +589,9 @@ TRUNCATION_GUIDANCE = "... [results truncated, try being more specific with your
 
 
 def truncate_if_too_long(
-    result: str | List[str],
+    result: str | list[str],
     token_limit: int = TOOL_TOKEN_LIMIT,
-) -> str | List[str]:
+) -> str | list[str]:
     """Truncate result if it exceeds token limit with helpful guidance.
 
     Based on DeepAgents pattern: Rough estimate of 4 chars/token.
@@ -623,7 +622,7 @@ def truncate_if_too_long(
 
 
 def format_content_with_line_numbers(
-    content: str | List[str],
+    content: str | list[str],
     start_line: int = 1,
     max_line_length: int = MAX_LINE_LENGTH,
 ) -> str:
@@ -693,7 +692,7 @@ def compute_content_hash(content: Any, max_sample: int = 1000) -> str:
     elif isinstance(content, (list, dict)):
         try:
             sample = json.dumps(content, default=str, sort_keys=True)[:max_sample]
-        except:
+        except Exception:
             sample = str(content)[:max_sample]
     else:
         sample = str(content)[:max_sample]

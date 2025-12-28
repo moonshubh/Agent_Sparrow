@@ -107,7 +107,7 @@ function restoreArtifactsFromMessages(messages: Message[]): void {
 const DEFAULT_MODELS: Record<Provider, string> = {
   google: 'gemini-3-flash-preview',
   xai: 'grok-4-1-fast-reasoning',
-  openrouter: 'x-ai/grok-4.1-fast:free',
+  openrouter: 'x-ai/grok-4.1-fast',
 };
 
 // Chat configuration constants
@@ -154,14 +154,15 @@ export default function LibreChatClient() {
       let activeModel: string = DEFAULT_MODELS.google;
 
       try {
-        const providers = await modelsAPI.getAvailableProviders();
-        const availableProvider = Object.entries(providers).find(([, available]) => available)?.[0] as Provider | undefined;
+        const config = await modelsAPI.getConfig();
+        const availableProvider = Object.entries(config.available_providers).find(([, available]) => available)?.[0] as Provider | undefined;
         if (availableProvider) {
           activeProvider = availableProvider;
-          activeModel = DEFAULT_MODELS[availableProvider];
-          setProvider(activeProvider);
-          setModel(activeModel);
+          activeModel = config.defaults[availableProvider] || DEFAULT_MODELS[availableProvider];
         }
+
+        setProvider(activeProvider);
+        setModel(activeModel);
       } catch (err) {
         console.debug('Failed to fetch providers, using defaults:', err);
       }

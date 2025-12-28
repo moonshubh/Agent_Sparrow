@@ -11,31 +11,25 @@ These middleware follow the LangChain AgentMiddleware interface.
 from __future__ import annotations
 
 import asyncio
-import re
 import time
-from dataclasses import dataclass, field
-from functools import wraps
-from typing import Any, Callable, Dict, List, Optional, TYPE_CHECKING, Union
+from dataclasses import dataclass
+from typing import Any, Callable, Dict, List, Optional
 
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
+from langchain_core.messages import AIMessage, BaseMessage, RemoveMessage, ToolMessage
 from loguru import logger
+
+from langgraph.graph.message import REMOVE_ALL_MESSAGES
 
 # Import AgentMiddleware interface
 try:
     from langchain.agents.middleware import AgentMiddleware, AgentState
     from langchain.agents.middleware.summarization import SummarizationMiddleware
-    from langchain.agents.middleware.types import ModelRequest, ModelResponse
     AGENT_MIDDLEWARE_AVAILABLE = True
 except ImportError:
     AGENT_MIDDLEWARE_AVAILABLE = False
     AgentMiddleware = object
     AgentState = Dict[str, Any]
     SummarizationMiddleware = object
-    ModelRequest = Any
-    ModelResponse = Any
-
-if TYPE_CHECKING:
-    from langgraph.config import RunnableConfig
 
 from app.agents.unified.model_context import DEFAULT_CONTEXT_WINDOW, get_model_context_window
 
@@ -237,31 +231,24 @@ class ContextEditingMiddleware(AgentMiddleware if AGENT_MIDDLEWARE_AVAILABLE els
         """Middleware name for identification."""
         return "context_editing"
 
+    def before_model(self, state: Any, runtime: Any) -> Optional[Dict[str, Any]]:  # noqa: ARG002
+        """Process messages before each model call.
+
+        This runs inside the agent loop (model → tools → model → ...). Tool results
+        accumulate over multiple iterations, so we must clear older tool results
+        repeatedly (not just once at agent start) to prevent context overflow.
+        """
+        messages = self._extract_messages(state)
+        return self._maybe_clear_tool_results(messages)
+
+    async def abefore_model(self, state: Any, runtime: Any) -> Optional[Dict[str, Any]]:  # noqa: ARG002
+        """Async version of before_model."""
+        return self.before_model(state, runtime)
+
     def before_agent(self, state: Any, runtime: Any) -> Optional[Dict[str, Any]]:
         """Process messages before agent call, clearing old tool results if needed."""
         messages = self._extract_messages(state)
-        if not messages:
-            return None
-
-        estimated_tokens = estimate_tokens(messages)
-        if estimated_tokens < self.trigger_tokens:
-            return None
-
-        self._stats.tokens_before_compaction = estimated_tokens
-
-        # Clear old tool results
-        edited_messages = self._clear_old_tool_results(messages)
-
-        self._stats.tokens_after_compaction = estimate_tokens(edited_messages)
-
-        logger.info(
-            "context_editing_triggered",
-            tokens_before=self._stats.tokens_before_compaction,
-            tokens_after=self._stats.tokens_after_compaction,
-            results_cleared=self._stats.tool_results_cleared,
-        )
-
-        return {"messages": edited_messages}
+        return self._maybe_clear_tool_results(messages)
 
     async def abefore_agent(self, state: Any, runtime: Any) -> Optional[Dict[str, Any]]:
         """Async version of before_agent."""
@@ -297,6 +284,38 @@ class ContextEditingMiddleware(AgentMiddleware if AGENT_MIDDLEWARE_AVAILABLE els
             return state.get("messages", [])
         return getattr(state, "messages", [])
 
+    def _maybe_clear_tool_results(self, messages: List[BaseMessage]) -> Optional[Dict[str, Any]]:
+        if not messages:
+            return None
+
+        estimated_tokens = estimate_tokens(messages)
+        if estimated_tokens < self.trigger_tokens:
+            return None
+
+        self._stats.tokens_before_compaction = estimated_tokens
+
+        cleared_before = self._stats.tool_results_cleared
+        edited_messages = self._clear_old_tool_results(messages)
+        cleared_now = self._stats.tool_results_cleared - cleared_before
+        if cleared_now <= 0:
+            return None
+
+        self._stats.tokens_after_compaction = estimate_tokens(edited_messages)
+
+        logger.info(
+            "context_editing_triggered",
+            tokens_before=self._stats.tokens_before_compaction,
+            tokens_after=self._stats.tokens_after_compaction,
+            results_cleared=cleared_now,
+        )
+
+        return {
+            "messages": [
+                RemoveMessage(id=REMOVE_ALL_MESSAGES),
+                *edited_messages,
+            ]
+        }
+
     def _clear_old_tool_results(self, messages: List[BaseMessage]) -> List[BaseMessage]:
         """Clear old tool results, keeping recent ones.
 
@@ -327,16 +346,19 @@ class ContextEditingMiddleware(AgentMiddleware if AGENT_MIDDLEWARE_AVAILABLE els
         # Clear older tool results (keep the most recent ones)
         indices_to_clear = tool_msg_indices[:-self.keep_recent]
         cleared_indices = {idx for idx, _, _ in indices_to_clear}
+        tool_name_by_index = {idx: tool_name for idx, tool_name, _ in indices_to_clear}
 
         edited_messages = []
         for i, msg in enumerate(messages):
             if i in cleared_indices:
                 # Replace with placeholder
                 original_tool_call_id = getattr(msg, "tool_call_id", "unknown")
+                original_tool_name = tool_name_by_index.get(i)
                 edited_messages.append(
                     ToolMessage(
                         content=self.placeholder,
                         tool_call_id=original_tool_call_id,
+                        name=str(original_tool_name) if original_tool_name else "tool",
                     )
                 )
                 self._stats.tool_results_cleared += 1
@@ -528,9 +550,7 @@ __all__ = [
     "ModelRetryMiddleware",
     "get_model_context_window",
     "estimate_tokens",
-    "MODEL_CONTEXT_WINDOWS",
     "ContextStats",
-    "PROVIDER_DEFAULT_CONTEXT",
     "DEFAULT_CONTEXT_WINDOW",
     "AGENT_MIDDLEWARE_AVAILABLE",
 ]

@@ -26,11 +26,6 @@ import re
 import threading
 from dataclasses import dataclass, field, replace
 from enum import Enum
-from functools import lru_cache
-from typing import TYPE_CHECKING, Dict, List, Optional, Set, Tuple
-
-if TYPE_CHECKING:
-    pass  # For forward references only
 
 
 class ModelTier(Enum):
@@ -69,7 +64,9 @@ class ModelSpec:
         rpd_limit: Requests per day (free tier default)
         supports_reasoning: Whether model supports extended reasoning
         supports_vision: Whether model supports image inputs
+        always_enable_reasoning: Whether to always request reasoning tokens (provider-specific)
         embedding_dims: Dimension count for embedding models (None for others)
+        expose_in_ui: Whether to expose this model via public model-selection APIs
     """
 
     id: str
@@ -80,7 +77,9 @@ class ModelSpec:
     rpd_limit: int = 250
     supports_reasoning: bool = False
     supports_vision: bool = False
+    always_enable_reasoning: bool = False
     embedding_dims: int | None = None
+    expose_in_ui: bool = True
 
 
 # =============================================================================
@@ -131,6 +130,7 @@ GEMINI_FLASH = ModelSpec(
     rpd_limit=250,
     supports_reasoning=True,
     supports_vision=True,
+    expose_in_ui=False,
 )
 
 GEMINI_FLASH_LITE = ModelSpec(
@@ -141,6 +141,7 @@ GEMINI_FLASH_LITE = ModelSpec(
     rpm_limit=15,
     rpd_limit=500,
     supports_vision=True,
+    expose_in_ui=False,
 )
 
 # Preview variants (for when stable isn't available yet)
@@ -153,6 +154,7 @@ GEMINI_FLASH_PREVIEW = ModelSpec(
     rpd_limit=250,
     supports_reasoning=True,
     supports_vision=True,
+    expose_in_ui=False,
 )
 
 GEMINI_PRO_PREVIEW = ModelSpec(
@@ -164,6 +166,7 @@ GEMINI_PRO_PREVIEW = ModelSpec(
     rpd_limit=100,
     supports_reasoning=True,
     supports_vision=True,
+    expose_in_ui=False,
 )
 
 GEMINI_FLASH_LITE_PREVIEW = ModelSpec(
@@ -174,6 +177,7 @@ GEMINI_FLASH_LITE_PREVIEW = ModelSpec(
     rpm_limit=15,
     rpd_limit=500,
     supports_vision=True,
+    expose_in_ui=False,
 )
 
 # Embedding model
@@ -210,23 +214,25 @@ GROK_4 = ModelSpec(
 
 # OpenRouter (Grok via OpenRouter)
 GROK_4_1_FAST_OPENROUTER = ModelSpec(
-    id="x-ai/grok-4.1-fast:free",
-    display_name="Grok 4.1 Fast (OpenRouter Free)",
+    id="x-ai/grok-4.1-fast",
+    display_name="Grok 4.1 Fast",
     provider=Provider.OPENROUTER,
     tier=ModelTier.STANDARD,
     rpm_limit=60,
     rpd_limit=1000,
     supports_reasoning=True,
+    always_enable_reasoning=True,
 )
 
 MINIMAX_M2_OPENROUTER = ModelSpec(
-    id="minimax/minimax-m2",
-    display_name="MiniMax M2 (OpenRouter)",
+    id="minimax/minimax-m2.1",
+    display_name="MiniMax M2.1 (OpenRouter)",
     provider=Provider.OPENROUTER,
     tier=ModelTier.STANDARD,
     rpm_limit=60,
     rpd_limit=1000,
     supports_reasoning=True,
+    always_enable_reasoning=True,
 )
 
 # =============================================================================
@@ -252,10 +258,23 @@ ALL_MODELS: tuple[ModelSpec, ...] = (
 # Lookup by ID
 _MODELS_BY_ID: dict[str, ModelSpec] = {m.id: m for m in ALL_MODELS}
 
+LEGACY_MODEL_ID_ALIASES: dict[str, str] = {
+    # OpenRouter previously exposed a free tier suffix for this model.
+    "x-ai/grok-4.1-fast:free": "x-ai/grok-4.1-fast",
+    # OpenRouter model rename.
+    "minimax/minimax-m2": "minimax/minimax-m2.1",
+}
+
+
+def normalize_model_id(model_id: str) -> str:
+    """Normalize known legacy model IDs to current registry IDs."""
+    normalized = (model_id or "").strip()
+    return LEGACY_MODEL_ID_ALIASES.get(normalized, normalized)
+
 
 def get_model_by_id(model_id: str) -> ModelSpec | None:
     """Look up a model spec by its ID."""
-    return _MODELS_BY_ID.get(model_id)
+    return _MODELS_BY_ID.get(normalize_model_id(model_id))
 
 
 # =============================================================================
@@ -498,6 +517,8 @@ class ModelRegistry:
         for model in ALL_MODELS:
             if model.tier == ModelTier.EMBEDDING:
                 continue  # Don't expose embedding models in selection
+            if not model.expose_in_ui:
+                continue
             provider_key = str(model.provider)
             if provider_key in result:
                 result[provider_key].append(model.id)
@@ -575,6 +596,8 @@ def _find_or_create_spec(
     Raises:
         ValueError: If model_id format is invalid
     """
+    model_id = normalize_model_id(model_id)
+
     # Infer provider from model_id when possible (e.g., OpenRouter prefixes)
     model_id_lower = model_id.lower()
     if provider == Provider.GOOGLE and "openrouter" in model_id_lower:

@@ -9,10 +9,11 @@ Key patterns adopted from Claude Agent SDK:
 """
 
 import asyncio
+import json
 import threading
 import time
 from dataclasses import dataclass
-from typing import Any, Callable, Mapping, MutableMapping
+from typing import Any, Callable, Mapping
 
 from langchain_core.messages import ToolMessage
 from langchain_core.tools import BaseTool
@@ -20,6 +21,33 @@ from langchain_core.tools import BaseTool
 from app.core.logging_config import get_logger
 
 logger = get_logger(__name__)
+
+
+MAX_TOOL_MESSAGE_CHARS = 50_000
+
+
+def _serialize_tool_content(payload: Any) -> str:
+    if payload is None:
+        return ""
+    if isinstance(payload, str):
+        return payload
+    try:
+        return json.dumps(payload, ensure_ascii=False, default=str)
+    except Exception:
+        return str(payload)
+
+
+def _truncate_text(text: str, *, max_chars: int) -> str:
+    if not text:
+        return ""
+    if len(text) <= max_chars:
+        return text
+    return (
+        text[: max(0, max_chars - 1)].rstrip()
+        + "\n\n[TRUNCATED: tool output exceeded "
+        + str(max_chars)
+        + " chars]"
+    )
 
 
 @dataclass
@@ -79,9 +107,14 @@ class ToolExecutionResult:
         status = self.status or ("success" if self.success else "error")
 
         if self.success:
+            content = _truncate_text(
+                _serialize_tool_content(self.result),
+                max_chars=MAX_TOOL_MESSAGE_CHARS,
+            )
             return ToolMessage(
-                content=str(self.result) if self.result is not None else "",
+                content=content,
                 tool_call_id=self.tool_call_id,
+                name=self.tool_name,
                 additional_kwargs={
                     "status": status,
                     "artifact": self.artifact,
@@ -94,6 +127,7 @@ class ToolExecutionResult:
             return ToolMessage(
                 content=error_content,
                 tool_call_id=self.tool_call_id,
+                name=self.tool_name,
                 additional_kwargs={
                     "is_error": True,
                     "error_type": self.error_type,
@@ -135,40 +169,76 @@ class ToolExecutionResult:
 # Tools that are more likely to have transient failures get more retries
 DEFAULT_TOOL_CONFIGS: dict[str, ToolExecutionConfig] = {
     # Web-based tools are more prone to transient failures
-    "web_search_tool": ToolExecutionConfig(
+    "web_search": ToolExecutionConfig(
         timeout=60.0,
         max_retries=3,
         retry_backoff=2.0,
         error_recovery_hint="Try a different search query or use alternative sources.",
     ),
-    "grounding_search_tool": ToolExecutionConfig(
+    "tavily_extract": ToolExecutionConfig(
+        timeout=90.0,
+        max_retries=2,
+        retry_backoff=2.0,
+        error_recovery_hint="Try fewer URLs or a smaller set of pages.",
+    ),
+    "grounding_search": ToolExecutionConfig(
         timeout=60.0,
         max_retries=3,
         retry_backoff=2.0,
-        error_recovery_hint="Try rephrasing the query or using web_search_tool instead.",
+        error_recovery_hint="Try rephrasing the query or using web_search instead.",
     ),
-    "firecrawl_extract_tool": ToolExecutionConfig(
+    "firecrawl_fetch": ToolExecutionConfig(
+        timeout=90.0,
+        max_retries=2,
+        retry_backoff=2.0,
+        error_recovery_hint="Try reducing formats or actions, or fetch a simpler URL first.",
+    ),
+    "firecrawl_search": ToolExecutionConfig(
+        timeout=60.0,
+        max_retries=2,
+        retry_backoff=2.0,
+        error_recovery_hint="Try narrowing the query or switching sources.",
+    ),
+    "firecrawl_map": ToolExecutionConfig(
+        timeout=60.0,
+        max_retries=2,
+        retry_backoff=2.0,
+        error_recovery_hint="Try a simpler base URL or reduce the limit.",
+    ),
+    "firecrawl_crawl": ToolExecutionConfig(
+        timeout=180.0,
+        max_retries=1,
+        retry_backoff=3.0,
+        error_recovery_hint="Try reducing limit/max_depth or crawl a smaller section.",
+    ),
+    "firecrawl_agent": ToolExecutionConfig(
+        timeout=180.0,
+        max_retries=1,
+        retry_backoff=3.0,
+        error_recovery_hint="Try a narrower prompt or provide seed URLs.",
+    ),
+    "firecrawl_extract": ToolExecutionConfig(
         timeout=90.0,
         max_retries=2,
         retry_backoff=3.0,
         error_recovery_hint="The URL may be inaccessible. Try a different source.",
     ),
     # Database tools should be fast but may have connection issues
-    "supabase_query_tool": ToolExecutionConfig(
+    "supabase_query": ToolExecutionConfig(
         timeout=30.0,
         max_retries=2,
         retry_backoff=1.0,
         error_recovery_hint="Check the query syntax or try a simpler query.",
     ),
     # Knowledge base search is usually reliable
-    "kb_search_tool": ToolExecutionConfig(
+    "kb_search": ToolExecutionConfig(
         timeout=30.0,
         max_retries=1,
         retry_backoff=1.0,
         error_recovery_hint="Try different search terms or check available knowledge bases.",
     ),
     # Log analysis can take longer for large files
-    "log_diagnoser_tool": ToolExecutionConfig(
+    "log_diagnoser": ToolExecutionConfig(
         timeout=120.0,
         max_retries=1,
         retry_backoff=2.0,
@@ -297,6 +367,7 @@ class ToolExecutor:
                             error_type=None,
                             duration_ms=duration_ms,
                             retries_used=retries_used,
+                            artifact=artifact,
                             args_summary=args_summary,
                             status="success",
                         )
@@ -372,6 +443,7 @@ class ToolExecutor:
             duration_ms=duration_ms,
             retries_used=retries_used,
             is_retryable_error=is_retryable,
+            artifact=artifact,
             args_summary=args_summary,
             status="error",
         )

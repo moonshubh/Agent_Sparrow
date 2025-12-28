@@ -351,7 +351,7 @@ class StreamEventHandler:
             async for event in self._event_generator():
                 await self._handle_event(event)
         except Exception as e:
-            logger.error(f"Error during agent streaming: {e}")
+            logger.opt(exception=True).error("Error during agent streaming: {}", e)
 
             # Emit warning event to notify UI that streaming failed
             self.emitter.emit_custom_event(
@@ -410,7 +410,10 @@ class StreamEventHandler:
 
             except Exception as fallback_error:
                 # Emit error event if fallback also fails after all retries
-                logger.error(f"Fallback invoke failed after retries: {fallback_error}")
+                logger.opt(exception=True).error(
+                    "Fallback invoke failed after retries: {}",
+                    fallback_error,
+                )
                 self.emitter.emit_custom_event(
                     "agent_thinking_trace",
                     {
@@ -456,7 +459,11 @@ class StreamEventHandler:
                     config=self.config,
                     version="v2",
                 ):
-                    logger.debug(f"Stream event: {event.get('event')} name={event.get('name')}")
+                    logger.debug(
+                        "Stream event: {} name={}",
+                        event.get("event"),
+                        event.get("name"),
+                    )
                     yield event
 
                 if run_span is not None:
@@ -465,7 +472,7 @@ class StreamEventHandler:
                 if run_span is not None:
                     run_span.record_exception(exc)
                     run_span.set_status(Status(StatusCode.ERROR, "agent_run_failed"))
-                logger.error(f"Agent run failed: {str(exc)}", exc_info=True)
+                logger.opt(exception=True).error("Agent run failed: {}", exc)
                 raise
 
     def _agent_inputs(self) -> dict[str, Any]:
@@ -983,7 +990,10 @@ class StreamEventHandler:
             # Only emit text content when not streaming tool call arguments,
             # not JSON payloads, and not inside a dedicated thinking block.
             if not has_tool_calls and not looks_like_json and visible_content and not is_thinking_chunk:
-                logger.info(f"Emitting TEXT_MESSAGE_CONTENT: {visible_content[:50]!r}...")
+                logger.info(
+                    "Emitting TEXT_MESSAGE_CONTENT: {!r}...",
+                    visible_content[:50],
+                )
                 self.emitter.emit_text_content(visible_content)
         else:
             # Empty chunk (no text, no tool calls) — log for diagnostics (common with some providers)
@@ -1631,7 +1641,11 @@ class StreamEventHandler:
         # Debug: Log the actual type and value being passed
         output_type = type(output).__name__
         output_repr_str = repr(output)[:500] if output else "None"
-        logger.info(f"write_todos_handler_input: type={output_type}, repr={output_repr_str}")
+        logger.info(
+            "write_todos_handler_input: type={}, repr={!r}",
+            output_type,
+            output_repr_str,
+        )
 
         # Extract content from ToolMessage if needed
         raw_output = output
@@ -1639,7 +1653,11 @@ class StreamEventHandler:
             raw_output = output.content
             content_type = type(raw_output).__name__
             content_repr_str = repr(raw_output)[:500] if raw_output else "None"
-            logger.info(f"write_todos_extracted_from_toolmessage: type={content_type}, repr={content_repr_str}")
+            logger.info(
+                "write_todos_extracted_from_toolmessage: type={}, repr={!r}",
+                content_type,
+                content_repr_str,
+            )
 
         self.emitter.update_todos(raw_output)
 
@@ -1944,7 +1962,7 @@ class StreamEventHandler:
             )
             return True
         except Exception as e:
-            logger.warning(f"evicted_result_storage_failed: {e}")
+            logger.warning("evicted_result_storage_failed: {}", e)
             return False
 
     def _log_cache_metrics(self, data: dict[str, Any]) -> None:
@@ -2034,4 +2052,4 @@ class StreamEventHandler:
 
         except Exception as e:
             # Cache metrics are optional - don't fail on errors
-            logger.debug(f"cache_metrics_extraction_failed: {e}")
+            logger.debug("cache_metrics_extraction_failed: {}", e)

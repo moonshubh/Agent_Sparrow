@@ -27,6 +27,8 @@ logging.basicConfig(
     format="%(message)s",  # structlog already renders JSON with timestamp, level
     stream=sys.stdout,
 )
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 # ---------------------------------------------------------------------------
 # structlog configuration – JSON renderer for production-friendly logs.

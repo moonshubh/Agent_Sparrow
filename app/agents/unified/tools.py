@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import ipaddress
 import re
+import socket
 from datetime import datetime
 from functools import lru_cache
 import json
 import uuid
 from typing import Any, Dict, List, Optional, Annotated, Callable, Literal
+from urllib.parse import urlparse
 
 import httpx
 from bs4 import BeautifulSoup
@@ -44,6 +48,7 @@ from app.services.global_knowledge.hybrid_retrieval import HybridRetrieval
 import os
 from app.tools.research_tools import FirecrawlTool, TavilySearchTool
 from app.core.logging_config import get_logger
+from app.agents.unified.mcp_client import invoke_firecrawl_mcp_tool
 import redis
 
 
@@ -57,19 +62,87 @@ ALLOWED_SUPABASE_TABLES = {
     "web_research_snapshots",
 }
 
+# Private IP ranges for SSRF protection
+_PRIVATE_NETWORKS = [
+    ipaddress.ip_network("10.0.0.0/8"),
+    ipaddress.ip_network("172.16.0.0/12"),
+    ipaddress.ip_network("192.168.0.0/16"),
+    ipaddress.ip_network("127.0.0.0/8"),
+    ipaddress.ip_network("169.254.0.0/16"),  # Link-local
+    ipaddress.ip_network("::1/128"),  # IPv6 loopback
+    ipaddress.ip_network("fc00::/7"),  # IPv6 private
+    ipaddress.ip_network("fe80::/10"),  # IPv6 link-local
+]
+
+
+def _is_safe_url(url: str) -> tuple[bool, str]:
+    """Validate URL against SSRF attacks.
+
+    Returns:
+        Tuple of (is_safe, reason). If not safe, reason explains why.
+    """
+    try:
+        parsed = urlparse(url)
+    except Exception:
+        return False, "Invalid URL format"
+
+    # Only allow http/https schemes
+    if parsed.scheme not in ("http", "https"):
+        return False, f"Disallowed scheme: {parsed.scheme}"
+
+    hostname = parsed.hostname
+    if not hostname:
+        return False, "No hostname in URL"
+
+    # Block localhost and special hostnames
+    blocked_hosts = {"localhost", "127.0.0.1", "0.0.0.0", "::1", "[::1]"}
+    if hostname.lower() in blocked_hosts:
+        return False, f"Blocked hostname: {hostname}"
+
+    # Block internal/metadata endpoints
+    if hostname.lower() in ("metadata.google.internal", "169.254.169.254"):
+        return False, "Blocked cloud metadata endpoint"
+
+    # Resolve hostname to IP and check against private ranges
+    try:
+        # Get all IP addresses for the hostname
+        infos = socket.getaddrinfo(hostname, None, socket.AF_UNSPEC)
+        for info in infos:
+            ip_str = info[4][0]
+            try:
+                ip = ipaddress.ip_address(ip_str)
+                for network in _PRIVATE_NETWORKS:
+                    if ip in network:
+                        return False, f"Resolved to private IP: {ip}"
+            except ValueError:
+                continue  # Skip invalid IP addresses
+    except socket.gaierror:
+        return False, f"Could not resolve hostname: {hostname}"
+
+    return True, ""
+
+
 # Naming guidance for new tools:
 # - search_* for retrieval, read_* for file/record reads,
 # - write_* for mutations, analyze_* for diagnostics.
 
 
-@lru_cache(maxsize=1)
+@lru_cache(maxsize=32)
+def _tavily_client_for_key(api_key: Optional[str]) -> TavilySearchTool:
+    return TavilySearchTool(api_key=api_key)
+
+
 def _tavily_client() -> TavilySearchTool:
-    return TavilySearchTool()
+    return _tavily_client_for_key(settings.tavily_api_key)
 
 
-@lru_cache(maxsize=1)
+@lru_cache(maxsize=32)
+def _firecrawl_client_for_key(api_key: Optional[str]) -> FirecrawlTool:
+    return FirecrawlTool(api_key=api_key)
+
+
 def _firecrawl_client() -> FirecrawlTool:
-    return FirecrawlTool()
+    return _firecrawl_client_for_key(settings.firecrawl_api_key)
 
 
 @lru_cache(maxsize=1)
@@ -100,6 +173,67 @@ if settings.redis_url and os.getenv("DISABLE_TOOL_CACHE") not in {"1", "true", "
         logger.info("tool_cache_redis_enabled", url=settings.redis_url)
     except Exception as exc:  # pragma: no cover - best effort
         logger.warning("tool_cache_redis_unavailable", error=str(exc))
+
+
+_FIRECRAWL_AGENT_USAGE_WINDOW_SECONDS = 60 * 60 * 24
+_FIRECRAWL_AGENT_MAX_USES_PER_WINDOW = int(
+    os.getenv("FIRECRAWL_AGENT_MAX_USES_PER_24H", "5")
+)
+_FIRECRAWL_AGENT_USAGE_FALLBACK: dict[str, list[int]] = {}
+
+
+def _firecrawl_agent_usage_key() -> str:
+    api_key = settings.firecrawl_api_key or ""
+    api_key_hash = hashlib.sha256(api_key.encode("utf-8")).hexdigest()[:16]
+    return f"firecrawl_agent_usage:{api_key_hash}"
+
+
+def _check_and_record_firecrawl_agent_use() -> tuple[bool, int, int]:
+    limit = _FIRECRAWL_AGENT_MAX_USES_PER_WINDOW
+    if limit <= 0:
+        return True, 0, 0
+
+    now = int(datetime.utcnow().timestamp())
+    window_start = now - _FIRECRAWL_AGENT_USAGE_WINDOW_SECONDS
+    key = _firecrawl_agent_usage_key()
+
+    if _REDIS_CACHE is not None:
+        try:  # pragma: no cover - best effort
+            pipe = _REDIS_CACHE.pipeline()
+            pipe.zremrangebyscore(key, 0, window_start)
+            pipe.zcard(key)
+            _, count = pipe.execute()
+            count_int = int(count or 0)
+
+            if count_int >= limit:
+                earliest = _REDIS_CACHE.zrange(key, 0, 0, withscores=True)
+                earliest_ts = int(earliest[0][1]) if earliest else now
+                retry_after = max(
+                    earliest_ts + _FIRECRAWL_AGENT_USAGE_WINDOW_SECONDS - now,
+                    0,
+                )
+                return False, count_int, retry_after
+
+            member = str(uuid.uuid4())
+            pipe = _REDIS_CACHE.pipeline()
+            pipe.zadd(key, {member: now})
+            pipe.expire(key, _FIRECRAWL_AGENT_USAGE_WINDOW_SECONDS * 2)
+            pipe.execute()
+            return True, count_int + 1, 0
+        except Exception:
+            pass
+
+    events = _FIRECRAWL_AGENT_USAGE_FALLBACK.get(key, [])
+    events = [ts for ts in events if ts > window_start]
+    if len(events) >= limit:
+        earliest_ts = min(events) if events else now
+        retry_after = max(earliest_ts + _FIRECRAWL_AGENT_USAGE_WINDOW_SECONDS - now, 0)
+        _FIRECRAWL_AGENT_USAGE_FALLBACK[key] = events
+        return False, len(events), retry_after
+
+    events.append(now)
+    _FIRECRAWL_AGENT_USAGE_FALLBACK[key] = events
+    return True, len(events), 0
 
 
 def _build_kb_filters(context: Optional[Dict[str, Any]]) -> Dict[str, Any]:
@@ -134,6 +268,62 @@ def _summarize_snippets(snippets: List[str], max_chars: int = 400) -> str:
     if len(summary) <= max_chars:
         return summary
     return summary[: max_chars - 1].rstrip() + "…"
+
+
+_FIRECRAWL_ALLOWED_FORMATS = {
+    "markdown",
+    "html",
+    "rawHtml",
+    "screenshot",
+    "links",
+    "summary",
+    "changeTracking",
+    "branding",
+}
+
+
+def _normalize_firecrawl_formats(
+    formats: Optional[List[Any]],
+    json_schema: Optional[Dict[str, Any]] = None,
+) -> tuple[List[Any], List[str]]:
+    normalized: List[Any] = []
+    dropped: List[str] = []
+
+    for entry in formats or []:
+        if isinstance(entry, str):
+            if entry in _FIRECRAWL_ALLOWED_FORMATS:
+                normalized.append(entry)
+            elif entry == "json":
+                if json_schema:
+                    normalized.append({"type": "json", "schema": json_schema})
+                else:
+                    dropped.append(entry)
+            else:
+                dropped.append(entry)
+            continue
+
+        if isinstance(entry, dict):
+            entry_type = entry.get("type")
+            if entry_type == "json":
+                schema = entry.get("schema") or json_schema
+                if schema:
+                    normalized.append({"type": "json", "schema": schema})
+                else:
+                    dropped.append(json.dumps(entry, default=str))
+            elif entry_type == "screenshot":
+                normalized.append(entry)
+            else:
+                dropped.append(json.dumps(entry, default=str))
+            continue
+
+        dropped.append(str(entry))
+
+    if json_schema and not any(
+        isinstance(item, dict) and item.get("type") == "json" for item in normalized
+    ):
+        normalized.append({"type": "json", "schema": json_schema})
+
+    return normalized, dropped
 
 
 def _rewrite_search_query(raw_query: str, max_chars: int = 400) -> str:
@@ -229,6 +419,12 @@ async def _http_fetch_fallback(url: str, max_chars: int = 8000) -> Dict[str, Any
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     }
 
+    # SSRF protection: validate URL before fetching
+    is_safe, reason = _is_safe_url(url)
+    if not is_safe:
+        logger.warning(f"SSRF protection blocked URL: {url} - {reason}")
+        return {"error": f"URL blocked for security reasons: {reason}", "url": url}
+
     cache_key = f"fetch:{url}"
     cached = _maybe_cached_tool_result(cache_key)
     if cached:
@@ -272,7 +468,7 @@ async def _http_fetch_fallback(url: str, max_chars: int = 8000) -> Dict[str, Any
         "source": "httpx_fallback",
     }
     _store_tool_result(cache_key, _serialize_tool_output(payload))
-    _cache_hit_miss(True, cache_key)
+    _cache_hit_miss(False, cache_key)  # False = cache miss (we stored new data)
     return payload
 
 
@@ -316,6 +512,8 @@ def _apply_supabase_filters(query, filters: Dict[str, Dict[str, Any]]):
 
 
 class WebSearchInput(BaseModel):
+    """Enhanced web search input with full Tavily API support."""
+
     query: str = Field(..., description="Natural language query to research.")
     max_results: int = Field(
         default=5,
@@ -326,6 +524,37 @@ class WebSearchInput(BaseModel):
     include_images: bool = Field(
         default=True,
         description="Whether to include image results in the response.",
+    )
+    # NEW: Advanced Tavily features
+    search_depth: str = Field(
+        default="advanced",
+        description="Search depth: 'basic' for quick results, 'advanced' for comprehensive search.",
+    )
+    include_domains: Optional[List[str]] = Field(
+        default=None,
+        description="Only return results from these domains (e.g., ['wikipedia.org', 'github.com']).",
+    )
+    exclude_domains: Optional[List[str]] = Field(
+        default=None,
+        description="Exclude results from these domains.",
+    )
+    days: Optional[int] = Field(
+        default=None,
+        ge=1,
+        description="Limit results to last N days. Useful for recent news/events.",
+    )
+    topic: Optional[str] = Field(
+        default=None,
+        description="Search topic: 'general' or 'news' for topic-specific results.",
+    )
+
+
+class TavilyExtractInput(BaseModel):
+    """Input schema for Tavily extract (full-content fetch)."""
+
+    urls: List[str] = Field(
+        ...,
+        description="URLs to extract content from (max 10).",
     )
 
 
@@ -423,6 +652,18 @@ def _tool_cache_enabled() -> bool:
 
 def _cache_hit_miss(hit: bool, key: str) -> None:
     logger.info("tool_cache_hit" if hit else "tool_cache_miss", key=key)
+
+
+async def _invoke_firecrawl_mcp_tool(
+    tool_name: str, args: Dict[str, Any]
+) -> Optional[Dict[str, Any]]:
+    try:
+        return await invoke_firecrawl_mcp_tool(
+            tool_name, args, api_key=settings.firecrawl_api_key
+        )
+    except Exception as exc:
+        logger.warning("mcp_tool_failed", tool_name=tool_name, error=str(exc))
+        return None
 
 
 @lru_cache(maxsize=2048)
@@ -537,17 +778,34 @@ class LogDiagnoserInput(BaseModel):
     )
 
 
+class FirecrawlLocationInput(BaseModel):
+    """Location configuration for geo-targeted scraping."""
+
+    country: Optional[str] = Field(
+        default=None,
+        description="Country code for geo-targeted requests (e.g., 'us', 'uk', 'de').",
+    )
+    languages: Optional[List[str]] = Field(
+        default=None,
+        description="Preferred languages for content (e.g., ['en', 'de']).",
+    )
+
+
 class FirecrawlFetchInput(BaseModel):
-    """Enhanced input schema for Firecrawl fetch with advanced options."""
+    """Enhanced input schema for Firecrawl fetch with advanced options.
+
+    Supports all MCP features including mobile scraping, geographic targeting,
+    branding extraction, PDF parsing, and built-in caching via maxAge.
+    """
 
     url: str = Field(..., description="URL to scrape for detailed content.")
     formats: Optional[List[str]] = Field(
         default=None,
-        description="Output formats: markdown, html, screenshot, links, rawHtml. Default: ['markdown']",
+        description="Output formats: markdown, html, screenshot, links, rawHtml, branding, summary. Default: ['markdown']",
     )
     actions: Optional[List[Dict[str, Any]]] = Field(
         default=None,
-        description="Page actions before scraping: [{type: 'click'|'scroll'|'wait'|'write'|'press', ...}]",
+        description="Page actions before scraping: [{type: 'click'|'scroll'|'wait'|'write'|'press'|'screenshot'|'executeJavascript', ...}]",
     )
     wait_for: Optional[int] = Field(
         default=None,
@@ -560,6 +818,31 @@ class FirecrawlFetchInput(BaseModel):
     json_schema: Optional[Dict[str, Any]] = Field(
         default=None,
         description="JSON schema for structured extraction (enables JSON mode).",
+    )
+    # NEW: MCP-enabled features
+    mobile: bool = Field(
+        default=False,
+        description="Use mobile user agent and viewport for scraping.",
+    )
+    location: Optional[FirecrawlLocationInput] = Field(
+        default=None,
+        description="Geographic location for geo-targeted scraping.",
+    )
+    max_age: Optional[int] = Field(
+        default=172800000,  # 48 hours in ms
+        description="Max age in milliseconds for cached results. Use for 500% faster scrapes.",
+    )
+    proxy: Optional[str] = Field(
+        default=None,
+        description="Proxy mode: 'basic', 'stealth', or 'auto'. Use 'stealth' for anti-bot sites.",
+    )
+    parsers: Optional[List[str]] = Field(
+        default=None,
+        description="Content parsers: ['pdf'] for PDF documents.",
+    )
+    remove_base64_images: bool = Field(
+        default=False,
+        description="Remove base64 encoded images to reduce response size.",
     )
 
 
@@ -610,13 +893,17 @@ class FirecrawlCrawlStatusInput(BaseModel):
 class FirecrawlExtractInput(BaseModel):
     """Input schema for Firecrawl extract (AI-powered structured extraction)."""
 
+    model_config = ConfigDict(populate_by_name=True)
+
     urls: List[str] = Field(..., description="URLs to extract data from.")
     prompt: Optional[str] = Field(
         default=None,
         description="Natural language extraction prompt (e.g., 'Extract product prices').",
     )
-    schema: Optional[Dict[str, Any]] = Field(
-        default=None, description="JSON schema for structured extraction."
+    extraction_schema: Optional[Dict[str, Any]] = Field(
+        default=None,
+        alias="schema",
+        description="JSON schema for structured extraction.",
     )
     enable_web_search: bool = Field(
         default=False, description="Enable web search for additional context."
@@ -624,9 +911,9 @@ class FirecrawlExtractInput(BaseModel):
 
     @model_validator(mode="after")
     def validate_prompt_or_schema(self):
-        if not self.prompt and not self.schema:
+        if not self.prompt and not self.extraction_schema:
             raise ValueError(
-                "Either 'prompt' or 'schema' must be provided for extraction."
+                "Either 'prompt' or 'extraction_schema' must be provided for extraction."
             )
         return self
 
@@ -642,6 +929,38 @@ class FirecrawlSearchInput(BaseModel):
     scrape_options: Optional[Dict[str, Any]] = Field(
         default=None, description="Options for scraping search results."
     )
+
+
+class FirecrawlAgentInput(BaseModel):
+    """Input schema for Firecrawl autonomous agent.
+
+    The Firecrawl Agent is a powerful autonomous data gathering tool that can
+    search, navigate, and extract data without knowing URLs upfront. Use this
+    for complex research tasks where you don't know which pages contain the info.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    prompt: str = Field(
+        ...,
+        description="Natural language description of what data you want to gather. Be specific about the information needed.",
+        max_length=10000,
+    )
+    urls: Optional[List[str]] = Field(
+        default=None,
+        description="Optional starting URLs to focus the agent on specific pages.",
+    )
+    output_schema: Optional[Dict[str, Any]] = Field(
+        default=None,
+        alias="schema",
+        description="Optional JSON schema for structured output format.",
+    )
+
+
+class FirecrawlAgentStatusInput(BaseModel):
+    """Input schema for checking Firecrawl agent job status."""
+
+    agent_id: str = Field(..., description="Agent job ID from firecrawl_agent call.")
 
 
 @tool("log_diagnoser", args_schema=LogDiagnoserInput)
@@ -717,12 +1036,28 @@ async def web_search_tool(
     query: Optional[str] = None,
     max_results: int = 5,
     include_images: bool = True,
+    search_depth: str = "advanced",
+    include_domains: Optional[List[str]] = None,
+    exclude_domains: Optional[List[str]] = None,
+    days: Optional[int] = None,
+    topic: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Search the public web using Tavily for broader context with retry logic.
 
     Supports both structured invocation with a WebSearchInput object and
-    direct kwargs (query, max_results, include_images) so that LangChain/DeepAgents tool
-    calls that pass raw arguments continue to work.
+    direct kwargs (query, max_results, include_images, etc.) so that LangChain/DeepAgents
+    tool calls that pass raw arguments continue to work.
+
+    Args:
+        input: Structured WebSearchInput object (preferred)
+        query: Search query string
+        max_results: Maximum results to return (1-10)
+        include_images: Include image results
+        search_depth: "basic" for quick, "advanced" for comprehensive (default: advanced)
+        include_domains: Only search these domains
+        exclude_domains: Exclude these domains from results
+        days: Limit to results from last N days
+        topic: "general" or "news" for topic-specific search
 
     Returns a dict containing:
     - query: The search query
@@ -735,13 +1070,25 @@ async def web_search_tool(
     # Normalize inputs regardless of how the tool is invoked
     if input is None:
         input = WebSearchInput(
-            query=query or "", max_results=max_results, include_images=include_images
+            query=query or "",
+            max_results=max_results,
+            include_images=include_images,
+            search_depth=search_depth,
+            include_domains=include_domains,
+            exclude_domains=exclude_domains,
+            days=days,
+            topic=topic,
         )
 
     max_retries = 3
     tavily = _tavily_client()
 
-    cache_key = f"web_search:{input.query}:{input.max_results}:{input.include_images}"
+    # Include all search parameters in cache key for proper cache isolation
+    cache_key = (
+        f"web_search:{input.query}:{input.max_results}:{input.include_images}"
+        f":{input.search_depth}:{input.include_domains}:{input.exclude_domains}"
+        f":{input.days}:{input.topic}"
+    )
     cached = _maybe_cached_tool_result(cache_key)
     if cached:
         _cache_hit_miss(True, cache_key)
@@ -754,10 +1101,19 @@ async def web_search_tool(
     for attempt in range(max_retries):
         try:
             logger.info(
-                f"web_search_tool_invoked query='{input.query}' max_results={input.max_results} include_images={input.include_images} attempt={attempt + 1}"
+                f"web_search_tool_invoked query='{input.query}' max_results={input.max_results} "
+                f"search_depth={input.search_depth} days={input.days} attempt={attempt + 1}"
             )
             result = await asyncio.to_thread(
-                tavily.search, input.query, input.max_results, input.include_images
+                tavily.search,
+                input.query,
+                input.max_results,
+                input.include_images,
+                input.search_depth,
+                input.include_domains,
+                input.exclude_domains,
+                input.days,
+                input.topic,
             )
             urls = result.get("urls") if isinstance(result, dict) else None
             images = result.get("images") if isinstance(result, dict) else None
@@ -794,6 +1150,30 @@ async def web_search_tool(
                     "query": input.query,
                 }
             await asyncio.sleep(1 * (attempt + 1))  # Exponential backoff
+
+
+@tool("tavily_extract", args_schema=TavilyExtractInput)
+@rate_limited(TOOL_RATE_LIMIT_MODEL, fail_gracefully=True)
+async def tavily_extract_tool(
+    input: Optional[TavilyExtractInput] = None,
+    urls: Optional[List[str]] = None,
+) -> Dict[str, Any]:
+    """Extract full page content for a list of URLs using Tavily."""
+
+    if input is None:
+        input = TavilyExtractInput(urls=urls or [])
+
+    tavily = _tavily_client()
+    try:
+        logger.info("tavily_extract_tool_invoked", url_count=len(input.urls))
+        result = await asyncio.to_thread(tavily.extract, input.urls)
+        logger.info("tavily_extract_tool_success", url_count=len(input.urls))
+        if isinstance(result, dict) and result.get("error"):
+            raise RuntimeError(result["error"])
+        return result
+    except Exception as e:
+        logger.error("tavily_extract_tool_error", error=str(e))
+        return {"error": str(e), "urls": input.urls}
 
 
 @tool("grounding_search", args_schema=GroundingSearchInput)
@@ -851,7 +1231,7 @@ async def grounding_search_tool(
         )
 
 
-@tool("fetch_url", args_schema=FirecrawlFetchInput)
+@tool("firecrawl_fetch", args_schema=FirecrawlFetchInput)
 @rate_limited(TOOL_RATE_LIMIT_MODEL, fail_gracefully=True)
 async def firecrawl_fetch_tool(
     input: Optional[FirecrawlFetchInput] = None,
@@ -861,6 +1241,12 @@ async def firecrawl_fetch_tool(
     wait_for: Optional[int] = None,
     only_main_content: bool = True,
     json_schema: Optional[Dict[str, Any]] = None,
+    mobile: Optional[bool] = None,
+    location: Optional[FirecrawlLocationInput] = None,
+    max_age: Optional[int] = None,
+    proxy: Optional[str] = None,
+    parsers: Optional[List[str]] = None,
+    remove_base64_images: Optional[bool] = None,
 ) -> Dict[str, Any]:
     """Fetch and scrape URL with advanced options (screenshots, actions, JSON mode).
 
@@ -883,6 +1269,14 @@ async def firecrawl_fetch_tool(
             wait_for=wait_for,
             only_main_content=only_main_content,
             json_schema=json_schema,
+            mobile=bool(mobile) if mobile is not None else False,
+            location=location,
+            max_age=max_age,
+            proxy=proxy,
+            parsers=parsers,
+            remove_base64_images=bool(remove_base64_images)
+            if remove_base64_images is not None
+            else False,
         )
 
     max_retries = 3
@@ -890,17 +1284,60 @@ async def firecrawl_fetch_tool(
 
     # Determine if we need advanced scraping or basic
     use_advanced = bool(
-        input.formats or input.actions or input.wait_for or input.json_schema
+        input.formats
+        or input.actions
+        or input.wait_for
+        or input.json_schema
+        or input.mobile
+        or input.location
+        or input.max_age is not None
+        or input.proxy
+        or input.parsers
+        or input.remove_base64_images
     )
-    cache_key = f"firecrawl_fetch:{input.url}:{input.formats}:{input.actions}:{input.wait_for}:{input.json_schema}"
-    cached = _maybe_cached_tool_result(cache_key)
-    if cached:
-        _cache_hit_miss(True, cache_key)
-        try:
-            return json.loads(cached)
-        except Exception:
-            return cached
-    _cache_hit_miss(False, cache_key)
+
+    resolved_formats, dropped_formats = _normalize_firecrawl_formats(
+        list(input.formats) if input.formats else None,
+        json_schema=input.json_schema,
+    )
+    if dropped_formats:
+        logger.warning(
+            "firecrawl_formats_filtered",
+            dropped=dropped_formats,
+        )
+
+    location_payload: Optional[Dict[str, Any]] = None
+    if input.location:
+        if hasattr(input.location, "model_dump"):
+            location_payload = input.location.model_dump(exclude_none=True)
+        else:
+            location_payload = dict(input.location)  # type: ignore[arg-type]
+
+    mcp_formats = resolved_formats or None
+
+    mcp_args = {
+        "url": input.url,
+        "formats": mcp_formats,
+        "actions": input.actions,
+        "waitFor": input.wait_for,
+        "onlyMainContent": input.only_main_content,
+        "mobile": input.mobile,
+        "location": location_payload,
+        "maxAge": input.max_age,
+        "proxy": input.proxy,
+        "parsers": input.parsers,
+        "removeBase64Images": input.remove_base64_images,
+    }
+    mcp_args = {k: v for k, v in mcp_args.items() if v not in (None, [], {})}
+
+    mcp_result = await _invoke_firecrawl_mcp_tool("firecrawl_scrape", mcp_args)
+    if mcp_result is not None:
+        if isinstance(mcp_result, dict) and (
+            mcp_result.get("error") or mcp_result.get("success") is False
+        ):
+            logger.warning("firecrawl_mcp_scrape_error", error=mcp_result.get("error"))
+        else:
+            return mcp_result
 
     last_error: Optional[Exception] = None
     for attempt in range(max_retries):
@@ -913,11 +1350,17 @@ async def firecrawl_fetch_tool(
                 result = await asyncio.to_thread(
                     firecrawl.scrape_with_options,
                     input.url,
-                    formats=input.formats,
+                    formats=resolved_formats or None,
                     actions=input.actions,
                     wait_for=input.wait_for,
-                    # avoid onlyMainContent arg for compatibility
+                    only_main_content=input.only_main_content,
                     json_schema=input.json_schema,
+                    mobile=input.mobile,
+                    location=location_payload,
+                    max_age=input.max_age,
+                    proxy=input.proxy,
+                    parsers=input.parsers,
+                    remove_base64_images=input.remove_base64_images,
                 )
             else:
                 # Use fetch as default for grounding to reduce Gemini grounding calls in Zendesk flows
@@ -928,8 +1371,6 @@ async def firecrawl_fetch_tool(
             )
             if isinstance(result, dict) and result.get("error"):
                 raise RuntimeError(result["error"])
-            _store_tool_result(cache_key, _serialize_tool_output(result))
-            _cache_hit_miss(True, cache_key)
             return result
         except Exception as e:
             logger.warning(
@@ -985,6 +1426,22 @@ async def firecrawl_map_tool(
     firecrawl = _firecrawl_client()
 
     try:
+        mcp_args = {
+            "url": input.url,
+            "limit": input.limit,
+            "search": input.search,
+            "includeSubdomains": input.include_subdomains,
+        }
+        mcp_args = {k: v for k, v in mcp_args.items() if v not in (None, [], {})}
+        mcp_result = await _invoke_firecrawl_mcp_tool("firecrawl_map", mcp_args)
+        if mcp_result is not None:
+            if isinstance(mcp_result, dict) and (
+                mcp_result.get("error") or mcp_result.get("success") is False
+            ):
+                logger.warning("firecrawl_mcp_map_error", error=mcp_result.get("error"))
+            else:
+                return mcp_result
+
         logger.info(
             f"firecrawl_map_tool_invoked url='{input.url}' limit={input.limit} search='{input.search}'"
         )
@@ -995,8 +1452,15 @@ async def firecrawl_map_tool(
             search=input.search,
             include_subdomains=input.include_subdomains,
         )
+        urls_found = 0
+        if isinstance(result, dict):
+            data = result.get("data")
+            if isinstance(data, dict):
+                urls_found = len(data.get("links") or [])
+            else:
+                urls_found = len(result.get("links") or result.get("urls") or [])
         logger.info(
-            f"firecrawl_map_tool_success url='{input.url}' urls_found={len(result.get('links', result.get('urls', []))) if isinstance(result, dict) else 0}"
+            f"firecrawl_map_tool_success url='{input.url}' urls_found={urls_found}"
         )
         if isinstance(result, dict) and result.get("error"):
             raise RuntimeError(result["error"])
@@ -1034,15 +1498,22 @@ async def firecrawl_crawl_tool(
             exclude_paths=exclude_paths,
         )
 
-    cache_key = f"firecrawl_crawl:{input.url}:{input.limit}:{input.max_depth}:{input.include_paths}:{input.exclude_paths}"
-    cached = _maybe_cached_tool_result(cache_key)
-    if cached:
-        _cache_hit_miss(True, cache_key)
-        try:
-            return json.loads(cached)
-        except Exception:
-            return cached
-    _cache_hit_miss(False, cache_key)
+    mcp_args = {
+        "url": input.url,
+        "limit": input.limit,
+        "maxDiscoveryDepth": input.max_depth,
+        "includePaths": input.include_paths,
+        "excludePaths": input.exclude_paths,
+    }
+    mcp_args = {k: v for k, v in mcp_args.items() if v not in (None, [], {})}
+    mcp_result = await _invoke_firecrawl_mcp_tool("firecrawl_crawl", mcp_args)
+    if mcp_result is not None:
+        if isinstance(mcp_result, dict) and (
+            mcp_result.get("error") or mcp_result.get("success") is False
+        ):
+            logger.warning("firecrawl_mcp_crawl_error", error=mcp_result.get("error"))
+        else:
+            return mcp_result
 
     firecrawl = _firecrawl_client()
 
@@ -1063,8 +1534,6 @@ async def firecrawl_crawl_tool(
         )
         if isinstance(result, dict) and result.get("error"):
             raise RuntimeError(result["error"])
-        _store_tool_result(cache_key, _serialize_tool_output(result))
-        _cache_hit_miss(True, cache_key)
         return result
     except Exception as e:
         logger.error(f"firecrawl_crawl_tool_error url='{input.url}' error='{str(e)}'")
@@ -1087,6 +1556,19 @@ async def firecrawl_crawl_status_tool(
 
     if input is None:
         input = FirecrawlCrawlStatusInput(crawl_id=crawl_id or "")
+
+    mcp_result = await _invoke_firecrawl_mcp_tool(
+        "firecrawl_check_crawl_status", {"id": input.crawl_id}
+    )
+    if mcp_result is not None:
+        if isinstance(mcp_result, dict) and (
+            mcp_result.get("error") or mcp_result.get("success") is False
+        ):
+            logger.warning(
+                "firecrawl_mcp_crawl_status_error", error=mcp_result.get("error")
+            )
+        else:
+            return mcp_result
 
     firecrawl = _firecrawl_client()
 
@@ -1133,17 +1615,35 @@ async def firecrawl_extract_tool(
             enable_web_search=enable_web_search,
         )
 
+    mcp_args = {
+        "urls": input.urls,
+        "prompt": input.prompt,
+        "schema": input.extraction_schema,
+        "enableWebSearch": input.enable_web_search,
+    }
+    mcp_args = {k: v for k, v in mcp_args.items() if v not in (None, [], {})}
+    mcp_result = await _invoke_firecrawl_mcp_tool("firecrawl_extract", mcp_args)
+    if mcp_result is not None:
+        if isinstance(mcp_result, dict) and (
+            mcp_result.get("error") or mcp_result.get("success") is False
+        ):
+            logger.warning(
+                "firecrawl_mcp_extract_error", error=mcp_result.get("error")
+            )
+        else:
+            return mcp_result
+
     firecrawl = _firecrawl_client()
 
     try:
         logger.info(
-            f"firecrawl_extract_tool_invoked urls={len(input.urls)} has_prompt={bool(input.prompt)} has_schema={bool(input.schema)}"
+            f"firecrawl_extract_tool_invoked urls={len(input.urls)} has_prompt={bool(input.prompt)} has_schema={bool(input.extraction_schema)}"
         )
         result = await asyncio.to_thread(
             firecrawl.extract,
             input.urls,
             prompt=input.prompt,
-            schema=input.schema,
+            schema=input.extraction_schema,
             enable_web_search=input.enable_web_search,
         )
         logger.info(f"firecrawl_extract_tool_success urls={len(input.urls)}")
@@ -1183,6 +1683,48 @@ async def firecrawl_search_tool(
             scrape_options=scrape_options,
         )
 
+    cleaned_scrape_options = None
+    if isinstance(input.scrape_options, dict):
+        cleaned_scrape_options = dict(input.scrape_options)
+        raw_formats = cleaned_scrape_options.get("formats")
+        normalized_formats, dropped_formats = _normalize_firecrawl_formats(raw_formats)
+        if dropped_formats:
+            logger.warning(
+                "firecrawl_search_formats_filtered",
+                dropped=dropped_formats,
+            )
+        if normalized_formats:
+            cleaned_scrape_options["formats"] = normalized_formats
+        else:
+            cleaned_scrape_options.pop("formats", None)
+        if not cleaned_scrape_options:
+            cleaned_scrape_options = None
+
+    mcp_sources = None
+    if input.sources:
+        mcp_sources = []
+        for source in input.sources:
+            if isinstance(source, str):
+                mcp_sources.append({"type": source})
+            elif isinstance(source, dict) and source.get("type"):
+                mcp_sources.append({"type": source["type"]})
+
+    mcp_args = {
+        "query": input.query,
+        "limit": input.limit,
+        "sources": mcp_sources,
+        "scrapeOptions": cleaned_scrape_options,
+    }
+    mcp_args = {k: v for k, v in mcp_args.items() if v not in (None, [], {})}
+    mcp_result = await _invoke_firecrawl_mcp_tool("firecrawl_search", mcp_args)
+    if mcp_result is not None:
+        if isinstance(mcp_result, dict) and (
+            mcp_result.get("error") or mcp_result.get("success") is False
+        ):
+            logger.warning("firecrawl_mcp_search_error", error=mcp_result.get("error"))
+        else:
+            return mcp_result
+
     firecrawl = _firecrawl_client()
 
     try:
@@ -1196,8 +1738,13 @@ async def firecrawl_search_tool(
             sources=input.sources,
             scrape_options=input.scrape_options,
         )
+        results_count = 0
+        if isinstance(result, dict):
+            data = result.get("data") or {}
+            if isinstance(data, dict):
+                results_count = len(data.get("web") or [])
         logger.info(
-            f"firecrawl_search_tool_success query='{input.query}' results={len(result.get('data', {}).get('web', [])) if isinstance(result, dict) else 0}"
+            f"firecrawl_search_tool_success query='{input.query}' results={results_count}"
         )
         if isinstance(result, dict) and result.get("error"):
             raise RuntimeError(result["error"])
@@ -1209,37 +1756,220 @@ async def firecrawl_search_tool(
         return {"error": str(e)}
 
 
+@tool("firecrawl_agent", args_schema=FirecrawlAgentInput)
+@rate_limited(TOOL_RATE_LIMIT_MODEL, fail_gracefully=True)
+async def firecrawl_agent_tool(
+    input: Optional[FirecrawlAgentInput] = None,
+    prompt: Optional[str] = None,
+    urls: Optional[List[str]] = None,
+    schema: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Autonomous web data gathering agent - Firecrawl's most powerful feature.
+
+    Use this tool for complex research tasks where you don't know which pages
+    contain the information. The agent will:
+    - Search the web to find relevant pages
+    - Navigate and extract data autonomously
+    - Return structured results matching your requirements
+
+    WHEN TO USE:
+    - Complex research requiring multiple unknown sources
+    - Finding specific data without knowing exact URLs
+    - Gathering structured information across many pages
+    - When other Firecrawl tools require URLs you don't have
+
+    EXAMPLES:
+    - "Find the founders of Firecrawl and their backgrounds"
+    - "Gather pricing information for top 5 AI startups"
+    - "Extract contact information for tech companies in SF"
+
+    Returns:
+    - For quick queries: Immediate results with extracted data
+    - For complex queries: {status: 'processing', agent_id: '...'} - use firecrawl_agent_status to check
+    """
+
+    if input is None:
+        input = FirecrawlAgentInput(
+            prompt=prompt or "",
+            urls=urls,
+            schema=schema,
+        )
+
+    if not input.prompt:
+        return {"error": "prompt is required for firecrawl_agent"}
+
+    if settings.firecrawl_api_key:
+        allowed, used, retry_after = _check_and_record_firecrawl_agent_use()
+        if not allowed:
+            return {
+                "error": "firecrawl_agent_daily_limit_exceeded",
+                "message": (
+                    "Firecrawl agent usage limit exceeded (free tier is typically 5 uses per 24h). "
+                    "Try firecrawl_search + firecrawl_fetch/extract instead, or retry later."
+                ),
+                "limit": _FIRECRAWL_AGENT_MAX_USES_PER_WINDOW,
+                "used": used,
+                "retry_after_seconds": retry_after,
+            }
+
+    mcp_args = {
+        "prompt": input.prompt,
+        "urls": input.urls,
+        "schema": input.output_schema,
+    }
+    mcp_args = {k: v for k, v in mcp_args.items() if v not in (None, [], {})}
+    mcp_result = await _invoke_firecrawl_mcp_tool("firecrawl_agent", mcp_args)
+    if mcp_result is not None:
+        if isinstance(mcp_result, dict) and (
+            mcp_result.get("error") or mcp_result.get("success") is False
+        ):
+            logger.warning("firecrawl_mcp_agent_error", error=mcp_result.get("error"))
+        else:
+            return mcp_result
+
+    firecrawl = _firecrawl_client()
+
+    try:
+        logger.info(
+            f"firecrawl_agent_tool_invoked prompt='{input.prompt[:100]}...' urls={len(input.urls or [])} has_schema={input.output_schema is not None}"
+        )
+
+        # Build agent request
+        agent_params: Dict[str, Any] = {"prompt": input.prompt}
+        if input.urls:
+            agent_params["urls"] = input.urls
+        if input.output_schema:
+            agent_params["schema"] = input.output_schema
+
+        if not hasattr(firecrawl, "app") or not firecrawl.app:
+            return {"error": "firecrawl_disabled"}
+        if not hasattr(firecrawl.app, "agent"):
+            return {"error": "firecrawl_agent_not_supported"}
+
+        # Call Firecrawl agent API (SDK)
+        result = await asyncio.to_thread(firecrawl.app.agent, **agent_params)
+
+        logger.info(
+            f"firecrawl_agent_tool_success prompt='{input.prompt[:50]}...' status={result.get('status', 'unknown') if isinstance(result, dict) else 'completed'}"
+        )
+
+        if isinstance(result, dict) and result.get("error"):
+            raise RuntimeError(result["error"])
+        return result
+
+    except Exception as e:
+        logger.error(
+            f"firecrawl_agent_tool_error prompt='{input.prompt[:50]}...' error='{str(e)}'"
+        )
+        return {"error": str(e)}
+
+
+@tool("firecrawl_agent_status", args_schema=FirecrawlAgentStatusInput)
+@rate_limited(TOOL_RATE_LIMIT_MODEL, fail_gracefully=True)
+async def firecrawl_agent_status_tool(
+    input: Optional[FirecrawlAgentStatusInput] = None,
+    agent_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Check the status of an async Firecrawl agent job.
+
+    Use this after calling firecrawl_agent when it returns status='processing'.
+
+    Returns:
+    - status: 'processing' | 'completed' | 'failed'
+    - data: Extracted data (when completed)
+    - progress: Progress information (when processing)
+    """
+
+    if input is None:
+        input = FirecrawlAgentStatusInput(agent_id=agent_id or "")
+
+    if not input.agent_id:
+        return {"error": "agent_id is required"}
+
+    mcp_result = await _invoke_firecrawl_mcp_tool(
+        "firecrawl_agent_status", {"id": input.agent_id}
+    )
+    if mcp_result is not None:
+        if isinstance(mcp_result, dict) and (
+            mcp_result.get("error") or mcp_result.get("success") is False
+        ):
+            logger.warning(
+                "firecrawl_mcp_agent_status_error", error=mcp_result.get("error")
+            )
+        else:
+            return mcp_result
+
+    firecrawl = _firecrawl_client()
+
+    try:
+        logger.info(f"firecrawl_agent_status_tool_invoked agent_id='{input.agent_id}'")
+
+        if not hasattr(firecrawl, "app") or not firecrawl.app:
+            return {"error": "firecrawl_disabled"}
+        if not hasattr(firecrawl.app, "get_agent_status"):
+            return {"error": "firecrawl_agent_status_not_supported"}
+
+        # Check agent status
+        result = await asyncio.to_thread(
+            firecrawl.app.get_agent_status, input.agent_id
+        )
+
+        logger.info(
+            f"firecrawl_agent_status_tool_success agent_id='{input.agent_id}' status={result.get('status', 'unknown') if isinstance(result, dict) else 'unknown'}"
+        )
+
+        return result
+
+    except Exception as e:
+        logger.error(
+            f"firecrawl_agent_status_tool_error agent_id='{input.agent_id}' error='{str(e)}'"
+        )
+        return {"error": str(e)}
+
+
 def get_registered_tools() -> List[BaseTool]:
     """Return the tools bound to the unified agent.
 
-    Search tool priority order:
-    1. grounding_search_tool (Gemini grounding - fastest, most reliable)
-    2. web_search_tool (Tavily - good general web search with images)
-    3. firecrawl_search_tool (Firecrawl - web/images/news search)
-    4. firecrawl_fetch_tool (Firecrawl - deep URL extraction with advanced options)
-    Caching:
-    - In-process cache (256 entries) with hit/miss logging; disable via DISABLE_TOOL_CACHE.
+    Tool priority order (FIRECRAWL FIRST for web tasks):
 
-    Firecrawl tools:
-    - fetch_url: Single page scrape with screenshots, actions, JSON mode
-    - firecrawl_map: Discover all URLs on a website
-    - firecrawl_crawl: Multi-page extraction (sync/async)
-    - firecrawl_crawl_status: Check async crawl progress
-    - firecrawl_extract: AI-powered structured data extraction
-    - firecrawl_search: Web search with multiple sources
+    1. FIRECRAWL (PRIMARY for URLs, scraping, research):
+       - firecrawl_fetch: Single page with screenshots, mobile, PDF, branding
+       - firecrawl_map: Site structure discovery
+       - firecrawl_crawl: Multi-page extraction
+       - firecrawl_extract: AI-powered structured extraction
+       - firecrawl_search: Multi-source search (web, images, news)
+       - firecrawl_agent: Autonomous data gathering (NEW - most powerful!)
+
+    2. TAVILY (for general web search):
+       - web_search_tool: Quick web search with images
+
+    3. GEMINI GROUNDING (for quick facts):
+       - grounding_search_tool: Fast factual lookups
+
+    Caching:
+    - Firecrawl fetch honors max_age for Firecrawl-native caching.
+    - In-process cache (256 entries) for other tools; disable via DISABLE_TOOL_CACHE.
+
+    MCP usage:
+    - Firecrawl tools attempt MCP first when enabled, then fall back to SDK.
+    - Mobile scraping, geo targeting, branding, PDF parsing, proxy modes supported.
     """
 
     tools: List[BaseTool] = [
         kb_search_tool,
-        grounding_search_tool,
-        web_search_tool,
-        # Firecrawl tools - full web scraping and extraction suite
-        firecrawl_fetch_tool,  # Enhanced single-page scrape (screenshots, actions, JSON)
-        firecrawl_map_tool,  # URL discovery
-        firecrawl_crawl_tool,  # Multi-page extraction
+        # Firecrawl tools FIRST - full web scraping and extraction suite
+        firecrawl_fetch_tool,  # Single-page: screenshots, mobile, PDF, branding, geo
+        firecrawl_map_tool,  # URL discovery with sitemap support
+        firecrawl_crawl_tool,  # Multi-page extraction (sync/async)
         firecrawl_crawl_status_tool,  # Async crawl status
-        firecrawl_extract_tool,  # AI structured extraction
-        firecrawl_search_tool,  # Enhanced web search
+        firecrawl_extract_tool,  # AI structured extraction with web search
+        firecrawl_search_tool,  # Multi-source search (web, images, news)
+        firecrawl_agent_tool,  # NEW: Autonomous data gathering agent
+        firecrawl_agent_status_tool,  # NEW: Agent job status
+        # Web search tools (secondary)
+        web_search_tool,  # Tavily - general web search
+        tavily_extract_tool,  # Tavily - full-content extraction
+        grounding_search_tool,  # Gemini grounding - quick facts
         # Other tools
         feedme_search_tool,
         supabase_query_tool,

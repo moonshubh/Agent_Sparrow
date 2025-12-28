@@ -174,7 +174,7 @@ def build_chat_model(
         return _build_xai_model(model, temperature, reasoning_enabled)
 
     elif provider == "openrouter":
-        return _build_openrouter_model(model, temperature)
+        return _build_openrouter_model(model, temperature, role=role)
 
     else:
         registry = get_registry()
@@ -329,9 +329,11 @@ def _build_xai_model(
     )
 
 
-def _build_openrouter_model(model: str, temperature: float) -> BaseChatModel:
+def _build_openrouter_model(
+    model: str, temperature: float, *, role: str | None = None
+) -> BaseChatModel:
     """Build an OpenRouter chat model."""
-    from langchain_openai import ChatOpenAI
+    from .openrouter_chat_openai import OpenRouterChatOpenAI
 
     api_key = getattr(settings, "openrouter_api_key", None)
     if not api_key:
@@ -363,9 +365,18 @@ def _build_openrouter_model(model: str, temperature: float) -> BaseChatModel:
     spec = get_model_by_id(model)
     supports_reasoning = spec.supports_reasoning if spec is not None else True
     include_reasoning = trace_mode in {"hybrid", "provider_reasoning"}
-    extra_body = {"include_reasoning": True} if supports_reasoning and include_reasoning else None
 
-    return ChatOpenAI(
+    # OpenRouter reasoning tokens: enable to receive `reasoning_details` and allow
+    # reasoning continuity by echoing `reasoning_details` back in subsequent turns.
+    extra_body = None
+    if supports_reasoning:
+        always_enable = spec.always_enable_reasoning if spec is not None else False
+        if always_enable or include_reasoning:
+            # OpenRouter expects `reasoning` as an object (not a string). See:
+            # https://openrouter.ai/docs/use-cases/reasoning-tokens
+            extra_body = {"reasoning": {"effort": "high"}}
+
+    return OpenRouterChatOpenAI(
         model=model,
         temperature=temperature,
         api_key=api_key,

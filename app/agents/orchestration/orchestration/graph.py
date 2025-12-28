@@ -172,15 +172,20 @@ def _build_tool_node():
 
                 if tool is None:
                     # Unknown tool - return error as context
+                    safe_tool_name = str(tool_name) if tool_name else "unknown_tool"
                     return ToolMessage(
                         tool_call_id=tool_call_id,
+                        name=safe_tool_name,
                         content=(
-                            f"Tool '{tool_name}' is not available. "
-                        f"Available tools: {', '.join(sorted(tool_map.keys()))}. "
-                        f"Please try a different approach."
-                    ),
-                    additional_kwargs={"is_error": True, "error_type": "unknown_tool"},
-                )
+                            f"Tool '{safe_tool_name}' is not available. "
+                            f"Available tools: {', '.join(sorted(tool_map.keys()))}. "
+                            "Please try a different approach."
+                        ),
+                        additional_kwargs={
+                            "is_error": True,
+                            "error_type": "unknown_tool",
+                        },
+                    )
 
                 # Use ToolExecutor for Claude-style reliable execution
                 result = await self.executor.execute(
