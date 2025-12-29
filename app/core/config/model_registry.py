@@ -200,6 +200,7 @@ GROK_4_1_FAST = ModelSpec(
     rpm_limit=60,
     rpd_limit=1000,
     supports_reasoning=True,
+    supports_vision=True,
 )
 
 GROK_4 = ModelSpec(
@@ -210,6 +211,7 @@ GROK_4 = ModelSpec(
     rpm_limit=20,
     rpd_limit=500,
     supports_reasoning=True,
+    supports_vision=True,
 )
 
 # OpenRouter (Grok via OpenRouter)
@@ -222,6 +224,7 @@ GROK_4_1_FAST_OPENROUTER = ModelSpec(
     rpd_limit=1000,
     supports_reasoning=True,
     always_enable_reasoning=True,
+    supports_vision=True,
 )
 
 MINIMAX_M2_OPENROUTER = ModelSpec(

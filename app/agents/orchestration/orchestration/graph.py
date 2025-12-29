@@ -3,7 +3,7 @@ import uuid
 from pathlib import Path
 from typing import Optional
 
-from langgraph.checkpoint.memory import MemorySaver
+from app.agents.harness.persistence.memory_checkpointer import SanitizingMemorySaver
 from langgraph.graph import StateGraph, END
 from langchain_core.messages import AIMessage, ToolMessage
 
@@ -25,8 +25,10 @@ def _build_checkpointer() -> Optional[object]:
     db_url = settings.checkpointer_db_url
     if db_url:
         try:
-            from app.agents.checkpointer.config import CheckpointerConfig
-            from app.agents.checkpointer.postgres_checkpointer import SupabaseCheckpointer
+            from app.agents.harness.persistence import (
+                CheckpointerConfig,
+                SupabaseCheckpointer,
+            )
 
             logger.info("Initializing Supabase checkpointer for unified graph")
             return SupabaseCheckpointer(
@@ -40,7 +42,7 @@ def _build_checkpointer() -> Optional[object]:
             logger.exception("checkpointer_supabase_init_failed", error=str(exc))
 
     logger.info("checkpointer_selected", checkpointer="memory")
-    return MemorySaver()
+    return SanitizingMemorySaver()
 
 
 def _get_store() -> Optional[object]:

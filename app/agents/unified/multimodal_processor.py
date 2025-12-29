@@ -38,6 +38,7 @@ MAX_PDF_SIZE = 10 * 1024 * 1024  # 10MB
 MAX_ATTACHMENTS = 10  # Increased for tickets with multiple attachments
 MAX_BASE64_CHARS = 5_000_000  # ~3.75MB raw data when base64 encoded
 MAX_TEXT_CHARS = 3_500_000  # ~3.5MB for log files - Gemini, Grok support large context
+MAX_IMAGE_PIXELS = 25_000_000  # Guardrail against decompression bombs / OOM during re-encode
 
 # Base64 pattern for validation
 BASE64_PATTERN = re.compile(r"^[A-Za-z0-9+/]+={0,2}$")
@@ -92,12 +93,14 @@ class MultimodalProcessor:
         max_pdf_size: int = MAX_PDF_SIZE,
         max_base64_chars: int = MAX_BASE64_CHARS,
         max_text_chars: int = MAX_TEXT_CHARS,
+        max_image_pixels: int = MAX_IMAGE_PIXELS,
     ):
         self.max_attachments = max_attachments
         self.max_image_size = max_image_size
         self.max_pdf_size = max_pdf_size
         self.max_base64_chars = max_base64_chars
         self.max_text_chars = max_text_chars
+        self.max_image_pixels = max(1, int(max_image_pixels))
 
     def process_attachments(
         self,
@@ -419,6 +422,17 @@ class MultimodalProcessor:
 
         try:
             image = Image.open(BytesIO(raw))
+            width, height = image.size
+            if width and height and (width * height) > self.max_image_pixels:
+                logger.warning(
+                    "image_pixels_too_large_for_reencode",
+                    name=name,
+                    width=width,
+                    height=height,
+                    pixels=width * height,
+                    limit=self.max_image_pixels,
+                )
+                return None
             image = ImageOps.exif_transpose(image)
         except Exception as exc:
             logger.warning("image_decode_failed", name=name, error=str(exc))

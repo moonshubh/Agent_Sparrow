@@ -10,6 +10,30 @@ from .config import CheckpointerConfig
 from .utils import decode_json
 
 logger = logging.getLogger(__name__)
+_DATA_URL_PREFIX = "data:"
+
+
+def _redact_data_urls(value: Any) -> Any:
+    """Redact large inline data URLs before persisting checkpoints.
+
+    Attachments can contain base64 payloads (images/PDFs). Persisting those in
+    checkpoints can balloon memory usage and database size with little value,
+    since the user can re-upload attachments on demand.
+    """
+    if isinstance(value, list):
+        return [_redact_data_urls(item) for item in value]
+    if isinstance(value, dict):
+        redacted: dict[str, Any] = {}
+        for key, item in value.items():
+            if key in {"data_url", "dataUrl"} and isinstance(item, str) and item.startswith(_DATA_URL_PREFIX):
+                redacted[key] = f"<redacted data_url len={len(item)}>"
+                continue
+            if key == "url" and isinstance(item, str) and item.startswith(_DATA_URL_PREFIX):
+                redacted[key] = f"<redacted data_uri len={len(item)}>"
+                continue
+            redacted[key] = _redact_data_urls(item)
+        return redacted
+    return value
 
 
 @dataclass(frozen=True, slots=True)
@@ -182,6 +206,7 @@ class SupabaseCheckpointer:
             version = metadata_dict.get("version")
             checkpoint_type = metadata_dict.get("checkpoint_type")
 
+        checkpoint_payload = _redact_data_urls(checkpoint_payload)
         state_json = json.dumps(checkpoint_payload)
         metadata_json = json.dumps(metadata_dict)
 
