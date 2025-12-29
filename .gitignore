@@ -67,6 +67,11 @@ logs/
 # macOS specific
 .DS_Store
 .AppleDouble
+
+# Cache directories
+.tmp/
+.ruff_cache/
+.benchmarks/
 .LSOverride
 
 # Windows specific
@@ -711,14 +716,10 @@ dev-debug.log
 !frontend/lib/api.ts
 !frontend/lib/types/logAnalysis.ts
 frontend/tsconfig.tsbuildinfo
+# Markdown files - ignore all except CLAUDE.md and AGENTS.md
 *.md
-docs/backend/*.md
-docs/phase-notes/*.md
-docs/frontend/*.md
-tests/frontend/*.md
-reviews/*.md
-Backend.md
-!CHANGELOG.md
+!CLAUDE.md
+!AGENTS.md
 *.xml
 *.bak
 
