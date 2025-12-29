@@ -772,7 +772,6 @@ export function AgentProvider({
         provider: stateProvider || 'google',
         model: stateModel || 'gemini-3-flash-preview',
         agent_type: hasLogAttachment(attachments) ? 'log_analysis' : stateAgentType,
-        attachments: attachments && attachments.length > 0 ? attachments : undefined,
       };
 
       // Run agent with streaming updates
