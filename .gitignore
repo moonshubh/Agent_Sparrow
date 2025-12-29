@@ -762,3 +762,4 @@ frontend/package-lock.json
 # Playwright screenshots and reports
 .playwright-mcp/
 playwright-report/
+requirements-lock.txt
