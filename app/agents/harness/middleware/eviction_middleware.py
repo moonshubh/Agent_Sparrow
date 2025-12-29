@@ -21,7 +21,7 @@ import os
 import re
 from datetime import datetime, timezone
 from functools import wraps
-from typing import Any, Callable, Dict, List, Optional, TYPE_CHECKING, Union
+from typing import Any, Callable, Dict, Optional, TYPE_CHECKING, Union
 
 from langchain_core.messages import ToolMessage
 from loguru import logger
@@ -32,7 +32,7 @@ from app.agents.harness._stats import EvictionStats
 # Import AgentMiddleware interface for DeepAgents compatibility
 try:
     from langchain.agents.middleware import AgentMiddleware, AgentState
-    from langchain.agents.middleware.types import ModelRequest, ModelResponse, ToolCallRequest
+    from langchain.agents.middleware.types import ToolCallRequest
     from langgraph.types import Command
     AGENT_MIDDLEWARE_AVAILABLE = True
 except ImportError:
@@ -43,8 +43,6 @@ except ImportError:
     Command = Any
 
 if TYPE_CHECKING:
-    from langgraph.config import RunnableConfig
-    from langgraph.runtime import Runtime
     from app.agents.harness.store.workspace_store import SparrowWorkspaceStore
 
 
@@ -650,6 +648,7 @@ class ToolResultEvictionMiddleware(AgentMiddleware if AGENT_MIDDLEWARE_AVAILABLE
         return ToolMessage(
             content=pointer_content,
             tool_call_id=tool_call_id,
+            name=tool_name,
             additional_kwargs={
                 "evicted": True,
                 "evicted_path": path,

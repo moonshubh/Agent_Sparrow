@@ -1,16 +1,14 @@
 import os
-from dotenv import load_dotenv
-import json
-import redis
+import time
+from typing import Any, Optional
 
-from app.core.settings import settings
+from dotenv import load_dotenv
 from tenacity import (
     retry,
     stop_after_attempt,
     wait_exponential,
     retry_if_exception_type,
 )
-import time
 
 # Optional third-party SDKs – import gracefully so tests don't fail if
 # the packages are not installed in the current environment.  Fallbacks
@@ -31,26 +29,21 @@ except ImportError:  # pragma: no cover
 # Load environment variables from .env file (noop if file missing)
 load_dotenv()
 
-# Redis URL
-REDIS_URL = settings.redis_url
-# 24 hours TTL for scrape cache
-SCRAPE_CACHE_TTL_SEC = int(os.getenv("SCRAPE_CACHE_TTL_SEC", "86400"))
-
-# Helper to get a singleton Redis client
-_redis_client: redis.Redis | None = None
-
-def _get_redis() -> redis.Redis:
-    global _redis_client
-    if not REDIS_URL:
-        raise RuntimeError("REDIS_URL not configured")
-    if _redis_client is None:
-        _redis_client = redis.Redis.from_url(REDIS_URL, decode_responses=True)
-    return _redis_client
+# NOTE: Redis caching for Firecrawl has been removed.
+# Firecrawl caching is handled by the service itself via the `max_age` parameter
+# when using scrape endpoints. The unified tool wrappers avoid extra cache layers.
 
 class TavilySearchTool:
-    """LangChain-compatible tool that queries the Tavily Search API and returns a
-    JSON object with a list of relevant URLs. The Tavily API key must be set in
-    the environment variable ``TAVILY_API_KEY``.
+    """Enhanced Tavily Search Tool with full API feature support.
+
+    Supports:
+    - Basic and advanced search depth for comprehensive results
+    - Domain filtering (include/exclude specific domains)
+    - Recency filtering (limit results to recent days)
+    - Image search results
+    - Content extraction from URLs
+
+    The Tavily API key must be set in the environment variable ``TAVILY_API_KEY``.
 
     Returns
     -------
@@ -58,14 +51,15 @@ class TavilySearchTool:
         Example::
 
             {
-                "urls": [
-                    "https://example.com/foo",
-                    "https://example.com/bar"
-                ]
+                "query": "search query",
+                "results": [...],
+                "urls": ["https://example.com/foo", ...],
+                "images": [{url, alt, source}, ...],
+                "attribution": "..."
             }
     """
 
-    def __init__(self):
+    def __init__(self, api_key: Optional[str] = None):
         # Disable tool if SDK missing or API key not set
         if TavilyClient is None:
             # SDK not installed – operate in disabled mode
@@ -73,7 +67,7 @@ class TavilySearchTool:
             self.disabled = True
             return
 
-        api_key = os.getenv("TAVILY_API_KEY")
+        api_key = api_key or os.getenv("TAVILY_API_KEY")
         if not api_key:
             # Operate in disabled mode when key missing
             self.client = None  # type: ignore[assignment]
@@ -90,27 +84,60 @@ class TavilySearchTool:
         wait=wait_exponential(multiplier=1, min=1, max=10),
         retry=retry_if_exception_type(Exception),
     )
-    def search(self, query: str, max_results: int = 10, include_images: bool = True) -> dict:  # noqa: D401
-        """Search the web with Tavily and return the top *max_results* URLs.
-        
-        When include_images is True, also attempts to retrieve image results
-        which are surfaced in the 'images' key of the response.
+    def search(
+        self,
+        query: str,
+        max_results: int = 10,
+        include_images: bool = True,
+        search_depth: str = "advanced",  # NEW: "basic" or "advanced"
+        include_domains: list | None = None,  # NEW: Only search these domains
+        exclude_domains: list | None = None,  # NEW: Exclude these domains
+        days: int | None = None,  # NEW: Limit to results from last N days
+        topic: str | None = None,  # NEW: "general" or "news"
+    ) -> dict:  # noqa: D401
+        """Search the web with Tavily and return structured results.
+
+        Args:
+            query: Search query string
+            max_results: Maximum number of results (default: 10)
+            include_images: Include image results (default: True)
+            search_depth: "basic" for quick search, "advanced" for comprehensive (default: "advanced")
+            include_domains: Only return results from these domains
+            exclude_domains: Exclude results from these domains
+            days: Limit results to last N days (useful for recent news)
+            topic: "general" or "news" for topic-specific search
+
+        Returns:
+            dict with query, results, urls, images, and attribution
         """
 
         if self.disabled:
             # Return empty list while still conforming to schema
-            return {"urls": [], "images": []}
+            return {"urls": [], "images": [], "results": []}
 
-        # Request images if available (Tavily supports include_images parameter)
-        search_kwargs = {
+        # Build search kwargs with all supported parameters
+        search_kwargs: dict = {
             "query": query,
             "max_results": max_results,
+            "search_depth": search_depth,  # Use advanced by default
         }
-        
-        # Try to include images if the API supports it
+
+        # Add optional parameters if provided
         if include_images:
             search_kwargs["include_images"] = True
-            
+
+        if include_domains:
+            search_kwargs["include_domains"] = include_domains
+
+        if exclude_domains:
+            search_kwargs["exclude_domains"] = exclude_domains
+
+        if days is not None:
+            search_kwargs["days"] = days
+
+        if topic:
+            search_kwargs["topic"] = topic
+
         results = self.client.search(**search_kwargs)
 
         structured_results = results.get("results", [])
@@ -167,19 +194,77 @@ class TavilySearchTool:
             "attribution": results.get("attribution"),
         }
 
+    @retry(
+        reraise=True,
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=1, max=10),
+        retry=retry_if_exception_type(Exception),
+    )
+    def extract(self, urls: list[str]) -> dict:
+        """Extract full content from URLs using Tavily's extract feature.
+
+        This is more comprehensive than search results, providing full page content.
+
+        Args:
+            urls: List of URLs to extract content from (max 10)
+
+        Returns:
+            dict with extracted content for each URL
+        """
+        if self.disabled:
+            return {"error": "tavily_disabled", "results": []}
+
+        if not urls:
+            return {"error": "no_urls_provided", "results": []}
+
+        # Limit to 10 URLs as per Tavily's API limits
+        urls = urls[:10]
+
+        try:
+            # Use Tavily's extract API if available
+            if hasattr(self.client, 'extract'):
+                results = self.client.extract(urls=urls)
+                return {
+                    "urls": urls,
+                    "results": results.get("results", []),
+                    "failed_results": results.get("failed_results", []),
+                }
+            else:
+                # Fallback: use search with the URLs as queries
+                all_results = []
+                for url in urls:
+                    try:
+                        result = self.client.search(
+                            query=f"site:{url}",
+                            max_results=1,
+                            include_answer=True,
+                        )
+                        if result.get("results"):
+                            all_results.append({
+                                "url": url,
+                                "content": result["results"][0].get("content", ""),
+                                "raw_content": result["results"][0].get("raw_content", ""),
+                            })
+                    except Exception:
+                        all_results.append({"url": url, "error": "extraction_failed"})
+
+                return {"urls": urls, "results": all_results}
+
+        except Exception as e:
+            return {"error": str(e), "results": []}
+
 
 class FirecrawlTool:
     """Enhanced Firecrawl integration with full API support.
 
     Supports: scrape, search, map, crawl, and extract operations.
+
+    NOTE: Caching is handled by Firecrawl via the `max_age` parameter on scrape
+    calls. This class provides the direct SDK interface without additional
+    caching to avoid redundant cache layers.
     """
 
-    # Cache TTL constants (in seconds)
-    MAP_CACHE_TTL = 3600  # 1 hour for map results (sites change)
-    SEARCH_CACHE_TTL = 3600  # 1 hour for search results
-    EXTRACT_CACHE_TTL = 86400  # 24 hours for extract results
-
-    def __init__(self):
+    def __init__(self, api_key: Optional[str] = None):
         """
         Initializes the FirecrawlTool with the API key.
         """
@@ -190,7 +275,7 @@ class FirecrawlTool:
             self.disabled = True
             return
 
-        api_key = os.getenv("FIRECRAWL_API_KEY")
+        api_key = api_key or os.getenv("FIRECRAWL_API_KEY")
         if not api_key:
             self.app = None  # type: ignore[assignment]
             self.disabled = True
@@ -199,33 +284,15 @@ class FirecrawlTool:
         self.app = FirecrawlApp(api_key=api_key)  # type: ignore[arg-type]
         self.disabled = False
 
-        # Redis client for caching
-        try:
-            self.redis = _get_redis()
-        except Exception:
-            # Cache is best-effort; Firecrawl should still work without Redis.
-            self.redis = None
-
-    def _get_cache(self, cache_key: str) -> dict | None:
-        """Retrieve cached result if available."""
-        if self.redis is None:
-            return None
-        try:
-            cached = self.redis.get(cache_key)
-            if not cached:
-                return None
-            return json.loads(cached)
-        except Exception:
-            return None
-
-    def _set_cache(self, cache_key: str, data: dict, ttl: int = SCRAPE_CACHE_TTL_SEC):
-        """Store result in cache with TTL."""
-        if self.redis is None:
-            return
-        try:
-            self.redis.setex(cache_key, ttl, json.dumps(data, default=str))
-        except Exception:
-            pass  # Don't fail on cache errors
+    @staticmethod
+    def _normalize_result(result: Any) -> dict:
+        if isinstance(result, dict):
+            return result
+        if hasattr(result, "model_dump"):
+            return result.model_dump()  # type: ignore[call-arg]
+        if hasattr(result, "dict"):
+            return result.dict()  # type: ignore[call-arg]
+        return {"data": result}
 
     def scrape_url(self, url: str) -> dict:
         """
@@ -239,12 +306,6 @@ class FirecrawlTool:
         """
         if self.disabled:
             return {"error": "firecrawl_disabled"}
-
-        cache_key = f"firecrawl:scrape:{url}"
-
-        # Check cache first
-        if cached := self._get_cache(cache_key):
-            return cached
 
         # Respect a minimal delay between subsequent API calls (simple rate-limit)
         time.sleep(1)
@@ -263,11 +324,8 @@ class FirecrawlTool:
             return scrape_fn(u)
 
         try:
-            scraped_data = _call_firecrawl(url)
-            self._set_cache(cache_key, scraped_data)
-            return scraped_data
+            return self._normalize_result(_call_firecrawl(url))
         except Exception as e:  # pragma: no cover
-            # Do not cache failures; propagate structured error
             return {"error": str(e)}
 
     def scrape_with_options(
@@ -278,6 +336,12 @@ class FirecrawlTool:
         wait_for: int | None = None,
         only_main_content: bool = True,
         json_schema: dict | None = None,
+        mobile: bool = False,
+        location: dict | None = None,
+        max_age: int | None = None,
+        proxy: str | None = None,
+        parsers: list | None = None,
+        remove_base64_images: bool = False,
     ) -> dict:
         """
         Scrape a URL with advanced options (screenshots, actions, JSON mode).
@@ -307,15 +371,40 @@ class FirecrawlTool:
                     processed_formats.append({"type": "json", "schema": json_schema})
                 else:
                     processed_formats.append(fmt)
+            if json_schema and "json" not in formats:
+                processed_formats.append({"type": "json", "schema": json_schema})
             scrape_params["formats"] = processed_formats
         else:
-            scrape_params["formats"] = ["markdown"]
+            if json_schema:
+                scrape_params["formats"] = [{"type": "json", "schema": json_schema}]
+            else:
+                scrape_params["formats"] = ["markdown"]
 
         if actions:
             scrape_params["actions"] = actions
 
-        if wait_for:
-            scrape_params["waitFor"] = wait_for
+        if wait_for is not None:
+            scrape_params["wait_for"] = wait_for
+
+        scrape_params["only_main_content"] = only_main_content
+
+        if mobile:
+            scrape_params["mobile"] = True
+
+        if location:
+            scrape_params["location"] = location
+
+        if proxy:
+            scrape_params["proxy"] = proxy
+
+        if parsers:
+            scrape_params["parsers"] = parsers
+
+        if remove_base64_images:
+            scrape_params["remove_base64_images"] = True
+
+        if max_age is not None:
+            scrape_params["max_age"] = max_age
 
         time.sleep(1)  # Rate limiting
 
@@ -332,7 +421,7 @@ class FirecrawlTool:
 
         try:
             result = _call_scrape()
-            return result
+            return self._normalize_result(result)
         except Exception as e:
             return {"error": str(e)}
 
@@ -360,7 +449,7 @@ class FirecrawlTool:
 
         try:
             results = _call_search(query)
-            return results
+            return self._normalize_result(results)
         except Exception as e:  # pragma: no cover
             return {"error": str(e)}
 
@@ -386,19 +475,13 @@ class FirecrawlTool:
         if self.disabled:
             return {"error": "firecrawl_disabled"}
 
-        # Check cache
-        import hashlib
-        cache_key = f"firecrawl:search:{hashlib.md5(f'{query}:{limit}:{sources}'.encode()).hexdigest()}"
-        if cached := self._get_cache(cache_key):
-            return cached
-
         search_params: dict = {"query": query, "limit": limit}
 
         if sources:
-            search_params["sources"] = [{"type": s} for s in sources]
+            search_params["sources"] = sources
 
         if scrape_options:
-            search_params["scrapeOptions"] = scrape_options
+            search_params["scrape_options"] = scrape_options
 
         @retry(
             reraise=True,
@@ -410,9 +493,7 @@ class FirecrawlTool:
             return self.app.search(**search_params)
 
         try:
-            results = _call_search()
-            self._set_cache(cache_key, results, self.SEARCH_CACHE_TTL)
-            return results
+            return self._normalize_result(_call_search())
         except Exception as e:
             return {"error": str(e)}
 
@@ -438,18 +519,13 @@ class FirecrawlTool:
         if self.disabled:
             return {"error": "firecrawl_disabled"}
 
-        # Check cache
-        cache_key = f"firecrawl:map:{url}:{limit}:{search or ''}"
-        if cached := self._get_cache(cache_key):
-            return cached
-
         map_params: dict = {"url": url, "limit": limit}
 
         if search:
             map_params["search"] = search
 
         if include_subdomains:
-            map_params["includeSubdomains"] = True
+            map_params["include_subdomains"] = True
 
         @retry(
             reraise=True,
@@ -461,9 +537,7 @@ class FirecrawlTool:
             return self.app.map(**map_params)
 
         try:
-            results = _call_map()
-            self._set_cache(cache_key, results, self.MAP_CACHE_TTL)
-            return results
+            return self._normalize_result(_call_map())
         except Exception as e:
             return {"error": str(e)}
 
@@ -499,17 +573,17 @@ class FirecrawlTool:
         crawl_params: dict = {
             "url": url,
             "limit": min(limit, 50),
-            "maxDiscoveryDepth": min(max_depth, 5),
+            "max_discovery_depth": min(max_depth, 5),
         }
 
         if include_paths:
-            crawl_params["includePaths"] = include_paths
+            crawl_params["include_paths"] = include_paths
 
         if exclude_paths:
-            crawl_params["excludePaths"] = exclude_paths
+            crawl_params["exclude_paths"] = exclude_paths
 
         if scrape_options:
-            crawl_params["scrapeOptions"] = scrape_options
+            crawl_params["scrape_options"] = scrape_options
 
         @retry(
             reraise=True,
@@ -527,17 +601,21 @@ class FirecrawlTool:
             retry=retry_if_exception_type(Exception),
         )
         def _start_async_crawl():
-            return self.app.async_crawl(**crawl_params)
+            return self.app.start_crawl(**crawl_params)
 
         try:
             if limit <= 10:
                 # Synchronous crawl for small jobs
                 results = _call_crawl()
-                return {"status": "completed", "data": results}
+                return {
+                    "status": "completed",
+                    "data": self._normalize_result(results),
+                }
             else:
                 # Async crawl for larger jobs
                 response = _start_async_crawl()
-                crawl_id = response.get("id") if isinstance(response, dict) else getattr(response, "id", None)
+                normalized = self._normalize_result(response)
+                crawl_id = normalized.get("id")
                 return {
                     "status": "started",
                     "crawl_id": crawl_id,
@@ -566,11 +644,11 @@ class FirecrawlTool:
             retry=retry_if_exception_type(Exception),
         )
         def _call_status():
-            return self.app.check_crawl_status(crawl_id)
+            return self.app.get_crawl_status(crawl_id)
 
         try:
             result = _call_status()
-            return result
+            return self._normalize_result(result)
         except Exception as e:
             return {"error": str(e)}
 
@@ -599,13 +677,6 @@ class FirecrawlTool:
         if not prompt and not schema:
             return {"error": "Either prompt or schema must be provided for extraction"}
 
-        # Check cache
-        import hashlib
-        urls_str = ",".join(sorted(urls))
-        cache_key = f"firecrawl:extract:{hashlib.md5(f'{urls_str}:{prompt}:{schema}'.encode()).hexdigest()}"
-        if cached := self._get_cache(cache_key):
-            return cached
-
         extract_params: dict = {"urls": urls}
 
         if prompt:
@@ -615,7 +686,7 @@ class FirecrawlTool:
             extract_params["schema"] = schema
 
         if enable_web_search:
-            extract_params["enableWebSearch"] = True
+            extract_params["enable_web_search"] = True
 
         @retry(
             reraise=True,
@@ -627,9 +698,7 @@ class FirecrawlTool:
             return self.app.extract(**extract_params)
 
         try:
-            results = _call_extract()
-            self._set_cache(cache_key, results, self.EXTRACT_CACHE_TTL)
-            return results
+            return self._normalize_result(_call_extract())
         except Exception as e:
             return {"error": str(e)}
 

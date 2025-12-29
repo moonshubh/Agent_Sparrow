@@ -2,6 +2,7 @@ import StarterKit from '@tiptap/starter-kit';
 import Placeholder from '@tiptap/extension-placeholder';
 import Link from '@tiptap/extension-link';
 import { Markdown } from '@tiptap/markdown';
+import type { AnyExtension } from '@tiptap/core';
 
 import { ArtifactDirective } from './artifact-directive';
 import { createCodeBlockExtension } from './code-block';
@@ -19,7 +20,7 @@ export interface ExtensionOptions {
 }
 
 export const createExtensions = (options: ExtensionOptions = {}) => {
-  const extensions = [
+  const extensions: AnyExtension[] = [
     StarterKit.configure({
       codeBlock: false,
     }),

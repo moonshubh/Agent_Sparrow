@@ -207,7 +207,10 @@ class StreamEventEmitter:
         elapsed_ms = (now - self._last_image_emission_time) * 1000
         if elapsed_ms < IMAGE_EMISSION_THROTTLE_MS and self._last_image_emission_time > 0:
             wait_time = (IMAGE_EMISSION_THROTTLE_MS - elapsed_ms) / 1000
-            logger.debug(f"emit_image_artifact: throttling, waiting {wait_time:.2f}s")
+            logger.debug(
+                "emit_image_artifact: throttling, waiting {:.2f}s",
+                wait_time,
+            )
             time.sleep(wait_time)
 
         import uuid
@@ -230,7 +233,12 @@ class StreamEventEmitter:
 
         # Update last emission time after successful emit
         self._last_image_emission_time = time.time()
-        logger.info(f"emit_image_artifact: id={artifact_id}, mime={mime_type}, title={title}")
+        logger.info(
+            "emit_image_artifact: id={}, mime={}, title={}",
+            artifact_id,
+            mime_type,
+            title,
+        )
 
     def emit_article_artifact(
         self,
@@ -289,7 +297,12 @@ class StreamEventEmitter:
             "content": content,
             "messageId": message_id,
         })
-        logger.info(f"emit_article_artifact: id={artifact_id}, title={title}, content_length={len(content)}")
+        logger.info(
+            "emit_article_artifact: id={}, title={}, content_length={}",
+            artifact_id,
+            title,
+            len(content),
+        )
 
     # -------------------------------------------------------------------------
     # Text message emission (AG-UI protocol)
@@ -322,7 +335,11 @@ class StreamEventEmitter:
             delta: The text chunk to emit.
         """
         if self.writer is None or not delta:
-            logger.debug(f"emit_text_content skipped: writer={self.writer is not None}, delta={bool(delta)}")
+            logger.debug(
+                "emit_text_content skipped: writer={}, delta={}",
+                self.writer is not None,
+                bool(delta),
+            )
             return
 
         # Ensure message is started
@@ -335,7 +352,10 @@ class StreamEventEmitter:
             "messageId": getattr(self, '_current_message_id', self.root_id),
             "delta": delta,
         }
-        logger.info(f"emit_text_content: Emitting event with delta length={len(delta)}")
+        logger.info(
+            "emit_text_content: Emitting event with delta length={}",
+            len(delta),
+        )
         self.writer(event)
 
     def end_text_message(self) -> None:
@@ -700,12 +720,18 @@ class StreamEventEmitter:
         raw_type = type(raw_todos).__name__
         raw_repr_str = repr(raw_todos)[:500] if raw_todos else "None"
         logger.info(
-            f"write_todos_debug: type={raw_type}, repr={raw_repr_str}"
+            "write_todos_debug: type={}, repr={!r}",
+            raw_type,
+            raw_repr_str,
         )
 
         normalized = normalize_todos(raw_todos, self.root_id)
         if not normalized:
-            logger.info(f"write_todos_no_new_items: prior_count={len(self.todo_items)}, raw_type={raw_type}")
+            logger.info(
+                "write_todos_no_new_items: prior_count={}, raw_type={}",
+                len(self.todo_items),
+                raw_type,
+            )
             # Emit current state even if no changes
             self._sync_todo_operations()
             self._emit_todos()

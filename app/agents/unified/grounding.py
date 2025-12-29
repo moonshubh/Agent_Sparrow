@@ -1,4 +1,13 @@
-"""Gemini Search Grounding integration with quota + fallbacks."""
+"""Gemini Search Grounding integration with quota + fallbacks.
+
+Fallback chain for search:
+1. Gemini Grounding (primary for quick factual answers)
+2. Tavily (secondary for web search)
+3. Firecrawl (tertiary for scraping/deep search)
+
+For URL fetching and scraping tasks, Firecrawl tools should be used directly
+(not through this service) as the PRIMARY tool.
+"""
 from __future__ import annotations
 
 import asyncio
@@ -8,7 +17,7 @@ import httpx
 
 from app.core.logging_config import get_logger
 from app.core.settings import settings
-from app.tools.research_tools import TavilySearchTool
+from app.tools.research_tools import FirecrawlTool, TavilySearchTool
 
 from .quota_manager import QuotaExceededError, QuotaManager
 
@@ -45,6 +54,7 @@ class GeminiGroundingService:
         self.max_results_default = settings.grounding_max_results
         self.snippet_limit = settings.grounding_snippet_chars
         self._tavily: Optional[TavilySearchTool] = None
+        self._firecrawl: Optional[FirecrawlTool] = None
 
     async def search_with_grounding(self, query: str, max_results: Optional[int] = None) -> Dict[str, Any]:
         if not self.enabled:
@@ -81,7 +91,12 @@ class GeminiGroundingService:
         }
 
     async def fallback_search(self, query: str, max_results: Optional[int] = None, reason: str = "error") -> Dict[str, Any]:
-        """Fallback chain: Tavily."""
+        """Fallback chain: Tavily → Firecrawl.
+
+        When Gemini Grounding is unavailable or quota exceeded:
+        1. Try Tavily for web search results
+        2. If Tavily fails, try Firecrawl search as final fallback
+        """
 
         limit = self._resolve_limit(max_results)
         tavily = self._get_tavily()
@@ -89,6 +104,7 @@ class GeminiGroundingService:
         # Track services used for LangSmith
         services_used = []
         tavily_success = False
+        firecrawl_success = False
 
         fallback_payload: Dict[str, Any] = {
             "source": "tavily_fallback",
@@ -97,7 +113,10 @@ class GeminiGroundingService:
             "extracted": [],
         }
 
+        urls: List[str] = []
         tavily_result: Optional[Dict[str, Any]] = None
+
+        # Step 1: Try Tavily first
         try:
             tavily_result = await asyncio.to_thread(tavily.search, query, limit)
             urls = tavily_result.get("urls", [])
@@ -106,9 +125,43 @@ class GeminiGroundingService:
         except Exception as exc:  # pragma: no cover - network failure
             self.logger.warning("grounding_fallback_tavily_error", error=str(exc))
             urls = []
+
+        # Step 2: If Tavily failed, try Firecrawl search as fallback
+        firecrawl_result: Optional[Dict[str, Any]] = None
+        if not tavily_success:
+            try:
+                firecrawl = self._get_firecrawl()
+                if not firecrawl.disabled:
+                    firecrawl_result = await asyncio.to_thread(firecrawl.search, query)
+                    firecrawl_urls: List[str] = []
+                    if isinstance(firecrawl_result, dict) and not firecrawl_result.get("error"):
+                        data = firecrawl_result.get("data") or {}
+                        data_items: List[Dict[str, Any]] = []
+                        if isinstance(data, dict):
+                            for bucket in ("web", "news", "images"):
+                                items = data.get(bucket) or []
+                                if isinstance(items, list):
+                                    data_items.extend(
+                                        [item for item in items if isinstance(item, dict)]
+                                    )
+                        elif isinstance(data, list):
+                            data_items = [item for item in data if isinstance(item, dict)]
+                        for item in data_items[:limit]:
+                            if item.get("url"):
+                                firecrawl_urls.append(item["url"])
+                        urls.extend(firecrawl_urls)
+                        firecrawl_success = bool(firecrawl_urls)
+                        services_used.append("firecrawl")
+                        fallback_payload["source"] = "firecrawl_fallback"
+            except Exception as exc:  # pragma: no cover - network failure
+                self.logger.warning("grounding_fallback_firecrawl_error", error=str(exc))
+
         fallback_payload["results"] = [{"url": url} for url in urls]
 
+        # Extract snippets from results
         extracts: List[Dict[str, Any]] = []
+
+        # Process Tavily results for snippets
         if isinstance(tavily_result, dict):
             structured_results = tavily_result.get("results") or []
             for item in structured_results[: min(3, len(structured_results))]:
@@ -127,6 +180,34 @@ class GeminiGroundingService:
                             "source": "tavily",
                         }
                     )
+
+        # Process Firecrawl results for snippets (if Tavily failed)
+        if isinstance(firecrawl_result, dict) and not firecrawl_result.get("error"):
+            data = firecrawl_result.get("data") or {}
+            data_items: List[Dict[str, Any]] = []
+            if isinstance(data, dict):
+                for bucket in ("web", "news", "images"):
+                    items = data.get(bucket) or []
+                    if isinstance(items, list):
+                        data_items.extend([item for item in items if isinstance(item, dict)])
+            elif isinstance(data, list):
+                data_items = [item for item in data if isinstance(item, dict)]
+            for item in data_items[: min(3, len(data_items))]:
+                url = item.get("url") or ""
+                snippet = self._trim_snippet(
+                    item.get("description")
+                    or item.get("title")
+                    or ""
+                )
+                if url or snippet:
+                    extracts.append(
+                        {
+                            "url": url,
+                            "snippet": snippet,
+                            "source": "firecrawl",
+                        }
+                    )
+
         if extracts:
             fallback_payload["extracted"] = extracts
 
@@ -136,6 +217,7 @@ class GeminiGroundingService:
             "fallback_reason": reason,
             "services_used": services_used,
             "tavily_success": tavily_success,
+            "firecrawl_success": firecrawl_success,
             "urls_found": len(urls),
             "query_length": len(query or ""),
         }
@@ -259,3 +341,8 @@ class GeminiGroundingService:
         if self._tavily is None:
             self._tavily = TavilySearchTool()
         return self._tavily
+
+    def _get_firecrawl(self) -> FirecrawlTool:
+        if self._firecrawl is None:
+            self._firecrawl = FirecrawlTool()
+        return self._firecrawl

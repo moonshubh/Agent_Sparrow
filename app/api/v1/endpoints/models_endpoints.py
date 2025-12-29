@@ -57,26 +57,9 @@ async def list_models(
         if available.get(provider, False)
     }
 
-    # Ensure configured defaults are present even if not in the static list
-    google_default = getattr(settings, "primary_agent_model", None)
-    if providers.get("google") is not None and google_default and google_default not in providers["google"]:
-        providers["google"].append(google_default)
-
-    xai_default = getattr(settings, "xai_default_model", None)
-    if providers.get("xai") is not None and xai_default and xai_default not in providers["xai"]:
-        providers["xai"].append(xai_default)
-
-    openrouter_default = getattr(settings, "openrouter_default_model", None)
-    if providers.get("openrouter") is not None and openrouter_default and openrouter_default not in providers["openrouter"]:
-        providers["openrouter"].append(openrouter_default)
-
     # Always include Google as fallback if nothing else is configured
     if not providers and settings.gemini_api_key:
-        google_models = list(provider_models.get("google", []))
-        google_default = getattr(settings, "primary_agent_model", None)
-        if google_default and google_default not in google_models:
-            google_models.append(google_default)
-        providers = {"google": google_models}
+        providers = {"google": list(provider_models.get("google", []))}
 
     return {"providers": providers}
 
@@ -115,6 +98,8 @@ async def get_model_config(request: Request):
             # Skip embedding models from public API
             if model.tier.value == "embedding":
                 continue
+            if not getattr(model, "expose_in_ui", True):
+                continue
             models[model.id] = {
                 "display_name": model.display_name,
                 "provider": model.provider.value,
@@ -122,6 +107,21 @@ async def get_model_config(request: Request):
                 "supports_reasoning": model.supports_reasoning,
                 "supports_vision": model.supports_vision,
             }
+
+    exposed_ids = set(models.keys())
+
+    def _filter_fallback_chain(
+        chain: Dict[str, str | None],
+    ) -> Dict[str, str | None]:
+        filtered: Dict[str, str | None] = {}
+        for src, dst in chain.items():
+            if src not in exposed_ids:
+                continue
+            if dst is not None and dst not in exposed_ids:
+                filtered[src] = None
+            else:
+                filtered[src] = dst
+        return filtered
 
     # Defaults
     defaults = {
@@ -132,9 +132,9 @@ async def get_model_config(request: Request):
 
     # Fallback chains
     fallback_chains = {
-        "google": registry.get_fallback_chain("google"),
-        "xai": registry.get_fallback_chain("xai"),
-        "openrouter": registry.get_fallback_chain("openrouter"),
+        "google": _filter_fallback_chain(registry.get_fallback_chain("google")),
+        "xai": _filter_fallback_chain(registry.get_fallback_chain("xai")),
+        "openrouter": _filter_fallback_chain(registry.get_fallback_chain("openrouter")),
     }
 
     return {

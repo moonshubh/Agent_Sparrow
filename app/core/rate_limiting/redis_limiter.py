@@ -5,11 +5,9 @@ This provides distributed rate limiting across multiple server instances
 using Redis as the shared storage for request counters.
 """
 
-import asyncio
-import json
 import time
 from datetime import datetime, timedelta
-from typing import Dict, Any, Optional, Tuple
+from typing import Dict, Any, Optional
 
 import redis.asyncio as redis
 from app.core.logging_config import get_logger
@@ -198,11 +196,7 @@ class RedisRateLimiter:
                 
         except Exception as e:
             self.logger.error(f"Redis rate limit check failed: {e}")
-            # Fail closed - deny request when Redis is unavailable to prevent free tier overages
-            return {
-                "allowed": False,
-                "used": 0
-            }
+            raise
     
     async def get_current_usage(
         self,

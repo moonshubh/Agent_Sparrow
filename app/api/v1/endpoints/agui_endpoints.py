@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """
 AG-UI Streaming Endpoint (LangGraph)
 
@@ -16,13 +14,13 @@ Highlights:
   - Comprehensive logging: Logs normalized properties, attachment processing, trace propagation
 """
 
+from __future__ import annotations
+
 import json
 import logging
-from copy import deepcopy
 from typing import Any, Dict, List, Optional, Set
-from uuid import uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Query
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from opentelemetry import trace
 from opentelemetry.trace import Status, StatusCode
@@ -31,12 +29,32 @@ from pydantic import ValidationError
 # AG-UI Protocol imports
 from ag_ui_langgraph import LangGraphAgent
 from ag_ui.core.types import RunAgentInput
-from ag_ui.core import CustomEvent, EventType, RunFinishedEvent, RunStartedEvent
+from ag_ui.core import (
+    CustomEvent,
+    EventType,
+    RunErrorEvent,
+    RunFinishedEvent,
+    RunStartedEvent,
+)
 from ag_ui.encoder import EventEncoder
 from ag_ui_langgraph.types import LangGraphEventTypes
 from ag_ui_langgraph.utils import make_json_safe
 from ag_ui_langgraph.utils import agui_messages_to_langchain, get_stream_payload_input
 from langgraph.types import Command
+
+from langchain_core.messages import (
+    AIMessage,
+    BaseMessage,
+    HumanMessage,
+    SystemMessage,
+    ToolMessage,
+)
+
+from app.agents.orchestration.orchestration.graph import app as compiled_graph
+
+# Import for context merge and attachment validation
+from app.agents.orchestration.orchestration.state import Attachment
+from app.core.settings import get_settings
 
 router = APIRouter()
 
@@ -47,15 +65,6 @@ except Exception:  # pragma: no cover
     async def get_current_user_id() -> str:  # type: ignore
         from app.core.settings import settings
         return getattr(settings, 'development_user_id', 'dev-user-12345')
-
-
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
-
-from app.agents.orchestration.orchestration.graph import app as compiled_graph
-
-# Import for context merge and attachment validation
-from app.agents.orchestration.orchestration.state import GraphState, Attachment
-from app.core.settings import get_settings
 
 # OpenTelemetry tracer for this module
 tracer = trace.get_tracer(__name__)
@@ -240,6 +249,24 @@ def _coerce_text(content: Any) -> str:
     return str(content)
 
 
+def _strip_reasoning_details(value: Any) -> Any:
+    """Remove OpenRouter/OpenAI-style reasoning_details from JSON-like payloads.
+
+    MiniMax M2.1 can emit large `reasoning_details` blocks (especially in streaming
+    chunks). These should not be sent to the browser as part of RAW debug events.
+    """
+
+    if isinstance(value, dict):
+        return {
+            k: _strip_reasoning_details(v)
+            for k, v in value.items()
+            if k != "reasoning_details"
+        }
+    if isinstance(value, list):
+        return [_strip_reasoning_details(v) for v in value]
+    return value
+
+
 def _normalize_tool_call_dict(raw: Any) -> Any:
     """Normalize various tool_call dict shapes into LangChain's {name, args, id} form.
 
@@ -326,9 +353,18 @@ def _coerce_message(raw: Any) -> Optional[BaseMessage]:
         tool_call_id = data.get("tool_call_id") or data.get("toolCallId")
         if not tool_call_id:
             return None
+
+        tool_name = (
+            data.get("name")
+            or data.get("tool_call_name")
+            or additional_kwargs.get("tool_name")
+            or additional_kwargs.get("name")
+            or "tool"
+        )
         return ToolMessage(
             tool_call_id=str(tool_call_id),
             content=_coerce_text(data.get("content")),
+            name=str(tool_name),
             additional_kwargs=additional_kwargs,
         )
 
@@ -549,6 +585,8 @@ def _merge_agui_context(
         if not model:
             if provider == "xai":
                 model = getattr(settings, "xai_default_model", None) or "grok-4-1-fast-reasoning"
+            elif provider == "openrouter":
+                model = getattr(settings, "openrouter_default_model", None) or "x-ai/grok-4.1-fast"
             else:
                 model = getattr(settings, "primary_agent_model", "gemini-2.5-flash")
 
@@ -894,6 +932,21 @@ async def agui_stream(
                     # Stream events from AG-UI LangGraphAgent
                     # The agent.run() method returns properly formatted AG-UI protocol events
                     async for event in agent.run(enriched_input):
+                        update: dict[str, Any] = {}
+
+                        # Avoid sending large `reasoning_details` blocks to the browser.
+                        try:
+                            if hasattr(event, "raw_event") and getattr(event, "raw_event") is not None:
+                                update["raw_event"] = _strip_reasoning_details(
+                                    getattr(event, "raw_event")
+                                )
+                            if getattr(event, "type", None) == EventType.RAW and hasattr(event, "event"):
+                                update["event"] = _strip_reasoning_details(getattr(event, "event"))
+                            if update:
+                                event = event.model_copy(update=update)
+                        except Exception:
+                            # Never fail streaming due to debug payload sanitization.
+                            pass
                         # Encode event using AG-UI EventEncoder for proper SSE formatting
                         yield encoder.encode(event)
 
@@ -902,7 +955,17 @@ async def agui_stream(
                     run_span.record_exception(exc)
                     run_span.set_status(Status(StatusCode.ERROR, "agent_run_failed"))
                     logging.error(f"Agent run failed: {str(exc)}", exc_info=True)
-                    raise
+                    try:
+                        yield encoder.encode(
+                            RunErrorEvent(
+                                type=EventType.RUN_ERROR,
+                                message=f"Agent run failed: {type(exc).__name__}",
+                                code="agent_run_failed",
+                            )
+                        )
+                    except Exception:
+                        pass
+                    return
 
         span.set_status(Status(StatusCode.OK))
         return StreamingResponse(
@@ -963,7 +1026,7 @@ async def agui_subgraphs_stream(
     user_id: str = Depends(get_current_user_id)
 ):
     """Endpoint for Subgraphs demo (Travel Agent)."""
-    with tracer.start_as_current_span("agui.subgraphs.stream") as span:
+    with tracer.start_as_current_span("agui.subgraphs.stream"):
         try:
             agent = get_travel_agent()
         except Exception as e:

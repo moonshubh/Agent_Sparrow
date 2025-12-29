@@ -43,13 +43,14 @@ try:
         pass
 
 except ImportError as e:
-    logger.warning(f"Middleware not available ({e}) - agent will run without middleware")
+    logger.warning("Middleware not available ({}) - agent will run without middleware", e)
     MIDDLEWARE_AVAILABLE = False
     CONTEXT_MIDDLEWARE_AVAILABLE = False
 
 from app.agents.orchestration.orchestration.state import GraphState
 from app.agents.harness.observability import AgentLoopState
 from app.agents.harness.middleware import get_state_tracking_middleware
+from app.core.config import get_registry
 from app.core.settings import settings
 from app.memory import memory_service
 from app.core.rate_limiting.agent_wrapper import get_rate_limiter
@@ -227,12 +228,9 @@ def _resolve_runtime_config(state: GraphState) -> AgentRuntimeConfig:
             provider=provider,
             task_type=task_type,
         )
-        provider_defaults = {
-            "xai": getattr(settings, "xai_default_model", None) or "grok-4-1-fast-reasoning",
-            "openrouter": getattr(settings, "openrouter_default_model", None) or "x-ai/grok-4.1-fast:free",
-        }
-        if provider in provider_defaults:
-            resolved_model = provider_defaults[provider]
+        if provider in {"xai", "openrouter"}:
+            registry = get_registry()
+            resolved_model = registry.get_model_for_role("coordinator", provider).id
         else:
             resolved_model = model_router.select_model(task_type, check_availability=False)
         state.model = resolved_model
@@ -325,12 +323,8 @@ async def _ensure_model_selection(state: GraphState) -> ModelSelectionResult:
     # For non-Google providers, preserve the user's model selection
     if provider != "google":
         if not state.model:
-            if provider == "xai":
-                state.model = getattr(settings, "xai_default_model", None) or "grok-4-1-fast-reasoning"
-            elif provider == "openrouter":
-                state.model = getattr(settings, "openrouter_default_model", None) or "x-ai/grok-4.1-fast:free"
-            else:
-                state.model = getattr(settings, "primary_agent_model", None) or "gemini-2.5-flash"
+            registry = get_registry()
+            state.model = registry.get_model_for_role("coordinator", provider).id
         logger.info(
             "preserving_non_google_model_selection",
             provider=provider,
@@ -1433,7 +1427,7 @@ async def run_unified_agent(state: GraphState, config: Optional[RunnableConfig] 
         }
     except Exception as e:
         tracker.set_error(f"Critical error: {str(e)[:100]}")
-        logger.error(f"Critical error in unified agent execution: {e}")
+        logger.opt(exception=True).error("Critical error in unified agent execution: {}", e)
 
         # Add error state to scratchpad
         scratchpad = dict(state.scratchpad or {})

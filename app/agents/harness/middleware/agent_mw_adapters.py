@@ -112,7 +112,7 @@ class ToolRetryMiddleware(AgentMiddleware):
         retryable: bool,
     ) -> ToolMessage:
         tool_call_id = getattr(request, "tool_call_id", None) or getattr(request, "id", "unknown")
-        tool_name = getattr(request, "name", "tool")
+        tool_name = getattr(request, "name", None) or "tool"
         logger.warning(
             "tool_retry_exhausted",
             tool=tool_name,
@@ -127,6 +127,7 @@ class ToolRetryMiddleware(AgentMiddleware):
                 f"Error: {exc}"
             ),
             tool_call_id=tool_call_id,
+            name=tool_name,
             additional_kwargs={"error": True, "retryable": retryable},
         )
 
@@ -156,7 +157,7 @@ class ToolCircuitBreakerMiddleware(AgentMiddleware):
         return state
 
     async def awrap_tool_call(self, request: ToolCallRequest, handler) -> ToolMessage:
-        tool_name = getattr(request, "name", "tool")
+        tool_name = getattr(request, "name", None) or "tool"
         tool_call_id = getattr(request, "tool_call_id", None) or getattr(request, "id", "unknown")
         now = time.time()
         state = self._state_for(tool_name)
@@ -166,6 +167,7 @@ class ToolCircuitBreakerMiddleware(AgentMiddleware):
             return ToolMessage(
                 content=f"Circuit breaker open for `{tool_name}`. Try later or pick another tool.",
                 tool_call_id=tool_call_id,
+                name=tool_name,
                 additional_kwargs={"error": True, "circuit": "open"},
             )
 
@@ -173,7 +175,7 @@ class ToolCircuitBreakerMiddleware(AgentMiddleware):
             result = await handler(request)
             state["failures"].clear()
             return result
-        except Exception as exc:
+        except Exception:
             state["failures"].append(now)
             if len(state["failures"]) >= self.failure_threshold:
                 state["opened_until"] = now + self.cooloff_s

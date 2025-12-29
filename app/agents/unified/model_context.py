@@ -34,9 +34,8 @@ MODEL_CONTEXT_WINDOWS = {
     "grok-3-fast": 128_000,
 
     # OpenRouter aliases (mirror Grok/Gemini caps above).
-    "x-ai/grok-4.1-fast:free": 128_000,
-    "x-ai/grok-4": 128_000,
-    "x-ai/grok-4-fast": 128_000,
+    "x-ai/grok-4.1-fast": 128_000,
+    "minimax/minimax-m2.1": 204_800,
     "google/gemini-2.5-flash": 1_000_000,
     "google/gemini-2.5-pro": 1_000_000,
     "google/gemini-3-pro-preview": 1_000_000,

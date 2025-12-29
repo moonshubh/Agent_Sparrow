@@ -8,7 +8,7 @@ This keeps the behavior stable even if the site-packages file is overwritten (e.
 
 from __future__ import annotations
 
-import asyncio
+import json
 import logging
 import threading
 from typing import Any, AsyncGenerator
@@ -16,6 +16,8 @@ from typing import Any, AsyncGenerator
 from ag_ui.core.events import CustomEvent, EventType
 from ag_ui_langgraph.agent import LangGraphAgent
 from ag_ui_langgraph.types import LangGraphEventTypes, State
+from langchain_core.messages import ToolMessage
+from langgraph.types import Command
 from app.patches.agui_json_safe import make_json_safe_with_cycle_detection
 
 
@@ -53,6 +55,52 @@ def _sanitize_event_for_json(event: Any) -> Any:
         return event
 
 
+def _normalize_tool_end_output(event: Any) -> Any:
+    """Ensure on_tool_end outputs are ToolMessage/Command for AG-UI compatibility."""
+    if not isinstance(event, dict):
+        return event
+
+    if event.get("event") != LangGraphEventTypes.OnToolEnd:
+        return event
+
+    data = event.get("data")
+    if not isinstance(data, dict):
+        return event
+
+    output = data.get("output")
+    if isinstance(output, (ToolMessage, Command)):
+        return event
+
+    if isinstance(output, list) and output and all(isinstance(item, ToolMessage) for item in output):
+        normalized = dict(data)
+        normalized["output"] = Command(update={"messages": output})
+        updated = dict(event)
+        updated["data"] = normalized
+        return updated
+
+    tool_call_id = data.get("tool_call_id") or data.get("id") or "unknown"
+    tool_name = event.get("name") or data.get("name") or "tool"
+    safe_output = make_json_safe_with_cycle_detection(output)
+
+    if isinstance(safe_output, str):
+        content = safe_output
+    else:
+        try:
+            content = json.dumps(safe_output, ensure_ascii=False, default=str)
+        except Exception:
+            content = str(safe_output)
+
+    normalized = dict(data)
+    normalized["output"] = ToolMessage(
+        content=content,
+        tool_call_id=str(tool_call_id),
+        name=str(tool_name),
+    )
+    updated = dict(event)
+    updated["data"] = normalized
+    return updated
+
+
 def _patch_get_stream_kwargs() -> None:
     original = LangGraphAgent.get_stream_kwargs
 
@@ -82,7 +130,7 @@ def _patch_handle_single_event() -> None:
         # Normalize event payloads so that any nested HumanMessage or other
         # complex objects under data["input"] are JSON-safe before the original
         # handler attempts json.dumps on them.
-        safe_event = _sanitize_event_for_json(event)
+        safe_event = _normalize_tool_end_output(_sanitize_event_for_json(event))
 
         # Detect writer-emitted custom events coming through custom stream_mode.
         if safe_event.get("event") == LangGraphEventTypes.OnChainStream:
@@ -104,6 +152,39 @@ def _patch_handle_single_event() -> None:
     LangGraphAgent._handle_single_event = patched_handle_single_event  # type: ignore[assignment]
 
 
+def _patch_messages_in_process_contract() -> None:
+    """Prevent ag_ui_langgraph crashes when `messages_in_process[run_id]` is None.
+
+    ag_ui_langgraph sets `messages_in_process[run_id] = None` after emitting certain
+    end events (e.g. TOOL_CALL_END / TEXT_MESSAGE_END). Some models then emit
+    additional stream events for the same run_id, and the library's
+    `set_message_in_progress()` attempts `**current_message_in_progress`, which
+    raises `TypeError: 'NoneType' object is not a mapping`.
+
+    We treat None/non-dicts as an empty dict so streaming can continue.
+    """
+
+    def patched_set_message_in_progress(
+        self: LangGraphAgent, run_id: str, data: Any
+    ) -> None:
+        record = getattr(self, "messages_in_process", None)
+        if not isinstance(record, dict):
+            record = {}
+            setattr(self, "messages_in_process", record)
+
+        current = record.get(run_id)
+        if not isinstance(current, dict):
+            current = {}
+        if not isinstance(data, dict):
+            data = {}
+        record[run_id] = {
+            **current,
+            **data,
+        }
+
+    LangGraphAgent.set_message_in_progress = patched_set_message_in_progress  # type: ignore[assignment]
+
+
 def apply_patch() -> None:
     """Idempotent patch application."""
     if getattr(LangGraphAgent, _PATCH_FLAG, False):
@@ -115,6 +196,7 @@ def apply_patch() -> None:
         try:
             _patch_get_stream_kwargs()
             _patch_handle_single_event()
+            _patch_messages_in_process_contract()
         except Exception:
             logger.exception("Failed to apply AG-UI custom event patch")
             raise

@@ -157,6 +157,11 @@ def _infer_ticket_category(
         pass
 
     # 2) Keyword fallback
+    return _infer_ticket_category_from_text(ticket_text)
+
+
+def _infer_ticket_category_from_text(ticket_text: str) -> str | None:
+    """Infer ticket category using keyword heuristics only (no retrieval)."""
     text = (ticket_text or "").lower()
     if not text:
         return None
@@ -262,6 +267,161 @@ def _infer_ticket_category(
     return None
 
 
+_ZENDESK_RETRIEVAL_STOPWORDS: set[str] = {
+    "a",
+    "an",
+    "and",
+    "are",
+    "as",
+    "at",
+    "be",
+    "been",
+    "being",
+    "but",
+    "by",
+    "can",
+    "cant",
+    "contacting",
+    "could",
+    "customer",
+    "did",
+    "do",
+    "does",
+    "else",
+    "email",
+    "for",
+    "from",
+    "had",
+    "has",
+    "have",
+    "happiness",
+    "he",
+    "hello",
+    "help",
+    "her",
+    "hi",
+    "him",
+    "his",
+    "how",
+    "i",
+    "if",
+    "in",
+    "into",
+    "is",
+    "it",
+    "its",
+    "mail",
+    "mailbird",
+    "many",
+    "me",
+    "my",
+    "no",
+    "not",
+    "of",
+    "on",
+    "or",
+    "our",
+    "please",
+    "problem",
+    "she",
+    "should",
+    "so",
+    "team",
+    "thank",
+    "thanks",
+    "that",
+    "the",
+    "their",
+    "there",
+    "these",
+    "they",
+    "this",
+    "those",
+    "to",
+    "too",
+    "was",
+    "we",
+    "were",
+    "what",
+    "when",
+    "where",
+    "which",
+    "who",
+    "why",
+    "will",
+    "with",
+    "without",
+    "would",
+    "you",
+    "your",
+}
+
+
+def _zendesk_extract_keywords(text: str) -> set[str]:
+    raw = str(text or "").lower()
+    tokens = re.findall(r"[^\W_]+", raw, flags=re.UNICODE)
+    return {t for t in tokens if len(t) >= 3 and t not in _ZENDESK_RETRIEVAL_STOPWORDS}
+
+
+def _zendesk_min_overlap(query_keywords: set[str]) -> int:
+    if len(query_keywords) >= 12:
+        return 3
+    if len(query_keywords) >= 6:
+        return 2
+    return 1
+
+
+def _zendesk_lexically_relevant(
+    query_keywords: set[str],
+    candidate_text: str,
+    *,
+    min_overlap: int,
+    min_item_coverage: float,
+) -> bool:
+    candidate_keywords = _zendesk_extract_keywords(candidate_text)
+    if not query_keywords or not candidate_keywords:
+        return True
+    overlap = len(query_keywords & candidate_keywords)
+    if overlap < min_overlap:
+        return False
+    return (overlap / max(1, len(candidate_keywords))) >= float(min_item_coverage)
+
+
+def _filter_similar_resolutions_for_ticket(
+    ticket_text: str,
+    resolutions: list[Any],
+) -> list[Any]:
+    if not resolutions:
+        return []
+    query_keywords = _zendesk_extract_keywords(ticket_text)
+    if not query_keywords:
+        return list(resolutions)
+
+    min_overlap = _zendesk_min_overlap(query_keywords)
+    filtered: list[Any] = []
+    for res in resolutions:
+        sim = getattr(res, "similarity", None)
+        try:
+            if isinstance(sim, (int, float)) and float(sim) >= 0.86:
+                filtered.append(res)
+                continue
+        except Exception:
+            pass
+
+        prob = str(getattr(res, "problem_summary", "") or "")
+        sol = str(getattr(res, "solution_summary", "") or "")
+        text = f"{prob}\n{sol}".strip()
+        if _zendesk_lexically_relevant(
+            query_keywords,
+            text,
+            min_overlap=min_overlap,
+            min_item_coverage=0.08,
+        ):
+            filtered.append(res)
+
+    return filtered
+
+
 def _format_similar_scenarios_md(
     ticket_id: str,
     query: str,
@@ -344,14 +504,30 @@ async def _run_pattern_preflight(
     max_hits = max(0, min(10, int(max_hits)))
     min_similarity = float(min_similarity)
 
+    seed_category = _infer_ticket_category_from_text(ticket_text)
     similar: list[Any] = []
     if max_hits > 0:
         try:
-            similar = await issue_store.find_similar_resolutions(
-                query=ticket_text,
-                limit=max_hits,
-                min_similarity=min_similarity,
-            )
+            if seed_category:
+                similar = await issue_store.find_similar_resolutions(
+                    query=ticket_text,
+                    category=seed_category,
+                    limit=max_hits,
+                    min_similarity=min_similarity,
+                )
+                if not similar:
+                    cross_min = min(0.95, min_similarity + 0.08)
+                    similar = await issue_store.find_similar_resolutions(
+                        query=ticket_text,
+                        limit=max_hits,
+                        min_similarity=cross_min,
+                    )
+            else:
+                similar = await issue_store.find_similar_resolutions(
+                    query=ticket_text,
+                    limit=max_hits,
+                    min_similarity=min_similarity,
+                )
         except Exception as exc:  # pragma: no cover - best effort
             logger.debug(
                 "issue_pattern_search_failed ticket_id=%s error=%s",
@@ -360,6 +536,7 @@ async def _run_pattern_preflight(
             )
             similar = []
 
+    similar = _filter_similar_resolutions_for_ticket(ticket_text, similar)
     md = _format_similar_scenarios_md(ticket_id, ticket_text, similar)
     await workspace_store.write_file("/context/similar_scenarios.md", md)
     await workspace_store.write_file("/context/similar_resolutions.md", md)
@@ -373,6 +550,10 @@ async def _run_pattern_preflight(
         )
 
     category = _infer_ticket_category(ticket_text, similar)
+    if seed_category and category and category != seed_category and similar:
+        top_sim = getattr(similar[0], "similarity", None)
+        if not isinstance(top_sim, (int, float)) or float(top_sim) < 0.86:
+            category = seed_category
     if not category:
         return None
 
@@ -1387,7 +1568,11 @@ def _text_stats(text: str | None) -> tuple[int, int, int]:
     return chars, words, tokens_est
 
 
-def _format_internal_retrieval_context(results: List[Dict[str, Any]]) -> Dict[str, Any]:
+def _format_internal_retrieval_context(
+    results: List[Dict[str, Any]],
+    *,
+    query: str,
+) -> Dict[str, Any]:
     macro_min = float(getattr(settings, "zendesk_macro_min_relevance", 0.55))
     kb_min = float(getattr(settings, "primary_agent_min_kb_relevance", 0.35))
     feedme_min = float(getattr(settings, "zendesk_feedme_min_relevance", 0.45))
@@ -1395,22 +1580,74 @@ def _format_internal_retrieval_context(results: List[Dict[str, Any]]) -> Dict[st
         getattr(settings, "zendesk_internal_retrieval_max_per_source", 5)
     )
 
+    query_keywords = _zendesk_extract_keywords(query)
+    min_overlap = _zendesk_min_overlap(query_keywords)
+
+    def keep_item(
+        item: Dict[str, Any],
+        *,
+        min_score: float,
+        bypass_score: float,
+        min_item_coverage: float,
+    ) -> bool:
+        score = float(item.get("relevance_score") or 0.0)
+        if score < float(min_score):
+            return False
+        if score >= float(bypass_score):
+            return True
+        if not query_keywords:
+            return True
+
+        title = str(item.get("title") or "")
+        raw_content = item.get("content") or item.get("snippet") or ""
+        if item.get("source") == "macro":
+            content = _normalize_macro_body(str(raw_content))
+        else:
+            content = str(raw_content)
+        candidate_text = f"{title}\n{content}"
+        return _zendesk_lexically_relevant(
+            query_keywords,
+            candidate_text,
+            min_overlap=min_overlap,
+            min_item_coverage=min_item_coverage,
+        )
+
+    macro_bypass = max(0.85, macro_min + 0.25)
+    kb_bypass = max(0.80, kb_min + 0.25)
+    feedme_bypass = max(0.80, feedme_min + 0.25)
+
     macro_hits = [
         r
         for r in results
         if r.get("source") == "macro"
-        and float(r.get("relevance_score") or 0.0) >= macro_min
+        and keep_item(
+            r,
+            min_score=macro_min,
+            bypass_score=macro_bypass,
+            min_item_coverage=0.12,
+        )
     ]
     kb_hits = [
         r
         for r in results
-        if r.get("source") == "kb" and float(r.get("relevance_score") or 0.0) >= kb_min
+        if r.get("source") == "kb"
+        and keep_item(
+            r,
+            min_score=kb_min,
+            bypass_score=kb_bypass,
+            min_item_coverage=0.08,
+        )
     ]
     feedme_hits = [
         r
         for r in results
         if r.get("source") == "feedme"
-        and float(r.get("relevance_score") or 0.0) >= feedme_min
+        and keep_item(
+            r,
+            min_score=feedme_min,
+            bypass_score=feedme_bypass,
+            min_item_coverage=0.08,
+        )
     ]
 
     macro_hits = sorted(
@@ -2853,7 +3090,9 @@ async def _generate_reply(
                         macro_id = meta.get("zendesk_id")
                         if macro_id:
                             macros_used.append(str(macro_id))
-                preflight = _format_internal_retrieval_context(retrieved_results)
+                preflight = _format_internal_retrieval_context(
+                    retrieved_results, query=user_query
+                )
                 internal_context = preflight.get("context")
                 macro_ok = bool(preflight.get("macro_ok"))
                 feedme_ok = bool(preflight.get("feedme_ok"))

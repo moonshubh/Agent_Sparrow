@@ -28,7 +28,7 @@ export interface ModelConfig {
 const FALLBACK_MODELS: Record<Provider, string[]> = {
   google: ['gemini-3-flash-preview', 'gemini-2.5-pro', 'gemini-3-pro-preview'],
   xai: ['grok-4-1-fast-reasoning'],
-  openrouter: ['x-ai/grok-4.1-fast:free', 'minimax/minimax-m2'],
+  openrouter: ['x-ai/grok-4.1-fast', 'minimax/minimax-m2.1'],
 }
 
 // Official model display names (from ai.google.dev & docs.x.ai)
@@ -37,12 +37,11 @@ const FALLBACK_DISPLAY_NAMES: Record<string, string> = {
   'gemini-3-pro-preview': 'Gemini 3.0 Pro',
   'gemini-3-flash-preview': 'Gemini 3.0 Flash',
   'gemini-2.5-pro': 'Gemini 2.5 Pro',
-  'gemini-2.5-flash': 'Gemini 2.5 Flash',
   // xAI Grok
   'grok-4-1-fast-reasoning': 'Grok 4.1 Fast',
   // OpenRouter
-  'x-ai/grok-4.1-fast:free': 'Grok 4.1 Fast (Free)',
-  'minimax/minimax-m2': 'MiniMax M2',
+  'x-ai/grok-4.1-fast': 'Grok 4.1 Fast',
+  'minimax/minimax-m2.1': 'MiniMax M2.1',
 }
 
 // Human-readable provider labels
@@ -208,7 +207,7 @@ export const modelsAPI = {
       defaults: {
         google: 'gemini-3-flash-preview',
         xai: 'grok-4-1-fast-reasoning',
-        openrouter: 'x-ai/grok-4.1-fast:free',
+        openrouter: 'x-ai/grok-4.1-fast',
       },
       fallback_chains: {
         google: {
@@ -220,8 +219,8 @@ export const modelsAPI = {
           'grok-4-1-fast-reasoning': null,
         },
         openrouter: {
-          'x-ai/grok-4.1-fast:free': 'minimax/minimax-m2',
-          'minimax/minimax-m2': null,
+          'x-ai/grok-4.1-fast': 'minimax/minimax-m2.1',
+          'minimax/minimax-m2.1': null,
         },
       },
       available_providers: { google: true, xai: false, openrouter: false },
