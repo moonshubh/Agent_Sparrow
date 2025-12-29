@@ -37,39 +37,24 @@ jobs:
         if: ${{ steps.release.outputs.release_created }}
         uses: slackapi/slack-github-action@v2.0.0
         with:
-          webhook: ${{ secrets.SLACK_WEBHOOK_URL }}
-          webhook-type: incoming-webhook
+          method: chat.postMessage
+          token: ${{ secrets.SLACK_BOT_TOKEN }}
           payload: |
-            {
-              "text": "🚀 Agent Sparrow ${{ steps.release.outputs.tag_name }} Released",
-              "blocks": [
-                {
-                  "type": "header",
-                  "text": {
-                    "type": "plain_text",
-                    "text": "🚀 New Release: Agent Sparrow ${{ steps.release.outputs.tag_name }}",
-                    "emoji": true
-                  }
-                },
-                {
-                  "type": "section",
-                  "fields": [
-                    {
-                      "type": "mrkdwn",
-                      "text": "*Version:*\n${{ steps.release.outputs.version }}"
-                    },
-                    {
-                      "type": "mrkdwn",
-                      "text": "*Tag:*\n${{ steps.release.outputs.tag_name }}"
-                    }
-                  ]
-                },
-                {
-                  "type": "section",
-                  "text": {
-                    "type": "mrkdwn",
-                    "text": "<${{ steps.release.outputs.html_url }}|View Release Notes>"
-                  }
-                }
-              ]
-            }
+            channel: "C09MV869UPK"
+            text: "🚀 Agent Sparrow ${{ steps.release.outputs.tag_name }} Released"
+            blocks:
+              - type: "header"
+                text:
+                  type: "plain_text"
+                  text: "🚀 New Release: Agent Sparrow ${{ steps.release.outputs.tag_name }}"
+                  emoji: true
+              - type: "section"
+                fields:
+                  - type: "mrkdwn"
+                    text: "*Version:*\n${{ steps.release.outputs.version }}"
+                  - type: "mrkdwn"
+                    text: "*Tag:*\n${{ steps.release.outputs.tag_name }}"
+              - type: "section"
+                text:
+                  type: "mrkdwn"
+                  text: "<${{ steps.release.outputs.html_url }}|View Release Notes>"
