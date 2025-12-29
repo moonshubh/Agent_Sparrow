@@ -459,7 +459,8 @@ class StreamEventHandler:
                     config=self.config,
                     version="v2",
                 ):
-                    logger.debug(
+                    # Extremely chatty; keep at TRACE so production logs stay within provider limits.
+                    logger.trace(
                         "Stream event: {} name={}",
                         event.get("event"),
                         event.get("name"),
@@ -864,16 +865,18 @@ class StreamEventHandler:
 
         chunk_text = visible_text
 
-        # Debug logging
-        logger.debug(
-            f"_on_model_stream: chunk_text={chunk_text[:100] if chunk_text else 'empty'!r}, "
-            f"has_tool_calls={has_tool_calls}, chunk_type={type(chunk).__name__}"
+        # Hot path: keep per-chunk logs at TRACE to avoid log flooding in production.
+        logger.trace(
+            "_on_model_stream chunk_len={} has_tool_calls={} chunk_type={}",
+            len(chunk_text) if chunk_text else 0,
+            has_tool_calls,
+            type(chunk).__name__,
         )
 
         if chunk_text:
             normalized = chunk_text.strip()
             if not normalized:
-                logger.debug(
+                logger.trace(
                     "empty_stream_chunk",
                     provider=getattr(self.state, "provider", None),
                     model=getattr(self.state, "model", None),
@@ -882,7 +885,7 @@ class StreamEventHandler:
                 return
 
             if normalized.lower() == "empty":
-                logger.debug(
+                logger.trace(
                     "empty_stream_placeholder_chunk",
                     provider=getattr(self.state, "provider", None),
                     model=getattr(self.state, "model", None),
@@ -990,14 +993,10 @@ class StreamEventHandler:
             # Only emit text content when not streaming tool call arguments,
             # not JSON payloads, and not inside a dedicated thinking block.
             if not has_tool_calls and not looks_like_json and visible_content and not is_thinking_chunk:
-                logger.info(
-                    "Emitting TEXT_MESSAGE_CONTENT: {!r}...",
-                    visible_content[:50],
-                )
                 self.emitter.emit_text_content(visible_content)
         else:
             # Empty chunk (no text, no tool calls) — log for diagnostics (common with some providers)
-            logger.debug(
+            logger.trace(
                 "empty_stream_chunk",
                 provider=getattr(self.state, "provider", None),
                 model=getattr(self.state, "model", None),

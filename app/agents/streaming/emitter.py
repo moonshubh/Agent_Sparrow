@@ -334,17 +334,13 @@ class StreamEventEmitter:
         Args:
             delta: The text chunk to emit.
         """
+        # Hot path: avoid per-chunk logging (can easily exceed provider log limits).
         if self.writer is None or not delta:
-            logger.debug(
-                "emit_text_content skipped: writer={}, delta={}",
-                self.writer is not None,
-                bool(delta),
-            )
             return
 
         # Ensure message is started
         if not getattr(self, '_message_started', False):
-            logger.info("emit_text_content: Starting new text message")
+            logger.debug("emit_text_content: Starting new text message")
             self.start_text_message()
 
         event = {
@@ -352,10 +348,6 @@ class StreamEventEmitter:
             "messageId": getattr(self, '_current_message_id', self.root_id),
             "delta": delta,
         }
-        logger.info(
-            "emit_text_content: Emitting event with delta length={}",
-            len(delta),
-        )
         self.writer(event)
 
     def end_text_message(self) -> None:

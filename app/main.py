@@ -58,10 +58,14 @@ from app.api.v1.endpoints import (
 )
 from app.api.v1.websocket import feedme_websocket  # FeedMe WebSocket endpoints
 from app.core.settings import settings
+from app.core.logging_setup import configure_logging
 from app.db.embedding_config import EXPECTED_DIM
 from app.integrations.zendesk import router as zendesk_router
 from app.integrations.zendesk.admin_endpoints import router as zendesk_admin_router
 from app.integrations.zendesk.scheduler import start_background_scheduler
+
+# Configure logging early to avoid noisy DEBUG defaults in production.
+configure_logging(production=settings.is_production_mode())
 
 # Conditional imports based on security configuration
 auth_endpoints = None
@@ -142,17 +146,29 @@ if ENABLE_OTEL:
     except Exception as _otel_exc:
         print(f"[OTel] Warning: failed to instrument FastAPI -> {_otel_exc}. Continuing without instrumentation.")
 
+_DEBUG_AGUI_REQUESTS: bool = os.getenv("DEBUG_AGUI_REQUESTS", "false").lower() in {
+    "1",
+    "true",
+    "yes",
+}
+
+
 @app.middleware("http")
 async def _debug_log_agui_requests(request: Request, call_next):
-    if request.url.path.startswith("/api/v1/agui"):
-        body_bytes = await request.body()
-        try:
-            body_preview = body_bytes.decode("utf-8")
-        except Exception:
-            body_preview = repr(body_bytes)
-        logging.info("agui_request path=%s method=%s body=%s", request.url.path, request.method, body_preview)
-    response = await call_next(request)
-    return response
+    """Lightweight diagnostics for AG-UI requests.
+
+    Never logs request bodies (may include base64-encoded attachments).
+    Enable via `DEBUG_AGUI_REQUESTS=true`.
+    """
+    if _DEBUG_AGUI_REQUESTS and request.url.path.startswith("/api/v1/agui"):
+        logging.info(
+            "agui_request path=%s method=%s content_length=%s content_type=%s",
+            request.url.path,
+            request.method,
+            request.headers.get("content-length"),
+            request.headers.get("content-type"),
+        )
+    return await call_next(request)
 
 # AG-UI streaming endpoint
 # LangGraph stream endpoint via router: /api/v1/agui/stream
