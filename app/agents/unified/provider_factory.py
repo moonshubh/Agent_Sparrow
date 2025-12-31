@@ -326,6 +326,7 @@ def _build_xai_model(
         temperature=temperature,
         xai_api_key=settings.xai_api_key,
         extra_body=extra_body,
+        timeout=REQUEST_TIMEOUT_SECONDS,
     )
 
 
@@ -383,6 +384,7 @@ def _build_openrouter_model(
         base_url=base_url,
         default_headers=headers,
         extra_body=extra_body,
+        timeout=REQUEST_TIMEOUT_SECONDS,
     )
 
 

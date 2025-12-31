@@ -1237,10 +1237,21 @@ async def run_unified_agent(state: GraphState, config: Optional[RunnableConfig] 
         except Exception:
             writer = None
 
-        # 5. Retrieve memory context
+        # 5. Initialize stream event emitter early so the client receives
+        # immediate feedback even if preprocessing (attachments, memory) is slow.
+        root_id = str(state.trace_id or state.session_id or "run")
+        emitter = StreamEventEmitter(writer, root_id=root_id)
+        emitter.start_root_operation(
+            name="Unified Agent",
+            provider=runtime.provider,
+            model=runtime.model,
+            task_type=runtime.task_type,
+        )
+
+        # 6. Retrieve memory context
         memory_context = await _retrieve_memory_context(state)
 
-        # 6. Prepare messages using MessagePreparer
+        # 7. Prepare messages using MessagePreparer
         preparer = MessagePreparer(
             helper=helper,
             session_cache=session_cache,
@@ -1256,22 +1267,20 @@ async def run_unified_agent(state: GraphState, config: Optional[RunnableConfig] 
         if autoroute_msg:
             messages.append(autoroute_msg)
 
-        # 7. Extract user query for reranking
+        # Attachments may include large base64 payloads (images/PDFs). By this point
+        # they've been inlined into `messages` (multimodal or summarized), so we can
+        # drop the raw payload to reduce memory pressure and checkpoint bloat.
+        try:
+            state.attachments = []
+        except Exception:
+            pass
+
+        # 8. Extract user query for reranking
         last_user_query = None
         for message in reversed(messages):
             if isinstance(message, HumanMessage):
                 last_user_query = _coerce_message_text(message)
                 break
-
-        # 8. Initialize stream event emitter
-        root_id = str(state.trace_id or state.session_id or "run")
-        emitter = StreamEventEmitter(writer, root_id=root_id)
-        emitter.start_root_operation(
-            name="Unified Agent",
-            provider=runtime.provider,
-            model=runtime.model,
-            task_type=runtime.task_type,
-        )
 
         # 9. Transition to awaiting model and stream with handler
         tracker.transition_to(

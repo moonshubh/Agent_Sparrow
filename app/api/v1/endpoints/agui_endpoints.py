@@ -250,18 +250,31 @@ def _coerce_text(content: Any) -> str:
 
 
 def _strip_reasoning_details(value: Any) -> Any:
-    """Remove OpenRouter/OpenAI-style reasoning_details from JSON-like payloads.
+    """Remove large / sensitive fields from JSON-like debug payloads.
 
     MiniMax M2.1 can emit large `reasoning_details` blocks (especially in streaming
-    chunks). These should not be sent to the browser as part of RAW debug events.
+    chunks). Attachments can also contain base64 `data:` URLs. These should not be
+    sent to the browser as part of RAW debug events.
     """
 
     if isinstance(value, dict):
-        return {
-            k: _strip_reasoning_details(v)
-            for k, v in value.items()
-            if k != "reasoning_details"
-        }
+        sanitized: Dict[str, Any] = {}
+        for key, item in value.items():
+            if key in {"reasoning_details", "reasoningDetails"}:
+                continue
+
+            # Attachment payloads can include base64 data URLs.
+            if key in {"data_url", "dataUrl"} and isinstance(item, str) and item.startswith("data:"):
+                sanitized[key] = f"<redacted data_url len={len(item)}>"
+                continue
+
+            # Multimodal blocks sometimes contain image_url.url as a data URI.
+            if key == "url" and isinstance(item, str) and item.startswith("data:"):
+                sanitized[key] = f"<redacted data_uri len={len(item)}>"
+                continue
+
+            sanitized[key] = _strip_reasoning_details(item)
+        return sanitized
     if isinstance(value, list):
         return [_strip_reasoning_details(v) for v in value]
     return value
@@ -921,7 +934,11 @@ async def agui_stream(
 
         async def event_generator():
             """Stream AG-UI protocol events from LangGraphAgent."""
-            with tracer.start_as_current_span("agui.stream.run") as run_span:
+            # Do not use `start_as_current_span` across `yield` boundaries.
+            # Starlette may close the generator in a different context, which can
+            # cause noisy context-detach errors on client disconnects.
+            run_span = tracer.start_span("agui.stream.run")
+            try:
                 cfg = config_dict.get("configurable", {})
                 run_span.set_attribute("agui.session_id", str(cfg.get("session_id") or ""))
                 run_span.set_attribute("agui.trace_id", str(cfg.get("trace_id") or ""))
@@ -934,7 +951,7 @@ async def agui_stream(
                     async for event in agent.run(enriched_input):
                         update: dict[str, Any] = {}
 
-                        # Avoid sending large `reasoning_details` blocks to the browser.
+                        # Avoid sending large debug payloads (reasoning details, data URLs) to the browser.
                         try:
                             if hasattr(event, "raw_event") and getattr(event, "raw_event") is not None:
                                 update["raw_event"] = _strip_reasoning_details(
@@ -966,6 +983,8 @@ async def agui_stream(
                     except Exception:
                         pass
                     return
+            finally:
+                run_span.end()
 
         span.set_status(Status(StatusCode.OK))
         return StreamingResponse(

@@ -17,6 +17,10 @@ from loguru import logger
 from .attachment_processor import AttachmentProcessor, get_attachment_processor
 from .multimodal_processor import MultimodalProcessor, get_multimodal_processor, ProcessedAttachments
 from app.agents.unified.model_context import get_model_context_window
+from app.agents.unified.provider_factory import build_chat_model
+from app.core.config import get_registry
+from app.core.config.model_registry import get_model_by_id
+from app.core.settings import settings
 
 if TYPE_CHECKING:
     from app.agents.helpers.gemma_helper import GemmaHelper
@@ -128,38 +132,97 @@ class MessagePreparer:
 
         # 4. Process attachments (multimodal for images/PDFs, text inline)
         if state.attachments:
-            processed = self.multimodal_processor.process_attachments(state.attachments)
+            # Attachment processing (especially image re-encoding) can be CPU-heavy.
+            # Run in a worker thread to avoid blocking the event loop.
+            processed = await asyncio.to_thread(
+                self.multimodal_processor.process_attachments,
+                state.attachments,
+            )
 
             if processed.has_multimodal:
-                # Build multimodal HumanMessage with images/PDFs
-                human_message_replaced = False
-                for i in range(len(messages) - 1, -1, -1):
-                    if isinstance(messages[i], HumanMessage):
-                        user_text = self._coerce_message_text(messages[i])
-                        messages[i] = self._build_multimodal_human_message(
-                            user_text, processed
-                        )
-                        stats["multimodal_attachments"] = len(processed.multimodal_blocks)
-                        human_message_replaced = True
-                        break
+                supports_vision = self._model_supports_vision(state)
+                stats["model_supports_vision"] = supports_vision
 
-                if not human_message_replaced:
-                    fallback_text = (
-                        self._coerce_message_text(messages[-1])
-                        if messages
-                        else "User provided attachments."
-                    )
-                    messages.append(
-                        self._build_multimodal_human_message(
-                            fallback_text, processed
+                if supports_vision:
+                    # Build multimodal HumanMessage with images/PDFs
+                    human_message_replaced = False
+                    for i in range(len(messages) - 1, -1, -1):
+                        if isinstance(messages[i], HumanMessage):
+                            user_text = self._coerce_message_text(messages[i])
+                            messages[i] = self._build_multimodal_human_message(
+                                user_text, processed
+                            )
+                            stats["multimodal_attachments"] = len(
+                                processed.multimodal_blocks
+                            )
+                            human_message_replaced = True
+                            break
+
+                    if not human_message_replaced:
+                        fallback_text = (
+                            self._coerce_message_text(messages[-1])
+                            if messages
+                            else "User provided attachments."
                         )
+                        messages.append(
+                            self._build_multimodal_human_message(
+                                fallback_text, processed
+                            )
+                        )
+                        stats["multimodal_attachments"] = len(
+                            processed.multimodal_blocks
+                        )
+
+                    stats["attachments_inlined"] = (
+                        len(processed.multimodal_blocks)
+                        + (1 if processed.text_content else 0)
                     )
+                else:
+                    # Non-vision model selected: run a vision sub-model to extract
+                    # a concise textual description that can be fed to the chosen model.
+                    user_query_for_vision = last_user_query or "User provided attachments."
+                    extracted = await self._vision_fallback_extract(
+                        user_query=user_query_for_vision,
+                        processed=processed,
+                    )
+                    inlined_blocks = 0
+                    if extracted:
+                        messages.append(
+                            SystemMessage(
+                                content=(
+                                    "Attached image/PDF context (extracted with a vision model):\n"
+                                    f"{extracted}"
+                                ),
+                                name="attachment_vision_summary",
+                            )
+                        )
+                        stats["vision_fallback_used"] = True
+                        inlined_blocks += 1
+                    else:
+                        messages.append(
+                            SystemMessage(
+                                content=(
+                                    "User attached images/PDFs, but the selected model does not "
+                                    "support vision and no vision fallback was available. "
+                                    "Ask the user to switch to a vision-capable model or re-upload "
+                                    "as text."
+                                ),
+                                name="attachment_vision_unavailable",
+                            )
+                        )
+                        stats["vision_fallback_used"] = False
+                        inlined_blocks += 1
+
+                    if processed.text_content:
+                        messages.append(
+                            SystemMessage(
+                                content=f"Attached files:\n{processed.text_content}",
+                                name="attachment_text_inline",
+                            )
+                        )
+                        inlined_blocks += 1
                     stats["multimodal_attachments"] = len(processed.multimodal_blocks)
-
-                stats["attachments_inlined"] = (
-                    len(processed.multimodal_blocks)
-                    + (1 if processed.text_content else 0)
-                )
+                    stats["attachments_inlined"] = inlined_blocks
             elif processed.text_content:
                 # Text-only: use existing SystemMessage approach
                 messages.append(
@@ -183,6 +246,88 @@ class MessagePreparer:
         stats["estimated_tokens"] = self._estimate_tokens(messages)
 
         return messages, stats
+
+    def _model_supports_vision(self, state: "GraphState") -> bool:
+        """Best-effort vision capability check for the currently-selected model."""
+        model = (getattr(state, "model", None) or "").strip()
+        if not model:
+            return False
+        spec = get_model_by_id(model)
+        if spec is not None:
+            return bool(spec.supports_vision)
+        model_lower = model.lower()
+        # Heuristics for custom/unregistered model IDs.
+        if "gemini" in model_lower:
+            return True
+        if "grok" in model_lower:
+            return True
+        return False
+
+    async def _vision_fallback_extract(
+        self,
+        *,
+        user_query: str,
+        processed: ProcessedAttachments,
+    ) -> Optional[str]:
+        """Extract text context from multimodal attachments using a vision model."""
+        if not processed.multimodal_blocks:
+            return None
+
+        vision_candidates: list[tuple[str, str]] = []
+        if settings.gemini_api_key:
+            vision_candidates.append(("google", get_registry().coordinator_google.id))
+        if settings.xai_api_key:
+            vision_candidates.append(("xai", get_registry().coordinator_xai.id))
+        if getattr(settings, "openrouter_api_key", None):
+            vision_candidates.append(("openrouter", get_registry().coordinator_openrouter.id))
+
+        if not vision_candidates:
+            return None
+
+        vision_prompt = (
+            "You are a vision assistant. The user question is:\n\n"
+            f"{user_query}\n\n"
+            "You will be given one or more attachments (images and/or PDFs). "
+            "Extract all details that are relevant to answering the question.\n\n"
+            "Return:\n"
+            "1) A short per-attachment summary (what it shows)\n"
+            "2) Any text you can read (OCR), preserving key numbers/labels\n"
+            "3) Any error messages, UI labels, or structured data\n"
+            "Be concise but include everything needed to answer accurately."
+        )
+
+        vision_human = HumanMessage(
+            content=[{"type": "text", "text": vision_prompt}, *processed.multimodal_blocks]
+        )
+
+        for provider, model in vision_candidates:
+            spec = get_model_by_id(model)
+            if spec is not None and not spec.supports_vision:
+                continue
+            try:
+                vision_model = build_chat_model(provider=provider, model=model, role="coordinator")
+                response = await vision_model.ainvoke(
+                    [
+                        SystemMessage(
+                            content="Extract factual visual context from attachments for downstream reasoning.",
+                            name="vision_fallback_system",
+                        ),
+                        vision_human,
+                    ]
+                )
+                extracted = self._coerce_message_text(response).strip()
+                if extracted:
+                    return extracted
+            except Exception as exc:
+                logger.warning(
+                    "vision_fallback_extract_failed",
+                    provider=provider,
+                    model=model,
+                    error=str(exc),
+                )
+                continue
+
+        return None
 
     async def _rewrite_query(
         self,

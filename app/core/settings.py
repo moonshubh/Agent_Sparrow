@@ -257,6 +257,12 @@ class Settings(BaseSettings):
     memory_embed_model: str = Field(default="models/gemini-embedding-001", alias="MEMORY_EMBED_MODEL")
     memory_embed_dims: int = Field(default=3072, alias="MEMORY_EMBED_DIMS")
 
+    # Memory UI (Phase 3+) - capture and retrieval toggles
+    enable_memory_ui_capture: bool = Field(default=False, alias="ENABLE_MEMORY_UI_CAPTURE")
+    enable_memory_ui_retrieval: bool = Field(default=False, alias="ENABLE_MEMORY_UI_RETRIEVAL")
+    memory_ui_agent_id: str = Field(default="sparrow", alias="MEMORY_UI_AGENT_ID")
+    memory_ui_tenant_id: str = Field(default="mailbot", alias="MEMORY_UI_TENANT_ID")
+
     # FeedMe AI Configuration
     feedme_model_name: str = Field(default="gemini-2.5-flash-lite-preview-09-2025", alias="FEEDME_MODEL_NAME")
     feedme_ai_pdf_enabled: bool = Field(default=True, alias="FEEDME_AI_PDF_ENABLED")
@@ -379,9 +385,9 @@ class Settings(BaseSettings):
     zendesk_windows_brand_ids: List[str] = Field(default_factory=list, alias="ZENDESK_WINDOWS_BRAND_IDS")
     zendesk_dry_run: bool = Field(default=True, alias="ZENDESK_DRY_RUN")
     zendesk_poll_interval_sec: int = Field(default=60, alias="ZENDESK_POLL_INTERVAL_SEC")
-    zendesk_rpm_limit: int = Field(default=300, alias="ZENDESK_RPM_LIMIT")
+    zendesk_rpm_limit: int = Field(default=240, alias="ZENDESK_RPM_LIMIT")
     zendesk_import_rpm_limit: int = Field(default=10, alias="ZENDESK_IMPORT_RPM_LIMIT")
-    zendesk_monthly_api_budget: int = Field(default=350, alias="ZENDESK_MONTHLY_API_BUDGET")
+    zendesk_monthly_api_budget: int = Field(default=1500, alias="ZENDESK_MONTHLY_API_BUDGET")
     zendesk_gemini_daily_limit: int = Field(default=380, alias="ZENDESK_GEMINI_DAILY_LIMIT")
     zendesk_max_retries: int = Field(default=5, alias="ZENDESK_MAX_RETRIES")
     zendesk_queue_retention_days: int = Field(default=30, alias="ZENDESK_QUEUE_RETENTION_DAYS")
@@ -398,11 +404,69 @@ class Settings(BaseSettings):
     )
     zendesk_firecrawl_support_pages: int = Field(default=3, alias="ZENDESK_FIRECRAWL_SUPPORT_PAGES")
     zendesk_firecrawl_support_screenshots: bool = Field(default=False, alias="ZENDESK_FIRECRAWL_SUPPORT_SCREENSHOTS")
+    # Query Agent (Phase 1 context engineering)
+    zendesk_query_agent_enabled: bool = Field(default=True, alias="ZENDESK_QUERY_AGENT_ENABLED")
+    zendesk_query_agent_model: str = Field(default="gemini-2.5-flash", alias="ZENDESK_QUERY_AGENT_MODEL")
+    zendesk_query_reformulation_max_attempts: int = Field(
+        default=2, alias="ZENDESK_QUERY_REFORMULATION_MAX_ATTEMPTS"
+    )
+    zendesk_query_confidence_threshold: float = Field(default=0.6, alias="ZENDESK_QUERY_CONFIDENCE_THRESHOLD")
+    zendesk_query_expansion_count: int = Field(default=2, alias="ZENDESK_QUERY_EXPANSION_COUNT")
+    # Query decomposition for multi-issue tickets (Phase 2 context engineering)
+    zendesk_query_decomposition_enabled: bool = Field(
+        default=True, alias="ZENDESK_QUERY_DECOMPOSITION_ENABLED"
+    )
+    zendesk_query_decomposition_max_subqueries: int = Field(
+        default=3, alias="ZENDESK_QUERY_DECOMPOSITION_MAX_SUBQUERIES"
+    )
+    # Complexity detection (Phase 2 context engineering)
+    zendesk_complexity_threshold: float = Field(default=0.5, alias="ZENDESK_COMPLEXITY_THRESHOLD")
     # Retrieval tuning for macro/KB/FeedMe preflight
     zendesk_internal_retrieval_min_relevance: float = Field(default=0.35, alias="ZENDESK_INTERNAL_RETRIEVAL_MIN_RELEVANCE")
     zendesk_internal_retrieval_max_per_source: int = Field(default=3, alias="ZENDESK_INTERNAL_RETRIEVAL_MAX_PER_SOURCE")
     zendesk_macro_min_relevance: float = Field(default=0.55, alias="ZENDESK_MACRO_MIN_RELEVANCE")
     zendesk_feedme_min_relevance: float = Field(default=0.45, alias="ZENDESK_FEEDME_MIN_RELEVANCE")
+    # Quality-first retrieval (Phase 3 context engineering)
+    zendesk_quality_first_retrieval_enabled: bool = Field(
+        default=True, alias="ZENDESK_QUALITY_FIRST_RETRIEVAL_ENABLED"
+    )
+    zendesk_rerank_enabled: bool = Field(default=True, alias="ZENDESK_RERANK_ENABLED")
+    zendesk_rerank_model: str = Field(default="gemini-2.5-flash", alias="ZENDESK_RERANK_MODEL")
+    zendesk_rerank_timeout_sec: int = Field(default=180, alias="ZENDESK_RERANK_TIMEOUT_SEC")
+    zendesk_clash_detection_enabled: bool = Field(
+        default=True, alias="ZENDESK_CLASH_DETECTION_ENABLED"
+    )
+    zendesk_clash_resolution: str = Field(default="prefer_newer", alias="ZENDESK_CLASH_RESOLUTION")
+    zendesk_context_budget_tokens: int = Field(default=8000, alias="ZENDESK_CONTEXT_BUDGET_TOKENS")
+    zendesk_confidence_high_threshold: float = Field(default=0.8, alias="ZENDESK_CONFIDENCE_HIGH_THRESHOLD")
+    zendesk_confidence_low_threshold: float = Field(default=0.6, alias="ZENDESK_CONFIDENCE_LOW_THRESHOLD")
+    # Output validation (Phase 4 context engineering)
+    zendesk_output_validation_enabled: bool = Field(
+        default=True, alias="ZENDESK_OUTPUT_VALIDATION_ENABLED"
+    )
+    zendesk_output_validation_max_rewrites: int = Field(
+        default=1, alias="ZENDESK_OUTPUT_VALIDATION_MAX_REWRITES"
+    )
+    zendesk_drift_guard_enabled: bool = Field(default=True, alias="ZENDESK_DRIFT_GUARD_ENABLED")
+    zendesk_drift_guard_strictness: str = Field(
+        default="medium", alias="ZENDESK_DRIFT_GUARD_STRICTNESS"
+    )
+    # Advanced retrieval (Phase 6 context engineering)
+    zendesk_feedme_slice_hydration_enabled: bool = Field(
+        default=True, alias="ZENDESK_FEEDME_SLICE_HYDRATION_ENABLED"
+    )
+    zendesk_feedme_slice_window_before: int = Field(
+        default=1, alias="ZENDESK_FEEDME_SLICE_WINDOW_BEFORE"
+    )
+    zendesk_feedme_slice_window_after: int = Field(
+        default=1, alias="ZENDESK_FEEDME_SLICE_WINDOW_AFTER"
+    )
+    zendesk_feedme_slice_max_chunks: int = Field(
+        default=8, alias="ZENDESK_FEEDME_SLICE_MAX_CHUNKS"
+    )
+    zendesk_source_specific_chunking_enabled: bool = Field(
+        default=True, alias="ZENDESK_SOURCE_SPECIFIC_CHUNKING_ENABLED"
+    )
     # Pattern-based context engineering (IssueResolutionStore + playbook learning)
     zendesk_issue_pattern_max_hits: int = Field(default=5, alias="ZENDESK_ISSUE_PATTERN_MAX_HITS")
     zendesk_issue_pattern_min_similarity: float = Field(default=0.62, alias="ZENDESK_ISSUE_PATTERN_MIN_SIMILARITY")
@@ -428,6 +492,38 @@ class Settings(BaseSettings):
         if normalized not in {"legacy", "markdown_v2"}:
             raise ValueError("zendesk_format_engine must be one of: legacy, markdown_v2")
         return normalized
+
+    @field_validator("zendesk_clash_resolution")
+    @classmethod
+    def validate_zendesk_clash_resolution(cls, value: str) -> str:
+        normalized = (value or "prefer_newer").strip().lower()
+        if normalized not in {"prefer_newer"}:
+            raise ValueError("zendesk_clash_resolution must be: prefer_newer")
+        return normalized
+
+    @field_validator("zendesk_drift_guard_strictness")
+    @classmethod
+    def validate_zendesk_drift_guard_strictness(cls, value: str) -> str:
+        normalized = (value or "medium").strip().lower()
+        if normalized not in {"low", "medium", "high"}:
+            raise ValueError("zendesk_drift_guard_strictness must be low, medium, or high")
+        return normalized
+
+    @field_validator("zendesk_feedme_slice_window_before", "zendesk_feedme_slice_window_after")
+    @classmethod
+    def validate_zendesk_feedme_slice_windows(cls, value: int) -> int:
+        value_int = int(value)
+        if value_int < 0 or value_int > 10:
+            raise ValueError("zendesk_feedme_slice_window must be between 0 and 10")
+        return value_int
+
+    @field_validator("zendesk_feedme_slice_max_chunks")
+    @classmethod
+    def validate_zendesk_feedme_slice_max_chunks(cls, value: int) -> int:
+        value_int = int(value)
+        if value_int < 1 or value_int > 50:
+            raise ValueError("zendesk_feedme_slice_max_chunks must be between 1 and 50")
+        return value_int
 
     @field_validator('feedme_max_pdf_size_mb')
     @classmethod
