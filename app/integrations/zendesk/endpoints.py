@@ -117,6 +117,7 @@ async def _upsert_month_usage(delta_calls: int = 0) -> Dict[str, Any]:
     """Ensure a usage row exists for current month and optionally increment calls_used."""
     supa = get_supabase_client()
     mk = datetime.now(timezone.utc).strftime("%Y-%m")
+    desired_budget = int(getattr(settings, "zendesk_monthly_api_budget", 0) or 0)
     resp = await supa._exec(
         lambda: supa.client.table("zendesk_usage")
         .select("month_key, calls_used, budget")
@@ -131,11 +132,33 @@ async def _upsert_month_usage(delta_calls: int = 0) -> Dict[str, Any]:
             .insert({
                 "month_key": mk,
                 "calls_used": 0,
-                "budget": settings.zendesk_monthly_api_budget,
+                "budget": desired_budget,
             })
             .execute()
         )
-        row = {"month_key": mk, "calls_used": 0, "budget": settings.zendesk_monthly_api_budget}
+        row = {"month_key": mk, "calls_used": 0, "budget": desired_budget}
+    else:
+        # Keep DB row budget in sync with config (so changes via env are applied immediately).
+        try:
+            current_budget = int(row.get("budget", desired_budget) or desired_budget)
+        except Exception:
+            current_budget = desired_budget
+        if desired_budget > 0 and current_budget != desired_budget:
+            try:
+                await supa._exec(
+                    lambda: supa.client.table("zendesk_usage")
+                    .update(
+                        {
+                            "budget": desired_budget,
+                            "updated_at": datetime.now(timezone.utc).isoformat(),
+                        }
+                    )
+                    .eq("month_key", mk)
+                    .execute()
+                )
+                row["budget"] = desired_budget
+            except Exception:
+                row["budget"] = desired_budget
     if delta_calls:
         new_val = max(0, int(row.get("calls_used", 0)) + int(delta_calls))
         await supa._exec(

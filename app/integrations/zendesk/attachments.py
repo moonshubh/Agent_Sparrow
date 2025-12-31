@@ -16,6 +16,8 @@ from typing import Iterable, List, Optional
 
 import requests
 
+from .client import ZendeskRateLimitError, zendesk_throttle
+
 logger = logging.getLogger(__name__)
 
 ZENDESK_SUBDOMAIN = os.environ.get("ZENDESK_SUBDOMAIN") or "mailbird"
@@ -51,7 +53,10 @@ def fetch_ticket_attachments(
     """
     exts = {ext.lower() for ext in allowed_extensions}
     url = f"https://{ZENDESK_SUBDOMAIN}.zendesk.com/api/v2/tickets/{ticket_id}/comments.json?sort_order=asc&include=attachments"
+    zendesk_throttle()
     resp = requests.get(url, auth=_auth(), timeout=20)
+    if resp.status_code == 429:
+        raise ZendeskRateLimitError.from_response(resp, operation="fetch_ticket_attachments")
     resp.raise_for_status()
     data = resp.json()
     comments = data.get("comments") or []
@@ -76,11 +81,18 @@ def fetch_ticket_attachments(
                 local_path = None
                 if content_url:
                     try:
+                        zendesk_throttle()
                         r = requests.get(content_url, auth=_auth(), timeout=30)
+                        if r.status_code == 429:
+                            raise ZendeskRateLimitError.from_response(
+                                r, operation="download_attachment"
+                            )
                         r.raise_for_status()
                         local_path = os.path.join(tmpdir, name)
                         with open(local_path, "wb") as f:
                             f.write(r.content)
+                    except ZendeskRateLimitError:
+                        raise
                     except Exception as exc:
                         logger.warning("failed_to_download_attachment", extra={"ticket_id": ticket_id, "name": name, "error": str(exc)})
                         local_path = None

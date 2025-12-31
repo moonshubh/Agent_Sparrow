@@ -3,16 +3,101 @@ from __future__ import annotations
 import base64
 import json
 import logging
+import threading
 import time
 from pathlib import Path
-from typing import Optional, Dict, Any, List, Generator
+from typing import Optional, Dict, Any, List, Generator, Mapping
 from datetime import datetime, timezone
 from urllib.parse import quote
 
 import requests
 
+from app.core.settings import settings
+
 
 logger = logging.getLogger(__name__)
+
+_ZENDESK_RPM_LOCK = threading.Lock()
+_ZENDESK_LAST_REQUEST_AT = 0.0
+
+
+def zendesk_throttle(rpm_limit: int | None = None) -> None:
+    """Best-effort process-wide Zendesk RPM throttle (thread-safe).
+
+    This does not protect across multiple replicas/processes, but it prevents a single
+    worker from bursting above the configured per-minute rate.
+    """
+    rpm = int(rpm_limit) if rpm_limit is not None else int(getattr(settings, "zendesk_rpm_limit", 240))
+    if rpm <= 0:
+        return
+    min_interval_sec = 60.0 / float(rpm)
+
+    global _ZENDESK_LAST_REQUEST_AT
+    with _ZENDESK_RPM_LOCK:
+        now = time.monotonic()
+        elapsed = now - _ZENDESK_LAST_REQUEST_AT
+        if elapsed < min_interval_sec:
+            time.sleep(max(0.0, min_interval_sec - elapsed))
+        _ZENDESK_LAST_REQUEST_AT = time.monotonic()
+
+
+def _retry_after_seconds(headers: Mapping[str, str]) -> float | None:
+    """Parse Retry-After / rate-limit reset headers into seconds."""
+    ra = headers.get("Retry-After") or headers.get("retry-after")
+    if ra:
+        try:
+            sec = float(str(ra).strip())
+            return max(0.0, sec)
+        except Exception:
+            # RFC 7231 allows HTTP-date; handle best-effort.
+            try:
+                from email.utils import parsedate_to_datetime
+
+                dt = parsedate_to_datetime(str(ra).strip())
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                return max(0.0, (dt - datetime.now(timezone.utc)).total_seconds())
+            except Exception:
+                return None
+
+    reset = headers.get("X-Rate-Limit-Reset") or headers.get("x-rate-limit-reset")
+    if reset:
+        try:
+            reset_epoch = float(str(reset).strip())
+            return max(0.0, reset_epoch - time.time())
+        except Exception:
+            return None
+
+    return None
+
+
+class ZendeskRateLimitError(RuntimeError):
+    def __init__(
+        self,
+        *,
+        operation: str,
+        status_code: int = 429,
+        retry_after_seconds: float | None = None,
+        request_id: str | None = None,
+    ) -> None:
+        self.operation = operation
+        self.status_code = int(status_code)
+        self.retry_after_seconds = retry_after_seconds
+        self.request_id = request_id
+        super().__init__(
+            f"Zendesk rate limited: {self.status_code} op={operation} "
+            f"retry_after={retry_after_seconds} req_id={request_id}"
+        )
+
+    @classmethod
+    def from_response(cls, resp: requests.Response, *, operation: str) -> "ZendeskRateLimitError":
+        rid = resp.headers.get("X-Request-Id") or resp.headers.get("X-Zendesk-Request-Id")
+        return cls(
+            operation=operation,
+            status_code=int(resp.status_code),
+            retry_after_seconds=_retry_after_seconds(resp.headers),
+            request_id=rid,
+        )
 
 
 class ZendeskClient:
@@ -39,10 +124,7 @@ class ZendeskClient:
         self.dry_run = dry_run
         self.session = session or requests.Session()
         self._user_cache: Dict[str, Dict[str, Any]] = {}
-        self._min_interval_sec = 0.0
-        self._last_request_at = 0.0
-        if rpm_limit and int(rpm_limit) > 0:
-            self._min_interval_sec = 60.0 / float(rpm_limit)
+        self._rpm_limit = int(rpm_limit) if rpm_limit and int(rpm_limit) > 0 else None
 
         # Prepare Basic auth header: base64("email/token:api_token")
         auth_bytes = f"{email}/token:{api_token}".encode("utf-8")
@@ -54,13 +136,7 @@ class ZendeskClient:
         }
 
     def _throttle(self) -> None:
-        if self._min_interval_sec <= 0:
-            return
-        now = time.monotonic()
-        elapsed = now - self._last_request_at
-        if elapsed < self._min_interval_sec:
-            time.sleep(self._min_interval_sec - elapsed)
-        self._last_request_at = time.monotonic()
+        zendesk_throttle(self._rpm_limit)
 
     def upload_file(
         self,
@@ -91,6 +167,8 @@ class ZendeskClient:
             self._throttle()
             resp = self.session.post(url, headers=headers, data=f, timeout=60)
 
+        if resp.status_code == 429:
+            raise ZendeskRateLimitError.from_response(resp, operation="upload_file")
         if resp.status_code >= 400:
             rid = resp.headers.get("X-Request-Id") or resp.headers.get("X-Zendesk-Request-Id")
             logger.warning("Zendesk upload failed (%s) req_id=%s", resp.status_code, rid)
@@ -165,6 +243,8 @@ class ZendeskClient:
                     merged.append(add_tag)
                 if merged:
                     ticket["tags"] = merged
+            except ZendeskRateLimitError:
+                raise
             except Exception:
                 ticket["additional_tags"] = [add_tag]
 
@@ -176,6 +256,8 @@ class ZendeskClient:
         # First attempt (maybe with html_body)
         self._throttle()
         resp = self.session.put(url, headers=self._headers, data=json.dumps(payload), timeout=20)
+        if resp.status_code == 429:
+            raise ZendeskRateLimitError.from_response(resp, operation="add_internal_note")
         if resp.status_code >= 400 and "html_body" in comment:
             # Fallback to plain body if HTML rejected
             try:
@@ -184,6 +266,10 @@ class ZendeskClient:
                 payload = {"ticket": ticket}
                 self._throttle()
                 resp = self.session.put(url, headers=self._headers, data=json.dumps(payload), timeout=20)
+                if resp.status_code == 429:
+                    raise ZendeskRateLimitError.from_response(
+                        resp, operation="add_internal_note_fallback_plain"
+                    )
             except Exception:
                 pass
         if resp.status_code >= 400:
@@ -256,10 +342,14 @@ class ZendeskClient:
         try:
             self._throttle()
             resp = self.session.get(url, headers=self._headers, timeout=20)
+            if resp.status_code == 429:
+                raise ZendeskRateLimitError.from_response(resp, operation="get_ticket")
             if resp.status_code >= 400:
                 return {}
             data = resp.json() if resp.headers.get("Content-Type", "").startswith("application/json") else {}
             return data.get("ticket") or {}
+        except ZendeskRateLimitError:
+            raise
         except Exception:
             return {}
 

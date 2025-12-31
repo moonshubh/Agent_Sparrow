@@ -19,6 +19,10 @@ ENABLE_LOCAL_AUTH_BYPASS = "false"
 # Restrict OAuth logins to Mailbird domain
 ALLOWED_OAUTH_EMAIL_DOMAINS = "getmailbird.com"
 
+# Zendesk limits (per plan)
+ZENDESK_RPM_LIMIT = "240"
+ZENDESK_MONTHLY_API_BUDGET = "1500"
+
 # CORS: set to your frontend domain (comma-separated for multiple)
 # Example: "https://agentsparrow-frontend.up.railway.app,https://mailbird.com"
 # CORS_ALLOW_ORIGINS = ""

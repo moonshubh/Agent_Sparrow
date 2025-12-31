@@ -15,6 +15,7 @@ import json
 from jose import jwk
 from jose.utils import base64url_decode
 from app.core.settings import get_settings
+from urllib.parse import urlparse
 
 # Configure logging if not already configured
 if not logging.getLogger().handlers:
@@ -41,8 +42,36 @@ SKIP_AUTH: bool = (os.getenv("SKIP_AUTH", "false").lower() in {"1", "true", "yes
 # If SUPABASE_URL is provided, we will verify incoming Bearer tokens against the
 # Supabase project's JWKS endpoint and validate the audience/issuer.
 # NOTE: Full validation logic will be added in a subsequent commit.
-SUPABASE_URL: str | None = os.getenv("SUPABASE_URL") or getattr(settings, "supabase_url", None)
+def _normalize_supabase_url(raw: str) -> str:
+    """Normalize SUPABASE_URL to the project base URL (no trailing slash/path)."""
+    url = (raw or "").strip()
+    if not url:
+        return ""
+    url = url.rstrip("/")
+
+    # Common misconfigurations: people sometimes set SUPABASE_URL to the auth base.
+    for suffix in ("/auth/v1/keys", "/auth/v1"):
+        if url.endswith(suffix):
+            url = url[: -len(suffix)].rstrip("/")
+            break
+
+    # Ensure we keep scheme + netloc (+ optional path if provided intentionally)
+    try:
+        parsed = urlparse(url)
+        if parsed.scheme and parsed.netloc:
+            return url
+    except Exception:
+        pass
+
+    return url
+
+
+_SUPABASE_URL_RAW: str | None = os.getenv("SUPABASE_URL") or getattr(settings, "supabase_url", None)
+SUPABASE_URL: str | None = _normalize_supabase_url(_SUPABASE_URL_RAW) if _SUPABASE_URL_RAW else None
 SUPABASE_JWT_AUD: str | None = os.getenv("SUPABASE_JWT_AUD", "authenticated")
+SUPABASE_JWT_SECRET: str | None = os.getenv("SUPABASE_JWT_SECRET") or getattr(
+    settings, "supabase_jwt_secret", None
+)
 
 # JWKS cache (module-level singletons)
 _SUPABASE_JWKS: dict | None = None
@@ -117,7 +146,69 @@ def _get_supabase_jwks() -> dict:
 
 
 def _verify_supabase_jwt(token: str) -> TokenPayload:
-    """Verify Supabase JWT using cached JWKS."""
+    """Verify Supabase JWT.
+
+    Prefers `SUPABASE_JWT_SECRET` (HS256) when configured; otherwise falls back to JWKS.
+    """
+    expected_issuer = f"{SUPABASE_URL}/auth/v1" if SUPABASE_URL else None
+
+    if SUPABASE_JWT_SECRET and expected_issuer:
+        try:
+            # Verify signature + standard claims using the configured secret.
+            # Supabase uses "authenticated" as the default audience for user sessions.
+            claims = jwt.decode(
+                token,
+                SUPABASE_JWT_SECRET,
+                algorithms=[ALGORITHM],
+                audience=SUPABASE_JWT_AUD,
+                issuer=expected_issuer,
+            )
+
+            exp_raw = claims.get("exp")
+            try:
+                exp = int(exp_raw) if exp_raw is not None else None
+            except Exception:
+                exp = None
+
+            roles_set: set[str] = set()
+
+            def add_roles(value: object) -> None:
+                if isinstance(value, str):
+                    cleaned = value.strip()
+                    if cleaned:
+                        roles_set.add(cleaned)
+                    return
+                if isinstance(value, list):
+                    for item in value:
+                        if isinstance(item, str):
+                            cleaned = item.strip()
+                            if cleaned:
+                                roles_set.add(cleaned)
+
+            add_roles(claims.get("role"))
+            add_roles(claims.get("roles"))
+
+            app_metadata = claims.get("app_metadata")
+            if isinstance(app_metadata, dict):
+                add_roles(app_metadata.get("roles"))
+                add_roles(app_metadata.get("role"))
+
+            user_metadata = claims.get("user_metadata")
+            if isinstance(user_metadata, dict):
+                add_roles(user_metadata.get("roles"))
+                add_roles(user_metadata.get("role"))
+
+            return TokenPayload(sub=claims.get("sub"), exp=exp, roles=sorted(roles_set))
+        except JWTError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid token",
+                headers={"WWW-Authenticate": "Bearer"},
+            ) from exc
+
+    # -------------------------------------------------------------------------
+    # JWKS fallback (for projects using asymmetric signing keys)
+    # -------------------------------------------------------------------------
     try:
         unverified_header = jwt.get_unverified_header(token)
     except JWTError as exc:
@@ -147,7 +238,11 @@ def _verify_supabase_jwt(token: str) -> TokenPayload:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token claims")
 
     # Validate issuer
-    expected_issuer = f"{SUPABASE_URL}/auth/v1"
+    if not expected_issuer:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Auth service unavailable",
+        )
     if claims.get("iss") != expected_issuer:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token issuer")
 
@@ -161,40 +256,39 @@ def _verify_supabase_jwt(token: str) -> TokenPayload:
     if exp is None or datetime.fromtimestamp(exp, tz=timezone.utc) < datetime.now(timezone.utc):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token has expired")
 
-    # Extract roles from multiple possible locations in the claims
-    roles = []
-    
-    # Check direct "role" claim (string or list)
-    if "role" in claims:
-        role_claim = claims["role"]
-        if isinstance(role_claim, str):
-            roles = [role_claim]
-        elif isinstance(role_claim, list):
-            roles = role_claim
-    # Check direct "roles" claim (typically a list)
-    elif "roles" in claims:
-        roles_claim = claims["roles"]
-        if isinstance(roles_claim, list):
-            roles = roles_claim
-        elif isinstance(roles_claim, str):
-            roles = [roles_claim]
-    # Check app_metadata.roles (Supabase pattern)
-    elif "app_metadata" in claims and isinstance(claims["app_metadata"], dict):
-        app_metadata = claims["app_metadata"]
-        if "roles" in app_metadata:
-            app_roles = app_metadata["roles"]
-            if isinstance(app_roles, list):
-                roles = app_roles
-            elif isinstance(app_roles, str):
-                roles = [app_roles]
-        elif "role" in app_metadata:
-            app_role = app_metadata["role"]
-            if isinstance(app_role, str):
-                roles = [app_role]
-            elif isinstance(app_role, list):
-                roles = app_role
-    
-    return TokenPayload(sub=claims.get("sub"), exp=exp, roles=roles)
+    # Extract roles from multiple possible locations in the claims.
+    # Supabase commonly sets:
+    # - role: "authenticated" (or "anon")
+    # - app_metadata / user_metadata: custom authorization metadata
+    roles_set: set[str] = set()
+
+    def add_roles(value: object) -> None:
+        if isinstance(value, str):
+            cleaned = value.strip()
+            if cleaned:
+                roles_set.add(cleaned)
+            return
+        if isinstance(value, list):
+            for item in value:
+                if isinstance(item, str):
+                    cleaned = item.strip()
+                    if cleaned:
+                        roles_set.add(cleaned)
+
+    add_roles(claims.get("role"))
+    add_roles(claims.get("roles"))
+
+    app_metadata = claims.get("app_metadata")
+    if isinstance(app_metadata, dict):
+        add_roles(app_metadata.get("roles"))
+        add_roles(app_metadata.get("role"))
+
+    user_metadata = claims.get("user_metadata")
+    if isinstance(user_metadata, dict):
+        add_roles(user_metadata.get("roles"))
+        add_roles(user_metadata.get("role"))
+
+    return TokenPayload(sub=claims.get("sub"), exp=exp, roles=sorted(roles_set))
 
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
     to_encode = data.copy()

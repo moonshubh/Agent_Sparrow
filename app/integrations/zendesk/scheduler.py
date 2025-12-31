@@ -13,7 +13,7 @@ from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 from app.core.settings import settings
 from app.db.supabase.client import get_supabase_client
-from .client import ZendeskClient
+from .client import ZendeskClient, ZendeskRateLimitError
 from .exclusions import compute_ticket_exclusion
 from app.core.user_context import UserContext, user_context_scope
 from app.agents.unified.agent_sparrow import run_unified_agent
@@ -2284,34 +2284,6 @@ async def _firecrawl_support_bundle(
     return context
 
 
-class RPMLimiter:
-    """Simple token bucket RPM limiter (in-memory)."""
-
-    def __init__(self, rpm: int) -> None:
-        self.capacity = max(1, int(rpm))
-        self.tokens = float(self.capacity)
-        self.last_refill = time.monotonic()
-
-    def _refill(self) -> None:
-        now = time.monotonic()
-        elapsed = max(0.0, now - self.last_refill)
-        # tokens per second = capacity / 60
-        rate_per_sec = self.capacity / 60.0
-        self.tokens = min(self.capacity, self.tokens + elapsed * rate_per_sec)
-        self.last_refill = now
-
-    def try_acquire(self, n: int = 1) -> bool:
-        self._refill()
-        if self.tokens >= n:
-            self.tokens -= n
-            return True
-        return False
-
-
-# Global RPM limiter instance
-_rpm = RPMLimiter(getattr(settings, "zendesk_rpm_limit", 300))
-
-
 async def _run_daily_maintenance(
     webhook_retention_days: int = 7, queue_retention_days: int | None = None
 ) -> None:
@@ -2379,6 +2351,62 @@ async def _run_daily_maintenance(
             )
     except Exception as e:
         logger.debug("daily maintenance failed: %s", e)
+
+
+async def _requeue_stale_processing(max_age_minutes: int = 30) -> int:
+    """Move long-running `processing` rows back to `retry` so they can be picked up again.
+
+    This protects against worker crashes/timeouts between the "claim" update and the
+    final "processed"/"retry"/"failed" update.
+    """
+    try:
+        max_age = max(1, int(max_age_minutes))
+    except Exception:
+        max_age = 30
+
+    supa = get_supabase_client()
+    now = datetime.now(timezone.utc)
+    cutoff = (now - timedelta(minutes=max_age)).isoformat()
+    now_iso = now.isoformat()
+
+    updated = 0
+    payload = {
+        "status": "retry",
+        "next_attempt_at": now_iso,
+        "last_error": "stale_processing_requeued",
+        "last_attempt_at": now_iso,
+    }
+
+    # Stale rows that have a timestamp
+    try:
+        res = await supa._exec(
+            lambda: supa.client.table("zendesk_pending_tickets")
+            .update(payload)
+            .eq("status", "processing")
+            .lt("last_attempt_at", cutoff)
+            .execute()
+        )
+        updated += len(getattr(res, "data", []) or [])
+    except Exception:
+        pass
+
+    # Backward-compat: processing rows with NULL last_attempt_at (older deployments)
+    try:
+        res2 = await supa._exec(
+            lambda: supa.client.table("zendesk_pending_tickets")
+            .update(payload)
+            .eq("status", "processing")
+            .is_("last_attempt_at", "null")
+            .lt("created_at", cutoff)
+            .execute()
+        )
+        updated += len(getattr(res2, "data", []) or [])
+    except Exception:
+        pass
+
+    if updated:
+        logger.warning("Re-queued %d stale Zendesk processing tickets", updated)
+    return updated
 
 
 async def _get_feature_state() -> Dict[str, Any]:
@@ -2449,6 +2477,7 @@ async def _set_last_run(ts: datetime) -> None:
 async def _get_month_usage() -> Dict[str, Any]:
     supa = get_supabase_client()
     mk = datetime.now(timezone.utc).strftime("%Y-%m")
+    desired_budget = int(getattr(settings, "zendesk_monthly_api_budget", 0) or 0)
     resp = await supa._exec(
         lambda: supa.client.table("zendesk_usage")
         .select("month_key,calls_used,budget")
@@ -2464,17 +2493,43 @@ async def _get_month_usage() -> Dict[str, Any]:
                 {
                     "month_key": mk,
                     "calls_used": 0,
-                    "budget": settings.zendesk_monthly_api_budget,
+                    "budget": desired_budget,
                 }
             )
             .execute()
         )
-        data = {
-            "month_key": mk,
-            "calls_used": 0,
-            "budget": settings.zendesk_monthly_api_budget,
-        }
-    return data
+        return {"month_key": mk, "calls_used": 0, "budget": desired_budget}
+
+    # Normalize types and keep the stored budget in sync with config.
+    try:
+        calls_used = max(0, int(data.get("calls_used", 0) or 0))
+    except Exception:
+        calls_used = 0
+    try:
+        budget = int(data.get("budget", desired_budget) or desired_budget)
+    except Exception:
+        budget = desired_budget
+    if budget <= 0:
+        budget = desired_budget
+
+    if desired_budget > 0 and budget != desired_budget:
+        try:
+            await supa._exec(
+                lambda: supa.client.table("zendesk_usage")
+                .update(
+                    {
+                        "budget": desired_budget,
+                        "updated_at": datetime.now(timezone.utc).isoformat(),
+                    }
+                )
+                .eq("month_key", mk)
+                .execute()
+            )
+            budget = desired_budget
+        except Exception:
+            budget = desired_budget
+
+    return {"month_key": mk, "calls_used": calls_used, "budget": budget}
 
 
 async def _inc_usage(n: int) -> None:
@@ -3902,6 +3957,13 @@ async def _process_window(
     model: str | None = None,
 ) -> Dict[str, Any]:
     supa = get_supabase_client()
+    # Re-queue tickets that were claimed but never finalized (e.g., crash/timeout).
+    try:
+        await _requeue_stale_processing(
+            max_age_minutes=int(getattr(settings, "zendesk_processing_timeout_minutes", 30) or 30)
+        )
+    except Exception:
+        pass
     # Pull due tickets (pending or retry where next_attempt_at <= now)
     resp = await supa._exec(
         lambda: supa.client.table("zendesk_pending_tickets")
@@ -3947,10 +4009,17 @@ async def _process_window(
     # Enforce monthly budget before doing any work (server-side check)
     try:
         mu = await _get_month_usage()
-        if not dry_run and int(mu.get("calls_used", 0)) >= int(
-            mu.get("budget", settings.zendesk_monthly_api_budget)
-        ):
-            logger.warning("Monthly Zendesk budget exhausted; stopping processing")
+        calls_used = int(mu.get("calls_used", 0) or 0)
+        budget = int(
+            mu.get("budget", getattr(settings, "zendesk_monthly_api_budget", 0) or 0) or 0
+        )
+        if budget > 0 and not dry_run and calls_used >= budget:
+            logger.warning(
+                "Monthly Zendesk budget exhausted (calls_used=%s budget=%s month_key=%s); stopping processing",
+                calls_used,
+                budget,
+                mu.get("month_key"),
+            )
             return {"processed": 0, "failed": 0, "skipped_budget": True}
     except Exception as e:
         logger.debug("failed to read monthly usage: %s", e)
@@ -3989,10 +4058,6 @@ async def _process_window(
                 "Skipping ticket with non-numeric id: %s", row.get("ticket_id")
             )
             continue
-        # Rate limit checks
-        if not _rpm.try_acquire(1):
-            rpm_exhausted = True
-            break
         if gemini_remaining <= 0 and not dry_run:
             logger.warning("Gemini daily limit exhausted; stopping processing")
             break
@@ -4006,6 +4071,7 @@ async def _process_window(
                     {
                         "status": "processing",
                         "status_details": {"processing_started_at": now_iso},
+                        "last_attempt_at": now_iso,
                     }
                 )
                 .eq("id", row["id"])
@@ -4029,6 +4095,8 @@ async def _process_window(
             # get an internal note / suggested reply.
             try:
                 ticket = await asyncio.to_thread(zc.get_ticket, tid)
+            except ZendeskRateLimitError:
+                raise
             except Exception:
                 ticket = {}
             exclusion = compute_ticket_exclusion(
@@ -4100,6 +4168,36 @@ async def _process_window(
             gemini_remaining = (
                 gemini_remaining if dry_run else max(0, gemini_remaining - 1)
             )
+        except ZendeskRateLimitError as e:
+            retry_after = e.retry_after_seconds
+            if retry_after is None:
+                retry_after = 60.0
+            retry_after = max(5.0, float(retry_after) + 1.0)
+            next_at = (
+                datetime.now(timezone.utc) + timedelta(seconds=retry_after)
+            ).isoformat()
+            await supa._exec(
+                lambda: supa.client.table("zendesk_pending_tickets")
+                .update(
+                    {
+                        "status": "retry",
+                        "last_error": str(e)[:500],
+                        "last_attempt_at": datetime.now(timezone.utc).isoformat(),
+                        "next_attempt_at": next_at,
+                    }
+                )
+                .eq("id", row["id"])
+                .execute()
+            )
+            failures += 1
+            rpm_exhausted = True
+            logger.warning(
+                "Zendesk rate limited; deferring remaining tickets (retry_after=%ss op=%s req_id=%s)",
+                int(retry_after),
+                e.operation,
+                e.request_id,
+            )
+            break
         except Exception as e:
             logger.warning("posting failed for ticket %s: %s", tid, e)
             err = str(e)
@@ -4154,7 +4252,6 @@ async def _process_window(
     overflow_pending = False
     if rpm_exhausted:
         overflow_pending = True
-        logger.warning("RPM exhausted; deferring remaining tickets to next cycle")
 
     # Increment usage only for actual API calls when not dry-run
     if not dry_run and processed > 0:
@@ -4172,7 +4269,12 @@ async def _process_window(
 async def start_background_scheduler() -> None:
     """Background loop that runs every N seconds and drains the pending queue respecting RPM & daily limits."""
     interval_sec = max(1, int(getattr(settings, "zendesk_poll_interval_sec", 60)))
-    logger.info("Zendesk scheduler starting (interval=%d sec)", interval_sec)
+    logger.info(
+        "Zendesk scheduler starting (interval=%d sec, rpm=%d, monthly_budget=%d)",
+        interval_sec,
+        int(getattr(settings, "zendesk_rpm_limit", 240) or 240),
+        int(getattr(settings, "zendesk_monthly_api_budget", 1500) or 1500),
+    )
 
     while True:
         try:
