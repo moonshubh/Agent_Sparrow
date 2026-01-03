@@ -24,6 +24,10 @@ class MemoryStats:
 
     Tracks both retrieval (before agent) and write (after agent) operations.
     Used by SparrowMemoryMiddleware for observability.
+
+    The retrieved_memory_ids field enables feedback attribution - when users
+    provide feedback on a response, it can be propagated to the memories
+    that were used to generate that response.
     """
 
     retrieval_attempted: bool = False
@@ -31,6 +35,8 @@ class MemoryStats:
     facts_retrieved: int = 0
     relevance_scores: List[float] = field(default_factory=list)
     retrieval_error: Optional[str] = None
+    # Memory IDs used in generating the response - enables feedback attribution
+    retrieved_memory_ids: list[str] = field(default_factory=list)
 
     write_attempted: bool = False
     write_success: bool = False

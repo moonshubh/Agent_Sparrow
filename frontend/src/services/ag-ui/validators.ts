@@ -100,18 +100,23 @@ export const AgentTodosUpdateEventSchema = z.object({
 
 export const GenuiStateUpdateEventSchema = z.record(z.string(), z.unknown());
 
-export const ImageArtifactEventSchema = z.object({
-  id: z.string(),
-  type: z.literal('image'),
-  title: z.string(),
-  content: z.string(),
-  messageId: z.string(),
-  imageData: z.string(),
-  mimeType: z.string(),
-  altText: z.string().optional(),
-  aspectRatio: z.string().optional(),
-  resolution: z.string().optional(),
-});
+export const ImageArtifactEventSchema = z
+  .object({
+    id: z.string(),
+    type: z.literal('image'),
+    title: z.string(),
+    content: z.string(),
+    messageId: z.string(),
+    imageUrl: z.string().optional(),
+    imageData: z.string().optional(),
+    mimeType: z.string(),
+    altText: z.string().optional(),
+    aspectRatio: z.string().optional(),
+    resolution: z.string().optional(),
+  })
+  .refine((value) => Boolean(value.imageUrl || value.imageData), {
+    message: 'imageUrl or imageData is required',
+  });
 
 export const ArticleArtifactEventSchema = z.object({
   id: z.string(),

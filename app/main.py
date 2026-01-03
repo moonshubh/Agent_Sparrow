@@ -50,6 +50,7 @@ from app.api.v1.endpoints import chat_session_endpoints  # Chat session persiste
 from app.api.v1.endpoints import rate_limit_endpoints  # Rate limiting monitoring
 from app.api.v1.endpoints import feedme_intelligence  # FeedMe AI intelligence endpoints
 from app.api.v1.endpoints import agent_interrupt_endpoints  # HITL interrupt controls
+from app.api.v1.endpoints import memory  # Memory UI endpoints
 # from app.api.v1.endpoints import secure_log_analysis  # Secure Log Analysis endpoints - Disabled due to reasoning engine removal
 from app.api.v1.endpoints import (
     global_knowledge_observability,  # Global knowledge observability APIs
@@ -240,6 +241,8 @@ app.include_router(metadata_endpoints.router, prefix="/api/v1", tags=["Metadata"
 app.include_router(global_knowledge_observability.router, prefix="/api/v1", tags=["Global Knowledge"])
 app.include_router(global_knowledge_feedback.router, prefix="/api/v1", tags=["Global Knowledge"])
 app.include_router(message_feedback_endpoints.router, prefix="/api/v1", tags=["Message Feedback"])  # /api/v1/feedback/message
+# Register Memory UI routes
+app.include_router(memory.router, prefix="/api/v1", tags=["Memory UI"])  # /api/v1/memory/*
 # Register FeedMe routes (modular package)
 app.include_router(feedme.router, prefix="/api/v1", tags=["FeedMe"])
 # Register FeedMe Text Approval routes  

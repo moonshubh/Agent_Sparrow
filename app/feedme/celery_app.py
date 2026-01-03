@@ -259,12 +259,33 @@ def _start_worker_health_server() -> None:
     if _health_server is not None:
         return
 
-    port_raw = os.getenv("HEALTH_PORT") or os.getenv("PORT", "8000")
+    health_port_raw = os.getenv("HEALTH_PORT")
+    port_raw = health_port_raw or os.getenv("PORT", "8000")
     try:
         port = int(port_raw)
     except ValueError:
         logger.warning("Invalid health port %r; defaulting to 8000", port_raw)
         port = 8000
+
+    if health_port_raw is None:
+        # When running locally (backend + worker in the same environment), the worker
+        # health server must not bind to the backend port. Some macOS combinations
+        # allow multiple listeners on the same port, causing intermittent 404s.
+        try:
+            import socket
+
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+                sock.settimeout(0.2)
+                in_use = sock.connect_ex(("127.0.0.1", port)) == 0
+        except Exception:
+            in_use = False
+
+        if in_use:
+            fallback = port + 1
+            logger.info(
+                "Health port %s already in use; falling back to %s", port, fallback
+            )
+            port = fallback
 
     class HealthHandler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:

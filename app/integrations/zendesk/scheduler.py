@@ -65,6 +65,38 @@ class ZendeskReplyResult:
     macros_used: list[str]
     learning_messages: list[Any]
 
+@dataclass(frozen=True, slots=True)
+class ZendeskQueryAgentProductContext:
+    os: str | None
+    provider: str | None
+    version: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class ZendeskQueryAgentIntent:
+    primary_intent: str
+    product_context: ZendeskQueryAgentProductContext
+    signals: tuple[str, ...]
+    sub_issues: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class ZendeskInternalRetrievalPreflight:
+    query: str
+    retrieved_results: list[dict[str, Any]] | None
+    internal_context: str | None
+    macro_ok: bool
+    kb_ok: bool
+    feedme_ok: bool
+    macro_choice: dict[str, Any] | None
+    kb_articles_used: list[str]
+    macros_used: list[str]
+    confidence: float | None
+    best_score: float | None
+    macro_hits: int
+    kb_hits: int
+    feedme_hits: int
+
 
 _ZENDESK_NOTE_SECTION_HEADINGS: set[str] = {
     "suggested reply",
@@ -385,6 +417,704 @@ def _zendesk_lexically_relevant(
     if overlap < min_overlap:
         return False
     return (overlap / max(1, len(candidate_keywords))) >= float(min_item_coverage)
+
+
+def _zendesk_strip_attachment_block(ticket_text: str) -> tuple[str, str]:
+    """Split `ticket_text` into (base_text, attachment_block).
+
+    The attachment block begins at a line starting with "Attachments summary for agent:".
+    """
+    raw = str(ticket_text or "")
+    if not raw.strip():
+        return "", ""
+
+    lines = raw.replace("\r\n", "\n").replace("\r", "\n").splitlines()
+    start: int | None = None
+    for idx, line in enumerate(lines):
+        if line.strip().lower().startswith("attachments summary for agent"):
+            start = idx
+            break
+
+    if start is None:
+        return raw.strip(), ""
+
+    base = "\n".join(lines[:start]).strip()
+    block = "\n".join(lines[start:]).strip()
+    return base, block
+
+
+def _zendesk_extract_attachment_signals(attachment_block: str) -> tuple[str, ...]:
+    """Extract concrete technical signals (domains, error codes) from the attachment text."""
+    block = str(attachment_block or "")
+    if not block.strip():
+        return ()
+
+    candidates: list[str] = []
+
+    # Domain / hostname-like tokens (e.g., smtp.gmail.com)
+    candidates.extend(
+        re.findall(r"\b[a-zA-Z0-9][a-zA-Z0-9.-]*\.[a-zA-Z]{2,}\b", block)
+    )
+
+    # 3-digit SMTP-like error codes (e.g., 550)
+    candidates.extend(re.findall(r"\b\d{3}\b", block))
+
+    # Common auth tokens
+    candidates.extend(re.findall(r"\binvalid_grant\b", block, flags=re.IGNORECASE))
+
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for value in candidates:
+        token = str(value or "").strip()
+        if not token:
+            continue
+        key = token.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        ordered.append(token)
+
+    return tuple(ordered)
+
+
+def _zendesk_infer_provider(text: str) -> str | None:
+    low = str(text or "").lower()
+    if "gmail" in low or "google" in low:
+        return "gmail"
+    if "outlook" in low or "office 365" in low or "microsoft" in low:
+        return "outlook"
+    if "icloud" in low:
+        return "icloud"
+    if "yahoo" in low:
+        return "yahoo"
+    return None
+
+
+def _zendesk_infer_primary_intent(text: str) -> str:
+    low = str(text or "").lower()
+
+    if _REFUND_INTENT_RE.search(low):
+        return "refund"
+
+    if re.search(r"\b(password|authenticate|authentication|oauth|sign[- ]in|login)\b", low):
+        return "sync_auth"
+
+    if re.search(r"\b(smtp|cannot send|can't send|sending error|relay denied|550|554)\b", low):
+        return "sending"
+
+    if re.search(r"\b(crash|freez|not responding|slow|lag)\b", low):
+        return "performance"
+
+    return "general"
+
+
+def _zendesk_build_query_agent_intent_and_query(
+    *, ticket_text: str, subject: str
+) -> tuple[ZendeskQueryAgentIntent, str, str]:
+    """Derive a retrieval intent and a safe, source-free internal retrieval query."""
+    base_text, attachment_block = _zendesk_strip_attachment_block(ticket_text)
+    signals = _zendesk_extract_attachment_signals(attachment_block)
+
+    segments = _zendesk_extract_issue_segments(base_text, max_segments=2)
+    primary_segment = segments[0] if segments else base_text
+
+    combined_primary = "\n".join(
+        [str(subject or ""), str(primary_segment or ""), attachment_block]
+    ).strip()
+    provider = _zendesk_infer_provider(combined_primary)
+    primary_intent = _zendesk_infer_primary_intent(combined_primary)
+    product_context = ZendeskQueryAgentProductContext(
+        os=None,
+        provider=provider,
+        version=None,
+    )
+
+    sub_issues = _zendesk_extract_sub_issues(base_text)
+    intent = ZendeskQueryAgentIntent(
+        primary_intent=primary_intent,
+        product_context=product_context,
+        signals=signals,
+        sub_issues=sub_issues,
+    )
+
+    parts = [f"Mailbird {str(subject or '').strip()}".strip(), base_text.strip()]
+    extra_signals: list[str] = []
+    for sig in signals:
+        if len(extra_signals) >= 3:
+            break
+        if sig.lower().endswith(".log"):
+            continue
+        extra_signals.append(sig)
+    if extra_signals:
+        parts.append(" ".join(extra_signals))
+
+    retrieval_query = " ".join(p for p in parts if p).strip()
+    retrieval_query = re.sub(r"\s+", " ", retrieval_query).strip()
+    return intent, base_text, retrieval_query
+
+
+def _zendesk_reformulate_retrieval_query(
+    *,
+    previous_query: str,
+    subject: str,
+    base_text: str,
+    intent: ZendeskQueryAgentIntent,
+    attempt_index: int,
+    expansion_count: int,
+) -> str:
+    """Lightweight, controlled query reformulation (no AI) to improve retrieval."""
+    _ = subject, base_text
+    previous = re.sub(r"\s+", " ", str(previous_query or "")).strip()
+
+    expansions: list[str] = []
+    if intent.primary_intent == "sync_auth":
+        expansions = ["oauth", "authentication", "imap", "invalid_grant"]
+    elif intent.primary_intent == "sending":
+        expansions = ["smtp", "authentication", "relay", "outgoing"]
+    elif intent.primary_intent == "refund":
+        expansions = ["refund policy", "subscription", "billing"]
+
+    provider = intent.product_context.provider
+    if provider and provider.lower() not in previous.lower():
+        expansions.insert(0, provider)
+
+    wanted = max(1, int(expansion_count or 1))
+    additions: list[str] = []
+    for term in expansions:
+        if len(additions) >= wanted:
+            break
+        if term.lower() in previous.lower():
+            continue
+        additions.append(term)
+
+    if not additions:
+        additions = [f"attempt{attempt_index + 1}"]
+
+    return f"{previous} {' '.join(additions)}".strip()
+
+
+def _zendesk_extract_issue_segments(ticket_text: str, *, max_segments: int = 4) -> list[str]:
+    """Split an incoming ticket into explicit issue segments (primary + secondary)."""
+    text = str(ticket_text or "").strip()
+    if not text:
+        return []
+
+    paragraphs = [p.strip() for p in re.split(r"\n\s*\n", text) if p.strip()]
+    if not paragraphs:
+        return []
+    if len(paragraphs) == 1:
+        return paragraphs
+
+    segments: list[str] = [paragraphs[0]]
+    for para in paragraphs[1:]:
+        low = para.lower().strip()
+        if re.match(r"^(also|additionally|another|secondly)\b", low):
+            segments.append(para)
+            continue
+        if re.search(r"\b(refund|billing|payment|cannot|can't|unable|error|crash|password|authenticate|smtp|oauth)\b", low):
+            segments.append(para)
+
+    return segments[: max(1, int(max_segments or 1))]
+
+
+_ZENDESK_TROUBLESHOOTING_RE = re.compile(
+    r"(?i)\b(i tried|i have tried|tried|reinstall|reinstalling|restart|restarting|reboot|updated|reset)\b"
+)
+
+
+def _zendesk_extract_sub_issues(ticket_text: str) -> tuple[str, ...]:
+    """Extract secondary issues, skipping 'I tried X' troubleshooting paragraphs."""
+    segments = _zendesk_extract_issue_segments(ticket_text, max_segments=6)
+    if len(segments) <= 1:
+        return ()
+
+    subs: list[str] = []
+    for seg in segments[1:]:
+        low = seg.lower()
+        if _ZENDESK_TROUBLESHOOTING_RE.search(low):
+            continue
+        subs.append(seg.strip())
+
+    return tuple(s for s in subs if s)
+
+
+def _zendesk_pack_multi_issue_internal_context(
+    *, issues: list[str], issue_contexts: list[str]
+) -> str | None:
+    if not issues or not issue_contexts:
+        return None
+
+    pairs = list(zip(issues, issue_contexts, strict=False))
+    if not any(str(ctx or "").strip() for _, ctx in pairs):
+        return None
+
+    lines: list[str] = [
+        "Internal knowledge (do NOT mention sources in the customer reply):",
+        "",
+    ]
+    for idx, (issue, ctx) in enumerate(pairs, start=1):
+        header = "Issue 1 (primary):" if idx == 1 else f"Issue {idx}:"
+        lines.append(header)
+        lines.append(str(issue or "").strip())
+        ctx_clean = str(ctx or "").strip()
+        if ctx_clean:
+            lines.append("")
+            lines.append(ctx_clean)
+        lines.append("")
+
+    packed = "\n".join(lines).strip()
+    packed = re.sub(r"\n{3,}", "\n\n", packed).strip()
+    return packed or None
+
+
+def _zendesk_select_feedme_slice_indices(
+    scores: dict[int, float],
+    *,
+    window_before: int,
+    window_after: int,
+    max_chunks: int,
+) -> list[int]:
+    if not scores:
+        return []
+
+    before = max(0, int(window_before))
+    after = max(0, int(window_after))
+    budget = max(1, int(max_chunks))
+
+    windows: list[tuple[int, int, float]] = []
+    for idx, score in scores.items():
+        start = int(idx) - before
+        end = int(idx) + after
+        windows.append((start, end, float(score)))
+
+    windows.sort(key=lambda w: w[0])
+
+    clusters: list[dict[str, float | int]] = []
+    for start, end, score in windows:
+        if not clusters or start > int(clusters[-1]["end"]) + 1:
+            clusters.append({"start": start, "end": end, "max_score": score})
+            continue
+        clusters[-1]["end"] = max(int(clusters[-1]["end"]), end)
+        clusters[-1]["max_score"] = max(float(clusters[-1]["max_score"]), score)
+
+    all_indices: list[int] = []
+    for cluster in clusters:
+        all_indices.extend(range(int(cluster["start"]), int(cluster["end"]) + 1))
+    all_indices = sorted({i for i in all_indices if i >= 0})
+    if len(all_indices) <= budget:
+        return all_indices
+
+    # Too wide: keep the strongest cluster only.
+    best = max(
+        clusters,
+        key=lambda c: (float(c["max_score"]), -(int(c["end"]) - int(c["start"]))),
+    )
+    best_indices = [i for i in range(int(best["start"]), int(best["end"]) + 1) if i >= 0]
+    if len(best_indices) <= budget:
+        return best_indices
+
+    # Still too many (very large window): center around the best-scoring chunk.
+    best_chunk = max(
+        (idx for idx in scores.keys() if int(best["start"]) <= idx <= int(best["end"])),
+        key=lambda i: float(scores.get(i) or 0.0),
+    )
+    half = budget // 2
+    start = max(int(best["start"]), best_chunk - half)
+    end = start + budget - 1
+    end = min(int(best["end"]), end)
+    start = max(int(best["start"]), end - budget + 1)
+    return [i for i in range(start, end + 1) if i >= 0]
+
+
+def _zendesk_build_feedme_slice_content(
+    chunks: list[dict[str, Any]],
+) -> tuple[str, list[int]]:
+    if not chunks:
+        return "", []
+
+    ordered = sorted(
+        [c for c in chunks if isinstance(c, dict)],
+        key=lambda c: int(c.get("chunk_index") or 0),
+    )
+
+    parts: list[str] = []
+    indices: list[int] = []
+    prev_index: int | None = None
+    for chunk in ordered:
+        try:
+            idx = int(chunk.get("chunk_index"))
+        except Exception:
+            continue
+        content = str(chunk.get("content") or "").strip()
+        if not content:
+            continue
+        if prev_index is not None and idx != prev_index + 1:
+            parts.append("[...]")
+        parts.append(content)
+        indices.append(idx)
+        prev_index = idx
+
+    return "\n\n".join(parts).strip(), indices
+
+
+def _zendesk_slice_kb_guidance(
+    kb_text: str,
+    *,
+    tier: str,
+    query_keywords: set[str],
+    max_chars: int,
+) -> str:
+    _ = tier
+    text = str(kb_text or "").strip()
+    if not text:
+        return ""
+
+    sections: list[tuple[str, str]] = []
+    current_title: str | None = None
+    current_lines: list[str] = []
+
+    def flush() -> None:
+        nonlocal current_title, current_lines
+        if current_title is None:
+            return
+        body = "\n".join(current_lines).strip()
+        sections.append((current_title, body))
+        current_title = None
+        current_lines = []
+
+    for line in text.splitlines():
+        if re.match(r"^\s*#{1,6}\s+", line):
+            flush()
+            current_title = line.strip()
+            continue
+        current_lines.append(line)
+
+    flush()
+
+    if not sections:
+        return _trim_block(text, int(max_chars))
+
+    if not query_keywords:
+        title, body = sections[0]
+        return _trim_block(f"{title}\n{body}".strip(), int(max_chars))
+
+    best = max(
+        sections,
+        key=lambda s: len(query_keywords & _zendesk_extract_keywords(f"{s[0]}\n{s[1]}")),
+    )
+    selected = f"{best[0]}\n{best[1]}".strip()
+    return _trim_block(selected, int(max_chars))
+
+
+def _zendesk_slice_macro_guidance(
+    macro_text: str,
+    *,
+    tier: str,
+    query_keywords: set[str],
+    max_chars: int,
+) -> str:
+    _ = tier
+    raw = _normalize_macro_body(str(macro_text or ""))
+    if not raw:
+        return ""
+
+    bullet_lines = [
+        ln.strip()
+        for ln in raw.splitlines()
+        if re.match(r"^(?:[-*]|\d+[.)])\s+", ln.strip())
+    ]
+
+    if not bullet_lines:
+        return _trim_block(raw, int(max_chars))
+
+    kept: list[str] = []
+    for line in bullet_lines:
+        if not query_keywords:
+            kept.append(line)
+            continue
+        overlap = len(query_keywords & _zendesk_extract_keywords(line))
+        if overlap >= 1:
+            kept.append(line)
+
+    if not kept:
+        return _trim_block("\n".join(bullet_lines[:5]).strip(), int(max_chars))
+
+    return _trim_block("\n".join(kept).strip(), int(max_chars))
+
+
+async def _zendesk_run_internal_retrieval_preflight(
+    *,
+    query: str,
+    intent: ZendeskQueryAgentIntent | None = None,
+    min_relevance: float,
+    max_per_source: int,
+    include_header: bool = True,
+) -> ZendeskInternalRetrievalPreflight:
+    _ = intent
+    retrieved = await db_unified_search_tool.ainvoke(
+        {
+            "query": query,
+            "sources": ["macros", "kb", "feedme"],
+            "max_results_per_source": int(max_per_source),
+            "min_relevance": float(min_relevance),
+        }
+    )
+    results = list((retrieved or {}).get("results") or [])
+
+    # Late-slice FeedMe results to keep only the most relevant chunk windows.
+    for item in results:
+        if not isinstance(item, dict) or str(item.get("source") or "") != "feedme":
+            continue
+        meta = item.get("metadata")
+        meta = meta if isinstance(meta, dict) else {}
+
+        conv_id = meta.get("id") or meta.get("conversation_id")
+        try:
+            conv_int = int(conv_id)
+        except Exception:
+            continue
+
+        matched = meta.get("matched_chunks") or []
+        matched_indices = meta.get("matched_chunk_indices") or []
+        scores: dict[int, float] = {}
+        if isinstance(matched, list):
+            for row in matched:
+                if not isinstance(row, dict):
+                    continue
+                try:
+                    idx = int(row.get("chunk_index"))
+                except Exception:
+                    continue
+                sim = row.get("similarity")
+                try:
+                    score = float(sim) if sim is not None else 1.0
+                except Exception:
+                    score = 1.0
+                scores[idx] = max(scores.get(idx, 0.0), score)
+        if isinstance(matched_indices, list):
+            for idx_raw in matched_indices:
+                try:
+                    idx = int(idx_raw)
+                except Exception:
+                    continue
+                scores[idx] = max(scores.get(idx, 0.0), 1.0)
+
+        if not scores:
+            continue
+
+        wanted_indices = _zendesk_select_feedme_slice_indices(
+            scores,
+            window_before=1,
+            window_after=1,
+            max_chunks=10,
+        )
+        if not wanted_indices:
+            continue
+
+        supa = get_supabase_client()
+        resp = await supa._exec(
+            lambda: supa.client.table("feedme_text_chunks")
+            .select("conversation_id,chunk_index,content")
+            .eq("conversation_id", conv_int)
+            .in_("chunk_index", wanted_indices)
+            .order("chunk_index")
+            .execute()
+        )
+        chunks = getattr(resp, "data", None) or []
+        if not isinstance(chunks, list) or not chunks:
+            continue
+
+        sliced_content, slice_indices = _zendesk_build_feedme_slice_content(chunks)
+        if not sliced_content:
+            continue
+
+        item["content"] = sliced_content
+        item_meta = item.get("metadata")
+        item_meta = item_meta if isinstance(item_meta, dict) else {}
+        item["metadata"] = {
+            **item_meta,
+            "hydration": "late_slice",
+            "slice_indices": slice_indices,
+        }
+
+    kb_articles_used: list[str] = []
+    macros_used: list[str] = []
+    for item in results:
+        if not isinstance(item, dict):
+            continue
+        source = str(item.get("source") or "").lower()
+        meta = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+        if source == "kb":
+            kb_id = meta.get("id") or meta.get("url")
+            if kb_id:
+                kb_articles_used.append(str(kb_id))
+        if source in {"macro", "macros"}:
+            macro_id = meta.get("zendesk_id")
+            if macro_id:
+                macros_used.append(str(macro_id))
+
+    preflight = _format_internal_retrieval_context(results, query=query)
+    internal_context = preflight.get("context")
+    if internal_context and not include_header:
+        internal_context = re.sub(
+            r"^Internal knowledge \(do NOT mention sources in the customer reply\):\s*",
+            "",
+            internal_context,
+            flags=re.IGNORECASE,
+        ).strip() or None
+
+    best_score: float | None = None
+    for item in results:
+        if not isinstance(item, dict):
+            continue
+        try:
+            score = float(item.get("relevance_score") or 0.0)
+        except Exception:
+            continue
+        best_score = score if best_score is None else max(best_score, score)
+
+    return ZendeskInternalRetrievalPreflight(
+        query=query,
+        retrieved_results=results,
+        internal_context=internal_context,
+        macro_ok=bool(preflight.get("macro_ok")),
+        kb_ok=bool(preflight.get("kb_ok")),
+        feedme_ok=bool(preflight.get("feedme_ok")),
+        macro_choice=None,
+        kb_articles_used=kb_articles_used,
+        macros_used=macros_used,
+        confidence=None,
+        best_score=best_score,
+        macro_hits=int(preflight.get("macro_hits") or 0),
+        kb_hits=int(preflight.get("kb_hits") or 0),
+        feedme_hits=int(preflight.get("feedme_hits") or 0),
+    )
+
+
+async def _zendesk_run_multi_issue_internal_retrieval_preflight(
+    *,
+    subject: str,
+    base_text: str,
+    intent: ZendeskQueryAgentIntent,
+    issue_segments: list[str],
+    min_relevance: float,
+    max_per_source: int,
+    max_subqueries: int,
+    confidence_threshold: float,
+    max_reformulations: int,
+    expansion_count: int,
+) -> ZendeskInternalRetrievalPreflight:
+    segments = [s for s in issue_segments if str(s or "").strip()]
+    if not segments:
+        return await _zendesk_run_internal_retrieval_preflight(
+            query=f"Mailbird {subject} {base_text}".strip(),
+            intent=intent,
+            min_relevance=min_relevance,
+            max_per_source=max_per_source,
+            include_header=True,
+        )
+
+    segments = segments[: max(1, int(max_subqueries or 1))]
+    issue_count = len(segments)
+
+    secondary_budget = max(0, issue_count - 1)
+    primary_budget = max(1, int(max_per_source) - secondary_budget)
+    primary_query = f"Mailbird {subject} {segments[0]}".strip()
+
+    best_primary = await _zendesk_run_internal_retrieval_preflight(
+        query=primary_query,
+        intent=intent,
+        min_relevance=min_relevance,
+        max_per_source=primary_budget,
+        include_header=False,
+    )
+
+    # Only reformulate the primary issue (avoid exploding calls for secondary issues).
+    current_query = primary_query
+    for attempt in range(max(0, int(max_reformulations or 0))):
+        confidence = float(best_primary.confidence or 0.0)
+        if confidence >= float(confidence_threshold):
+            break
+        next_query = _zendesk_reformulate_retrieval_query(
+            previous_query=current_query,
+            subject=subject,
+            base_text=base_text,
+            intent=intent,
+            attempt_index=attempt,
+            expansion_count=expansion_count,
+        )
+        if not next_query or next_query.strip().lower() == current_query.strip().lower():
+            break
+        current_query = next_query
+        candidate = await _zendesk_run_internal_retrieval_preflight(
+            query=next_query,
+            intent=intent,
+            min_relevance=min_relevance,
+            max_per_source=primary_budget,
+            include_header=False,
+        )
+        if float(candidate.confidence or 0.0) > float(best_primary.confidence or 0.0):
+            best_primary = candidate
+
+    issue_contexts: list[str] = [best_primary.internal_context or ""]
+    macro_ok = best_primary.macro_ok
+    kb_ok = best_primary.kb_ok
+    feedme_ok = best_primary.feedme_ok
+    kb_articles_used = list(best_primary.kb_articles_used)
+    macros_used = list(best_primary.macros_used)
+    best_score = best_primary.best_score
+    confidence = best_primary.confidence
+
+    # Secondary issues: single pass with minimal budget.
+    for seg in segments[1:]:
+        secondary_query = f"Mailbird {subject} {seg}".strip()
+        secondary_preflight = await _zendesk_run_internal_retrieval_preflight(
+            query=secondary_query,
+            intent=intent,
+            min_relevance=min_relevance,
+            max_per_source=1,
+            include_header=False,
+        )
+        issue_contexts.append(secondary_preflight.internal_context or "")
+        macro_ok = macro_ok or secondary_preflight.macro_ok
+        kb_ok = kb_ok or secondary_preflight.kb_ok
+        feedme_ok = feedme_ok or secondary_preflight.feedme_ok
+        kb_articles_used.extend(list(secondary_preflight.kb_articles_used))
+        macros_used.extend(list(secondary_preflight.macros_used))
+        if secondary_preflight.best_score is not None:
+            best_score = (
+                secondary_preflight.best_score
+                if best_score is None
+                else max(best_score, secondary_preflight.best_score)
+            )
+        if secondary_preflight.confidence is not None:
+            confidence = (
+                secondary_preflight.confidence
+                if confidence is None
+                else max(confidence, secondary_preflight.confidence)
+            )
+
+    internal_context = _zendesk_pack_multi_issue_internal_context(
+        issues=segments,
+        issue_contexts=issue_contexts,
+    )
+
+    return ZendeskInternalRetrievalPreflight(
+        query=primary_query,
+        retrieved_results=None,
+        internal_context=internal_context,
+        macro_ok=macro_ok,
+        kb_ok=kb_ok,
+        feedme_ok=feedme_ok,
+        macro_choice=None,
+        kb_articles_used=kb_articles_used,
+        macros_used=macros_used,
+        confidence=confidence,
+        best_score=best_score,
+        macro_hits=0,
+        kb_hits=0,
+        feedme_hits=0,
+    )
 
 
 def _filter_similar_resolutions_for_ticket(
@@ -1718,6 +2448,16 @@ def _format_internal_retrieval_context(
     kb_chars = _content_len(kb_hits)
     feedme_chars = _content_len(feedme_hits)
 
+    best_score: float | None = None
+    for group in (macro_hits, kb_hits, feedme_hits):
+        if not group:
+            continue
+        try:
+            score = float(group[0].get("relevance_score") or 0.0)
+        except Exception:
+            continue
+        best_score = score if best_score is None else max(best_score, score)
+
     add_section("Macro guidance", macro_hits, max_items=max_items)
     add_section("Knowledge base", kb_hits, max_items=max_items)
     add_section("Similar past examples", feedme_hits, max_items=max_items)
@@ -1729,6 +2469,7 @@ def _format_internal_retrieval_context(
         "macro_ok": bool(macro_hits),
         "kb_ok": bool(kb_hits),
         "feedme_ok": bool(feedme_hits),
+        "best_score": best_score,
         "macro_hits": len(macro_hits),
         "kb_hits": len(kb_hits),
         "feedme_hits": len(feedme_hits),
@@ -1737,6 +2478,228 @@ def _format_internal_retrieval_context(
         "feedme_context_chars": feedme_chars,
         "macro_results": macro_hits,
     }
+
+
+def _zendesk_resolve_context_clashes(
+    items: list[dict[str, Any]], *, resolution: str
+) -> list[dict[str, Any]]:
+    """Resolve contradictory/duplicate context items (e.g., outdated KB vs newer KB)."""
+
+    def canonical_title(title: str) -> str:
+        cleaned = re.sub(r"\s*\(.*?\)\s*$", "", str(title or "")).strip().lower()
+        cleaned = re.sub(r"(?i)\b(updated|new)\b", "", cleaned).strip()
+        cleaned = re.sub(r"[^a-z0-9]+", " ", cleaned).strip()
+        return cleaned
+
+    def parse_last_updated(meta: dict[str, Any]) -> datetime | None:
+        raw = meta.get("last_updated")
+        if not raw:
+            return None
+        try:
+            value = str(raw)
+            if value.endswith("Z"):
+                value = value[:-1] + "+00:00"
+            return datetime.fromisoformat(value)
+        except Exception:
+            return None
+
+    resolved = str(resolution or "").strip().lower()
+    if resolved != "prefer_newer":
+        return list(items or [])
+
+    by_key: dict[str, list[dict[str, Any]]] = {}
+    for item in items or []:
+        if not isinstance(item, dict):
+            continue
+        title = str(item.get("title") or "")
+        key = canonical_title(title) or title.strip().lower()
+        by_key.setdefault(key, []).append(item)
+
+    selected: list[dict[str, Any]] = []
+    for group in by_key.values():
+        if len(group) == 1:
+            selected.append(group[0])
+            continue
+
+        def score(item: dict[str, Any]) -> tuple[int, float]:
+            meta = item.get("metadata")
+            meta = meta if isinstance(meta, dict) else {}
+            dt = parse_last_updated(meta)
+            dt_score = int(dt.timestamp()) if dt else 0
+            confidence = float(item.get("confidence_score") or 0.0)
+            return (dt_score, confidence)
+
+        selected.append(max(group, key=score))
+
+    return selected
+
+
+def _format_internal_retrieval_context_quality_first(
+    results: list[dict[str, Any]],
+    *,
+    query: str,
+    include_header: bool,
+    max_per_source: int,
+    total_budget_tokens: int,
+    confidence_high: float,
+    confidence_low: float,
+) -> dict[str, Any]:
+    """Pack internal context by selecting the most relevant paragraphs first.
+
+    This is designed to keep the prompt under budget while maximizing signal density.
+    """
+    _ = confidence_high, confidence_low
+
+    query_keywords = _zendesk_extract_keywords(query)
+    query_phrases = [
+        s.lower()
+        for s in re.findall(r"\b[a-zA-Z0-9]+_[a-zA-Z0-9]+\b", str(query or ""))
+        if s
+    ]
+    max_items = max(1, min(10, int(max_per_source)))
+    char_budget = max(120, int(total_budget_tokens) * 4)
+
+    candidates: list[tuple[tuple[int, float], str]] = []
+    best_score: float | None = None
+
+    def paragraphs(text: str) -> list[str]:
+        return [p.strip() for p in re.split(r"\n{2,}", str(text or "")) if p.strip()]
+
+    def excerpt(text: str, max_len: int) -> str:
+        raw = str(text or "").strip()
+        if max_len <= 0 or not raw:
+            return ""
+        if len(raw) <= max_len:
+            return raw
+
+        lower = raw.lower()
+
+        def find_anchor() -> tuple[int, int] | None:
+            for phrase in query_phrases:
+                idx = lower.find(phrase)
+                if idx != -1:
+                    return idx, idx + len(phrase)
+            for kw in query_keywords:
+                idx = lower.find(kw.lower())
+                if idx != -1:
+                    return idx, idx + len(kw)
+            return None
+
+        anchor = find_anchor()
+        if not anchor:
+            return raw[: max_len - 1].rstrip() + "…"
+
+        anchor_start, anchor_end = anchor
+        start = max(0, anchor_start - 28)
+        end = start + max_len
+        if end < anchor_end:
+            start = max(0, anchor_end - max_len)
+            end = start + max_len
+        end = min(len(raw), end)
+        start = max(0, min(start, max(0, end - max_len)))
+
+        snippet = raw[start:end].strip()
+        if start > 0:
+            snippet = "…" + snippet.lstrip()
+        if end < len(raw):
+            snippet = snippet.rstrip() + "…"
+        return snippet
+
+    for item in (results or [])[: max_items * 3]:
+        if not isinstance(item, dict):
+            continue
+        try:
+            relevance = float(item.get("relevance_score") or 0.0)
+        except Exception:
+            relevance = 0.0
+        best_score = relevance if best_score is None else max(best_score, relevance)
+
+        raw_content = item.get("content") or item.get("snippet") or ""
+        content = str(raw_content)
+        for para in paragraphs(content):
+            if not query_keywords:
+                overlap = 1
+            else:
+                overlap = len(query_keywords & _zendesk_extract_keywords(para))
+            if overlap <= 0:
+                continue
+            candidates.append(((overlap, relevance), para))
+
+    candidates.sort(key=lambda c: c[0], reverse=True)
+
+    lines: list[str] = []
+    if include_header:
+        lines.append("Internal knowledge (do NOT mention sources in the customer reply):")
+        lines.append("")
+
+    remaining = char_budget - sum(len(line) + 1 for line in lines)
+    for _, para in candidates:
+        if remaining <= 0:
+            break
+        snippet = excerpt(para, remaining)
+        lines.append(snippet)
+        lines.append("")
+        remaining -= len(snippet) + 2
+
+    context = "\n".join(lines).strip()
+    context = re.sub(r"\n{3,}", "\n\n", context).strip()
+    return {"context": context or None, "best_score": best_score}
+
+
+def _topic_drift_issues(
+    reply: str,
+    *,
+    ticket_text: str,
+    intent: ZendeskQueryAgentIntent,
+    strictness: str,
+) -> list[str]:
+    """Detect when a draft reply drifts into unrelated topics."""
+    _ = ticket_text
+    strict = str(strictness or "").strip().lower()
+    if strict not in {"low", "medium", "high"}:
+        strict = "medium"
+
+    issues: list[str] = []
+    low_reply = str(reply or "").lower()
+
+    mentions_payment = bool(
+        re.search(r"\b(payment method|payment|credit card|invoice)\b", low_reply)
+    )
+    if mentions_payment and intent.primary_intent not in {"refund", "licensing"}:
+        issues.append("topic_drift_payment_methods")
+
+    return issues
+
+
+_REFUND_POLICY_WINDOW_RE = re.compile(r"(?i)\bwithin\s+(\d{1,3})\s+days\b")
+
+
+def _risk_statement_issues(
+    reply: str,
+    *,
+    ticket_text: str,
+    evidence_text: str,
+    intent: ZendeskQueryAgentIntent,
+) -> list[str]:
+    """Flag risky claims in the reply that are not supported by evidence."""
+    _ = ticket_text
+    issues: list[str] = []
+
+    if intent.primary_intent != "refund":
+        return issues
+
+    reply_text = str(reply or "")
+    evidence = str(evidence_text or "")
+
+    match = _REFUND_POLICY_WINDOW_RE.search(reply_text)
+    if not match:
+        return issues
+
+    days = match.group(1)
+    if days and days not in evidence:
+        issues.append("risk_unsupported_refund_policy")
+
+    return issues
 
 
 def _select_macro_candidate(

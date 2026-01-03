@@ -9,7 +9,7 @@ from typing import Optional, List, Dict
 
 from dotenv import load_dotenv
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 
 # Load environment variables from project root .env if present
 # Calculate the path safely with depth validation
@@ -45,6 +45,15 @@ class Settings(BaseSettings):
     )
 
     gemini_api_key: Optional[str] = Field(default=None, alias="GEMINI_API_KEY")
+    google_api_key: Optional[str] = Field(default=None, alias="GOOGLE_API_KEY")
+
+    @model_validator(mode="after")
+    def hydrate_gemini_api_key(self) -> "Settings":
+        # Backwards/ops compatibility: some environments still use GOOGLE_API_KEY
+        # for Gemini. Prefer GEMINI_API_KEY when present.
+        if not self.gemini_api_key and self.google_api_key:
+            self.gemini_api_key = self.google_api_key
+        return self
 
     # XAI/Grok Configuration
     xai_api_key: Optional[str] = Field(default=None, alias="XAI_API_KEY")

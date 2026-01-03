@@ -90,7 +90,7 @@ kill_process_on_port() {
         return
     fi
     
-    PIDS=$(lsof -t -i:$PORT 2>/dev/null || true)
+    PIDS=$(lsof -t -iTCP:$PORT -sTCP:LISTEN 2>/dev/null || true)
     if [ -z "$PIDS" ]; then
         echo "No process found on port $PORT."
     else
@@ -101,7 +101,7 @@ kill_process_on_port() {
             sleep 3
             
             # Check if processes are still running
-            REMAINING_PIDS=$(lsof -t -i:$PORT 2>/dev/null || true)
+            REMAINING_PIDS=$(lsof -t -iTCP:$PORT -sTCP:LISTEN 2>/dev/null || true)
             if [ -z "$REMAINING_PIDS" ]; then
                 echo "Processes terminated gracefully."
             else
@@ -131,7 +131,7 @@ UVICORN_ARGS=(app.main:app --port 8000)
 if [ "${ENABLE_UVICORN_RELOAD:-true}" = "true" ]; then
     UVICORN_ARGS+=(--reload)
 fi
-"$VENV_PY" -m uvicorn "${UVICORN_ARGS[@]}" > "$BACKEND_LOG_DIR/backend.log" 2>&1 &
+nohup "$VENV_PY" -m uvicorn "${UVICORN_ARGS[@]}" > "$BACKEND_LOG_DIR/backend.log" 2>&1 &
 BACKEND_PID=$!
 echo "Backend server started with PID: $BACKEND_PID"
 
@@ -184,6 +184,11 @@ else
     # Create Celery log directory
     CELERY_LOG_DIR="$LOG_DIR/celery"
     mkdir -p "$CELERY_LOG_DIR"
+
+    # Celery worker starts a lightweight health server (for Railway worker checks).
+    # Avoid port collisions with the FastAPI backend when running everything locally.
+    CELERY_HEALTH_PORT="${CELERY_HEALTH_PORT:-8001}"
+    kill_process_on_port "$CELERY_HEALTH_PORT"
     
     # Kill any existing Celery workers
     echo "Checking for existing Celery workers..."
@@ -195,7 +200,7 @@ else
     
     # Start FeedMe Celery worker
     echo "Starting FeedMe Celery worker in the background (venv python)..."
-    "$VENV_PY" -m celery -A app.feedme.celery_app worker \
+    nohup env HEALTH_PORT="$CELERY_HEALTH_PORT" "$VENV_PY" -m celery -A app.feedme.celery_app worker \
         --loglevel=info \
         --concurrency=2 \
         --queues=feedme_default,feedme_processing,feedme_embeddings,feedme_parsing,feedme_health \
@@ -222,12 +227,12 @@ FRONTEND_DIR="$ROOT_DIR/frontend"
 cd "$FRONTEND_DIR"
 
 echo "Installing Node.js dependencies..."
-npm install --legacy-peer-deps
+pnpm install
 
 kill_process_on_port 3000
 
 echo "Starting Next.js development server in the background..."
-npm run dev > "$FRONTEND_LOG_DIR/frontend.log" 2>&1 &
+nohup pnpm run dev > "$FRONTEND_LOG_DIR/frontend.log" 2>&1 &
 FRONTEND_PID=$!
 echo "Frontend server started with PID: $FRONTEND_PID"
 

@@ -351,6 +351,8 @@ class ModelRegistry:
         db_retrieval: Cost-efficient database lookups
         grounding: Gemini search grounding
         feedme: Document processing
+        memory_clustering: Memory relationship clustering/splitting
+        memory_relationship_analysis: Relationship/cluster advisor
         embedding: Vector embeddings
     """
 
@@ -371,6 +373,8 @@ class ModelRegistry:
     # Specialized models
     grounding: ModelSpec = field(default=GEMINI_3_FLASH)
     feedme: ModelSpec = field(default=GEMINI_FLASH_LITE)
+    memory_clustering: ModelSpec = field(default=GEMINI_3_FLASH)
+    memory_relationship_analysis: ModelSpec = field(default=GEMINI_3_FLASH)
     embedding: ModelSpec = field(default=GEMINI_EMBEDDING)
 
     # Model families for fallback chains
