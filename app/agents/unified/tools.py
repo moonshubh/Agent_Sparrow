@@ -43,7 +43,7 @@ from app.core.rate_limiting.agent_wrapper import rate_limited
 from app.core.settings import settings
 from app.db.embedding import utils as embedding_utils
 from app.db.supabase.client import get_supabase_client
-from app.security.pii_redactor import redact_pii, redact_pii_from_dict
+from app.security.pii_redactor import redact_pii, redact_pii_from_dict, redact_sensitive_from_dict
 from app.services.global_knowledge.hybrid_retrieval import HybridRetrieval
 import os
 from app.tools.research_tools import FirecrawlTool, TavilySearchTool
@@ -60,6 +60,8 @@ ALLOWED_SUPABASE_TABLES = {
     "feedme_conversations",
     "chat_sessions",
     "web_research_snapshots",
+    # Support/ops lookups (sensitive; outputs are redacted)
+    "orders",
 }
 
 # Private IP ranges for SSRF protection
@@ -651,7 +653,12 @@ def _tool_cache_enabled() -> bool:
 
 
 def _cache_hit_miss(hit: bool, key: str) -> None:
-    logger.info("tool_cache_hit" if hit else "tool_cache_miss", key=key)
+    try:
+        prefix = str(key).split(":", 1)[0] if key else "unknown"
+    except Exception:
+        prefix = "unknown"
+    key_hash = hashlib.sha256(str(key).encode("utf-8")).hexdigest()[:16]
+    logger.info("tool_cache_hit" if hit else "tool_cache_miss", tool=prefix, key_hash=key_hash)
 
 
 async def _invoke_firecrawl_mcp_tool(
@@ -1100,9 +1107,15 @@ async def web_search_tool(
 
     for attempt in range(max_retries):
         try:
+            query_hash = hashlib.sha256(str(input.query).encode("utf-8")).hexdigest()[:16]
             logger.info(
-                f"web_search_tool_invoked query='{input.query}' max_results={input.max_results} "
-                f"search_depth={input.search_depth} days={input.days} attempt={attempt + 1}"
+                "web_search_tool_invoked",
+                query_hash=query_hash,
+                query_len=len(str(input.query or "")),
+                max_results=input.max_results,
+                search_depth=input.search_depth,
+                days=input.days,
+                attempt=attempt + 1,
             )
             result = await asyncio.to_thread(
                 tavily.search,
@@ -1118,7 +1131,10 @@ async def web_search_tool(
             urls = result.get("urls") if isinstance(result, dict) else None
             images = result.get("images") if isinstance(result, dict) else None
             logger.info(
-                f"web_search_tool_success query='{input.query}' urls={len(urls or [])} images={len(images or [])}"
+                "web_search_tool_success",
+                query_hash=query_hash,
+                urls=len(urls or []),
+                images=len(images or []),
             )
             _store_tool_result(cache_key, _serialize_tool_output(result))
             return result
@@ -1126,28 +1142,30 @@ async def web_search_tool(
             if attempt == max_retries - 1:
                 logger.warning("web_search_tool_failed", error=str(e))
                 try:
+                    query_hash = hashlib.sha256(str(input.query).encode("utf-8")).hexdigest()[:16]
                     fallback_sources = (
                         ["web", "news", "images"]
                         if input.include_images
                         else ["web", "news"]
                     )
-                    fallback = await firecrawl_search_tool(
-                        input=FirecrawlSearchInput(
-                            query=input.query,
-                            limit=input.max_results,
-                            sources=fallback_sources,
-                        )
+                    fallback = await firecrawl_search_tool.ainvoke(
+                        {
+                            "query": input.query,
+                            "limit": input.max_results,
+                            "sources": fallback_sources,
+                        }
                     )
                     if isinstance(fallback, dict) and not fallback.get("error"):
                         return fallback
                 except Exception as fallback_exc:
                     logger.error(
-                        "web_search_firecrawl_fallback_failed", error=str(fallback_exc)
+                        "web_search_firecrawl_fallback_failed",
+                        query_hash=query_hash,
+                        error=str(fallback_exc),
                     )
                 return {
                     "error": "web_search_failed",
                     "message": str(e),
-                    "query": input.query,
                 }
             await asyncio.sleep(1 * (attempt + 1))  # Exponential backoff
 
@@ -1201,16 +1219,22 @@ async def grounding_search_tool(
         service = _grounding_service()
         if not service.enabled:
             raise GroundingUnavailableError("grounding_disabled")
+        query_hash = hashlib.sha256(str(input.query).encode("utf-8")).hexdigest()[:16]
         logger.info(
-            f"grounding_search_tool_invoked query='{input.query}' max_results={input.max_results}"
+            "grounding_search_tool_invoked",
+            query_hash=query_hash,
+            query_len=len(str(input.query or "")),
+            max_results=input.max_results,
         )
         response = await service.search_with_grounding(input.query, input.max_results)
         logger.info(
-            f"grounding_search_tool_success query='{input.query}' result_count={len(response.get('results') or [])}"
+            "grounding_search_tool_success",
+            query_hash=query_hash,
+            result_count=len(response.get("results") or []),
         )
         if response.get("results"):
             return response
-        logger.info(f"grounding_search_tool_empty query='{input.query}'")
+        logger.info("grounding_search_tool_empty", query_hash=query_hash)
         return await _grounding_fallback(
             input.query, input.max_results, reason="empty_results"
         )
@@ -1728,8 +1752,13 @@ async def firecrawl_search_tool(
     firecrawl = _firecrawl_client()
 
     try:
+        query_hash = hashlib.sha256(str(input.query).encode("utf-8")).hexdigest()[:16]
         logger.info(
-            f"firecrawl_search_tool_invoked query='{input.query}' limit={input.limit} sources={input.sources}"
+            "firecrawl_search_tool_invoked",
+            query_hash=query_hash,
+            query_len=len(str(input.query or "")),
+            limit=input.limit,
+            sources=input.sources,
         )
         result = await asyncio.to_thread(
             firecrawl.search_web,
@@ -1744,15 +1773,16 @@ async def firecrawl_search_tool(
             if isinstance(data, dict):
                 results_count = len(data.get("web") or [])
         logger.info(
-            f"firecrawl_search_tool_success query='{input.query}' results={results_count}"
+            "firecrawl_search_tool_success",
+            query_hash=query_hash,
+            results=results_count,
         )
         if isinstance(result, dict) and result.get("error"):
             raise RuntimeError(result["error"])
         return result
     except Exception as e:
-        logger.error(
-            f"firecrawl_search_tool_error query='{input.query}' error='{str(e)}'"
-        )
+        query_hash = hashlib.sha256(str(getattr(input, "query", "")).encode("utf-8")).hexdigest()[:16]
+        logger.error("firecrawl_search_tool_error", query_hash=query_hash, error=str(e))
         return {"error": str(e)}
 
 
@@ -2505,7 +2535,8 @@ async def supabase_query_tool(
 
     table = input.table.strip()
     if table not in ALLOWED_SUPABASE_TABLES:
-        raise ValueError(f"Table '{table}' is not permitted for supabase_query")
+        logger.warning("supabase_query_blocked_table", table=table)
+        return [{"error": f"Table '{table}' is not permitted for supabase_query"}]
 
     client = _supabase_client_cached()
     if getattr(client, "mock_mode", False):
@@ -2527,7 +2558,8 @@ async def supabase_query_tool(
         return []
 
     rows = response.data or []
-    return [redact_pii_from_dict(row) for row in rows]
+    redactor = redact_sensitive_from_dict if table == "orders" else redact_pii_from_dict
+    return [redactor(row) for row in rows]
 
 
 # --- Database Retrieval Subagent Tools ---
@@ -2575,9 +2607,9 @@ async def db_unified_search_tool(
 ) -> Dict[str, Any]:
     """Semantic search across all database sources in parallel.
 
-    Returns FULL content for KB/macros. For FeedMe >3000 chars,
-    marks content_type as 'summarized' to indicate the agent should
-    polish it while preserving key details.
+    Returns FULL content for KB/macros.
+    For FeedMe, returns relevant matched chunk excerpts and metadata to
+    support late hydration of surrounding context.
     """
     if sources is None:
         sources = ["kb", "macros", "feedme"]
@@ -2767,13 +2799,23 @@ async def db_unified_search_tool(
                     conv_id = int(conv_id)
                 except Exception:
                     continue
+                try:
+                    chunk_index = int(row.get("chunk_index"))
+                except Exception:
+                    continue
                 if conv_id not in conv_data:
                     conv_data[conv_id] = {
-                        "content_parts": [],
+                        "matches": [],
                         "max_similarity": 0.0,
                     }
-                conv_data[conv_id]["content_parts"].append(row.get("content", ""))
                 sim = float(row.get("similarity", 0.0))
+                conv_data[conv_id]["matches"].append(
+                    {
+                        "chunk_index": chunk_index,
+                        "content": str(row.get("content", "") or ""),
+                        "similarity": sim,
+                    }
+                )
                 if sim > conv_data[conv_id]["max_similarity"]:
                     conv_data[conv_id]["max_similarity"] = sim
 
@@ -2790,42 +2832,56 @@ async def db_unified_search_tool(
                 for conv_id, data in ranked:
                     details = (conv_details or {}).get(conv_id, {})
 
-                    # Fetch FULL conversation chunks (not just matched chunks).
-                    chunks: list[dict[str, Any]] = []
-                    try:
-                        resp = await asyncio.to_thread(
-                            lambda: client.client.table("feedme_text_chunks")
-                            .select("content, chunk_index")
-                            .eq("conversation_id", conv_id)
-                            .order("chunk_index")
-                            .execute()
-                        )
-                        chunks = resp.data or []
-                    except Exception:
-                        chunks = []
+                    matches = list(data.get("matches") or [])
+                    match_scores: dict[int, float] = {}
+                    match_text_by_index: dict[int, str] = {}
+                    for match in matches:
+                        if not isinstance(match, dict):
+                            continue
+                        idx = match.get("chunk_index")
+                        try:
+                            idx_int = int(idx)
+                        except Exception:
+                            continue
+                        score = float(match.get("similarity", 0.0))
+                        if idx_int not in match_scores or score > match_scores[idx_int]:
+                            match_scores[idx_int] = score
+                            match_text_by_index[idx_int] = str(match.get("content") or "")
 
-                    if chunks:
-                        full_content = "\n\n".join(
-                            str(chunk.get("content") or "") for chunk in chunks
-                        )
-                    else:
-                        # Fallback: include whatever matched chunks we already have.
-                        full_content = "\n\n".join(data["content_parts"])
-
-                    full_content = redact_pii(full_content)
+                    # Keep a compact excerpt in the tool response; hydrate slices later.
+                    matched_indices = sorted(
+                        match_scores.keys(),
+                        key=lambda i: (-match_scores.get(i, 0.0), i),
+                    )
+                    excerpt_indices = sorted(matched_indices[:3])
+                    excerpt_blocks = [
+                        (match_text_by_index.get(idx) or "").strip()
+                        for idx in excerpt_indices
+                        if (match_text_by_index.get(idx) or "").strip()
+                    ]
+                    excerpt_content = "\n\n".join(excerpt_blocks)
+                    excerpt_content = redact_pii(excerpt_content)
 
                     results.append(
                         _format_result_with_content_type(
                             source="feedme",
                             title=details.get("title", f"Conversation {conv_id}"),
-                            content=full_content,
+                            content=excerpt_content,
                             relevance_score=data["max_similarity"],
                             metadata={
                                 "id": conv_id,
                                 "created_at": details.get("created_at"),
                                 "folder_id": details.get("folder_id"),
-                                "chunk_count": len(chunks) if chunks else None,
                                 "last_updated": details.get("updated_at"),
+                                "matched_chunk_indices": matched_indices,
+                                "matched_chunks": [
+                                    {
+                                        "chunk_index": idx,
+                                        "similarity": match_scores.get(idx, 0.0),
+                                    }
+                                    for idx in matched_indices
+                                ],
+                                "hydration": "matched_chunks_excerpt",
                             },
                             weight=weights.get("feedme", 1.0),
                         )

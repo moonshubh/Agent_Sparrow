@@ -13,7 +13,7 @@ kill_service() {
     
     # Try to kill by port
     if command -v lsof &> /dev/null && [ -n "$PORT" ]; then
-        PIDS=$(lsof -t -i:$PORT 2>/dev/null || true)
+        PIDS=$(lsof -t -iTCP:$PORT -sTCP:LISTEN 2>/dev/null || true)
         if [ -n "$PIDS" ]; then
             echo "  Killing $SERVICE_NAME processes on port $PORT: $PIDS"
             kill -TERM $PIDS 2>/dev/null || true

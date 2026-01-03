@@ -1637,26 +1637,15 @@ class StreamEventHandler:
         """Handle write_todos tool output and return normalized todos."""
         from langchain_core.messages import ToolMessage
 
-        # Debug: Log the actual type and value being passed
         output_type = type(output).__name__
-        output_repr_str = repr(output)[:500] if output else "None"
-        logger.info(
-            "write_todos_handler_input: type={}, repr={!r}",
-            output_type,
-            output_repr_str,
-        )
+        logger.debug("write_todos_handler_input: type=%s", output_type)
 
         # Extract content from ToolMessage if needed
         raw_output = output
         if isinstance(output, ToolMessage):
             raw_output = output.content
             content_type = type(raw_output).__name__
-            content_repr_str = repr(raw_output)[:500] if raw_output else "None"
-            logger.info(
-                "write_todos_extracted_from_toolmessage: type={}, repr={!r}",
-                content_type,
-                content_repr_str,
-            )
+            logger.debug("write_todos_extracted_from_toolmessage: type=%s", content_type)
 
         self.emitter.update_todos(raw_output)
 

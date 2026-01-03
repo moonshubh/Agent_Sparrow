@@ -5,7 +5,7 @@
 ### Frontend (Next.js/TypeScript)
 - `frontend/`: Next.js 16 app with feature-based architecture
   - `src/app/`: Routes and layouts (Next.js App Router)
-  - `src/features/`: Domain-specific modules (chat, ag-ui, feedme) with colocated components, hooks, and services
+  - `src/features/`: Domain-specific modules (chat, ag-ui, feedme, memory) with colocated components, hooks, and services
   - `src/shared/`: Reusable UI primitives and utilities
   - `src/services/`: API clients and Supabase integration
   - `src/state/`: Zustand stores organized by domain
@@ -15,10 +15,11 @@
 - `app/`: FastAPI application with modular agent architecture
   - `main.py`: Application entrypoint with CORS and router setup
   - `agents/`: Agent modules (unified, orchestration, harness)
-  - `api/v1/endpoints/`: APIRouter modules by domain
+  - `api/v1/endpoints/`: APIRouter modules by domain (chat, feedme, memory)
   - `core/`: Config, tracing, and shared utilities
   - `db/`: Supabase client and models
   - `integrations/`: External service integrations (Zendesk, AG-UI)
+  - `memory/`: Memory UI service, search, and feedback propagation
   - `services/`: Business logic layer
   - `feedme/`: Document processing module with Celery tasks
 
@@ -330,6 +331,9 @@ settings = Settings()
 | `SUPABASE_ANON_KEY` | Supabase anonymous key | Backend |
 | `GOOGLE_API_KEY` | Gemini API key | Backend |
 | `TAVILY_API_KEY` | Web search API | Backend |
+| `ENABLE_MEMORY_UI_RETRIEVAL` | Enable Memory UI retrieval | Backend |
+| `MEMORY_UI_AGENT_ID` | Agent ID for Memory UI | Backend |
+| `MEMORY_UI_TENANT_ID` | Tenant ID for Memory UI | Backend |
 | `NEXT_PUBLIC_API_URL` | Backend API URL | Frontend |
 | `NEXT_PUBLIC_SUPABASE_URL` | Supabase URL | Frontend |
 

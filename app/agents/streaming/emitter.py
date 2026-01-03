@@ -710,12 +710,7 @@ class StreamEventEmitter:
         """Update the todo list from raw tool output."""
         # Debug logging to understand the raw_todos structure
         raw_type = type(raw_todos).__name__
-        raw_repr_str = repr(raw_todos)[:500] if raw_todos else "None"
-        logger.info(
-            "write_todos_debug: type={}, repr={!r}",
-            raw_type,
-            raw_repr_str,
-        )
+        logger.debug("write_todos_debug: type=%s", raw_type)
 
         normalized = normalize_todos(raw_todos, self.root_id)
         if not normalized:
@@ -797,11 +792,7 @@ class StreamEventEmitter:
             todo_dict["id"] = unique_id
             seen_ids.add(unique_id)
 
-        logger.info(
-            "write_todos_normalized",
-            normalized_count=len(normalized),
-            todos=safe_json_value(normalized),
-        )
+        logger.info("write_todos_normalized normalized_count=%s", len(normalized))
 
         # Convert to TodoItem objects
         self.todo_items.clear()

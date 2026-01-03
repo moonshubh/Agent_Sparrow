@@ -12,6 +12,16 @@ IPV4_PATTERN = re.compile(
 )
 IPV6_PATTERN = re.compile(r"\b(?:[0-9a-f]{1,4}:){7}[0-9a-f]{1,4}\b", re.IGNORECASE)
 CREDIT_CARD_PATTERN = re.compile(r"\b(?:\d[ -]?){13,19}\b")
+UUID_PATTERN = re.compile(
+    r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b",
+    re.IGNORECASE,
+)
+LICENSE_KEY_PATTERN = re.compile(
+    r"\b[a-z0-9]{4,6}(?:-[a-z0-9]{4,6}){2,}\b", re.IGNORECASE
+)
+MIXED_ALNUM_TOKEN_PATTERN = re.compile(
+    r"\b(?=[a-z0-9]{20,}\b)(?=.*[a-z])(?=.*\d)[a-z0-9]+\b", re.IGNORECASE
+)
 
 
 def contains_pii(text: str) -> bool:
@@ -20,6 +30,14 @@ def contains_pii(text: str) -> bool:
     if not text:
         return False
     return any(pattern.search(text) for pattern in _patterns())
+
+
+def contains_sensitive(text: str) -> bool:
+    """Return True if the string contains PII or sensitive tokens."""
+
+    if not text:
+        return False
+    return any(pattern.search(text) for pattern in _sensitive_patterns())
 
 
 def redact_pii(text: str) -> str:
@@ -33,6 +51,22 @@ def redact_pii(text: str) -> str:
     redacted = IPV4_PATTERN.sub("[REDACTED_IP]", redacted)
     redacted = IPV6_PATTERN.sub("[REDACTED_IP]", redacted)
     redacted = CREDIT_CARD_PATTERN.sub("[REDACTED_CARD]", redacted)
+    return redacted
+
+
+def redact_sensitive(text: str) -> str:
+    """Redact PII and common secret-like tokens (UUIDs, license keys, long mixed tokens).
+
+    Intended for logs/telemetry where accidental leaks are more harmful than over-redaction.
+    """
+
+    if not text:
+        return text
+
+    redacted = redact_pii(text)
+    redacted = UUID_PATTERN.sub("[REDACTED_UUID]", redacted)
+    redacted = LICENSE_KEY_PATTERN.sub("[REDACTED_KEY]", redacted)
+    redacted = MIXED_ALNUM_TOKEN_PATTERN.sub("[REDACTED_TOKEN]", redacted)
     return redacted
 
 
@@ -50,5 +84,38 @@ def redact_pii_from_dict(data: Any) -> Any:
     return data
 
 
+def redact_sensitive_from_dict(data: Any) -> Any:
+    """Walk nested structures and redact sensitive tokens from all string leaves."""
+
+    if isinstance(data, dict):
+        return {key: redact_sensitive_from_dict(value) for key, value in data.items()}
+    if isinstance(data, list):
+        return [redact_sensitive_from_dict(item) for item in data]
+    if isinstance(data, tuple):
+        return tuple(redact_sensitive_from_dict(item) for item in data)
+    if isinstance(data, str):
+        return redact_sensitive(data)
+    return data
+
+
 def _patterns() -> Iterable[re.Pattern[str]]:
-    return (EMAIL_PATTERN, PHONE_PATTERN, IPV4_PATTERN, IPV6_PATTERN, CREDIT_CARD_PATTERN)
+    return (
+        EMAIL_PATTERN,
+        PHONE_PATTERN,
+        IPV4_PATTERN,
+        IPV6_PATTERN,
+        CREDIT_CARD_PATTERN,
+    )
+
+
+def _sensitive_patterns() -> Iterable[re.Pattern[str]]:
+    return (
+        EMAIL_PATTERN,
+        PHONE_PATTERN,
+        IPV4_PATTERN,
+        IPV6_PATTERN,
+        CREDIT_CARD_PATTERN,
+        UUID_PATTERN,
+        LICENSE_KEY_PATTERN,
+        MIXED_ALNUM_TOKEN_PATTERN,
+    )

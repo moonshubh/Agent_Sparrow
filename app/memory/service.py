@@ -117,6 +117,54 @@ class MemoryService:
         )
         return formatted
 
+    async def list_primary_memories(
+        self,
+        *,
+        agent_id: str,
+        limit: int = 200,
+        filters: dict[str, Any] | None = None,
+    ) -> list[dict[str, Any]]:
+        """
+        List mem0 primary-collection memories using metadata filters.
+
+        This is useful for backfilling the Memory UI schema for admin review.
+        """
+        if not self._is_configured():
+            return []
+
+        safe_limit = max(1, min(2000, int(limit)))
+        effective_filters = filters if filters is not None else {"tenant_id": TENANT_ID}
+
+        start = perf_counter()
+        try:
+            results = await self._get_by_filters(
+                collection_name=settings.memory_collection_primary,
+                filters=effective_filters,
+                agent_id=agent_id,
+                limit=safe_limit,
+            )
+        except Exception as exc:  # pragma: no cover - network/runtime failures
+            logger.exception("memory_list_primary_error", agent_id=agent_id, error=str(exc))
+            duration_ms = (perf_counter() - start) * 1000.0
+            memory_metrics.record_retrieval(
+                "list_primary",
+                hit=False,
+                duration_ms=duration_ms,
+                result_count=0,
+                error=True,
+            )
+            return []
+
+        duration_ms = (perf_counter() - start) * 1000.0
+        memory_metrics.record_retrieval(
+            "list_primary",
+            hit=bool(results),
+            duration_ms=duration_ms,
+            result_count=len(results),
+            error=False,
+        )
+        return results
+
     async def add_facts(
         self,
         agent_id: str,

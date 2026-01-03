@@ -1,0 +1,594 @@
+'use client';
+
+import { useCallback, useEffect, useMemo, useRef, useState, type MutableRefObject, type RefObject } from 'react';
+import { useFrame, useThree } from '@react-three/fiber';
+import { Html } from '@react-three/drei';
+import { Box3, PerspectiveCamera, Sphere, Vector3 } from 'three';
+import type { EntityType, GraphNode, TreeEdge, TreeTransformResult, TreeViewMode } from '../types';
+import { useTree3DLayout } from '../hooks/useTree3DLayout';
+import { CycleConnection } from './cycle-connection';
+import { GroundPlane } from './GroundPlane';
+import { NodeCluster } from './node-cluster';
+import { OrphanScatter } from './OrphanScatter';
+import { SkeletonTree } from './SkeletonTree';
+import { TreeBranch } from './tree-branch';
+import { TreeNode } from './tree-node';
+import { TreeTrunk } from './TreeTrunk';
+import { getLeafTexture } from '../lib/textureLoader';
+import { useLOD } from '../hooks/useLOD';
+
+function toTimeMs(value: string | null | undefined): number | null {
+  if (!value) return null;
+  const ms = Date.parse(value);
+  return Number.isFinite(ms) ? ms : null;
+}
+
+function isRelationshipReviewed(input: {
+  acknowledgedAt?: string | null;
+  lastModifiedAt?: string | null;
+}): boolean {
+  const acknowledgedMs = toTimeMs(input.acknowledgedAt ?? null);
+  if (!acknowledgedMs) return false;
+
+  const modifiedMs = toTimeMs(input.lastModifiedAt ?? null);
+  if (!modifiedMs) return true;
+
+  return acknowledgedMs >= modifiedMs;
+}
+
+export function TreeScene({
+  tree,
+  selectedNodeId,
+  viewMode,
+  showAllLabels,
+  expandedNodeIdSet,
+  maxChildrenVisible,
+  entityTypeFilter,
+  searchMatchIds,
+  activeSearchMatchId,
+  onNodeClick,
+  onToggleExpanded,
+  onShowChildren,
+  onEdgeClick,
+  orbitControlsRef,
+  htmlPortal,
+  loading,
+  lastExpansionEvent,
+}: {
+  tree: TreeTransformResult | null;
+  selectedNodeId: string | null;
+  viewMode: TreeViewMode;
+  showAllLabels: boolean;
+  expandedNodeIdSet: Set<string>;
+  maxChildrenVisible: number;
+  entityTypeFilter?: ReadonlySet<EntityType> | null;
+  searchMatchIds?: readonly string[];
+  activeSearchMatchId?: string | null;
+  onNodeClick?: (node: GraphNode) => void;
+  onToggleExpanded?: (nodeId: string) => void;
+  onShowChildren?: (nodeId: string) => void;
+  onEdgeClick?: (edge: TreeEdge) => void;
+  orbitControlsRef?: MutableRefObject<{
+    target: Vector3;
+    minDistance?: number;
+    maxDistance?: number;
+    update: () => void;
+  } | null>;
+  htmlPortal?: RefObject<HTMLElement>;
+  loading?: boolean;
+  lastExpansionEvent?: { nodeId: string; action: 'expand' | 'collapse'; at: number } | null;
+}) {
+  const [hoveredNodeId, setHoveredNodeId] = useState<string | null>(null);
+  const hoverClearTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastExpansionHandledRef = useRef<number>(0);
+
+  const cancelHoverClear = useCallback(() => {
+    if (hoverClearTimerRef.current) {
+      clearTimeout(hoverClearTimerRef.current);
+      hoverClearTimerRef.current = null;
+    }
+  }, []);
+
+  const scheduleHoverClear = useCallback((nodeId: string) => {
+    cancelHoverClear();
+    hoverClearTimerRef.current = setTimeout(() => {
+      setHoveredNodeId((prev) => (prev === nodeId ? null : prev));
+    }, 90);
+  }, [cancelHoverClear]);
+
+  const leafTexture = useMemo(() => getLeafTexture(), []);
+  const camera = useThree((state) => state.camera);
+
+  const flightRef = useRef<{
+    startAt: number | null;
+    duration: number;
+    fromCamera: Vector3;
+    toCamera: Vector3;
+    fromTarget: Vector3;
+    toTarget: Vector3;
+  } | null>(null);
+
+  const layout = useTree3DLayout(tree, {
+    expandedNodeIdSet,
+    selectedNodeId,
+    maxChildrenVisible,
+    showAllLabels,
+  });
+
+  const reviewedEntityIdSet = useMemo(() => {
+    if (!tree) return null;
+
+    const reviewed = new Set<string>();
+    for (const edge of tree.treeEdges) {
+      if (!edge.relationships.length) continue;
+      if (
+        edge.relationships.some((rel) =>
+          isRelationshipReviewed({
+            acknowledgedAt: rel.acknowledgedAt ?? null,
+            lastModifiedAt: rel.lastModifiedAt ?? null,
+          })
+        )
+      ) {
+        reviewed.add(edge.sourceId);
+        reviewed.add(edge.targetId);
+      }
+    }
+    return reviewed;
+  }, [tree]);
+
+  const lodConfig = useMemo(() => {
+    const nodeCount = layout.nodes.length;
+    if (nodeCount > 600) {
+      return { highDistance: 8, mediumDistance: 22, updateIntervalSeconds: 0.32 };
+    }
+    if (nodeCount > 400) {
+      return { highDistance: 10, mediumDistance: 28, updateIntervalSeconds: 0.28 };
+    }
+    if (nodeCount > 250) {
+      return { highDistance: 12, mediumDistance: 34, updateIntervalSeconds: 0.24 };
+    }
+    return { highDistance: 14, mediumDistance: 42, updateIntervalSeconds: 0.2 };
+  }, [layout.nodes.length]);
+
+  const lodById = useLOD(layout.nodes, lodConfig);
+
+  const ghostedById = useMemo(() => {
+    if (entityTypeFilter == null) return null;
+
+    const out = new Map<string, boolean>();
+    for (const node of layout.nodes) {
+      if (node.kind === 'entity') {
+        out.set(node.id, !entityTypeFilter.has(node.data.node.entityType));
+        continue;
+      }
+
+      const hasAnyMatchingType = Array.from(node.memberTypes.values()).some((t) =>
+        entityTypeFilter.has(t)
+      );
+      out.set(node.id, !hasAnyMatchingType);
+    }
+    return out;
+  }, [entityTypeFilter, layout.nodes]);
+
+  const focusNodeIdSet = useMemo(() => {
+    if (!selectedNodeId) return null;
+    const selected = layout.renderableById.get(selectedNodeId);
+    if (!selected) return null;
+
+    const focus = new Set<string>();
+    focus.add(selectedNodeId);
+
+    let cursorId = selected.parentId;
+    while (cursorId) {
+      focus.add(cursorId);
+      const cursor = layout.renderableById.get(cursorId);
+      cursorId = cursor?.parentId ?? null;
+    }
+
+    layout.nodes.forEach((node) => {
+      if (node.parentId === selectedNodeId) focus.add(node.id);
+    });
+
+    return focus;
+  }, [layout.nodes, layout.renderableById, selectedNodeId]);
+
+  const protectedNodeIdSet = useMemo(() => {
+    const set = new Set<string>();
+    if (tree?.rootId) {
+      set.add(tree.rootId);
+    }
+    if (selectedNodeId) {
+      set.add(selectedNodeId);
+    }
+    if (focusNodeIdSet) {
+      focusNodeIdSet.forEach((id) => set.add(id));
+    }
+    if (searchMatchIds) {
+      searchMatchIds.forEach((id) => set.add(id));
+    }
+    if (activeSearchMatchId) {
+      set.add(activeSearchMatchId);
+    }
+    return set;
+  }, [activeSearchMatchId, focusNodeIdSet, searchMatchIds, selectedNodeId, tree]);
+
+  const culledNodeIdSet = useMemo(() => {
+    const set = new Set<string>();
+    if (layout.nodes.length < 200) return set;
+    for (const node of layout.nodes) {
+      if (node.kind !== 'entity') continue;
+      const lod = lodById.get(node.id) ?? 'high';
+      if (lod === 'low' && !protectedNodeIdSet.has(node.id)) {
+        set.add(node.id);
+      }
+    }
+    return set;
+  }, [layout.nodes, lodById, protectedNodeIdSet]);
+
+  const cyclesToShow = useMemo(() => {
+    if (!selectedNodeId) return [];
+    return layout.cycles.filter(
+      (cycle) => cycle.edge.sourceId === selectedNodeId || cycle.edge.targetId === selectedNodeId
+    );
+  }, [layout.cycles, selectedNodeId]);
+
+  const groundSize = useMemo(() => {
+    return Math.max(30, layout.layoutRadius * 1.5);
+  }, [layout.layoutRadius]);
+
+  const hasTree = Boolean(tree) && layout.nodes.length > 0;
+
+  const searchMarkers = useMemo(() => {
+    if (!searchMatchIds || searchMatchIds.length === 0) return [];
+    const max = Math.min(9, searchMatchIds.length);
+    const out: Array<{ id: string; label: string; position: Vector3 }> = [];
+    for (let idx = 0; idx < max; idx += 1) {
+      const id = searchMatchIds[idx];
+      if (!id) continue;
+      const node = layout.nodeById.get(id);
+      if (!node) continue;
+      out.push({ id, label: String(idx + 1), position: node.position });
+    }
+    return out;
+  }, [layout.nodeById, searchMatchIds]);
+
+  useEffect(() => {
+    if (!selectedNodeId) return;
+    const selected = layout.nodeById.get(selectedNodeId);
+    if (!selected) return;
+    const controls = orbitControlsRef?.current;
+    if (!controls) return;
+    if (!(camera instanceof PerspectiveCamera)) return;
+
+    const fromTarget = controls.target.clone();
+    const fromCamera = camera.position.clone();
+    const toTarget = selected.position.clone();
+
+    const dir = new Vector3().subVectors(fromCamera, fromTarget);
+    const currentDistance = dir.length() || 10;
+    const minDistance = controls.minDistance ?? 0;
+    const maxDistance = controls.maxDistance ?? Number.POSITIVE_INFINITY;
+    dir.setLength(Math.min(maxDistance, Math.max(minDistance, currentDistance)));
+
+    const toCamera = toTarget.clone().add(dir);
+
+    flightRef.current = {
+      startAt: null,
+      duration: 1.35,
+      fromCamera,
+      toCamera,
+      fromTarget,
+      toTarget,
+    };
+  }, [camera, layout.nodeById, orbitControlsRef, selectedNodeId]);
+
+  useEffect(() => {
+    if (!lastExpansionEvent) return;
+    if (lastExpansionEvent.action !== 'expand') return;
+    if (lastExpansionHandledRef.current === lastExpansionEvent.at) return;
+    lastExpansionHandledRef.current = lastExpansionEvent.at;
+
+    const expandedRoot = layout.renderableById.get(lastExpansionEvent.nodeId);
+    if (!expandedRoot) return;
+
+    const controls = orbitControlsRef?.current;
+    if (!controls) return;
+    if (!(camera instanceof PerspectiveCamera)) return;
+
+    const childrenByParentId = new Map<string, string[]>();
+    for (const node of layout.nodes) {
+      const parentId = node.parentId;
+      if (!parentId) continue;
+      const existing = childrenByParentId.get(parentId);
+      if (existing) {
+        existing.push(node.id);
+      } else {
+        childrenByParentId.set(parentId, [node.id]);
+      }
+    }
+
+    const ids = new Set<string>();
+    const queue: string[] = [expandedRoot.id];
+    while (queue.length) {
+      const id = queue.shift();
+      if (!id) break;
+      if (ids.has(id)) continue;
+      ids.add(id);
+      const children = childrenByParentId.get(id);
+      if (children) queue.push(...children);
+    }
+
+    if (ids.size < 2) return;
+
+    const box = new Box3();
+    ids.forEach((id) => {
+      const node = layout.renderableById.get(id);
+      if (!node) return;
+      box.expandByPoint(node.position);
+    });
+
+    if (box.isEmpty()) return;
+
+    box.expandByScalar(2.2);
+
+    const corners = [
+      new Vector3(box.min.x, box.min.y, box.min.z),
+      new Vector3(box.min.x, box.min.y, box.max.z),
+      new Vector3(box.min.x, box.max.y, box.min.z),
+      new Vector3(box.min.x, box.max.y, box.max.z),
+      new Vector3(box.max.x, box.min.y, box.min.z),
+      new Vector3(box.max.x, box.min.y, box.max.z),
+      new Vector3(box.max.x, box.max.y, box.min.z),
+      new Vector3(box.max.x, box.max.y, box.max.z),
+    ];
+
+    camera.updateMatrixWorld();
+    const bounds = corners.reduce(
+      (acc, corner) => {
+        const projected = corner.clone().project(camera);
+        acc.minX = Math.min(acc.minX, projected.x);
+        acc.maxX = Math.max(acc.maxX, projected.x);
+        acc.minY = Math.min(acc.minY, projected.y);
+        acc.maxY = Math.max(acc.maxY, projected.y);
+        return acc;
+      },
+      {
+        minX: Number.POSITIVE_INFINITY,
+        maxX: Number.NEGATIVE_INFINITY,
+        minY: Number.POSITIVE_INFINITY,
+        maxY: Number.NEGATIVE_INFINITY,
+      }
+    );
+
+    const margin = 0.92;
+    const alreadyFits =
+      bounds.minX >= -margin &&
+      bounds.maxX <= margin &&
+      bounds.minY >= -margin &&
+      bounds.maxY <= margin;
+
+    if (alreadyFits) return;
+
+    const sphere = new Sphere();
+    box.getBoundingSphere(sphere);
+
+    const fov = (camera.fov * Math.PI) / 180;
+    const aspect = camera.aspect || 1;
+    const hFov = 2 * Math.atan(Math.tan(fov / 2) * aspect);
+    const distV = sphere.radius / Math.sin(fov / 2);
+    const distH = sphere.radius / Math.sin(hFov / 2);
+    const desiredDistance = Math.max(distV, distH);
+    const minDistance = controls.minDistance ?? 0;
+    const maxDistance = controls.maxDistance ?? Number.POSITIVE_INFINITY;
+    const distance = Math.min(maxDistance, Math.max(minDistance, desiredDistance));
+
+    const fromTarget = controls.target.clone();
+    const fromCamera = camera.position.clone();
+    const toTarget = sphere.center.clone();
+
+    const dir = new Vector3().subVectors(fromCamera, fromTarget);
+    if (dir.lengthSq() < 1e-4) dir.set(0, 0.35, 1);
+    dir.normalize().multiplyScalar(distance);
+    const toCamera = toTarget.clone().add(dir);
+
+    flightRef.current = {
+      startAt: null,
+      duration: 1.05,
+      fromCamera,
+      toCamera,
+      fromTarget,
+      toTarget,
+    };
+  }, [camera, lastExpansionEvent, layout.nodes, layout.renderableById, orbitControlsRef]);
+
+  useFrame((state) => {
+    const flight = flightRef.current;
+    const controls = orbitControlsRef?.current;
+    if (!flight || !controls) return;
+    if (!(camera instanceof PerspectiveCamera)) return;
+
+    if (flight.startAt === null) {
+      flight.startAt = state.clock.elapsedTime;
+    }
+
+    const t = (state.clock.elapsedTime - flight.startAt) / flight.duration;
+    const clamped = Math.min(1, Math.max(0, t));
+    const eased =
+      clamped < 0.5
+        ? 4 * clamped * clamped * clamped
+        : 1 - Math.pow(-2 * clamped + 2, 3) / 2;
+
+    camera.position.lerpVectors(flight.fromCamera, flight.toCamera, eased);
+    controls.target.lerpVectors(flight.fromTarget, flight.toTarget, eased);
+    controls.update();
+
+    if (clamped >= 1) {
+      flightRef.current = null;
+    }
+  });
+
+  useEffect(() => {
+    return () => {
+      cancelHoverClear();
+    };
+  }, [cancelHoverClear]);
+
+  return (
+    <>
+      <GroundPlane size={groundSize} />
+
+      {tree?.orphans?.length ? (
+        <OrphanScatter
+          orphans={tree.orphans}
+          groundSize={groundSize}
+          htmlPortal={htmlPortal}
+          onSelect={onNodeClick}
+        />
+      ) : null}
+
+      {loading && !hasTree ? <SkeletonTree /> : null}
+
+      {hasTree ? (
+        <>
+          <TreeTrunk height={layout.trunkHeight} />
+
+          {layout.links.map((link) => {
+            const isCulled =
+              culledNodeIdSet.has(link.source.id) || culledNodeIdSet.has(link.target.id);
+            if (isCulled) return null;
+
+            const isDimmed =
+              Boolean(focusNodeIdSet) &&
+              !(focusNodeIdSet?.has(link.source.id) && focusNodeIdSet?.has(link.target.id));
+
+            const sourceLod = lodById.get(link.source.id) ?? 'high';
+            const targetLod = lodById.get(link.target.id) ?? 'high';
+            const linkLod =
+              sourceLod === 'low' && targetLod === 'low'
+                ? 'low'
+                : sourceLod === 'high' || targetLod === 'high'
+                  ? 'high'
+                  : 'medium';
+
+            return (
+              <TreeBranch
+                key={link.key}
+                link={link}
+                maxDepth={layout.maxDepth}
+                viewMode={viewMode}
+                isDimmed={isDimmed}
+                isGhosted={Boolean(
+                  ghostedById?.get(link.source.id) || ghostedById?.get(link.target.id)
+                )}
+                lod={linkLod}
+                onClick={(edge) => onEdgeClick?.(edge)}
+              />
+            );
+          })}
+
+          {cyclesToShow.map((cycle) => (
+            <CycleConnection
+              key={cycle.key}
+              points={[
+                [cycle.source.position.x, cycle.source.position.y + 0.2, cycle.source.position.z],
+                [cycle.target.position.x, cycle.target.position.y + 0.2, cycle.target.position.z],
+              ]}
+            />
+          ))}
+
+          {layout.nodes.map((node) => {
+            if (culledNodeIdSet.has(node.id)) return null;
+            const selected = node.id === selectedNodeId;
+            const hovered = node.id === hoveredNodeId;
+            const isRoot = node.id === tree!.rootId;
+            const showLabel = showAllLabels || selected || isRoot;
+
+            const dimmed = Boolean(focusNodeIdSet) && !focusNodeIdSet?.has(node.id);
+
+            const ghosted = ghostedById?.get(node.id) ?? false;
+
+            const lod = lodById.get(node.id) ?? 'high';
+
+            return (
+              <group
+                key={`node-${node.id}`}
+                onPointerOver={(e) => {
+                  e.stopPropagation();
+                  cancelHoverClear();
+                  setHoveredNodeId(node.id);
+                }}
+                onPointerOut={(e) => {
+                  e.stopPropagation();
+                  scheduleHoverClear(node.id);
+                }}
+              >
+                {node.kind === 'cluster' ? (
+                  <NodeCluster
+                    cluster={node}
+                    hovered={hovered}
+                    dimmed={dimmed}
+                    ghosted={ghosted}
+                    lod={lod}
+                    showLabel={showAllLabels || hovered}
+                    htmlPortal={htmlPortal}
+                    onToggleExpanded={onToggleExpanded}
+                    onControlsHoverChange={(isHovering) => {
+                      if (isHovering) {
+                        cancelHoverClear();
+                        setHoveredNodeId(node.id);
+                      } else {
+                        scheduleHoverClear(node.id);
+                      }
+                    }}
+                  />
+                ) : (
+                  <TreeNode
+                    node={node}
+                    hovered={hovered}
+                    selected={selected}
+                    reviewed={reviewedEntityIdSet?.has(node.id) ?? false}
+                    dimmed={dimmed}
+                    ghosted={ghosted}
+                    lod={lod}
+                    showLabel={showLabel}
+                    leafTexture={leafTexture}
+                    viewMode={viewMode}
+                    htmlPortal={htmlPortal}
+                    onClick={onNodeClick}
+                    onToggleExpanded={onToggleExpanded}
+                    onShowChildren={onShowChildren}
+                    onControlsHoverChange={(isHovering) => {
+                      if (isHovering) {
+                        cancelHoverClear();
+                        setHoveredNodeId(node.id);
+                      } else {
+                        scheduleHoverClear(node.id);
+                      }
+                    }}
+                  />
+                )}
+              </group>
+            );
+          })}
+
+          {searchMarkers.map((marker) => (
+            <Html
+              key={`search-marker-${marker.id}`}
+              position={[marker.position.x, marker.position.y + 2.2, marker.position.z]}
+              center
+              portal={htmlPortal}
+            >
+              <div
+                className={`particle-tree-search-marker ${
+                  marker.id === activeSearchMatchId ? 'is-active' : ''
+                }`}
+              >
+                {marker.label}
+              </div>
+            </Html>
+          ))}
+        </>
+      ) : null}
+    </>
+  );
+}

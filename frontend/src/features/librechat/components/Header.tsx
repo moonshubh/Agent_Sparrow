@@ -3,7 +3,8 @@
 import React, { useState, useCallback, useEffect, useRef } from 'react';
 import Link from 'next/link';
 import { useAgent } from '@/features/librechat/AgentContext';
-import { PanelLeftClose, PanelLeft, ChevronDown, Settings, Check, Layers } from 'lucide-react';
+import { PanelLeftClose, PanelLeft, ChevronDown, Settings, Check, Layers, Brain, FileText } from 'lucide-react';
+import * as DropdownMenu from '@radix-ui/react-dropdown-menu';
 import { SettingsDialogV2 } from '@/features/settings/components/SettingsDialogV2';
 import { useArtifactActions, useArtifactSelector } from '@/features/librechat/artifacts';
 import { modelsAPI, PROVIDER_LABELS, type ModelTier, type Provider as ProviderId } from '@/services/api/endpoints/models';
@@ -486,20 +487,50 @@ export function Header({ onToggleSidebar, sidebarOpen }: HeaderProps) {
             <span className="lc-artifact-count">{orderedIds.length}</span>
           </button>
         )}
-        {/* FeedMe link */}
-        <Link
-          href="/feedme"
-          className="lc-toggle-sidebar-btn"
-          aria-label="Open FeedMe"
-          title="FeedMe - Document Processing"
-        >
-          <img
-            src="/feedme_icon.png"
-            alt=""
-            className="lc-feedme-icon"
-            aria-hidden="true"
-          />
-        </Link>
+        {/* Tools Dropdown Menu (FeedMe & Memory) */}
+        <DropdownMenu.Root>
+          <DropdownMenu.Trigger asChild>
+            <button
+              className="lc-toggle-sidebar-btn lc-tools-dropdown-trigger"
+              aria-label="Open tools menu"
+              title="Tools"
+            >
+              <img
+                src="/feedme_icon.png"
+                alt=""
+                className="lc-feedme-icon"
+                aria-hidden="true"
+              />
+              <ChevronDown size={12} className="lc-dropdown-chevron" />
+            </button>
+          </DropdownMenu.Trigger>
+
+          <DropdownMenu.Portal>
+            <DropdownMenu.Content
+              className="lc-tools-dropdown-content"
+              sideOffset={5}
+              align="end"
+            >
+              <DropdownMenu.Item asChild>
+                <Link href="/feedme" className="lc-tools-dropdown-item">
+                  <FileText size={16} />
+                  <span>FeedMe</span>
+                  <span className="lc-tools-dropdown-desc">Document Processing</span>
+                </Link>
+              </DropdownMenu.Item>
+
+              <DropdownMenu.Separator className="lc-tools-dropdown-separator" />
+
+              <DropdownMenu.Item asChild>
+                <Link href="/memory" className="lc-tools-dropdown-item">
+                  <Brain size={16} />
+                  <span>Memory</span>
+                  <span className="lc-tools-dropdown-desc">Knowledge Graph</span>
+                </Link>
+              </DropdownMenu.Item>
+            </DropdownMenu.Content>
+          </DropdownMenu.Portal>
+        </DropdownMenu.Root>
 
         {/* Settings button */}
         <button

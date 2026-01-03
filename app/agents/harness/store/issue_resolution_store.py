@@ -45,6 +45,8 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from loguru import logger
 
+from app.memory.title import ensure_memory_title
+
 if TYPE_CHECKING:
     from supabase import Client as SupabaseClient
 
@@ -406,6 +408,74 @@ class IssueResolutionStore:
                     category=category,
                     has_embedding=True,
                 )
+
+                # Best-effort: also write a reviewable Memory UI entry (separate from IssueResolutionStore).
+                try:
+                    from app.core.settings import settings
+                    from app.security.pii_redactor import redact_pii, redact_pii_from_dict
+
+                    if getattr(settings, "enable_memory_ui_capture", False):
+                        agent_id = getattr(settings, "memory_ui_agent_id", "sparrow") or "sparrow"
+                        tenant_id = getattr(settings, "memory_ui_tenant_id", "mailbot") or "mailbot"
+
+                        # Keep the content compact and pattern-focused.
+                        memory_content = "\n".join(
+                            [
+                                f"Category: {category}",
+                                f"Problem: {problem_summary}",
+                                f"Solution: {solution_summary}",
+                            ]
+                        ).strip()
+
+                        redacted_content = redact_pii(memory_content)
+                        metadata = ensure_memory_title(
+                            redact_pii_from_dict(
+                                {
+                                    "source": "issue_resolution_store",
+                                    "resolution_id": resolution_id,
+                                    "ticket_id": str(ticket_id),
+                                    "category": category,
+                                    "was_escalated": bool(was_escalated),
+                                    "kb_articles_used": kb_articles_used or [],
+                                    "macros_used": macros_used or [],
+                                }
+                            ),
+                            content=redacted_content,
+                        )
+
+                        # Reuse the existing embedding to avoid a second Gemini call.
+                        if isinstance(embedding, list) and len(embedding) == 3072:
+                            payload = {
+                                "id": resolution_id,
+                                "content": redacted_content,
+                                "metadata": metadata,
+                                "source_type": "auto_extracted",
+                                "agent_id": agent_id,
+                                "tenant_id": tenant_id,
+                                "embedding": embedding,
+                            }
+
+                            async def _insert_memory_ui() -> None:
+                                try:
+                                    await asyncio.to_thread(
+                                        lambda: client.table("memories").insert(payload).execute()
+                                    )
+                                except Exception as insert_exc:
+                                    logger.debug(
+                                        "memory_ui_capture_issue_resolution_insert_failed",
+                                        error=str(insert_exc)[:180],
+                                    )
+
+                            asyncio.create_task(_insert_memory_ui())
+                        else:
+                            logger.debug(
+                                "memory_ui_capture_skipped_embedding_mismatch",
+                                ticket_id=ticket_id,
+                                got_dim=len(embedding) if isinstance(embedding, list) else None,
+                            )
+                except Exception as exc:
+                    logger.debug("memory_ui_capture_issue_resolution_failed", error=str(exc)[:180])
+
                 if prune:
                     try:
                         pruned = await asyncio.to_thread(

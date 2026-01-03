@@ -90,7 +90,7 @@ const nextConfig = {
           },
           {
             key: 'Content-Security-Policy',
-            value: `default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://accounts.google.com https://apis.google.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdn.jsdelivr.net; img-src 'self' data: blob: https:; connect-src ${isProduction ? connectSrcProd : connectSrcDev}; font-src 'self' https://fonts.gstatic.com https://cdn.jsdelivr.net data:; frame-src https://accounts.google.com https://github.com https://*.supabase.co; object-src 'none'; base-uri 'self';`
+            value: `default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://accounts.google.com https://apis.google.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdn.jsdelivr.net; img-src 'self' data: blob: https:; connect-src ${isProduction ? connectSrcProd : connectSrcDev}; font-src 'self' https://fonts.gstatic.com https://cdn.jsdelivr.net data:; frame-src https://accounts.google.com https://github.com https://*.supabase.co; worker-src 'self' blob:; object-src 'none'; base-uri 'self';`
           },
           // Only add HSTS in production
           ...(isProduction ? [{

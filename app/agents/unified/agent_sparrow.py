@@ -5,6 +5,7 @@ Refactored to use modular streaming, event emission, and message preparation.
 
 from __future__ import annotations
 
+import asyncio
 import re
 import textwrap
 from dataclasses import dataclass
@@ -508,9 +509,12 @@ def _build_deep_agent(state: GraphState, runtime: AgentRuntimeConfig):
             else 128000
         )
 
-        # Build default middleware for subagents
+        # Build default middleware for subagents.
+        # NOTE: Do NOT include TodoListMiddleware here — DeepAgents subagent graphs
+        # can emit multiple `todos` updates in a single step, which triggers
+        # langgraph.errors.InvalidUpdateError (LastValue channel).
         # Order matters: retry → summarization → context editing → eviction → patch
-        default_middleware = [SubAgentTodoListMiddleware()]
+        default_middleware: list[Any] = []
 
         # Add model retry middleware for context overflow resilience
         if CONTEXT_MIDDLEWARE_AVAILABLE:
@@ -896,8 +900,16 @@ def _build_memory_system_message(memories: List[Dict[str, Any]]) -> Optional[Sys
 
 
 async def _retrieve_memory_context(state: GraphState) -> Optional[str]:
-    """Retrieve memory context for the conversation."""
-    if not _memory_is_enabled(state):
+    """Retrieve memory context for the conversation.
+
+    Also tracks memory IDs for feedback attribution - when users provide
+    feedback on a response, it can be propagated to the memories used.
+    """
+    mem0_enabled = _memory_is_enabled(state)
+    memory_ui_enabled = bool(getattr(settings, "enable_memory_ui_retrieval", False)) and bool(
+        getattr(state, "use_server_memory", False)
+    )
+    if not mem0_enabled and not memory_ui_enabled:
         return None
 
     query = _extract_last_user_query(state.messages)
@@ -911,29 +923,70 @@ async def _retrieve_memory_context(state: GraphState) -> Optional[str]:
         "facts_retrieved": 0,
         "relevance_scores": [],
         "retrieval_error": None,
+        "retrieved_memory_ids": [],  # Track IDs for feedback attribution
+        "memory_ui_retrieval_enabled": memory_ui_enabled,
+        "mem0_retrieval_enabled": mem0_enabled,
     }
 
-    try:
-        retrieved = await memory_service.retrieve(
-            agent_id=MEMORY_AGENT_ID,
-            query=query,
-            top_k=settings.memory_top_k,
-        )
-    except Exception as exc:
-        logger.warning("memory_retrieve_failed", error=str(exc))
-        memory_stats["retrieval_error"] = str(exc)
-        _update_memory_stats(state, memory_stats)
-        return None
+    retrieved: List[Dict[str, Any]] = []
+    memory_ui_retrieved_ids: list[str] = []
+
+    if mem0_enabled:
+        try:
+            retrieved = await memory_service.retrieve(
+                agent_id=MEMORY_AGENT_ID,
+                query=query,
+                top_k=settings.memory_top_k,
+            )
+        except Exception as exc:
+            logger.warning("memory_retrieve_failed", error=str(exc))
+            memory_stats["retrieval_error"] = str(exc)
+
+    if memory_ui_enabled:
+        try:
+            from app.memory.memory_ui_service import get_memory_ui_service
+
+            service = get_memory_ui_service()
+            ui_results = await service.search_memories(
+                query=query,
+                agent_id=getattr(settings, "memory_ui_agent_id", MEMORY_AGENT_ID) or MEMORY_AGENT_ID,
+                tenant_id=getattr(settings, "memory_ui_tenant_id", "mailbot") or "mailbot",
+                limit=settings.memory_top_k,
+                similarity_threshold=0.5,
+            )
+            for item in ui_results or []:
+                if not isinstance(item, dict):
+                    continue
+                memory_id = item.get("id")
+                if isinstance(memory_id, str) and memory_id:
+                    memory_ui_retrieved_ids.append(memory_id)
+                retrieved.append(
+                    {
+                        "id": memory_id,
+                        "memory": item.get("content"),
+                        "score": item.get("similarity"),
+                        "metadata": item.get("metadata") or {},
+                        "source": "memory_ui",
+                    }
+                )
+        except Exception as exc:
+            logger.warning("memory_ui_retrieve_failed", error=str(exc))
 
     if not retrieved:
         _update_memory_stats(state, memory_stats)
         return None
 
-    # Extract stats from retrieved memories
+    # Extract stats from retrieved memories including IDs for feedback attribution
     memory_stats["facts_retrieved"] = len(retrieved)
     memory_stats["relevance_scores"] = [
-        getattr(mem, "score", 0.0) for mem in retrieved
-        if hasattr(mem, "score")
+        mem.get("score", 0.0) if isinstance(mem, dict) else getattr(mem, "score", 0.0)
+        for mem in retrieved
+    ]
+    # Extract memory IDs for feedback attribution
+    memory_stats["retrieved_memory_ids"] = [
+        mem.get("id") if isinstance(mem, dict) else getattr(mem, "id", None)
+        for mem in retrieved
+        if (mem.get("id") if isinstance(mem, dict) else getattr(mem, "id", None))
     ]
 
     memory_message = _build_memory_system_message(retrieved)
@@ -943,6 +996,31 @@ async def _retrieve_memory_context(state: GraphState) -> Optional[str]:
 
     # Store memory stats in scratchpad for LangSmith
     _update_memory_stats(state, memory_stats)
+
+    # Best-effort: increment retrieval_count for Memory UI memories actually retrieved by the agent.
+    if memory_ui_retrieved_ids:
+        try:
+            from app.memory.memory_ui_service import get_memory_ui_service
+
+            service = get_memory_ui_service()
+            unique_ids = list(dict.fromkeys(memory_ui_retrieved_ids))
+
+            async def _record_retrievals(ids: list[str]) -> None:
+                supabase = service._get_supabase()
+                for mid in ids:
+                    try:
+                        await supabase._exec(
+                            lambda: supabase.client.rpc(
+                                "record_memory_retrieval",
+                                {"p_memory_id": mid},
+                            ).execute()
+                        )
+                    except Exception as exc:
+                        logger.debug("memory_ui_record_retrieval_failed", memory_id=mid, error=str(exc))
+
+            asyncio.create_task(_record_retrievals(unique_ids))
+        except Exception as exc:
+            logger.debug("memory_ui_record_retrieval_schedule_failed", error=str(exc))
 
     return memory_message.content
 
@@ -1019,7 +1097,11 @@ def _split_into_sentences(text: str) -> List[str]:
 
 async def _record_memory(state: GraphState, ai_message: BaseMessage) -> None:
     """Record memory from AI response."""
-    if not _memory_is_enabled(state):
+    mem0_enabled = _memory_is_enabled(state)
+    memory_ui_enabled = bool(getattr(settings, "enable_memory_ui_capture", False)) and bool(
+        getattr(state, "use_server_memory", False)
+    )
+    if not mem0_enabled and not memory_ui_enabled:
         return
     if not isinstance(ai_message, BaseMessage):
         return
@@ -1044,20 +1126,51 @@ async def _record_memory(state: GraphState, ai_message: BaseMessage) -> None:
         meta["user_id"] = state.user_id
     if state.session_id:
         meta["session_id"] = state.session_id
+    if state.trace_id:
+        meta["trace_id"] = state.trace_id
+    if state.agent_type:
+        meta["agent_type"] = state.agent_type
     meta["fact_strategy"] = "sentence_extract"
 
-    try:
-        result = await memory_service.add_facts(
-            agent_id=MEMORY_AGENT_ID,
-            facts=facts,
-            meta=meta,
-        )
-        write_stats["write_successful"] = bool(result)
-        write_stats["facts_written"] = len(facts)
-    except Exception as exc:
-        logger.warning("memory_add_failed", error=str(exc))
-        write_stats["write_error"] = str(exc)
-        write_stats["write_successful"] = False
+    if mem0_enabled:
+        try:
+            result = await memory_service.add_facts(
+                agent_id=MEMORY_AGENT_ID,
+                facts=facts,
+                meta=meta,
+            )
+            write_stats["write_successful"] = bool(result)
+            write_stats["facts_written"] = len(facts)
+        except Exception as exc:
+            logger.warning("memory_add_failed", error=str(exc))
+            write_stats["write_error"] = str(exc)
+            write_stats["write_successful"] = False
+
+    # Best-effort capture into the Memory UI schema (separate from mem0).
+    if memory_ui_enabled:
+        try:
+            from app.memory.memory_ui_service import get_memory_ui_service
+
+            service = get_memory_ui_service()
+            agent_id = getattr(settings, "memory_ui_agent_id", MEMORY_AGENT_ID) or MEMORY_AGENT_ID
+            tenant_id = getattr(settings, "memory_ui_tenant_id", "mailbot") or "mailbot"
+
+            async def _capture_one(fact: str) -> None:
+                try:
+                    await service.add_memory(
+                        content=fact,
+                        metadata=meta,
+                        source_type="auto_extracted",
+                        agent_id=agent_id,
+                        tenant_id=tenant_id,
+                    )
+                except Exception as exc:
+                    logger.debug("memory_ui_capture_failed", error=str(exc)[:180])
+
+            for fact in facts:
+                asyncio.create_task(_capture_one(fact))
+        except Exception as exc:
+            logger.debug("memory_ui_capture_unavailable", error=str(exc)[:180])
 
     _update_memory_stats(state, write_stats)
 

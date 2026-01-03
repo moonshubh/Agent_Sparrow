@@ -183,7 +183,8 @@ export interface ImageArtifactEvent {
   title: string;
   content: string;
   messageId: string;
-  imageData: string;
+  imageUrl?: string;
+  imageData?: string;
   mimeType: string;
   altText?: string;
   aspectRatio?: string;

@@ -26,6 +26,7 @@ Usage:
 
 from __future__ import annotations
 
+import asyncio
 import json
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
@@ -41,6 +42,8 @@ LEARNED_ENTRIES_TABLE = "playbook_learned_entries"
 
 # Sentinel for import failure detection
 _IMPORT_FAILED = object()
+
+_background_tasks: set[asyncio.Task] = set()
 
 # Extraction prompt template
 EXTRACTION_PROMPT = """You are a support resolution analyst. Analyze the following conversation
@@ -393,8 +396,8 @@ class PlaybookEnricher:
         }
 
         try:
-            response = (
-                self.client.table(LEARNED_ENTRIES_TABLE)
+            response = await asyncio.to_thread(
+                lambda: self.client.table(LEARNED_ENTRIES_TABLE)
                 .upsert(data, on_conflict="conversation_id")  # Update if exists
                 .execute()
             )
@@ -410,6 +413,84 @@ class PlaybookEnricher:
                     word_count=word_count,
                     message_count=message_count,
                 )
+
+                # Best-effort: also write a reviewable Memory UI entry (separate from playbook compilation).
+                try:
+                    from app.core.settings import settings
+
+                    if getattr(settings, "enable_memory_ui_capture", False):
+                        from app.memory.memory_ui_service import get_memory_ui_service
+
+                        service = get_memory_ui_service()
+                        agent_id = getattr(settings, "memory_ui_agent_id", "sparrow") or "sparrow"
+                        tenant_id = getattr(settings, "memory_ui_tenant_id", "mailbot") or "mailbot"
+
+                        steps = extracted.get("resolution_steps") or []
+                        step_lines: List[str] = []
+                        if isinstance(steps, list):
+                            for raw in steps[:5]:
+                                if not isinstance(raw, dict):
+                                    continue
+                                action = str(raw.get("action") or "").strip()
+                                rationale = str(raw.get("rationale") or "").strip()
+                                if not action:
+                                    continue
+                                step_lines.append(
+                                    f"- {action}{f' — {rationale}' if rationale else ''}"
+                                )
+
+                        content_lines = [
+                            f"Category: {category}",
+                            f"Problem: {extracted.get('problem_summary', '')}",
+                            f"Solution: {extracted.get('final_solution', '')}",
+                        ]
+                        why = str(extracted.get("why_it_worked") or "").strip()
+                        if why:
+                            content_lines.append(f"Why it worked: {why}")
+                        learnings = str(extracted.get("key_learnings") or "").strip()
+                        if learnings:
+                            content_lines.append(f"Key learnings: {learnings}")
+                        if step_lines:
+                            content_lines.append("Resolution steps:\n" + "\n".join(step_lines))
+
+                        async def _capture_memory_ui() -> None:
+                            try:
+                                from app.security.pii_redactor import redact_pii, redact_pii_from_dict
+
+                                content = "\n".join(line for line in content_lines if line).strip()
+                                content = redact_pii(content)
+                                metadata = redact_pii_from_dict(
+                                    {
+                                        "source": "playbook_learned_entry",
+                                        "playbook_entry_id": entry_id,
+                                        "conversation_id": conversation_id,
+                                        "category": category,
+                                        "status": "pending_review",
+                                    }
+                                )
+
+                                embedding = await service.generate_embedding(content)
+                                await service.insert_memory_with_embedding(
+                                    memory_id=entry_id,
+                                    content=content,
+                                    metadata=metadata,
+                                    source_type="auto_extracted",
+                                    agent_id=agent_id,
+                                    tenant_id=tenant_id,
+                                    embedding=embedding,
+                                )
+                            except Exception as capture_exc:
+                                logger.debug(
+                                    "memory_ui_capture_playbook_insert_failed",
+                                    error=str(capture_exc)[:180],
+                                )
+
+                        task = asyncio.create_task(_capture_memory_ui())
+                        _background_tasks.add(task)
+                        task.add_done_callback(_background_tasks.discard)
+                except Exception as exc:
+                    logger.debug("memory_ui_capture_playbook_failed", error=str(exc)[:180])
+
                 return entry_id
 
         except Exception as exc:
