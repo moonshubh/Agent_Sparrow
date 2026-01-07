@@ -1934,34 +1934,63 @@ class StreamEventHandler:
         return str(output)
 
     def _store_evicted_result(self, path: str, content: str) -> bool:
-        """Store evicted tool result to scratchpad for later retrieval.
+        """Persist an evicted tool result outside the in-memory GraphState.
 
-        This callback is used by ToolResultEvictionManager to persist
-        large tool results that were evicted from the main context.
+        IMPORTANT: Do NOT store full tool outputs in `state.scratchpad`.
+        That keeps large blobs in memory (and in checkpoints), defeating eviction.
 
-        Args:
-            path: Virtual path for the evicted result (e.g., /large_tool_results/tool/id)
-            content: The full tool result content
-
-        Returns:
-            True if storage succeeded
+        We store under session-scoped workspace paths (e.g. /knowledge/tool_results/...).
         """
         try:
-            # Store in state scratchpad under special key
-            evicted_results = self.state.scratchpad.setdefault("_evicted_tool_results", {})
-            evicted_results[path] = {
-                "content": content,
-                "stored_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                "size": len(content),
-            }
+            import asyncio
+
+            from app.agents.harness.store import SparrowWorkspaceStore
+
+            session_id = (
+                getattr(self.state, "session_id", None)
+                or getattr(self.state, "trace_id", None)
+                or "unknown"
+            )
+            forwarded = getattr(self.state, "forwarded_props", {}) or {}
+            customer_id = None
+            if isinstance(forwarded, dict):
+                customer_id = forwarded.get("customer_id") or forwarded.get("customerId")
+
+            stored_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+            store = SparrowWorkspaceStore(session_id=str(session_id), customer_id=customer_id)
+
+            async def _write() -> None:
+                try:
+                    await store.write_file(
+                        path,
+                        content,
+                        metadata={
+                            "stored_at": stored_at,
+                            "size": len(content),
+                        },
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "evicted_result_workspace_write_failed",
+                        path=path,
+                        error=str(exc),
+                    )
+
+            try:
+                loop = asyncio.get_running_loop()
+                loop.create_task(_write())
+            except RuntimeError:
+                # Best-effort fallback for sync contexts (should be rare).
+                asyncio.run(_write())
+
             logger.debug(
-                "evicted_result_stored",
+                "evicted_result_write_scheduled",
                 path=path,
                 size=len(content),
             )
             return True
-        except Exception as e:
-            logger.warning("evicted_result_storage_failed: {}", e)
+        except Exception as exc:
+            logger.warning("evicted_result_storage_failed: {}", exc)
             return False
 
     def _log_cache_metrics(self, data: dict[str, Any]) -> None:

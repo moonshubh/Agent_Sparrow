@@ -481,7 +481,13 @@ class StreamEventEmitter:
             if isinstance(goal, str) and goal.strip():
                 result_meta["goal"] = goal.strip()
             if safe_output is not None:
-                result_meta["output"] = safe_output
+                # Avoid retaining large tool outputs in memory via thinking trace metadata.
+                if isinstance(safe_output, str) and len(safe_output) <= 2000:
+                    result_meta["output"] = safe_output
+                else:
+                    preview = tool_op.metadata.get("rawOutputPreview") if tool_op else None
+                    if isinstance(preview, str) and preview.strip():
+                        result_meta["outputPreview"] = preview
             if tool_op.duration is not None:
                 result_meta["durationMs"] = tool_op.duration
 
