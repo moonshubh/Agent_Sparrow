@@ -431,4 +431,6 @@ def get_session_data(session_id: Optional[str]) -> Dict[str, Dict[str, Any]]:
     """
     if not session_id:
         return {}
-    return get_session_cache().get_session_data(session_id)
+    cache = get_session_cache()
+    cache.prune_expired_sessions()
+    return cache.get_session_data(session_id)

@@ -2769,11 +2769,23 @@ async def db_unified_search_tool(
                     continue
                 if conv_id not in conv_data:
                     conv_data[conv_id] = {
-                        "content_parts": [],
+                        "matches": [],
                         "max_similarity": 0.0,
                     }
-                conv_data[conv_id]["content_parts"].append(row.get("content", ""))
                 sim = float(row.get("similarity", 0.0))
+                chunk_index = (
+                    row.get("chunk_index")
+                    or row.get("chunkIndex")
+                    or row.get("chunk_order")
+                    or row.get("chunkOrder")
+                )
+                conv_data[conv_id]["matches"].append(
+                    {
+                        "content": row.get("content", ""),
+                        "similarity": sim,
+                        "chunk_index": chunk_index,
+                    }
+                )
                 if sim > conv_data[conv_id]["max_similarity"]:
                     conv_data[conv_id]["max_similarity"] = sim
 
@@ -2790,46 +2802,46 @@ async def db_unified_search_tool(
                 for conv_id, data in ranked:
                     details = (conv_details or {}).get(conv_id, {})
 
-                    # Fetch FULL conversation chunks (not just matched chunks).
-                    chunks: list[dict[str, Any]] = []
-                    try:
-                        resp = await asyncio.to_thread(
-                            lambda: client.client.table("feedme_text_chunks")
-                            .select("content, chunk_index")
-                            .eq("conversation_id", conv_id)
-                            .order("chunk_index")
-                            .execute()
-                        )
-                        chunks = resp.data or []
-                    except Exception:
-                        chunks = []
-
-                    if chunks:
-                        full_content = "\n\n".join(
-                            str(chunk.get("content") or "") for chunk in chunks
-                        )
-                    else:
-                        # Fallback: include whatever matched chunks we already have.
-                        full_content = "\n\n".join(data["content_parts"])
-
-                    full_content = redact_pii(full_content)
-
-                    results.append(
-                        _format_result_with_content_type(
-                            source="feedme",
-                            title=details.get("title", f"Conversation {conv_id}"),
-                            content=full_content,
-                            relevance_score=data["max_similarity"],
-                            metadata={
-                                "id": conv_id,
-                                "created_at": details.get("created_at"),
-                                "folder_id": details.get("folder_id"),
-                                "chunk_count": len(chunks) if chunks else None,
-                                "last_updated": details.get("updated_at"),
-                            },
-                            weight=weights.get("feedme", 1.0),
-                        )
+                    # Return excerpts by default (matched chunks only). Full transcripts are
+                    # accessible via db_context_search(source="feedme", doc_id=...).
+                    matches = list(data.get("matches") or [])
+                    matches.sort(
+                        key=lambda m: float(m.get("similarity") or 0.0),
+                        reverse=True,
                     )
+                    excerpt_parts: list[str] = []
+                    included_indices: list[Any] = []
+                    for match in matches[:3]:
+                        chunk_text = str(match.get("content") or "").strip()
+                        if not chunk_text:
+                            continue
+                        chunk_text = _trim_content(redact_pii(chunk_text), max_chars=900)
+                        chunk_idx = match.get("chunk_index")
+                        if chunk_idx is not None:
+                            included_indices.append(chunk_idx)
+                            excerpt_parts.append(f"[chunk {chunk_idx}] {chunk_text}")
+                        else:
+                            excerpt_parts.append(chunk_text)
+
+                    excerpt = "\n\n".join(excerpt_parts).strip()
+                    feedme_result = _format_result_with_content_type(
+                        source="feedme",
+                        title=details.get("title", f"Conversation {conv_id}"),
+                        content=excerpt,
+                        relevance_score=data["max_similarity"],
+                        metadata={
+                            "id": conv_id,
+                            "created_at": details.get("created_at"),
+                            "folder_id": details.get("folder_id"),
+                            "last_updated": details.get("updated_at"),
+                            "matched_chunks": len(matches),
+                            "included_chunk_indices": included_indices or None,
+                            "full_transcript_tool": "db_context_search",
+                        },
+                        weight=weights.get("feedme", 1.0),
+                    )
+                    feedme_result["content_type"] = "excerpt"
+                    results.append(feedme_result)
             else:
                 no_results_sources.append("feedme")
         except Exception as exc:
