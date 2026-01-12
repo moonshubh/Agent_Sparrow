@@ -9,7 +9,7 @@ export const serializeArtifact = (artifact: Artifact): SerializedArtifact => ({
   language: artifact.language,
   identifier: artifact.identifier,
   index: artifact.index,
-  imageData: artifact.imageData,
+  imageUrl: artifact.imageUrl,
   mimeType: artifact.mimeType,
   altText: artifact.altText,
   aspectRatio: artifact.aspectRatio,

@@ -25,10 +25,20 @@ import {
   Sparkles,
 } from 'lucide-react';
 import { toast } from 'sonner';
-import { useMemoryStats, useDuplicateCandidates, useImportMemorySources } from '../hooks';
+import {
+  useDuplicateCandidates,
+  useImportZendeskTagged,
+  useMemoryMe,
+  useMemoryStats,
+} from '../hooks';
 import { MemorySearch } from './memory-search';
 import { GraphErrorBoundary } from './GraphErrorBoundary';
-import { ALL_ENTITY_TYPES, type EntityType, type MemoryFilters } from '../types';
+import {
+  ALL_ENTITY_TYPES,
+  type EntityType,
+  type MemoryFilters,
+  type ReviewStatus,
+} from '../types';
 import '../styles/memory.css';
 
 // Lazy load heavy components
@@ -46,6 +56,7 @@ const defaultFilters: MemoryFilters = {
   entityTypes: [...ALL_ENTITY_TYPES],
   minConfidence: 0,
   sourceType: null,
+  reviewStatus: 'approved',
   sortBy: 'created_at',
   sortOrder: 'desc',
 };
@@ -87,9 +98,12 @@ export default function MemoryClient() {
   >(null);
 
   // Data hooks
+  const { data: me } = useMemoryMe();
   const { data: stats, isLoading: statsLoading, refetch: refetchStats } = useMemoryStats();
   const { data: duplicates } = useDuplicateCandidates('pending');
-  const importSources = useImportMemorySources();
+  const importZendeskTagged = useImportZendeskTagged();
+
+  const isAdmin = Boolean(me?.is_admin);
 
   const availableEntityTypes = useMemo(() => {
     const counts = stats?.entity_types;
@@ -142,27 +156,28 @@ export default function MemoryClient() {
     []
   );
 
-  const handleImportSources = useCallback(async () => {
+  const handleImportZendeskTagged = useCallback(async () => {
     try {
-      const result = await importSources.mutateAsync({
-        include_issue_resolutions: true,
-        include_playbook_entries: true,
-        include_playbook_files: true,
-        include_mem0_primary: true,
-        limit: 200,
-        include_playbook_embeddings: false,
+      const result = await importZendeskTagged.mutateAsync({
+        tag: 'MB_playbook',
+        limit: 50,
       });
 
       toast.success(
-        `Imported ${result.issue_resolutions_imported} issue patterns, ${result.playbook_entries_imported} playbook entries, ${result.playbook_files_imported} playbook files, and ${result.mem0_primary_imported} mem0 facts`
+        `Imported ${result.imported} new tagged tickets (skipped ${result.skipped_existing}, failed ${result.failed})`
       );
+
+      setViewMode('table');
+      setFilters((prev) => ({
+        ...prev,
+        reviewStatus: 'pending_review',
+      }));
       refetchStats();
-      setGraphKey((prev) => prev + 1);
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'Import failed';
       toast.error(message);
     }
-  }, [importSources, refetchStats]);
+  }, [importZendeskTagged, refetchStats]);
 
   const toggleSidebar = useCallback(() => {
     setSidebarCollapsed((prev) => !prev);
@@ -434,49 +449,53 @@ export default function MemoryClient() {
 
           {/* Sidebar Actions */}
           <div className="memory-sidebar-actions">
-            <motion.button
-              className="memory-sidebar-action"
-              onClick={() => setShowAddForm(true)}
-              whileHover={{ scale: 1.02 }}
-              whileTap={{ scale: 0.98 }}
-              transition={springConfig}
-            >
-              <SquarePen size={18} />
-              <AnimatePresence>
-                {!sidebarCollapsed && (
-                  <motion.span
-                    initial={{ opacity: 0 }}
-                    animate={{ opacity: 1 }}
-                    exit={{ opacity: 0 }}
-                  >
-                    Add Memory
-                  </motion.span>
-                )}
-              </AnimatePresence>
-            </motion.button>
+            {isAdmin && (
+              <motion.button
+                className="memory-sidebar-action"
+                onClick={() => setShowAddForm(true)}
+                whileHover={{ scale: 1.02 }}
+                whileTap={{ scale: 0.98 }}
+                transition={springConfig}
+              >
+                <SquarePen size={18} />
+                <AnimatePresence>
+                  {!sidebarCollapsed && (
+                    <motion.span
+                      initial={{ opacity: 0 }}
+                      animate={{ opacity: 1 }}
+                      exit={{ opacity: 0 }}
+                    >
+                      Add Memory
+                    </motion.span>
+                  )}
+                </AnimatePresence>
+              </motion.button>
+            )}
 
-            <motion.button
-              className="memory-sidebar-action"
-              onClick={handleImportSources}
-              disabled={importSources.isPending}
-              whileHover={{ scale: 1.02 }}
-              whileTap={{ scale: 0.98 }}
-              transition={springConfig}
-              title="Backfill Memory UI from issue patterns + playbooks"
-            >
-              <ArrowDownToLine size={18} />
-              <AnimatePresence>
-                {!sidebarCollapsed && (
-                  <motion.span
-                    initial={{ opacity: 0 }}
-                    animate={{ opacity: 1 }}
-                    exit={{ opacity: 0 }}
-                  >
-                    {importSources.isPending ? 'Importing…' : 'Import Knowledge'}
-                  </motion.span>
-                )}
-              </AnimatePresence>
-            </motion.button>
+            {isAdmin && (
+              <motion.button
+                className="memory-sidebar-action"
+                onClick={handleImportZendeskTagged}
+                disabled={importZendeskTagged.isPending}
+                whileHover={{ scale: 1.02 }}
+                whileTap={{ scale: 0.98 }}
+                transition={springConfig}
+                title="Import solved Zendesk tickets tagged MB_playbook into Pending Review"
+              >
+                <ArrowDownToLine size={18} />
+                <AnimatePresence>
+                  {!sidebarCollapsed && (
+                    <motion.span
+                      initial={{ opacity: 0 }}
+                      animate={{ opacity: 1 }}
+                      exit={{ opacity: 0 }}
+                    >
+                      {importZendeskTagged.isPending ? 'Importing…' : 'Import MB_playbook'}
+                    </motion.span>
+                  )}
+                </AnimatePresence>
+              </motion.button>
+            )}
           </div>
 
           {/* Back to Chat Link */}
@@ -529,28 +548,50 @@ export default function MemoryClient() {
               </div>
 
               {viewMode === 'table' && (
-                <div className="memory-header-sort">
-                  <span className="memory-header-sort__label">Created</span>
-                  <select
-                    className="memory-header-sort__select"
-                    value={filters.sortBy === 'created_at' ? filters.sortOrder : ''}
-                    onChange={(e) => {
-                      const value = e.target.value as '' | 'asc' | 'desc';
-                      if (!value) return;
-                      setFilters((prev) => ({
-                        ...prev,
-                        sortBy: 'created_at',
-                        sortOrder: value,
-                      }));
-                    }}
-                  >
-                    {filters.sortBy !== 'created_at' ? (
-                      <option value="">{`Current sort: ${filters.sortBy} (${filters.sortOrder})`}</option>
-                    ) : null}
-                    <option value="desc">Newest → Oldest</option>
-                    <option value="asc">Oldest → Newest</option>
-                  </select>
-                </div>
+                <>
+                  {isAdmin && (
+                    <div className="memory-header-sort">
+                      <span className="memory-header-sort__label">Table</span>
+                      <select
+                        className="memory-header-sort__select"
+                        value={(filters.reviewStatus ?? 'approved') as ReviewStatus}
+                        onChange={(e) => {
+                          const value = e.target.value as ReviewStatus;
+                          setFilters((prev) => ({
+                            ...prev,
+                            reviewStatus: value,
+                          }));
+                        }}
+                      >
+                        <option value="approved">Approved</option>
+                        <option value="pending_review">Pending Review</option>
+                      </select>
+                    </div>
+                  )}
+
+                  <div className="memory-header-sort">
+                    <span className="memory-header-sort__label">Created</span>
+                    <select
+                      className="memory-header-sort__select"
+                      value={filters.sortBy === 'created_at' ? filters.sortOrder : ''}
+                      onChange={(e) => {
+                        const value = e.target.value as '' | 'asc' | 'desc';
+                        if (!value) return;
+                        setFilters((prev) => ({
+                          ...prev,
+                          sortBy: 'created_at',
+                          sortOrder: value,
+                        }));
+                      }}
+                    >
+                      {filters.sortBy !== 'created_at' ? (
+                        <option value="">{`Current sort: ${filters.sortBy} (${filters.sortOrder})`}</option>
+                      ) : null}
+                      <option value="desc">Newest → Oldest</option>
+                      <option value="asc">Oldest → Newest</option>
+                    </select>
+                  </div>
+                </>
               )}
 
               <motion.button
@@ -609,8 +650,12 @@ export default function MemoryClient() {
                   )}
                   {viewMode === 'table' && (
                     <MemoryTable
+                      key={`memory-table:${filters.reviewStatus}:${filters.sourceType ?? 'all'}:${
+                        (filters.searchQuery || '').trim().length >= 2 ? 'search' : 'list'
+                      }`}
                       searchQuery={filters.searchQuery}
                       filters={filters}
+                      isAdmin={isAdmin}
                       onSortChange={(sortBy, sortOrder) => {
                         setFilters((prev) => ({ ...prev, sortBy, sortOrder }));
                       }}
@@ -654,7 +699,11 @@ export default function MemoryClient() {
             <MemoryForm
               onClose={() => setShowAddForm(false)}
               onSuccess={() => {
-                setShowAddForm(false);
+                setViewMode('table');
+                setFilters((prev) => ({
+                  ...prev,
+                  reviewStatus: 'pending_review',
+                }));
                 refetchStats();
               }}
             />

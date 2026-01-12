@@ -114,6 +114,12 @@ class ExportFormat(str, Enum):
     JSON = "json"
     """Export as JSON format."""
 
+class ReviewStatus(str, Enum):
+    """Review status for human-gated memories."""
+
+    PENDING_REVIEW = "pending_review"
+    APPROVED = "approved"
+
 
 # =============================================================================
 # Auth / Meta Schemas
@@ -875,6 +881,9 @@ class MemoryRecord(BaseModel):
     content: str
     metadata: Dict[str, Any] = Field(default_factory=dict)
     source_type: str
+    review_status: ReviewStatus = ReviewStatus.APPROVED
+    reviewed_by: Optional[UUID] = None
+    reviewed_at: Optional[datetime] = None
     confidence_score: float
     retrieval_count: int
     last_retrieved_at: Optional[datetime] = None
@@ -888,6 +897,48 @@ class MemoryRecord(BaseModel):
     updated_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class ImportZendeskTaggedRequest(BaseModel):
+    """Import solved Zendesk tickets tagged for playbook learning (admin-only)."""
+
+    tag: str = Field(
+        default="MB_playbook",
+        min_length=1,
+        max_length=100,
+        description="Zendesk tag used to gate memory imports (case-insensitive).",
+    )
+    limit: int = Field(
+        default=50,
+        ge=1,
+        le=500,
+        description="Maximum number of new tagged tickets to import in this run.",
+    )
+
+
+class ImportZendeskTaggedResponse(BaseModel):
+    """Summary for a Zendesk-tagged import run."""
+
+    tag: str
+    cursor_started_at: datetime
+    cursor_updated_at: datetime
+    tickets_scanned: int = Field(default=0, ge=0)
+    tickets_tagged: int = Field(default=0, ge=0)
+    imported: int = Field(default=0, ge=0)
+    skipped_existing: int = Field(default=0, ge=0)
+    failed: int = Field(default=0, ge=0)
+    memory_ids: List[UUID] = Field(default_factory=list)
+
+
+class ApproveMemoryResponse(BaseModel):
+    """Result of approving a pending-review memory (admin-only)."""
+
+    approved: bool = Field(..., description="Whether the approval completed successfully.")
+    memory_id: UUID
+    mem0_written: bool = Field(default=False, description="Whether the approved memory was written into mem0.")
+    playbook_entry_approved: bool = Field(default=False)
+    issue_resolution_approved: bool = Field(default=False)
+    mem0_results: List[Dict[str, Any]] = Field(default_factory=list)
 
 
 class MemoryEntityRecord(BaseModel):

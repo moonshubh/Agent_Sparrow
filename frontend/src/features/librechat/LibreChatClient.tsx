@@ -53,15 +53,16 @@ function restoreArtifactsFromMessages(messages: Message[]): void {
     console.debug('[Artifacts] Found', artifacts.length, 'artifacts in message', message.id);
 
     for (const artifact of artifacts) {
-      // Validate required fields - image artifacts may have empty content but must have imageData
+      // Validate required fields - image artifacts may have empty content but must have image data or URL
       const hasRequiredFields = artifact.id && artifact.type;
-      const hasContent = artifact.content || (artifact.type === 'image' && artifact.imageData);
+      const hasContent = artifact.content || (artifact.type === 'image' && (artifact.imageData || artifact.imageUrl));
       if (!hasRequiredFields || !hasContent) {
         console.debug('[Artifacts] Skipping invalid artifact:', {
           id: artifact.id,
           type: artifact.type,
           hasContent: Boolean(artifact.content),
           hasImageData: Boolean(artifact.imageData),
+          hasImageUrl: Boolean(artifact.imageUrl),
         });
         skippedCount += 1;
         continue;
@@ -77,6 +78,7 @@ function restoreArtifactsFromMessages(messages: Message[]): void {
         identifier: artifact.identifier,
         index: artifact.index,
         imageData: artifact.imageData,
+        imageUrl: artifact.imageUrl,
         mimeType: artifact.mimeType,
         altText: artifact.altText,
         aspectRatio: artifact.aspectRatio,

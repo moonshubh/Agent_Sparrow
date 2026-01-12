@@ -13,7 +13,7 @@ from langchain_core.language_models import BaseChatModel
 from loguru import logger
 
 from app.core.settings import settings
-from app.core.config import get_registry
+from app.core.config import get_registry, get_models_config, resolve_subagent_config
 
 from .prompts import LOG_ANALYSIS_PROMPT, RESEARCH_PROMPT, DATABASE_RETRIEVAL_PROMPT
 from .tools import (
@@ -23,7 +23,6 @@ from .tools import (
     web_search_tool,
     tavily_extract_tool,
     feedme_search_tool,
-    supabase_query_tool,
     get_db_retrieval_tools,
     # Firecrawl tools for enhanced web scraping (MCP-backed)
     firecrawl_fetch_tool,
@@ -38,27 +37,13 @@ from .model_router import model_router
 
 # Import middleware classes for per-subagent configuration
 try:
-    # LangChain provides TodoList and Summarization middleware
-    from langchain.agents.middleware import TodoListMiddleware
     from langchain.agents.middleware.summarization import SummarizationMiddleware
-
-    # DeepAgents provides PatchToolCalls middleware
-    from deepagents.middleware.patch_tool_calls import PatchToolCallsMiddleware
 
     MIDDLEWARE_AVAILABLE = True
 except ImportError:
     # Fallback if middleware not available
     MIDDLEWARE_AVAILABLE = False
     logger.warning("DeepAgents middleware not available - subagents will run without middleware")
-
-# Import custom middleware
-try:
-    from app.agents.harness.middleware import ToolResultEvictionMiddleware
-
-    CUSTOM_MIDDLEWARE_AVAILABLE = True
-except ImportError:
-    CUSTOM_MIDDLEWARE_AVAILABLE = False
-
 
 @dataclass(frozen=True)
 class MiddlewareConfig:
@@ -73,7 +58,12 @@ LOG_ANALYSIS_MW_CONFIG = MiddlewareConfig(max_tokens_before_summary=150000, mess
 DB_RETRIEVAL_MW_CONFIG = MiddlewareConfig(max_tokens_before_summary=80000, messages_to_keep=3)
 
 
-def _get_chat_model(model_name: str, provider: str = "google", role: str = "default") -> BaseChatModel:
+def _get_chat_model(
+    model_name: str,
+    provider: str = "google",
+    role: str = "default",
+    temperature: float | None = None,
+) -> BaseChatModel:
     """Create a pre-initialized chat model instance using the provider factory.
 
     Uses role-based temperature selection from provider_factory.TEMPERATURE_CONFIG.
@@ -93,7 +83,38 @@ def _get_chat_model(model_name: str, provider: str = "google", role: str = "defa
         provider=provider,
         model=model_name,
         role=role,  # Role-based temperature selection
+        temperature=temperature,
     )
+
+
+def _provider_api_key_available(provider: str) -> bool:
+    provider = str(provider or "").strip().lower()
+    if provider == "google":
+        return bool(getattr(settings, "gemini_api_key", None))
+    if provider == "xai":
+        return bool(getattr(settings, "xai_api_key", None))
+    if provider == "openrouter":
+        return bool(getattr(settings, "openrouter_api_key", None))
+    return False
+
+
+def _resolve_subagent_model(name: str, *, role: str) -> tuple[str, str, BaseChatModel]:
+    config = get_models_config()
+    resolved = resolve_subagent_config(config, name)
+    provider = str(resolved.provider or "google").strip().lower()
+    model_name = str(resolved.model_id)
+
+    if not _provider_api_key_available(provider):
+        logger.warning("subagent_provider_api_key_missing", subagent=name, provider=provider)
+        provider = "google"
+
+    model = _get_chat_model(
+        model_name,
+        provider=provider,
+        role=role,
+        temperature=resolved.temperature,
+    )
+    return provider, model_name, model
 
 
 def _build_research_middleware(model: BaseChatModel) -> List[Any]:
@@ -255,7 +276,10 @@ def _research_subagent(provider: str = "google") -> Dict[str, Any]:
     Args:
         provider: The provider name ("google" or "xai"). Defaults to "google".
     """
-    model_name, model = _get_subagent_model_for_provider("lightweight", provider, role="research")
+    model_provider, model_name, model = _resolve_subagent_model(
+        "research-agent",
+        role="research",
+    )
 
     subagent_spec: Dict[str, Any] = {
         "name": "research-agent",
@@ -269,7 +293,6 @@ def _research_subagent(provider: str = "google") -> Dict[str, Any]:
         "tools": [
             kb_search_tool,
             feedme_search_tool,
-            supabase_query_tool,
             # Prefer Firecrawl first for web scraping (MCP-backed with full feature support)
             firecrawl_fetch_tool,      # Single-page scrape with screenshots/actions/mobile/geo
             firecrawl_map_tool,        # Discover all URLs on a website
@@ -286,7 +309,7 @@ def _research_subagent(provider: str = "google") -> Dict[str, Any]:
         ],
         "model": model,
         "model_name": model_name,
-        "model_provider": provider,
+        "model_provider": model_provider,
         "middleware": _build_research_middleware(model),
     }
 
@@ -317,12 +340,10 @@ def _log_diagnoser_subagent(provider: str = "google") -> Dict[str, Any]:
     Args:
         provider: The provider name ("google" or "xai"). Defaults to "google".
     """
-    # Temporarily force Gemini 3.0 Pro (preview) for log diagnosis unless explicitly overridden
-    if provider == "google":
-        model_name = getattr(settings, "zendesk_log_model_override", None) or "gemini-3-pro-preview"
-        model = _get_chat_model(model_name, provider="google", role="log_analysis")
-    else:
-        model_name, model = _get_subagent_model_for_provider("log_analysis", provider, role="log_analysis")
+    model_provider, model_name, model = _resolve_subagent_model(
+        "log-diagnoser",
+        role="log_analysis",
+    )
 
     subagent_spec: Dict[str, Any] = {
         "name": "log-diagnoser",
@@ -336,7 +357,6 @@ def _log_diagnoser_subagent(provider: str = "google") -> Dict[str, Any]:
             log_diagnoser_tool,
             kb_search_tool,
             feedme_search_tool,
-            supabase_query_tool,
             # Firecrawl tools for researching errors and solutions online
             firecrawl_fetch_tool,      # Fetch documentation/solutions from URLs
             firecrawl_search_tool,     # Search for error messages and fixes
@@ -344,7 +364,7 @@ def _log_diagnoser_subagent(provider: str = "google") -> Dict[str, Any]:
         ],
         "model": model,
         "model_name": model_name,
-        "model_provider": provider,
+        "model_provider": model_provider,
         "middleware": _build_log_analysis_middleware(model),
     }
 
@@ -380,7 +400,10 @@ def _db_retrieval_subagent(provider: str = "google") -> Dict[str, Any]:
     Args:
         provider: The provider name ("google" or "xai"). Defaults to "google".
     """
-    model_name, model = _get_subagent_model_for_provider("db_retrieval", provider, role="db_retrieval")
+    model_provider, model_name, model = _resolve_subagent_model(
+        "db-retrieval",
+        role="db_retrieval",
+    )
 
     subagent_spec: Dict[str, Any] = {
         "name": "db-retrieval",
@@ -399,7 +422,7 @@ def _db_retrieval_subagent(provider: str = "google") -> Dict[str, Any]:
         ],
         "model": model,
         "model_name": model_name,
-        "model_provider": provider,
+        "model_provider": model_provider,
         "middleware": _build_db_retrieval_middleware(model),
     }
 
@@ -412,6 +435,37 @@ def _db_retrieval_subagent(provider: str = "google") -> Dict[str, Any]:
     )
 
     return subagent_spec
+
+
+def _explorer_subagent() -> Dict[str, Any]:
+    """Create a lightweight exploration subagent.
+
+    Designed for quick, low-risk exploration using search and retrieval tools,
+    without any privileged database querying.
+    """
+
+    model_provider, model_name, model = _resolve_subagent_model(
+        "explorer",
+        role="research",
+    )
+
+    return {
+        "name": "explorer",
+        "description": "Lightweight exploration agent for quick lookups and web research.",
+        "system_prompt": RESEARCH_PROMPT,
+        "tools": [
+            kb_search_tool,
+            feedme_search_tool,
+            firecrawl_fetch_tool,
+            firecrawl_search_tool,
+            tavily_extract_tool,
+            grounding_search_tool,
+        ],
+        "model": model,
+        "model_name": model_name,
+        "model_provider": model_provider,
+        "middleware": _build_research_middleware(model),
+    }
 
 
 def get_subagent_specs(provider: str = "google") -> List[Dict[str, Any]]:
@@ -436,6 +490,7 @@ def get_subagent_specs(provider: str = "google") -> List[Dict[str, Any]]:
         provider=provider,
     )
     return [
+        _explorer_subagent(),
         _research_subagent(provider=provider),
         _log_diagnoser_subagent(provider=provider),
         _db_retrieval_subagent(provider=provider),

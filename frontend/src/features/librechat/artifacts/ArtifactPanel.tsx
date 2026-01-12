@@ -9,6 +9,7 @@ import { useCurrentArtifact, useArtifactsVisible, useArtifactStore, useArtifactS
 import { MermaidEditor } from './MermaidEditor';
 import { ArticleEditor } from './ArticleEditor';
 import type { Artifact } from './types';
+import { resolveImageSrc } from './imageUtils';
 import { useAgent } from '@/features/librechat/AgentContext';
 import { sessionsAPI } from '@/services/api/endpoints/sessions';
 
@@ -537,28 +538,52 @@ export const ArtifactPanel = memo(function ArtifactPanel() {
     if (!artifact) return;
 
     // Handle image downloads
-    if (artifact.type === 'image' && artifact.imageData) {
+    if (artifact.type === 'image') {
       const mimeType = artifact.mimeType || 'image/png';
       const extension = mimeType.split('/')[1] || 'png';
+      const filename = `${artifact.title.replace(/\s+/g, '_')}.${extension}`;
 
-      // Convert base64 to blob
-      const byteCharacters = atob(artifact.imageData);
-      const byteNumbers = new Array(byteCharacters.length);
-      for (let i = 0; i < byteCharacters.length; i++) {
-        byteNumbers[i] = byteCharacters.charCodeAt(i);
+      if (artifact.imageData) {
+        // Convert base64 to blob
+        const byteCharacters = atob(artifact.imageData);
+        const byteNumbers = new Array(byteCharacters.length);
+        for (let i = 0; i < byteCharacters.length; i++) {
+          byteNumbers[i] = byteCharacters.charCodeAt(i);
+        }
+        const byteArray = new Uint8Array(byteNumbers);
+        const blob = new Blob([byteArray], { type: mimeType });
+
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        return;
       }
-      const byteArray = new Uint8Array(byteNumbers);
-      const blob = new Blob([byteArray], { type: mimeType });
 
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `${artifact.title.replace(/\s+/g, '_')}.${extension}`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-      return;
+      const imageSrc = resolveImageSrc(artifact);
+      if (imageSrc) {
+        fetch(imageSrc)
+          .then((res) => res.blob())
+          .then((blob) => {
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+          })
+          .catch((err) => {
+            console.error('Failed to download image:', err);
+            window.open(imageSrc, '_blank', 'noopener,noreferrer');
+          });
+        return;
+      }
     }
 
     const extension = artifact.type === 'mermaid' ? 'mmd'
@@ -781,9 +806,7 @@ export const ArtifactPanel = memo(function ArtifactPanel() {
 
     switch (artifact.type) {
       case 'image': {
-        const imageSrc = artifact.imageData
-          ? `data:${artifact.mimeType || 'image/png'};base64,${artifact.imageData}`
-          : artifact.content || null;
+        const imageSrc = resolveImageSrc(artifact);
 
         if (!imageSrc) {
           return (

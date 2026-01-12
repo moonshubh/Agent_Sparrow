@@ -421,3 +421,18 @@ def get_default_model_for_provider(provider: str) -> str:
         "openrouter": registry.coordinator_openrouter.id,
     }
     return defaults.get(provider.lower(), registry.coordinator_google.id)
+
+
+def build_summarization_model():
+    """Build the fixed summarization/state extraction model.
+
+    Policy: summarization must always use Google Gemini 2.5 Flash (preview) to
+    avoid reasoning-mode variability and keep costs/latency predictable.
+    """
+
+    from app.core.rate_limiting.agent_wrapper import RateLimitedAgent
+
+    registry = get_registry()
+    model_id = registry.summarizer.id
+    agent = build_chat_model(provider="google", model=model_id, role="summarization")
+    return RateLimitedAgent(agent=agent, model=model_id)

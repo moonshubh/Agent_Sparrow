@@ -39,6 +39,7 @@ class MemoryUIService:
     MEMORY_SELECT_COLUMNS = (
         "id,content,metadata,source_type,confidence_score,retrieval_count,last_retrieved_at,"
         "feedback_positive,feedback_negative,resolution_success_count,resolution_failure_count,"
+        "review_status,reviewed_by,reviewed_at,"
         "agent_id,tenant_id,created_at,updated_at"
     )
 
@@ -121,6 +122,7 @@ class MemoryUIService:
         agent_id: str,
         tenant_id: str,
         embedding: list[float],
+        review_status: str | None = None,
     ) -> dict[str, Any]:
         """Insert a memory record with a precomputed embedding."""
         content = (content or "").strip()
@@ -153,6 +155,8 @@ class MemoryUIService:
         }
         if memory_id is not None:
             payload["id"] = str(memory_id)
+        if review_status:
+            payload["review_status"] = str(review_status)
 
         supabase = self._get_supabase()
         try:
@@ -177,6 +181,7 @@ class MemoryUIService:
         source_type: str,
         agent_id: str,
         tenant_id: str,
+        review_status: str | None = None,
     ) -> dict[str, Any]:
         """
         Add a new memory with Gemini embedding generation.
@@ -221,6 +226,8 @@ class MemoryUIService:
             "created_at": datetime.now(timezone.utc).isoformat(),
             "updated_at": datetime.now(timezone.utc).isoformat(),
         }
+        if review_status:
+            payload["review_status"] = str(review_status)
 
         supabase = self._get_supabase()
         try:
@@ -601,6 +608,7 @@ class MemoryUIService:
         agent_id: str | None = None,
         tenant_id: str | None = None,
         source_type: str | None = None,
+        review_status: str | None = None,
         limit: int = 50,
         offset: int = 0,
         sort_order: str = "desc",
@@ -633,6 +641,8 @@ class MemoryUIService:
                 query = query.eq("tenant_id", tenant_id)
             if source_type:
                 query = query.eq("source_type", source_type)
+            if review_status:
+                query = query.eq("review_status", review_status)
 
             query = query.order("created_at", desc=sort_order_norm == "desc").range(
                 offset, offset + limit - 1

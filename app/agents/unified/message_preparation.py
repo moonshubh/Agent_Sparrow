@@ -101,6 +101,7 @@ class MessagePreparer:
             "history_summarized": False,
             "attachments_inlined": 0,
             "context_compacted": False,
+            "thread_state_prepended": False,
         }
 
         messages = list(state.messages)
@@ -241,6 +242,19 @@ class MessagePreparer:
         if estimated_tokens > dynamic_threshold and self.helper:
             messages = await self._compact_context(messages)
             stats["context_compacted"] = True
+
+        thread_state = getattr(state, "thread_state", None)
+        if thread_state is not None:
+            try:
+                messages.append(
+                    SystemMessage(
+                        content=thread_state.to_prompt(),
+                        name="thread_state",
+                    )
+                )
+                stats["thread_state_prepended"] = True
+            except Exception:
+                pass
 
         stats["final_message_count"] = len(messages)
         stats["estimated_tokens"] = self._estimate_tokens(messages)

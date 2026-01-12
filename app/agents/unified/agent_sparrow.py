@@ -6,13 +6,14 @@ Refactored to use modular streaming, event emission, and message preparation.
 from __future__ import annotations
 
 import asyncio
+import json
 import re
 import textwrap
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set
 
 from langchain.agents import create_agent
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
 from langgraph.config import RunnableConfig, get_stream_writer
 from loguru import logger
 
@@ -103,6 +104,80 @@ PROVIDER_TOKEN_LIMITS: Dict[str, int] = {
     "openrouter": 50000,  # OpenRouter 262K context → 50K summarization threshold
 }
 DEFAULT_TOKEN_LIMIT = 50000  # Conservative default for unknown providers
+
+
+@dataclass(frozen=True)
+class LogAnalysisNote:
+    file_name: str = ""
+    customer_ready: str = ""
+    internal_notes: str = ""
+    confidence: float = 0.0
+    evidence: list[str] = field(default_factory=list)
+    recommended_actions: list[str] = field(default_factory=list)
+    open_questions: list[str] = field(default_factory=list)
+
+
+def _extract_log_analysis_notes(messages: list[BaseMessage]) -> dict[str, LogAnalysisNote]:
+    """Extract log analysis notes emitted by the log-diagnoser Task subagent.
+
+    Returns a mapping from tool_call_id -> LogAnalysisNote.
+    """
+
+    log_task_ids: set[str] = set()
+    for msg in messages or []:
+        if not isinstance(msg, AIMessage):
+            continue
+        tool_calls = getattr(msg, "tool_calls", None)
+        if not isinstance(tool_calls, list):
+            continue
+        for call in tool_calls:
+            if not isinstance(call, dict):
+                continue
+            if str(call.get("name") or "") != "task":
+                continue
+            args = call.get("args")
+            if not isinstance(args, dict):
+                continue
+            if str(args.get("subagent_type") or "") != "log-diagnoser":
+                continue
+            call_id = str(call.get("id") or "").strip()
+            if call_id:
+                log_task_ids.add(call_id)
+
+    if not log_task_ids:
+        return {}
+
+    notes: dict[str, LogAnalysisNote] = {}
+    for msg in messages or []:
+        if not isinstance(msg, ToolMessage):
+            continue
+        tool_call_id = str(getattr(msg, "tool_call_id", "") or "").strip()
+        if not tool_call_id or tool_call_id not in log_task_ids:
+            continue
+        content = str(getattr(msg, "content", "") or "")
+        try:
+            payload = json.loads(content) if content else {}
+        except Exception:
+            payload = {}
+        payload = payload if isinstance(payload, dict) else {}
+
+        evidence = payload.get("evidence")
+        recommended_actions = payload.get("recommended_actions")
+        open_questions = payload.get("open_questions")
+
+        notes[tool_call_id] = LogAnalysisNote(
+            file_name=str(payload.get("file_name") or ""),
+            customer_ready=str(payload.get("customer_ready") or ""),
+            internal_notes=str(payload.get("internal_notes") or ""),
+            confidence=float(payload.get("confidence") or 0.0),
+            evidence=[str(x) for x in evidence] if isinstance(evidence, list) else [],
+            recommended_actions=[str(x) for x in recommended_actions]
+            if isinstance(recommended_actions, list)
+            else [],
+            open_questions=[str(x) for x in open_questions] if isinstance(open_questions, list) else [],
+        )
+
+    return notes
 
 
 def _is_quota_exhausted(exc: Exception) -> bool:
@@ -923,17 +998,50 @@ async def _retrieve_memory_context(state: GraphState) -> Optional[str]:
         "facts_retrieved": 0,
         "relevance_scores": [],
         "retrieval_error": None,
-        "retrieved_memory_ids": [],  # Track IDs for feedback attribution
+        # Track Memory UI IDs for feedback attribution.
+        # (Never include mem0 IDs here; feedback RPCs expect Memory UI UUIDs.)
+        "retrieved_memory_ids": [],
+        "retrieved_memory_ui_ids": [],
+        "retrieved_mem0_ids": [],
         "memory_ui_retrieval_enabled": memory_ui_enabled,
         "mem0_retrieval_enabled": mem0_enabled,
     }
 
-    retrieved: List[Dict[str, Any]] = []
-    memory_ui_retrieved_ids: list[str] = []
-
-    if mem0_enabled:
+    def _as_float(value: Any, default: float = 0.0) -> float:
+        if isinstance(value, (int, float)):
+            return float(value)
         try:
-            retrieved = await memory_service.retrieve(
+            return float(str(value))
+        except Exception:
+            return default
+
+    # Collect results separately so we can normalize, dedupe, and rank consistently.
+    # Policy: Memory UI is the primary source of truth; mem0 is only used as a backup
+    # when Memory UI yields no hits (or is disabled/unavailable).
+
+    ui_raw: list[dict[str, Any]] = []
+    if memory_ui_enabled:
+        try:
+            from app.memory.memory_ui_service import get_memory_ui_service
+
+            service = get_memory_ui_service()
+            ui_raw = await service.search_memories(
+                query=query,
+                agent_id=getattr(settings, "memory_ui_agent_id", MEMORY_AGENT_ID)
+                or MEMORY_AGENT_ID,
+                tenant_id=getattr(settings, "memory_ui_tenant_id", "mailbot")
+                or "mailbot",
+                limit=settings.memory_top_k,
+                similarity_threshold=0.5,
+            )
+        except Exception as exc:
+            logger.warning("memory_ui_retrieve_failed", error=str(exc))
+
+    mem0_raw: List[Dict[str, Any]] = []
+    mem0_should_query = mem0_enabled and (not memory_ui_enabled or not ui_raw)
+    if mem0_should_query:
+        try:
+            mem0_raw = await memory_service.retrieve(
                 agent_id=MEMORY_AGENT_ID,
                 query=query,
                 top_k=settings.memory_top_k,
@@ -942,68 +1050,180 @@ async def _retrieve_memory_context(state: GraphState) -> Optional[str]:
             logger.warning("memory_retrieve_failed", error=str(exc))
             memory_stats["retrieval_error"] = str(exc)
 
-    if memory_ui_enabled:
-        try:
-            from app.memory.memory_ui_service import get_memory_ui_service
+    normalized: list[dict[str, Any]] = []
+    # Prefer Memory UI memories when conflicts occur (source of truth).
+    for item in ui_raw or []:
+        if not isinstance(item, dict):
+            continue
+        memory_id = item.get("id")
+        if not isinstance(memory_id, str) or not memory_id:
+            continue
+        text = str(item.get("content") or "").strip()
+        if not text:
+            continue
+        normalized.append(
+            {
+                "canonical_id": f"memory_ui:{memory_id}",
+                "id": memory_id,
+                "memory": text,
+                "score": _as_float(item.get("similarity"), 0.0),
+                "confidence_score": _as_float(item.get("confidence_score"), 0.5),
+                "metadata": item.get("metadata") if isinstance(item.get("metadata"), dict) else {},
+                "source": "memory_ui",
+            }
+        )
 
-            service = get_memory_ui_service()
-            ui_results = await service.search_memories(
-                query=query,
-                agent_id=getattr(settings, "memory_ui_agent_id", MEMORY_AGENT_ID) or MEMORY_AGENT_ID,
-                tenant_id=getattr(settings, "memory_ui_tenant_id", "mailbot") or "mailbot",
-                limit=settings.memory_top_k,
-                similarity_threshold=0.5,
-            )
-            for item in ui_results or []:
-                if not isinstance(item, dict):
-                    continue
-                memory_id = item.get("id")
-                if isinstance(memory_id, str) and memory_id:
-                    memory_ui_retrieved_ids.append(memory_id)
-                retrieved.append(
-                    {
-                        "id": memory_id,
-                        "memory": item.get("content"),
-                        "score": item.get("similarity"),
-                        "metadata": item.get("metadata") or {},
-                        "source": "memory_ui",
-                    }
-                )
-        except Exception as exc:
-            logger.warning("memory_ui_retrieve_failed", error=str(exc))
+    for item in mem0_raw or []:
+        if not isinstance(item, dict):
+            continue
+        mem0_id = item.get("id")
+        text = str(item.get("memory") or "").strip()
+        if not text:
+            continue
+        meta = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+        memory_ui_id = meta.get("memory_ui_id")
+        canonical_id: str
+        if isinstance(memory_ui_id, str) and memory_ui_id:
+            canonical_id = f"memory_ui:{memory_ui_id}"
+        elif isinstance(mem0_id, str) and mem0_id:
+            canonical_id = f"mem0:{mem0_id}"
+        else:
+            import hashlib
 
-    if not retrieved:
+            canonical_id = f"mem0:sha1:{hashlib.sha1(text.encode('utf-8')).hexdigest()}"
+
+        normalized.append(
+            {
+                "canonical_id": canonical_id,
+                "id": str(mem0_id) if mem0_id is not None else None,
+                "memory": text,
+                "score": _as_float(item.get("score"), 0.0),
+                "confidence_score": _as_float(meta.get("confidence_score"), 0.5),
+                "metadata": meta,
+                "source": "mem0",
+            }
+        )
+
+    if not normalized:
         _update_memory_stats(state, memory_stats)
         return None
 
-    # Extract stats from retrieved memories including IDs for feedback attribution
-    memory_stats["facts_retrieved"] = len(retrieved)
-    memory_stats["relevance_scores"] = [
-        mem.get("score", 0.0) if isinstance(mem, dict) else getattr(mem, "score", 0.0)
-        for mem in retrieved
-    ]
-    # Extract memory IDs for feedback attribution
-    memory_stats["retrieved_memory_ids"] = [
-        mem.get("id") if isinstance(mem, dict) else getattr(mem, "id", None)
-        for mem in retrieved
-        if (mem.get("id") if isinstance(mem, dict) else getattr(mem, "id", None))
-    ]
+    # Dedupe + prefer Memory UI.
+    by_canonical: dict[str, dict[str, Any]] = {}
+    for hit in normalized:
+        canonical = str(hit.get("canonical_id") or "").strip()
+        if not canonical:
+            continue
+        existing = by_canonical.get(canonical)
+        if not existing:
+            by_canonical[canonical] = hit
+            continue
+        existing_source = str(existing.get("source") or "")
+        hit_source = str(hit.get("source") or "")
+        if existing_source != "memory_ui" and hit_source == "memory_ui":
+            by_canonical[canonical] = hit
+            continue
+        if hit_source == existing_source and _as_float(hit.get("score"), 0.0) > _as_float(
+            existing.get("score"), 0.0
+        ):
+            by_canonical[canonical] = hit
 
-    memory_message = _build_memory_system_message(retrieved)
-    if not memory_message:
+    def _rank(hit: dict[str, Any]) -> float:
+        # Confidence dominates similarity (user preference), with a small bias for Memory UI.
+        conf = _as_float(hit.get("confidence_score"), 0.5)
+        sim = _as_float(hit.get("score"), 0.0)
+        source_boost = 0.1 if str(hit.get("source")) == "memory_ui" else 0.0
+        return (conf * 10.0) + sim + source_boost
+
+    ranked = sorted(by_canonical.values(), key=_rank, reverse=True)
+
+    # Enforce a deterministic token/char budget for memory injection.
+    budget = int(getattr(settings, "memory_char_budget", 2000) or 2000)
+    header = "Server memory retrieved for this session/user. Use only if relevant:\n"
+    used_chars = len(header)
+    selected: list[dict[str, Any]] = []
+    for hit in ranked:
+        raw_text = str(hit.get("memory") or "").strip()
+        if not raw_text:
+            continue
+        compact = re.sub(r"\s+", " ", raw_text).strip()
+        preview = textwrap.shorten(compact, width=320, placeholder="…")
+        conf = _as_float(hit.get("confidence_score"), 0.5)
+        sim = _as_float(hit.get("score"), 0.0)
+        src = str(hit.get("source") or "")
+        prefix = f"[{src} conf={conf:.2f} sim={sim:.2f}] "
+        line = f"- {prefix}{preview}"
+        projected = used_chars + len(line) + 1
+        if projected > budget:
+            continue
+        selected.append(hit)
+        used_chars = projected
+        if len(selected) >= int(getattr(settings, "memory_top_k", 5) or 5):
+            break
+
+    if not selected:
         _update_memory_stats(state, memory_stats)
         return None
+
+    # Track Memory UI IDs used (for feedback attribution and retrieval_count updates).
+    memory_ui_ids_used: list[str] = []
+    mem0_ids_used: list[str] = []
+    for hit in selected:
+        src = str(hit.get("source") or "")
+        if src == "memory_ui":
+            mid = hit.get("id")
+            if isinstance(mid, str) and mid:
+                memory_ui_ids_used.append(mid)
+        else:
+            mid = hit.get("id")
+            if isinstance(mid, str) and mid:
+                mem0_ids_used.append(mid)
+            meta = hit.get("metadata") if isinstance(hit.get("metadata"), dict) else {}
+            ui_id = meta.get("memory_ui_id")
+            if isinstance(ui_id, str) and ui_id:
+                memory_ui_ids_used.append(ui_id)
+
+    unique_memory_ui_ids = list(dict.fromkeys(memory_ui_ids_used))
+    unique_mem0_ids = list(dict.fromkeys(mem0_ids_used))
+
+    memory_stats["facts_retrieved"] = len(selected)
+    memory_stats["relevance_scores"] = [_as_float(h.get("score"), 0.0) for h in selected]
+    memory_stats["retrieved_memory_ui_ids"] = unique_memory_ui_ids
+    memory_stats["retrieved_mem0_ids"] = unique_mem0_ids
+    # Back-compat: keep this field Memory-UI-only to avoid invalid UUIDs downstream.
+    memory_stats["retrieved_memory_ids"] = unique_memory_ui_ids
+
+    lines: list[str] = []
+    for hit in selected:
+        raw_text = str(hit.get("memory") or "").strip()
+        if not raw_text:
+            continue
+        compact = re.sub(r"\s+", " ", raw_text).strip()
+        preview = textwrap.shorten(compact, width=320, placeholder="…")
+        conf = _as_float(hit.get("confidence_score"), 0.5)
+        sim = _as_float(hit.get("score"), 0.0)
+        src = str(hit.get("source") or "")
+        lines.append(f"- [{src} conf={conf:.2f} sim={sim:.2f}] {preview}")
+
+    if not lines:
+        _update_memory_stats(state, memory_stats)
+        return None
+
+    memory_message = SystemMessage(
+        content=header + "\n".join(lines),
+        name=MEMORY_SYSTEM_NAME,
+    )
 
     # Store memory stats in scratchpad for LangSmith
     _update_memory_stats(state, memory_stats)
 
     # Best-effort: increment retrieval_count for Memory UI memories actually retrieved by the agent.
-    if memory_ui_retrieved_ids:
+    if unique_memory_ui_ids:
         try:
             from app.memory.memory_ui_service import get_memory_ui_service
 
             service = get_memory_ui_service()
-            unique_ids = list(dict.fromkeys(memory_ui_retrieved_ids))
+            unique_ids = unique_memory_ui_ids
 
             async def _record_retrievals(ids: list[str]) -> None:
                 supabase = service._get_supabase()
@@ -1131,8 +1351,13 @@ async def _record_memory(state: GraphState, ai_message: BaseMessage) -> None:
     if state.agent_type:
         meta["agent_type"] = state.agent_type
     meta["fact_strategy"] = "sentence_extract"
+    meta["review_status"] = "pending_review"
 
-    if mem0_enabled:
+    # Policy: only approved memories are ever written to mem0.
+    review_status = str(meta.get("review_status") or "").strip().lower()
+    mem0_write_enabled = mem0_enabled and review_status == "approved"
+
+    if mem0_write_enabled:
         try:
             result = await memory_service.add_facts(
                 agent_id=MEMORY_AGENT_ID,
@@ -1163,6 +1388,7 @@ async def _record_memory(state: GraphState, ai_message: BaseMessage) -> None:
                         source_type="auto_extracted",
                         agent_id=agent_id,
                         tenant_id=tenant_id,
+                        review_status="pending_review",
                     )
                 except Exception as exc:
                     logger.debug("memory_ui_capture_failed", error=str(exc)[:180])

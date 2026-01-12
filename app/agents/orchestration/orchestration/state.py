@@ -12,6 +12,8 @@ from langchain_core.messages import BaseMessage, SystemMessage
 from langgraph.graph import add_messages
 from pydantic import BaseModel, Field, ConfigDict, field_validator, model_serializer
 
+from app.agents.unified.thread_state import ThreadState
+
 
 # Type variable for reducer functions
 T = TypeVar("T")
@@ -222,6 +224,11 @@ class GraphState(BaseModel):
     scratchpad: Annotated[Dict[str, Any], merge_scratchpad] = Field(
         default_factory=dict,
         description="Ephemeral state used by tools/subagents during execution.",
+    )
+
+    thread_state: ThreadState | None = Field(
+        default=None,
+        description="Compressed thread state for resumptions and long-running sessions.",
     )
 
     # Todos with append reducer

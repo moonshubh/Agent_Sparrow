@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useRef, type MutableRefObject } from 'react';
-import { useFrame } from '@react-three/fiber';
+import { useFrame, type ThreeEvent } from '@react-three/fiber';
 import {
   AdditiveBlending,
   BackSide,
@@ -344,6 +344,11 @@ export function TreeBranch({
     [veinGeometry, veinMaterial]
   );
 
+  const lowLine = useMemo(
+    () => (lineGeometry && lineMaterial ? new Line(lineGeometry, lineMaterial) : null),
+    [lineGeometry, lineMaterial]
+  );
+
   useEffect(() => {
     if (!showVeins || !veinLine) return;
     veinLine.computeLineDistances();
@@ -384,12 +389,11 @@ export function TreeBranch({
     };
   }, [hitMaterial]);
 
-  if (isLow && lineGeometry && lineMaterial) {
+  if (isLow && lowLine) {
     return (
-      <line
-        geometry={lineGeometry}
-        material={lineMaterial}
-        onClick={(e) => {
+      <primitive
+        object={lowLine}
+        onClick={(e: ThreeEvent<MouseEvent>) => {
           if (!edge) return;
           e.stopPropagation();
           onClick?.(edge);

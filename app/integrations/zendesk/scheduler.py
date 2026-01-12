@@ -65,6 +65,8 @@ class ZendeskReplyResult:
     macros_used: list[str]
     learning_messages: list[Any]
 
+
+
 @dataclass(frozen=True, slots=True)
 class ZendeskQueryAgentProductContext:
     os: str | None
@@ -1222,7 +1224,7 @@ async def _run_pattern_preflight(
     playbook_extractor: Any | None,
     max_hits: int,
     min_similarity: float,
-) -> str | None:
+) -> dict[str, Any] | None:
     """Populate workspace files for pattern-first Zendesk runs.
 
     Writes:
@@ -1300,6 +1302,8 @@ async def _run_pattern_preflight(
         ),
     )
 
+    playbook_compiled = False
+    playbook_path: str | None = None
     if category in _ZENDESK_PATTERN_CATEGORIES and playbook_extractor is not None:
         try:
             playbook = await playbook_extractor.build_playbook_with_learned(category)
@@ -1328,6 +1332,7 @@ async def _run_pattern_preflight(
                     category,
                     True,
                 )
+                playbook_compiled = True
         except Exception as exc:  # pragma: no cover - best effort
             logger.debug(
                 "playbook_compile_failed ticket_id=%s category=%s error=%s",
@@ -1336,7 +1341,12 @@ async def _run_pattern_preflight(
                 str(exc)[:180],
             )
 
-    return category
+    return {
+        "category": category,
+        "similar_scenarios_path": "/context/similar_scenarios.md",
+        "playbook_compiled": playbook_compiled,
+        "playbook_path": playbook_path,
+    }
 
 
 def _strip_html_tags(text: str) -> str:
@@ -3952,6 +3962,7 @@ async def _generate_reply(
     result: Dict[str, Any] | None = None
     learning_messages: list[Any] = []
     inferred_category: str | None = None
+    pattern_info: dict[str, Any] | None = None
     kb_articles_used: list[str] = []
     macros_used: list[str] = []
 
@@ -4163,7 +4174,7 @@ async def _generate_reply(
                 except Exception:
                     playbook_extractor = None
 
-                inferred_category = await _run_pattern_preflight(
+                pattern_info = await _run_pattern_preflight(
                     ticket_id=str(ticket_id),
                     session_id=session_id,
                     ticket_text=user_query,
@@ -4177,12 +4188,19 @@ async def _generate_reply(
                         getattr(settings, "zendesk_issue_pattern_min_similarity", 0.62)
                     ),
                 )
+                inferred_category = (
+                    str(pattern_info.get("category"))
+                    if isinstance(pattern_info, dict) and pattern_info.get("category")
+                    else None
+                )
             except Exception as exc:  # pragma: no cover - best effort
                 logger.debug(
                     "zendesk_pattern_preflight_failed ticket_id=%s error=%s",
                     ticket_id,
                     str(exc)[:180],
                 )
+                pattern_info = None
+                inferred_category = None
 
             # Hybrid KB preflight (vector + full-text) for better recall.
             try:
@@ -4415,6 +4433,7 @@ async def _generate_reply(
                 session_id=session_id,
                 provider=use_provider,
                 model=agent_model,
+                use_server_memory=True,
                 attachments=attachments_for_agent,  # Pass multimodal attachments for vision processing
                 forwarded_props={
                     "force_websearch": not (kb_ok or macro_ok or feedme_ok or web_ok),
@@ -4424,10 +4443,16 @@ async def _generate_reply(
                     "is_zendesk_ticket": True,  # Explicit Zendesk marker
                     # Pattern-based context engineering
                     "ticket_category": inferred_category,
-                    "similar_scenarios_path": "/context/similar_scenarios.md",
-                    "playbook_path": f"/playbooks/{inferred_category}.md"
-                    if inferred_category
-                    else None,
+                    "similar_scenarios_path": (
+                        pattern_info.get("similar_scenarios_path")
+                        if isinstance(pattern_info, dict)
+                        else "/context/similar_scenarios.md"
+                    ),
+                    "playbook_path": (
+                        pattern_info.get("playbook_path")
+                        if isinstance(pattern_info, dict)
+                        else None
+                    ),
                 },
             )
 
@@ -5126,7 +5151,29 @@ async def _process_window(
                 .eq("id", row["id"])
                 .execute()
             )
-            _queue_post_resolution_learning(run, dry_run=dry_run)
+
+            # Post-resolution learning is gated by explicit Zendesk tag.
+            # Policy: only tickets tagged MB_playbook are eligible for capture.
+            try:
+                raw_tags = ticket.get("tags") if isinstance(ticket, dict) else None
+                tags_list: list[str] = []
+                if isinstance(raw_tags, list):
+                    tags_list = [str(t).strip() for t in raw_tags if str(t).strip()]
+                elif isinstance(raw_tags, str) and raw_tags.strip():
+                    tags_list = [t.strip() for t in raw_tags.replace(",", " ").split() if t.strip()]
+                should_learn = any(t.lower() == "mb_playbook" for t in tags_list)
+            except Exception:
+                should_learn = False
+
+            if should_learn:
+                try:
+                    _queue_post_resolution_learning(run, dry_run=dry_run)
+                except Exception as exc:  # pragma: no cover - best effort
+                    logger.debug(
+                        "post_resolution_learning_queue_failed ticket_id=%s error=%s",
+                        tid,
+                        str(exc)[:180],
+                    )
             processed += 1
             gemini_remaining = (
                 gemini_remaining if dry_run else max(0, gemini_remaining - 1)
@@ -5136,6 +5183,7 @@ async def _process_window(
             if retry_after is None:
                 retry_after = 60.0
             retry_after = max(5.0, float(retry_after) + 1.0)
+            rate_limit_error = str(e)[:500]
             next_at = (
                 datetime.now(timezone.utc) + timedelta(seconds=retry_after)
             ).isoformat()
@@ -5144,7 +5192,7 @@ async def _process_window(
                 .update(
                     {
                         "status": "retry",
-                        "last_error": str(e)[:500],
+                        "last_error": rate_limit_error,
                         "last_attempt_at": datetime.now(timezone.utc).isoformat(),
                         "next_attempt_at": next_at,
                     }

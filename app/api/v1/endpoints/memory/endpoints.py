@@ -57,8 +57,12 @@ from .schemas import (
     MemoryEntityRecord,
     MemoryRelationshipRecord,
     DuplicateCandidateRecord,
+    ReviewStatus,
     ImportMemorySourcesRequest,
     ImportMemorySourcesResponse,
+    ImportZendeskTaggedRequest,
+    ImportZendeskTaggedResponse,
+    ApproveMemoryResponse,
     MergeRelationshipsRequest,
     MergeRelationshipsResponse,
     SplitRelationshipCommitRequest,
@@ -148,6 +152,15 @@ def _escape_like_pattern(value: str) -> str:
     )
 
 
+def _is_playbook_file_memory(row: object) -> bool:
+    if not isinstance(row, dict):
+        return False
+    metadata = row.get("metadata")
+    if not isinstance(metadata, dict):
+        return False
+    return str(metadata.get("source") or "").strip().lower() == "playbook_file"
+
+
 @router.get(
     "/list",
     response_model=List[MemoryRecord],
@@ -167,18 +180,31 @@ async def list_memories(
     agent_id: str | None = Query(default=None),
     tenant_id: str | None = Query(default=None),
     source_type: str | None = Query(default=None),
+    review_status: ReviewStatus | None = Query(
+        default=None,
+        description="Filter by review status. Non-admin users are restricted to approved memories.",
+    ),
     sort_order: Literal["asc", "desc"] = Query(default="desc"),
 ) -> List[MemoryRecord]:
     try:
+        is_admin = bool(current_user.roles and "admin" in current_user.roles)
+        effective_review_status = None
+        if is_admin:
+            effective_review_status = str(review_status.value) if review_status else "approved"
+        else:
+            effective_review_status = "approved"
+
         memories = await service.list_memories(
             agent_id=agent_id,
             tenant_id=tenant_id,
             source_type=source_type,
+            review_status=effective_review_status,
             limit=int(limit),
             offset=int(offset),
             sort_order=sort_order,
         )
-        return memories  # type: ignore[return-value]
+        filtered = [m for m in memories if not _is_playbook_file_memory(m)]
+        return filtered  # type: ignore[return-value]
     except Exception as exc:
         logger.exception("Error listing memories: %s", exc)
         raise HTTPException(
@@ -206,6 +232,10 @@ async def search_memories_text(
     min_confidence: float = Query(default=0.0, ge=0.0, le=1.0),
     agent_id: str | None = Query(default=None),
     tenant_id: str | None = Query(default=None),
+    review_status: ReviewStatus | None = Query(
+        default=None,
+        description="Filter by review status. Non-admin users are restricted to approved memories.",
+    ),
 ) -> List[MemoryRecord]:
     supabase = service._get_supabase()
     trimmed = (query or "").strip()
@@ -216,10 +246,18 @@ async def search_memories_text(
     pattern = f"%{escaped}%"
 
     try:
+        is_admin = bool(current_user.roles and "admin" in current_user.roles)
+        effective_review_status = None
+        if is_admin:
+            effective_review_status = str(review_status.value) if review_status else "approved"
+        else:
+            effective_review_status = "approved"
+
         q = (
             supabase.client.table("memories")
             .select(service.MEMORY_SELECT_COLUMNS)
             .ilike("content", pattern)
+            .eq("review_status", effective_review_status)
             .gte("confidence_score", float(min_confidence))
             .order("confidence_score", desc=True)
             .limit(int(limit))
@@ -231,7 +269,8 @@ async def search_memories_text(
 
         resp = await supabase._exec(lambda: q.execute())
         rows = list(resp.data or [])
-        return rows  # type: ignore[return-value]
+        filtered = [m for m in rows if not _is_playbook_file_memory(m)]
+        return filtered  # type: ignore[return-value]
     except Exception as exc:
         logger.exception("Error searching memories: %s", exc)
         raise HTTPException(
@@ -3050,17 +3089,18 @@ async def list_duplicate_candidates(
     response_model=AddMemoryResponse,
     status_code=status.HTTP_201_CREATED,
     summary="Add new memory",
-    description="Add a new memory entry to the system. Requires authentication.",
+    description="Add a new memory entry to the system (Admin only).",
     responses={
         201: {"description": "Memory created successfully"},
         400: {"description": "Invalid request data"},
         401: {"description": "Authentication required"},
+        403: {"description": "Admin access required"},
         500: {"description": "Internal server error"},
     }
 )
 async def add_memory(
     request: AddMemoryRequest,
-    current_user: Annotated[TokenPayload, Depends(get_current_user)],
+    _admin_user: Annotated[TokenPayload, Depends(require_admin)],
     background_tasks: BackgroundTasks,
     service: MemoryUIService = Depends(get_memory_ui_service),
 ) -> AddMemoryResponse:
@@ -3078,6 +3118,7 @@ async def add_memory(
             source_type=request.source_type,
             agent_id=request.agent_id,
             tenant_id=request.tenant_id,
+            review_status="pending_review",
         )
 
         # Extract the memory ID from result
@@ -3157,6 +3198,12 @@ async def get_memory_by_id(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Memory {memory_id} not found",
             )
+        is_admin = bool(current_user.roles and "admin" in current_user.roles)
+        if not is_admin and str(existing.get("review_status") or "approved") != "approved":
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Memory {memory_id} not found",
+            )
         return existing  # type: ignore[return-value]
     except HTTPException:
         raise
@@ -3209,15 +3256,137 @@ async def update_memory(
                 detail=f"Memory {memory_id} not found"
             )
 
+        existing_content = str(existing.get("content") or "")
+        existing_content_stripped = existing_content.strip()
+        existing_metadata = (
+            existing.get("metadata") if isinstance(existing.get("metadata"), dict) else {}
+        )
+        existing_review_status = str(existing.get("review_status") or "approved")
+
         # Use existing values if not provided
-        content = request.content if request.content is not None else existing.get("content", "")
-        metadata = request.metadata if request.metadata is not None else existing.get("metadata", {})
+        content = request.content if request.content is not None else existing_content
+        metadata = request.metadata if request.metadata is not None else existing_metadata
+        content_changed = (
+            request.content is not None
+            and str(request.content or "").strip() != existing_content_stripped
+        )
 
         result = await service.update_memory(
             memory_id=memory_id,
             content=content,
             metadata=metadata,
         )
+
+        # Policy: if an approved memory is edited, keep its mem0 mirror in sync.
+        if existing_review_status == "approved" and content_changed:
+            from app.memory.service import memory_service
+
+            now = datetime.now(timezone.utc)
+            mem0_agent_id = getattr(settings, "memory_ui_agent_id", "sparrow") or "sparrow"
+
+            # Prefer deleting known prior mem0 IDs (to avoid wiping the newly-written mirror).
+            prior_mem0_ids: list[str] = []
+            try:
+                mem0_meta = (
+                    existing_metadata.get("mem0")
+                    if isinstance(existing_metadata, dict)
+                    else None
+                )
+                results_blob = (
+                    mem0_meta.get("results")
+                    if isinstance(mem0_meta, dict)
+                    else None
+                )
+                if isinstance(results_blob, list):
+                    for r in results_blob:
+                        mid = r.get("id") if isinstance(r, dict) else None
+                        if isinstance(mid, str) and mid.strip():
+                            prior_mem0_ids.append(mid.strip())
+            except Exception:
+                prior_mem0_ids = []
+
+            meta_for_mem0: dict[str, Any] = {}
+            if isinstance(metadata, dict):
+                meta_for_mem0.update(metadata)
+            meta_for_mem0.pop("mem0", None)
+            meta_for_mem0.pop("tenant_id", None)
+            meta_for_mem0.pop("agent_id", None)
+            meta_for_mem0.setdefault(
+                "source",
+                str(meta_for_mem0.get("source") or "memory_ui"),
+            )
+            meta_for_mem0["memory_ui_id"] = str(memory_id)
+            meta_for_mem0["review_status"] = "approved"
+            try:
+                meta_for_mem0["confidence_score"] = float(
+                    existing.get("confidence_score") or 0.6
+                )
+            except Exception:
+                pass
+
+            mem0_results: list[dict[str, Any]] = []
+            mem0_error: str | None = None
+            try:
+                resp = await memory_service.add_facts(
+                    agent_id=mem0_agent_id,
+                    facts=[content],
+                    meta={k: v for k, v in meta_for_mem0.items() if v is not None},
+                )
+                mem0_results = (
+                    list(resp.get("results") or []) if isinstance(resp, dict) else []
+                )
+
+                new_ids = {
+                    r.get("id")
+                    for r in mem0_results
+                    if isinstance(r, dict) and isinstance(r.get("id"), str)
+                }
+                for mid in prior_mem0_ids:
+                    if mid in new_ids:
+                        continue
+                    await memory_service.delete_primary_memory(memory_id=mid)
+            except Exception as exc:
+                mem0_error = str(exc)[:180]
+                logger.debug(
+                    "mem0_sync_failed memory_id=%s error=%s",
+                    memory_id,
+                    mem0_error,
+                )
+
+            # Persist sync status for operator visibility.
+            try:
+                supabase = service._get_supabase()
+                new_meta = dict(metadata or {}) if isinstance(metadata, dict) else {}
+                mem0_meta = (
+                    dict(new_meta.get("mem0") or {})
+                    if isinstance(new_meta.get("mem0"), dict)
+                    else {}
+                )
+                mem0_meta["sync_attempted_at"] = now.isoformat()
+                if mem0_results:
+                    mem0_meta["written"] = True
+                    mem0_meta["written_at"] = now.isoformat()
+                    mem0_meta["results"] = mem0_results
+                    mem0_meta.pop("out_of_sync", None)
+                    mem0_meta.pop("last_error", None)
+                else:
+                    mem0_meta["out_of_sync"] = True
+                    if mem0_error:
+                        mem0_meta["last_error"] = mem0_error
+                new_meta["mem0"] = mem0_meta
+
+                await supabase._exec(
+                    lambda: supabase.client.table("memories")
+                    .update({"metadata": new_meta, "updated_at": now.isoformat()})
+                    .eq("id", str(memory_id))
+                    .execute()
+                )
+            except Exception as exc:  # pragma: no cover - best effort
+                logger.debug(
+                    "mem0_sync_metadata_update_failed memory_id=%s error=%s",
+                    memory_id,
+                    str(exc)[:180],
+                )
 
         updated_at = result.get("updated_at")
         if isinstance(updated_at, str):
@@ -3280,7 +3449,50 @@ async def delete_memory(
                 detail=f"Memory {memory_id} not found"
             )
 
+        # Best-effort cleanup: if this Memory UI entry was mirrored into mem0 during
+        # approval, delete the corresponding mem0 primary memories as well.
+        mem0_ids: list[str] = []
+        try:
+            metadata = existing.get("metadata") if isinstance(existing, dict) else None
+            mem0_meta = metadata.get("mem0") if isinstance(metadata, dict) else None
+            results = mem0_meta.get("results") if isinstance(mem0_meta, dict) else None
+            if isinstance(results, list):
+                for r in results:
+                    mid = r.get("id") if isinstance(r, dict) else None
+                    if isinstance(mid, str) and mid.strip():
+                        mem0_ids.append(mid.strip())
+        except Exception:
+            mem0_ids = []
+
         result = await service.delete_memory(memory_id=memory_id)
+
+        try:
+            if mem0_ids:
+                from app.memory.service import memory_service
+
+                for mid in mem0_ids:
+                    await memory_service.delete_primary_memory(memory_id=mid)
+            else:
+                from app.core.settings import settings
+                from app.memory.service import memory_service
+
+                mem0_agent_id = (
+                    getattr(settings, "memory_ui_agent_id", "sparrow") or "sparrow"
+                )
+                tenant_id = (
+                    getattr(settings, "memory_ui_tenant_id", "mailbot") or "mailbot"
+                )
+                await memory_service.delete_primary_memories_by_filters(
+                    agent_id=mem0_agent_id,
+                    filters={"tenant_id": tenant_id, "memory_ui_id": str(memory_id)},
+                    limit=50,
+                )
+        except Exception as exc:  # pragma: no cover - best effort
+            logger.debug(
+                "mem0_cleanup_failed memory_id=%s error=%s",
+                memory_id,
+                str(exc)[:180],
+            )
 
         return DeleteMemoryResponse(
             deleted=True,
@@ -3355,6 +3567,28 @@ async def merge_memories(
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Merge did not return deleted_memory_id",
+            )
+
+        # Best-effort cleanup: if the deleted duplicate had an approved mem0 mirror,
+        # remove it so it cannot be retrieved after the Memory UI entry is gone.
+        try:
+            from app.core.settings import settings
+            from app.memory.service import memory_service
+
+            mem0_agent_id = (
+                getattr(settings, "memory_ui_agent_id", "sparrow") or "sparrow"
+            )
+            tenant_id = getattr(settings, "memory_ui_tenant_id", "mailbot") or "mailbot"
+            await memory_service.delete_primary_memories_by_filters(
+                agent_id=mem0_agent_id,
+                filters={"tenant_id": tenant_id, "memory_ui_id": str(deleted_id)},
+                limit=50,
+            )
+        except Exception as exc:  # pragma: no cover - best effort
+            logger.debug(
+                "mem0_cleanup_failed memory_id=%s error=%s",
+                deleted_id,
+                str(exc)[:180],
             )
 
         return MergeMemoriesResponse(
@@ -3841,6 +4075,687 @@ async def get_memory_stats(
             detail="Failed to get memory statistics"
         )
 
+@router.post(
+    "/import/zendesk-tagged",
+    response_model=ImportZendeskTaggedResponse,
+    summary="Import Zendesk tickets tagged for playbook learning (Admin only)",
+    description=(
+        "Imports only solved/closed Zendesk tickets that have the MB_playbook tag "
+        "(case-insensitive). Imported memories land in the Pending Review queue "
+        "and are not added to the graph or mem0 until approved."
+    ),
+    responses={
+        200: {"description": "Import completed"},
+        400: {"description": "Zendesk not configured / invalid request"},
+        401: {"description": "Authentication required"},
+        403: {"description": "Admin access required"},
+        500: {"description": "Internal server error"},
+    },
+)
+async def import_zendesk_tagged_memories(
+    request: ImportZendeskTaggedRequest,
+    admin_user: Annotated[TokenPayload, Depends(require_admin)],
+    service: MemoryUIService = Depends(get_memory_ui_service),
+) -> ImportZendeskTaggedResponse:
+    from app.integrations.zendesk.client import ZendeskClient
+
+    supabase = service._get_supabase()
+
+    subdomain = str(getattr(settings, "zendesk_subdomain", "") or "").strip()
+    email = str(getattr(settings, "zendesk_email", "") or "").strip()
+    api_token = str(getattr(settings, "zendesk_api_token", "") or "").strip()
+    if not subdomain or not email or not api_token:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Zendesk credentials not configured (ZENDESK_SUBDOMAIN, ZENDESK_EMAIL, ZENDESK_API_TOKEN).",
+        )
+
+    raw_tag = str(request.tag or "").strip()
+    if not raw_tag:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="tag is required")
+    tag = raw_tag.lower()
+
+    # Policy: MB_playbook is the only tag that enables learning/capture.
+    if tag != "mb_playbook":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Only the MB_playbook tag is allowed for Zendesk memory imports.",
+        )
+
+    # Read (or initialize) the incremental cursor
+    now = datetime.now(timezone.utc)
+    cursor_started_at = datetime.fromtimestamp(0, tz=timezone.utc)
+    try:
+        state_resp = await supabase._exec(
+            lambda: supabase.client.table("zendesk_memory_import_state")
+            .select("tag,last_cursor_ts")
+            .eq("tag", tag)
+            .maybe_single()
+            .execute()
+        )
+        state_row = state_resp.data if state_resp else None
+        if isinstance(state_row, dict) and state_row.get("last_cursor_ts"):
+            try:
+                cursor_started_at = datetime.fromisoformat(
+                    str(state_row["last_cursor_ts"]).replace("Z", "+00:00")
+                )
+            except Exception:
+                cursor_started_at = datetime.fromtimestamp(0, tz=timezone.utc)
+        else:
+            await supabase._exec(
+                lambda: supabase.client.table("zendesk_memory_import_state")
+                .upsert(
+                    {
+                        "tag": tag,
+                        "last_cursor_ts": cursor_started_at.isoformat(),
+                        "updated_at": now.isoformat(),
+                    },
+                    on_conflict="tag",
+                )
+                .execute()
+            )
+    except Exception as exc:
+        logger.exception("zendesk_import_state_read_failed: %s", str(exc)[:180])
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to read Zendesk import cursor state",
+        )
+
+    start_epoch = int(cursor_started_at.timestamp())
+    # Avoid missing just-updated tickets due to timestamp granularity; dedupe handles repeats.
+    start_epoch = max(0, start_epoch - 60)
+
+    zc = ZendeskClient(
+        subdomain=subdomain,
+        email=email,
+        api_token=api_token,
+        dry_run=False,
+        rpm_limit=int(getattr(settings, "zendesk_import_rpm_limit", 10) or 10),
+    )
+
+    def _has_tag(ticket_obj: Dict[str, Any]) -> bool:
+        tags = ticket_obj.get("tags") or []
+        if not isinstance(tags, list):
+            return False
+        return tag in {str(t or "").strip().lower() for t in tags if t}
+
+    def _ticket_epoch(ticket_obj: Dict[str, Any]) -> int:
+        for key in ("updated_at", "solved_at", "closed_at", "created_at"):
+            raw = ticket_obj.get(key)
+            if not raw:
+                continue
+            try:
+                dt = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                return int(dt.timestamp())
+            except Exception:
+                continue
+        return int(now.timestamp())
+
+    def _fetch_tagged(limit: int) -> Tuple[List[Dict[str, Any]], int, int, int]:
+        scanned = 0
+        tagged = 0
+        out: List[Dict[str, Any]] = []
+        max_seen_epoch = start_epoch
+        for ticket in zc.export_resolved_tickets_cursor(start_time=start_epoch, per_page=100):
+            if not isinstance(ticket, dict):
+                continue
+            scanned += 1
+            try:
+                max_seen_epoch = max(max_seen_epoch, _ticket_epoch(ticket))
+            except Exception:
+                pass
+            if _has_tag(ticket):
+                tagged += 1
+                out.append(ticket)
+                if len(out) >= limit:
+                    break
+        return out, scanned, tagged, max_seen_epoch
+
+    tickets, tickets_scanned, tickets_tagged, max_seen_epoch = await asyncio.to_thread(
+        _fetch_tagged, max(1, int(request.limit))
+    )
+
+    # Deduplicate against prior imports.
+    ticket_ids = [int(t.get("id")) for t in tickets if isinstance(t.get("id"), (int, float, str))]
+    normalized_ticket_ids: List[int] = []
+    for raw in ticket_ids:
+        try:
+            normalized_ticket_ids.append(int(raw))
+        except Exception:
+            continue
+    normalized_ticket_ids = sorted(set(normalized_ticket_ids))
+
+    already_imported: set[int] = set()
+    if normalized_ticket_ids:
+        try:
+            existing_resp = await supabase._exec(
+                lambda: supabase.client.table("zendesk_tagged_memory_imports")
+                .select("ticket_id")
+                .eq("tag", tag)
+                .in_("ticket_id", normalized_ticket_ids)
+                .execute()
+            )
+            existing_rows = list(existing_resp.data or [])
+            for row in existing_rows:
+                try:
+                    already_imported.add(int(row.get("ticket_id")))
+                except Exception:
+                    continue
+        except Exception:
+            already_imported = set()
+
+    agent_id = getattr(settings, "memory_ui_agent_id", "sparrow") or "sparrow"
+    tenant_id = getattr(settings, "memory_ui_tenant_id", "mailbot") or "mailbot"
+
+    imported = skipped_existing = failed = 0
+    imported_memory_ids: List[UUID] = []
+    cursor_updated_at = datetime.fromtimestamp(max_seen_epoch, tz=timezone.utc)
+    if cursor_updated_at < cursor_started_at:
+        cursor_updated_at = cursor_started_at
+
+    from app.security.pii_redactor import redact_pii, redact_pii_from_dict
+    from app.integrations.zendesk.historical_import import _sanitize_text, _truncate_text  # reuse helpers
+
+    def _looks_like_duplicate(exc: Exception) -> bool:
+        msg = str(exc).lower()
+        return (
+            "duplicate key value" in msg
+            or "unique constraint" in msg
+            or "23505" in msg
+            or ("conflict" in msg and "ticket" in msg)
+        )
+
+    def _infer_category(text: str) -> str:
+        try:
+            from app.integrations.zendesk.scheduler import _infer_ticket_category_from_text
+
+            cat = _infer_ticket_category_from_text(text)
+            return str(cat or "features")
+        except Exception:
+            return "features"
+
+    async def _extract_messages(ticket_id: int) -> Tuple[List[Dict[str, Any]], List[str], List[str]]:
+        audits = await asyncio.to_thread(zc.get_ticket_audits, ticket_id, 120)
+        items: List[Tuple[datetime, int, int, str, str]] = []
+        for idx, audit in enumerate(audits or []):
+            created_raw = str((audit or {}).get("created_at") or "")
+            try:
+                created = datetime.fromisoformat(created_raw.replace("Z", "+00:00"))
+            except Exception:
+                created = datetime.min.replace(tzinfo=timezone.utc)
+            author_id = (audit or {}).get("author_id")
+            role = "user"
+            if author_id is not None:
+                try:
+                    user = zc.get_user_cached(author_id)
+                    if (user or {}).get("role") in {"agent", "admin"}:
+                        role = "assistant"
+                except Exception:
+                    role = "user"
+
+            events = (audit or {}).get("events") or []
+            if not isinstance(events, list):
+                continue
+            for e_idx, event in enumerate(events):
+                if not isinstance(event, dict):
+                    continue
+                if str(event.get("type") or "") != "Comment":
+                    continue
+                if not bool(event.get("public", False)):
+                    continue
+                body = event.get("body") or event.get("html_body") or ""
+                if not isinstance(body, str):
+                    continue
+                content = _truncate_text(_sanitize_text(body), 8000)
+                if not content:
+                    continue
+                items.append((created, idx, e_idx, role, content))
+
+        items.sort(key=lambda v: (v[0], v[1], v[2]))
+        messages: List[Dict[str, Any]] = [{"role": role, "content": content} for _, _, _, role, content in items]
+
+        macros: List[str] = []
+        for audit in audits or []:
+            events = (audit or {}).get("events") or []
+            if not isinstance(events, list):
+                continue
+            for event in events:
+                if not isinstance(event, dict):
+                    continue
+                event_type = str(event.get("type") or "")
+                if event_type in {"Macro", "MacroReference"}:
+                    macro_id = event.get("macro_id") or event.get("id") or event.get("value")
+                    if macro_id:
+                        macros.append(str(macro_id))
+                    continue
+                if event_type != "Comment":
+                    continue
+                via = event.get("via") or {}
+                if not isinstance(via, dict):
+                    continue
+                source = via.get("source") or {}
+                if not isinstance(source, dict):
+                    continue
+                source_type = str(source.get("type") or source.get("rel") or "").lower()
+                if source_type != "macro":
+                    continue
+                macro_id = source.get("id") or source.get("macro_id")
+                if not macro_id:
+                    from_obj = source.get("from") or {}
+                    if isinstance(from_obj, dict):
+                        macro_id = from_obj.get("id") or from_obj.get("macro_id")
+                if macro_id:
+                    macros.append(str(macro_id))
+
+        domains = [d.strip().lower() for d in (settings.zendesk_firecrawl_support_domains or []) if d]
+        if not domains:
+            domains = ["support.getmailbird.com", "www.getmailbird.com/help"]
+        kb_urls: List[str] = []
+        url_pattern = re.compile(r"https?://[^\\s)>\\\"]+", re.IGNORECASE)
+        for msg in messages:
+            content = str(msg.get("content") or "")
+            for match in url_pattern.findall(content):
+                lowered = match.lower()
+                if any(domain in lowered for domain in domains):
+                    kb_urls.append(match)
+
+        return messages, sorted(set(macros)), sorted(set(kb_urls))
+
+    for ticket in tickets:
+        try:
+            ticket_id_raw = ticket.get("id")
+            ticket_id = int(ticket_id_raw) if ticket_id_raw is not None else None
+            if not ticket_id:
+                failed += 1
+                continue
+            if ticket_id in already_imported:
+                skipped_existing += 1
+                continue
+
+            ticket_epoch = _ticket_epoch(ticket)
+            ticket_dt = datetime.fromtimestamp(ticket_epoch, tz=timezone.utc)
+            if ticket_dt > cursor_updated_at:
+                cursor_updated_at = ticket_dt
+
+            subject = str(ticket.get("subject") or "").strip()
+            description = str(ticket.get("description") or "").strip()
+
+            messages, macros_used, kb_articles_used = await _extract_messages(ticket_id)
+            first_user = next((m.get("content") for m in messages if m.get("role") == "user"), "")
+            last_assistant = next((m.get("content") for m in reversed(messages) if m.get("role") == "assistant"), "")
+
+            problem_summary = _truncate_text(_sanitize_text("\n\n".join([p for p in [subject, first_user or description] if p])), 800)
+            solution_summary = _truncate_text(_sanitize_text(str(last_assistant or "")), 1200)
+
+            category = _infer_category(" ".join([subject, description, problem_summary, solution_summary]))
+
+            # Generate a single embedding and reuse across issue_resolutions + memories.
+            embedding_text = f"Problem: {problem_summary}\nSolution: {solution_summary}".strip()
+            embedding = await service.generate_embedding(embedding_text)
+
+            issue_resolution_id = UUID(str(uuid5(NAMESPACE_URL, f"zendesk_issue_resolution:{ticket_id}:{tag}")))
+            await supabase._exec(
+                lambda: supabase.client.table("issue_resolutions")
+                .upsert(
+                    {
+                        "id": str(issue_resolution_id),
+                        "ticket_id": str(ticket_id),
+                        "category": category,
+                        "problem_summary": redact_pii(problem_summary),
+                        "solution_summary": redact_pii(solution_summary),
+                        "was_escalated": False,
+                        "kb_articles_used": kb_articles_used,
+                        "macros_used": macros_used,
+                        "embedding": embedding,
+                        "status": "pending_review",
+                        "reviewed_by": None,
+                        "reviewed_at": None,
+                        "created_at": ticket_dt.isoformat(),
+                    },
+                    on_conflict="id",
+                )
+                .execute()
+            )
+
+            playbook_entry_id: str | None = None
+            try:
+                from app.agents.unified.playbooks import PlaybookEnricher
+
+                enricher = PlaybookEnricher()
+                playbook_entry_id = await enricher.extract_from_conversation(
+                    conversation_id=f"zendesk-{ticket_id}",
+                    messages=messages,
+                    category=category,
+                )
+            except Exception as exc:
+                logger.debug(
+                    "zendesk_playbook_extraction_failed ticket_id=%s error=%s",
+                    ticket_id,
+                    str(exc)[:180],
+                )
+                playbook_entry_id = None
+
+            content_lines = [
+                f"Category: {category}",
+                f"Problem: {problem_summary}",
+                f"Solution: {solution_summary}",
+            ]
+            content = redact_pii("\n".join([line for line in content_lines if line]).strip())
+
+            metadata = ensure_memory_title(
+                redact_pii_from_dict(
+                    {
+                        "source": "zendesk_mb_playbook",
+                        "zendesk_ticket_id": str(ticket_id),
+                        "zendesk_tag": tag,
+                        "zendesk_updated_at": ticket_dt.isoformat(),
+                        "category": category,
+                        "issue_resolution_id": str(issue_resolution_id),
+                        "playbook_entry_id": playbook_entry_id,
+                        "kb_articles_used": kb_articles_used,
+                        "macros_used": macros_used,
+                    }
+                ),
+                content=content,
+            )
+
+            memory_id = UUID(str(uuid5(NAMESPACE_URL, f"zendesk_memory:{ticket_id}:{tag}")))
+            try:
+                await supabase._exec(
+                    lambda: supabase.client.table("memories")
+                    .insert(
+                        {
+                            "id": str(memory_id),
+                            "content": content,
+                            "metadata": metadata,
+                            "source_type": "auto_extracted",
+                            "agent_id": agent_id,
+                            "tenant_id": tenant_id,
+                            "embedding": embedding,
+                            "review_status": "pending_review",
+                            "reviewed_by": None,
+                            "reviewed_at": None,
+                            "created_at": ticket_dt.isoformat(),
+                            "updated_at": ticket_dt.isoformat(),
+                        }
+                    )
+                    .execute()
+                )
+
+                imported_by = admin_user.sub
+                await supabase._exec(
+                    lambda: supabase.client.table("zendesk_tagged_memory_imports")
+                    .insert(
+                        {
+                            "ticket_id": ticket_id,
+                            "tag": tag,
+                            "memory_id": str(memory_id),
+                            "conversation_id": f"zendesk-{ticket_id}",
+                            "zendesk_updated_at": ticket_dt.isoformat(),
+                            "imported_by": imported_by,
+                        }
+                    )
+                    .execute()
+                )
+            except Exception as exc:
+                if _looks_like_duplicate(exc):
+                    skipped_existing += 1
+                    continue
+                raise
+
+            imported += 1
+            imported_memory_ids.append(memory_id)
+        except Exception as exc:
+            failed += 1
+            logger.exception("zendesk_tag_import_failed: %s", str(exc)[:180])
+
+    # Persist updated cursor (even if no tickets were imported, we keep the prior cursor).
+    try:
+        await supabase._exec(
+            lambda: supabase.client.table("zendesk_memory_import_state")
+            .upsert(
+                {
+                    "tag": tag,
+                    "last_cursor_ts": cursor_updated_at.isoformat(),
+                    "updated_at": datetime.now(timezone.utc).isoformat(),
+                },
+                on_conflict="tag",
+            )
+            .execute()
+        )
+    except Exception as exc:
+        logger.exception("zendesk_import_state_write_failed: %s", str(exc)[:180])
+
+    return ImportZendeskTaggedResponse(
+        tag=tag,
+        cursor_started_at=cursor_started_at,
+        cursor_updated_at=cursor_updated_at,
+        tickets_scanned=tickets_scanned,
+        tickets_tagged=tickets_tagged,
+        imported=imported,
+        skipped_existing=skipped_existing,
+        failed=failed,
+        memory_ids=imported_memory_ids,
+    )
+
+
+@router.post(
+    "/{memory_id:uuid}/approve",
+    response_model=ApproveMemoryResponse,
+    summary="Approve a pending-review memory (Admin only)",
+    description=(
+        "Approves the selected memory, auto-approves its linked "
+        "playbook_learned_entries + issue_resolutions, and then writes the approved "
+        "content into mem0. Graph extraction is triggered after approval."
+    ),
+    responses={
+        200: {"description": "Approval completed"},
+        400: {"description": "Invalid memory state"},
+        401: {"description": "Authentication required"},
+        403: {"description": "Admin access required"},
+        404: {"description": "Memory not found"},
+        500: {"description": "Internal server error"},
+    },
+)
+async def approve_memory(
+    memory_id: UUID,
+    admin_user: Annotated[TokenPayload, Depends(require_admin)],
+    service: MemoryUIService = Depends(get_memory_ui_service),
+) -> ApproveMemoryResponse:
+    from app.memory.service import memory_service
+
+    supabase = service._get_supabase()
+    now = datetime.now(timezone.utc)
+
+    record = await service.get_memory_by_id(memory_id)
+    if not record:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Memory not found")
+
+    current_status = str(record.get("review_status") or "approved")
+    if current_status not in {"pending_review", "approved"}:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid review_status")
+
+    metadata = record.get("metadata") if isinstance(record.get("metadata"), dict) else {}
+    mem0_written = bool(
+        isinstance(metadata, dict)
+        and isinstance(metadata.get("mem0"), dict)
+        and bool((metadata.get("mem0") or {}).get("written"))
+    )
+
+    playbook_entry_id = None
+    issue_resolution_id = None
+    if isinstance(metadata, dict):
+        playbook_entry_id = metadata.get("playbook_entry_id")
+        issue_resolution_id = metadata.get("issue_resolution_id")
+
+    reviewer_id = admin_user.sub
+    reviewer_uuid = None
+    try:
+        reviewer_uuid = str(UUID(str(reviewer_id)))
+    except Exception:
+        reviewer_uuid = None
+
+    playbook_approved = False
+    issue_approved = False
+    mem0_results: List[Dict[str, Any]] = []
+
+    # Step 1: auto-approve linked entries (required before mem0 write)
+    if playbook_entry_id:
+        try:
+            await supabase._exec(
+                lambda: supabase.client.table("playbook_learned_entries")
+                .update(
+                    {
+                        "status": "approved",
+                        "reviewed_by": reviewer_id,
+                        "reviewed_at": now.isoformat(),
+                    }
+                )
+                .eq("id", str(playbook_entry_id))
+                .execute()
+            )
+            playbook_approved = True
+        except Exception as exc:
+            logger.exception("approve_playbook_entry_failed: %s", str(exc)[:180])
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to approve linked playbook entry",
+            )
+
+    if issue_resolution_id:
+        try:
+            update_payload = {
+                "status": "approved",
+                "reviewed_at": now.isoformat(),
+            }
+            if reviewer_uuid:
+                update_payload["reviewed_by"] = reviewer_uuid
+            await supabase._exec(
+                lambda: supabase.client.table("issue_resolutions")
+                .update(update_payload)
+                .eq("id", str(issue_resolution_id))
+                .execute()
+            )
+            issue_approved = True
+        except Exception as exc:
+            # Best-effort revert playbook approval if we already did it.
+            if playbook_entry_id and playbook_approved:
+                try:
+                    await supabase._exec(
+                        lambda: supabase.client.table("playbook_learned_entries")
+                        .update(
+                            {
+                                "status": "pending_review",
+                                "reviewed_by": None,
+                                "reviewed_at": None,
+                            }
+                        )
+                        .eq("id", str(playbook_entry_id))
+                        .execute()
+                    )
+                except Exception:
+                    pass
+            logger.exception("approve_issue_resolution_failed: %s", str(exc)[:180])
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to approve linked issue resolution",
+            )
+
+    # Step 2: write into mem0 (idempotent)
+    if not mem0_written:
+        try:
+            content = str(record.get("content") or "").strip()
+            zendesk_ticket_id = metadata.get("zendesk_ticket_id") if isinstance(metadata, dict) else None
+            zendesk_tag = metadata.get("zendesk_tag") if isinstance(metadata, dict) else None
+            meta = {
+                "source": "zendesk_mb_playbook",
+                "zendesk_ticket_id": zendesk_ticket_id,
+                "zendesk_tag": zendesk_tag,
+                "memory_ui_id": str(memory_id),
+                "review_status": "approved",
+                "issue_resolution_id": str(issue_resolution_id) if issue_resolution_id else None,
+                "playbook_entry_id": str(playbook_entry_id) if playbook_entry_id else None,
+            }
+            result = await memory_service.add_facts(
+                agent_id=getattr(settings, "memory_ui_agent_id", "sparrow") or "sparrow",
+                facts=[content],
+                meta={k: v for k, v in meta.items() if v is not None},
+            )
+            mem0_results = list(result.get("results") or []) if isinstance(result, dict) else []
+            mem0_written = True
+        except Exception as exc:
+            # Best-effort revert linked approvals to keep the system consistent.
+            if issue_resolution_id and issue_approved:
+                try:
+                    await supabase._exec(
+                        lambda: supabase.client.table("issue_resolutions")
+                        .update(
+                            {
+                                "status": "pending_review",
+                                "reviewed_by": None,
+                                "reviewed_at": None,
+                            }
+                        )
+                        .eq("id", str(issue_resolution_id))
+                        .execute()
+                    )
+                except Exception:
+                    pass
+            if playbook_entry_id and playbook_approved:
+                try:
+                    await supabase._exec(
+                        lambda: supabase.client.table("playbook_learned_entries")
+                        .update(
+                            {
+                                "status": "pending_review",
+                                "reviewed_by": None,
+                                "reviewed_at": None,
+                            }
+                        )
+                        .eq("id", str(playbook_entry_id))
+                        .execute()
+                    )
+                except Exception:
+                    pass
+            logger.exception("mem0_write_failed: %s", str(exc)[:180])
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to write approved memory into mem0",
+            )
+
+    # Step 3: approve the Memory UI record (also triggers entity extraction / graph)
+    new_meta = dict(metadata or {})
+    mem0_meta = dict(new_meta.get("mem0") or {}) if isinstance(new_meta.get("mem0"), dict) else {}
+    mem0_meta["written"] = True
+    mem0_meta["written_at"] = now.isoformat()
+    if mem0_results:
+        mem0_meta["results"] = mem0_results
+    new_meta["mem0"] = mem0_meta
+
+    update_payload: Dict[str, Any] = {
+        "review_status": "approved",
+        "reviewed_at": now.isoformat(),
+        "metadata": new_meta,
+        "updated_at": now.isoformat(),
+    }
+    if reviewer_uuid:
+        update_payload["reviewed_by"] = reviewer_uuid
+
+    await supabase._exec(
+        lambda: supabase.client.table("memories").update(update_payload).eq("id", str(memory_id)).execute()
+    )
+
+    return ApproveMemoryResponse(
+        approved=True,
+        memory_id=memory_id,
+        mem0_written=mem0_written,
+        playbook_entry_approved=playbook_approved or not bool(playbook_entry_id),
+        issue_resolution_approved=issue_approved or not bool(issue_resolution_id),
+        mem0_results=mem0_results,
+    )
+
 
 @router.post(
     "/import",
@@ -3947,6 +4862,7 @@ async def import_memory_sources(
                         content=redact_pii(content),
                     ),
                     "source_type": "auto_extracted",
+                    "review_status": "pending_review",
                     "agent_id": agent_id,
                     "tenant_id": tenant_id,
                     "embedding": embedding,
@@ -4043,6 +4959,7 @@ async def import_memory_sources(
                         content=content,
                     ),
                     "source_type": "auto_extracted",
+                    "review_status": "pending_review",
                     "agent_id": agent_id,
                     "tenant_id": tenant_id,
                     "created_at": row.get("created_at"),
@@ -4122,6 +5039,7 @@ async def import_memory_sources(
                         content=content,
                     ),
                     "source_type": "auto_extracted",
+                    "review_status": "pending_review",
                     "agent_id": agent_id,
                     "tenant_id": tenant_id,
                     "created_at": row.get("created_at"),
@@ -4186,6 +5104,7 @@ async def import_memory_sources(
                         content=content,
                     ),
                     "source_type": "auto_extracted",
+                    "review_status": "pending_review",
                     "agent_id": agent_id,
                     "tenant_id": tenant_id,
                     "created_at": datetime.now(timezone.utc).isoformat(),

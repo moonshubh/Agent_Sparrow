@@ -19,6 +19,12 @@ from .model_registry import (
     GROK_4,
 )
 
+from .models_config import (
+    clear_models_config_cache,
+    get_models_config,
+    resolve_subagent_config,
+)
+
 __all__ = [
     "MODEL_REGISTRY",
     "get_registry",
@@ -36,4 +42,7 @@ __all__ = [
     "GEMINI_EMBEDDING",
     "GROK_4_1_FAST",
     "GROK_4",
+    "clear_models_config_cache",
+    "get_models_config",
+    "resolve_subagent_config",
 ]

@@ -20,6 +20,7 @@ import {
   extractTodosFromPayload,
   formatIfStructuredLog,
 } from './utils';
+import { uploadImageToSupabase } from '@/services/storage/storage';
 
 /**
  * Serializable artifact data for persistence in message metadata.
@@ -35,6 +36,7 @@ export interface SerializedArtifact {
   index?: number;
   // Image artifact fields
   imageData?: string;
+  imageUrl?: string;
   mimeType?: string;
   altText?: string;
   aspectRatio?: string;
@@ -117,6 +119,74 @@ const stripMarkdownDataUriImages = (text: string): string => {
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+
+const MAX_PERSISTED_ARTIFACT_CHARS = 1_000_000;
+const ARTIFACT_UPLOAD_WAIT_MS = 20_000;
+
+const extFromMime = (mimeType: string): string => {
+  const normalized = mimeType.toLowerCase();
+  const map: Record<string, string> = {
+    'image/png': 'png',
+    'image/jpeg': 'jpg',
+    'image/jpg': 'jpg',
+    'image/webp': 'webp',
+    'image/gif': 'gif',
+    'image/svg+xml': 'svg',
+  };
+  return map[normalized] || 'bin';
+};
+
+const base64ToFile = (base64: string, mimeType: string, filename: string): File => {
+  const byteCharacters = atob(base64);
+  const byteNumbers = new Array(byteCharacters.length);
+  for (let i = 0; i < byteCharacters.length; i++) {
+    byteNumbers[i] = byteCharacters.charCodeAt(i);
+  }
+  const byteArray = new Uint8Array(byteNumbers);
+  const blob = new Blob([byteArray], { type: mimeType });
+  return new File([blob], filename, { type: mimeType });
+};
+
+const coerceSessionId = (sessionId?: string | number): number | undefined => {
+  if (typeof sessionId === 'number') return sessionId;
+  if (typeof sessionId === 'string') {
+    const parsed = Number(sessionId);
+    return Number.isFinite(parsed) ? parsed : undefined;
+  }
+  return undefined;
+};
+
+const waitForUploads = async (uploads: Promise<void>[]) => {
+  if (!uploads.length) return;
+  await Promise.allSettled(
+    uploads.map((upload) => Promise.race([
+      upload,
+      new Promise<void>((resolve) => setTimeout(resolve, ARTIFACT_UPLOAD_WAIT_MS)),
+    ]))
+  );
+};
+
+const compactArtifactsForPersistence = (artifacts: SerializedArtifact[]): SerializedArtifact[] => {
+  const compacted = artifacts.map((artifact) => {
+    if (artifact.type !== 'image' || !artifact.imageData) {
+      return artifact;
+    }
+    const { imageData, ...rest } = artifact;
+    return rest;
+  }).filter((artifact) => artifact.type !== 'image' || Boolean(artifact.imageUrl));
+
+  try {
+    const serialized = JSON.stringify({ artifacts: compacted });
+    if (serialized.length <= MAX_PERSISTED_ARTIFACT_CHARS) {
+      return compacted;
+    }
+  } catch {
+    // Fall through to dropping artifacts on serialization failure.
+  }
+
+  console.warn('[Artifacts] Skipping artifact persistence due to payload size.');
+  return [];
+};
 
 const isMessageRole = (value: unknown): value is Message['role'] =>
   value === 'user' || value === 'assistant' || value === 'system' || value === 'tool';
@@ -659,6 +729,20 @@ export function AgentProvider({
   const persistedMessageIdRef = useRef<Record<string, string>>({});
   // Track artifacts created during the current run for persistence
   const pendingArtifactsRef = useRef<SerializedArtifact[]>([]);
+  const pendingArtifactUploadsRef = useRef<Record<string, Promise<void>>>({});
+
+  const updatePendingArtifact = (artifactId: string, updates: Partial<SerializedArtifact>) => {
+    pendingArtifactsRef.current = pendingArtifactsRef.current.map((artifact) =>
+      artifact.id === artifactId ? { ...artifact, ...updates } : artifact
+    );
+  };
+
+  const trackArtifactUpload = (artifactId: string, uploadPromise: Promise<void>) => {
+    pendingArtifactUploadsRef.current[artifactId] = uploadPromise;
+    uploadPromise.finally(() => {
+      delete pendingArtifactUploadsRef.current[artifactId];
+    });
+  };
   const sendMessage = useCallback(async (content: string, attachments?: AttachmentInput[]) => {
     if (!agent || isStreaming) return;
 
@@ -675,6 +759,7 @@ export function AgentProvider({
     assistantPersistedRef.current = false;
     lastRunUserMessageIdRef.current = null;
     pendingArtifactsRef.current = [];
+    pendingArtifactUploadsRef.current = {};
 
     try {
       // Create abort controller for this request
@@ -1124,6 +1209,7 @@ export function AgentProvider({
                   // Log summary only (avoid logging large base64 imageData)
                   console.debug('[AG-UI] Image artifact event:', payload?.title, 'imageData length:', payload?.imageData?.length);
                   if (payload?.imageData) {
+                    const mimeType = payload.mimeType || 'image/png';
                     const store = getGlobalArtifactStore();
                     if (store) {
                       const state = store.getState();
@@ -1134,7 +1220,8 @@ export function AgentProvider({
                         content: payload.content || '',
                         messageId: payload.messageId,
                         imageData: payload.imageData,
-                        mimeType: payload.mimeType || 'image/png',
+                        imageUrl: payload.imageUrl,
+                        mimeType,
                         altText: payload.altText,
                         aspectRatio: payload.aspectRatio,
                         resolution: payload.resolution,
@@ -1149,11 +1236,40 @@ export function AgentProvider({
                       title: payload.title || 'Generated Image',
                       content: payload.content || '',
                       imageData: payload.imageData,
-                      mimeType: payload.mimeType || 'image/png',
+                      imageUrl: payload.imageUrl,
+                      mimeType,
                       altText: payload.altText,
                       aspectRatio: payload.aspectRatio,
                       resolution: payload.resolution,
                     });
+
+                    if (!pendingArtifactUploadsRef.current[payload.id]) {
+                      const uploadPromise = (async () => {
+                        try {
+                          const extension = extFromMime(mimeType);
+                          const filename = `${payload.id}.${extension}`;
+                          const file = base64ToFile(payload.imageData, mimeType, filename);
+                          const imageUrl = await uploadImageToSupabase(
+                            file,
+                            coerceSessionId(sessionId)
+                          );
+                          if (!imageUrl) return;
+
+                          updatePendingArtifact(payload.id, { imageUrl });
+
+                          if (store) {
+                            const state = store.getState();
+                            const existing = state.getArtifact(payload.id);
+                            if (existing) {
+                              state.addArtifact({ ...existing, imageUrl });
+                            }
+                          }
+                        } catch (err) {
+                          console.error('[Artifacts] Failed to upload image artifact:', err);
+                        }
+                      })();
+                      trackArtifactUpload(payload.id, uploadPromise);
+                    }
                   }
                 }
                 return undefined;
@@ -1330,10 +1446,14 @@ export function AgentProvider({
 
             // Only persist if we've advanced beyond the last successfully persisted assistant message.
             if (candidateIndex > lastPersistedIndex) {
+              const pendingUploads = Object.values(pendingArtifactUploadsRef.current);
+              if (pendingUploads.length > 0) {
+                await waitForUploads(pendingUploads);
+              }
               const artifacts = pendingArtifactsRef.current.length > 0
-                ? pendingArtifactsRef.current
+                ? compactArtifactsForPersistence(pendingArtifactsRef.current)
                 : undefined;
-              const mergedMetadata = artifacts
+              const mergedMetadata = artifacts && artifacts.length > 0
                 ? { ...(candidate.metadata ?? {}), artifacts }
                 : candidate.metadata;
               const metadataToPersist =

@@ -453,6 +453,7 @@ class IssueResolutionStore:
                                 "agent_id": agent_id,
                                 "tenant_id": tenant_id,
                                 "embedding": embedding,
+                                "review_status": "pending_review",
                             }
 
                             async def _insert_memory_ui() -> None:

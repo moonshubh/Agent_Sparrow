@@ -34,7 +34,7 @@ except ImportError:  # pragma: no cover - handled gracefully when mem0 is missin
 
 logger = get_logger(__name__)
 
-TENANT_ID = "mailbot"
+TENANT_ID = getattr(settings, "memory_ui_tenant_id", "mailbot") or "mailbot"
 DEFAULT_MEMORY_TYPE = "fact"
 DEFAULT_SOURCE = "primary_agent"
 LOG_AGENT_ID = "log_analyst"
@@ -97,8 +97,17 @@ class MemoryService:
             return []
 
         raw_results = result.get("results", [])
-        formatted: List[Dict[str, Any]] = []
+        approved_results: list[dict[str, Any]] = []
         for item in raw_results:
+            meta = item.get("metadata") if isinstance(item, dict) else None
+            meta = meta if isinstance(meta, dict) else {}
+            status = str(meta.get("review_status") or "").strip().lower()
+            # Policy: missing review_status is treated as pending_review (exclude).
+            if status != "approved":
+                continue
+            approved_results.append(item)
+        formatted: List[Dict[str, Any]] = []
+        for item in approved_results:
             formatted.append(
                 {
                     "id": item.get("id"),
@@ -110,9 +119,9 @@ class MemoryService:
         duration_ms = (perf_counter() - start) * 1000.0
         memory_metrics.record_retrieval(
             "primary",
-            hit=bool(raw_results),
+            hit=bool(approved_results),
             duration_ms=duration_ms,
-            result_count=len(raw_results),
+            result_count=len(approved_results),
             error=False,
         )
         return formatted
@@ -474,6 +483,64 @@ class MemoryService:
                 duration_ms=duration_ms,
                 error=error_flag,
             )
+
+    async def delete_primary_memory(self, *, memory_id: str) -> bool:
+        """Best-effort delete of a primary-collection memory by mem0 ID."""
+        if not self._is_configured():
+            return False
+
+        mem_id = str(memory_id or "").strip()
+        if not mem_id:
+            return False
+
+        try:
+            client = await self._get_client(settings.memory_collection_primary)
+            await client.delete(mem_id)
+            return True
+        except Exception as exc:  # pragma: no cover - best effort
+            logger.warning(
+                "memory_primary_delete_failed",
+                memory_id=mem_id,
+                error=str(exc)[:180],
+            )
+            return False
+
+    async def delete_primary_memories_by_filters(
+        self,
+        *,
+        agent_id: str,
+        filters: dict[str, Any],
+        limit: int = 25,
+    ) -> list[str]:
+        """Best-effort delete of primary-collection memories matching metadata filters."""
+        if not self._is_configured():
+            return []
+
+        safe_limit = max(1, min(200, int(limit)))
+        try:
+            rows = await self._get_by_filters(
+                collection_name=settings.memory_collection_primary,
+                filters=filters,
+                agent_id=agent_id,
+                limit=safe_limit,
+            )
+        except Exception as exc:  # pragma: no cover
+            logger.warning("memory_primary_delete_lookup_failed", error=str(exc)[:180])
+            return []
+
+        ids: list[str] = []
+        for row in rows or []:
+            mid = row.get("id") if isinstance(row, dict) else None
+            if isinstance(mid, str) and mid.strip():
+                ids.append(mid.strip())
+        if not ids:
+            return []
+
+        deleted: list[str] = []
+        for mid in ids:
+            if await self.delete_primary_memory(memory_id=mid):
+                deleted.append(mid)
+        return deleted
 
     # ---------------------------------------------------------------------
     # Internal helpers

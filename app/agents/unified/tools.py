@@ -7,7 +7,7 @@ import hashlib
 import ipaddress
 import re
 import socket
-from datetime import datetime
+from datetime import datetime, timezone
 from functools import lru_cache
 import json
 import uuid
@@ -251,12 +251,23 @@ def _build_kb_filters(context: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     return filters
 
 
-def _parse_iso_datetime(value: Optional[str]) -> Optional[datetime]:
+def _normalize_datetime(value: Optional[datetime]) -> Optional[datetime]:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
+def _parse_iso_datetime(value: Optional[str | datetime]) -> Optional[datetime]:
     if not value:
         return None
+    if isinstance(value, datetime):
+        return _normalize_datetime(value)
     try:
-        cleaned = value.replace("Z", "+00:00") if isinstance(value, str) else value
-        return datetime.fromisoformat(cleaned)
+        cleaned = value.replace("Z", "+00:00")
+        parsed = datetime.fromisoformat(cleaned)
+        return _normalize_datetime(parsed)
     except Exception:
         return None
 
@@ -2459,8 +2470,8 @@ async def feedme_search_tool(
         logger.error("Failed to hydrate FeedMe conversations: %s", exc)
         conv_details = {}
 
-    start_date = input.start_date
-    end_date = input.end_date
+    start_date = _normalize_datetime(input.start_date)
+    end_date = _normalize_datetime(input.end_date)
     results: List[Dict[str, Any]] = []
 
     for conv_id, payload in aggregated.items():

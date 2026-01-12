@@ -11,6 +11,8 @@
 
 export type SourceType = 'auto_extracted' | 'manual';
 
+export type ReviewStatus = 'pending_review' | 'approved';
+
 export type FeedbackType =
   | 'thumbs_up'
   | 'thumbs_down'
@@ -48,6 +50,9 @@ export interface Memory {
   content: string;
   metadata: Record<string, unknown>;
   source_type: SourceType;
+  review_status: ReviewStatus;
+  reviewed_by: string | null;
+  reviewed_at: string | null;
   confidence_score: number;
   retrieval_count: number;
   last_retrieved_at: string | null;
@@ -272,6 +277,7 @@ export interface SearchMemoriesRequest {
   min_confidence?: number;
   agent_id?: string;
   tenant_id?: string;
+  review_status?: ReviewStatus;
 }
 
 export interface ListMemoriesRequest {
@@ -280,6 +286,7 @@ export interface ListMemoriesRequest {
   agent_id?: string;
   tenant_id?: string;
   source_type?: SourceType;
+  review_status?: ReviewStatus;
   sort_order?: 'asc' | 'desc';
 }
 
@@ -291,6 +298,11 @@ export interface ImportMemorySourcesRequest {
   limit?: number;
   include_playbook_embeddings?: boolean;
   include_mem0_primary?: boolean;
+}
+
+export interface ImportZendeskTaggedRequest {
+  tag?: string;
+  limit?: number;
 }
 
 export interface UpdateRelationshipRequest {
@@ -406,6 +418,27 @@ export interface ImportMemorySourcesResponse {
   mem0_primary_imported: number;
   mem0_primary_skipped: number;
   mem0_primary_failed: number;
+}
+
+export interface ImportZendeskTaggedResponse {
+  tag: string;
+  cursor_started_at: string;
+  cursor_updated_at: string;
+  tickets_scanned: number;
+  tickets_tagged: number;
+  imported: number;
+  skipped_existing: number;
+  failed: number;
+  memory_ids: string[];
+}
+
+export interface ApproveMemoryResponse {
+  approved: boolean;
+  memory_id: string;
+  mem0_written: boolean;
+  playbook_entry_approved: boolean;
+  issue_resolution_approved: boolean;
+  mem0_results: Array<Record<string, unknown>>;
 }
 
 export interface MergeRelationshipsResponse {
@@ -529,6 +562,7 @@ export interface MemoryFilters {
   entityTypes: EntityType[];
   minConfidence: number;
   sourceType: SourceType | null;
+  reviewStatus?: ReviewStatus;
   sortBy: 'confidence' | 'created_at' | 'retrieval_count';
   sortOrder: 'asc' | 'desc';
 }

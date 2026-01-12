@@ -68,18 +68,75 @@ def _normalize_tool_end_output(event: Any) -> Any:
         return event
 
     output = data.get("output")
-    if isinstance(output, (ToolMessage, Command)):
+    tool_name = event.get("name") or data.get("name") or "tool"
+
+    if isinstance(output, ToolMessage):
+        if not getattr(output, "name", None):
+            normalized = dict(data)
+            normalized["output"] = ToolMessage(
+                content=str(getattr(output, "content", "") or ""),
+                tool_call_id=str(getattr(output, "tool_call_id", "") or "unknown"),
+                name=str(tool_name),
+            )
+            updated = dict(event)
+            updated["data"] = normalized
+            return updated
+        return event
+
+    if isinstance(output, Command):
+        try:
+            update_payload = getattr(output, "update", None)
+            if isinstance(update_payload, dict) and isinstance(update_payload.get("messages"), list):
+                changed = False
+                new_messages: list[Any] = []
+                for msg in update_payload.get("messages") or []:
+                    if isinstance(msg, ToolMessage) and not getattr(msg, "name", None):
+                        changed = True
+                        new_messages.append(
+                            ToolMessage(
+                                content=str(getattr(msg, "content", "") or ""),
+                                tool_call_id=str(getattr(msg, "tool_call_id", "") or "unknown"),
+                                name=str(tool_name),
+                            )
+                        )
+                    else:
+                        new_messages.append(msg)
+                if changed:
+                    normalized = dict(data)
+                    normalized["output"] = Command(
+                        update={
+                            **update_payload,
+                            "messages": new_messages,
+                        }
+                    )
+                    updated = dict(event)
+                    updated["data"] = normalized
+                    return updated
+        except Exception:
+            return event
         return event
 
     if isinstance(output, list) and output and all(isinstance(item, ToolMessage) for item in output):
+        normalized_messages: list[ToolMessage] = []
+        for msg in output:
+            if not getattr(msg, "name", None):
+                normalized_messages.append(
+                    ToolMessage(
+                        content=str(getattr(msg, "content", "") or ""),
+                        tool_call_id=str(getattr(msg, "tool_call_id", "") or "unknown"),
+                        name=str(tool_name),
+                    )
+                )
+            else:
+                normalized_messages.append(msg)
+
         normalized = dict(data)
-        normalized["output"] = Command(update={"messages": output})
+        normalized["output"] = Command(update={"messages": normalized_messages})
         updated = dict(event)
         updated["data"] = normalized
         return updated
 
     tool_call_id = data.get("tool_call_id") or data.get("id") or "unknown"
-    tool_name = event.get("name") or data.get("name") or "tool"
     safe_output = make_json_safe_with_cycle_detection(output)
 
     if isinstance(safe_output, str):

@@ -478,6 +478,7 @@ class PlaybookEnricher:
                                     agent_id=agent_id,
                                     tenant_id=tenant_id,
                                     embedding=embedding,
+                                    review_status="pending_review",
                                 )
                             except Exception as capture_exc:
                                 logger.debug(

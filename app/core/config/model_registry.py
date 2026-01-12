@@ -372,6 +372,7 @@ class ModelRegistry:
 
     # Specialized models
     grounding: ModelSpec = field(default=GEMINI_3_FLASH)
+    summarizer: ModelSpec = field(default=GEMINI_FLASH_PREVIEW)
     feedme: ModelSpec = field(default=GEMINI_FLASH_LITE)
     memory_clustering: ModelSpec = field(default=GEMINI_3_FLASH)
     memory_relationship_analysis: ModelSpec = field(default=GEMINI_3_FLASH)
