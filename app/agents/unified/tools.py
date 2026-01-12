@@ -7,7 +7,9 @@ import hashlib
 import ipaddress
 import re
 import socket
-from datetime import datetime, timezone
+import threading
+import time
+from datetime import datetime
 from functools import lru_cache
 import json
 import uuid
@@ -44,17 +46,17 @@ from app.core.settings import settings
 from app.db.embedding import utils as embedding_utils
 from app.db.supabase.client import get_supabase_client
 from app.security.pii_redactor import redact_pii, redact_pii_from_dict, redact_sensitive_from_dict
-from app.services.global_knowledge.hybrid_retrieval import HybridRetrieval
+from app.services.knowledge_base.hybrid_retrieval import HybridRetrieval
 import os
 from app.tools.research_tools import FirecrawlTool, TavilySearchTool
 from app.core.logging_config import get_logger
 from app.agents.unified.mcp_client import invoke_firecrawl_mcp_tool
 import redis
 
+from app.agents.unified.image_store import store_image_bytes, rewrite_base64_images
 
-TOOL_RATE_LIMIT_MODEL = (
-    settings.router_model or settings.primary_agent_model or "gemini-2.5-flash-lite"
-)
+
+TOOL_RATE_LIMIT_BUCKET = "internal.helper"
 ALLOWED_SUPABASE_TABLES = {
     "mailbird_knowledge",
     "feedme_conversations",
@@ -183,6 +185,128 @@ _FIRECRAWL_AGENT_MAX_USES_PER_WINDOW = int(
 )
 _FIRECRAWL_AGENT_USAGE_FALLBACK: dict[str, list[int]] = {}
 
+_FIRECRAWL_CIRCUIT_LOCK = threading.Lock()
+_FIRECRAWL_CIRCUIT_OPEN_UNTIL: float = 0.0
+_FIRECRAWL_CIRCUIT_REASON: str | None = None
+_FIRECRAWL_RETRY_AFTER_RE = re.compile(r"retry after\s+(\d+)s", re.IGNORECASE)
+
+
+def _is_firecrawl_unavailable_error(error: str) -> bool:
+    """Return True when Firecrawl is unavailable due to limits/credits/quota."""
+    text = (error or "").strip().lower()
+    if not text:
+        return False
+    patterns = (
+        "insufficient credits",
+        "rate limit exceeded",
+        "quota exceeded",
+        "upgrade your plan",
+        "payment required",
+        "free tier",
+    )
+    return any(pattern in text for pattern in patterns)
+
+
+def _parse_firecrawl_retry_after_seconds(error: str) -> int | None:
+    match = _FIRECRAWL_RETRY_AFTER_RE.search(error or "")
+    if not match:
+        return None
+    try:
+        seconds = int(match.group(1))
+    except Exception:
+        return None
+    return max(1, min(seconds, 3600))
+
+
+def _open_firecrawl_circuit(error: str) -> None:
+    global _FIRECRAWL_CIRCUIT_OPEN_UNTIL, _FIRECRAWL_CIRCUIT_REASON
+    retry_after = _parse_firecrawl_retry_after_seconds(error) or 300
+    reason = (error or "").strip()[:240] or "firecrawl_unavailable"
+    with _FIRECRAWL_CIRCUIT_LOCK:
+        _FIRECRAWL_CIRCUIT_OPEN_UNTIL = time.time() + float(retry_after)
+        _FIRECRAWL_CIRCUIT_REASON = reason
+    logger.warning(
+        "firecrawl_circuit_opened",
+        retry_after_seconds=retry_after,
+        reason=reason,
+    )
+
+
+def _firecrawl_circuit_reason() -> str | None:
+    with _FIRECRAWL_CIRCUIT_LOCK:
+        return _FIRECRAWL_CIRCUIT_REASON
+
+
+def _firecrawl_circuit_open() -> bool:
+    with _FIRECRAWL_CIRCUIT_LOCK:
+        return time.time() < _FIRECRAWL_CIRCUIT_OPEN_UNTIL
+
+
+async def _tavily_search_fallback_for_firecrawl(
+    *,
+    query: str,
+    limit: int,
+    include_images: bool,
+) -> Dict[str, Any]:
+    """Return a Firecrawl-like search payload using Tavily (best-effort)."""
+    tavily = _tavily_client()
+    safe_limit = max(1, min(int(limit or 5), 10))
+
+    result = await asyncio.to_thread(
+        tavily.search,
+        query,
+        safe_limit,
+        bool(include_images),
+        "advanced",
+        None,
+        None,
+        None,
+        None,
+    )
+
+    web_items: list[dict[str, Any]] = []
+    image_items: list[dict[str, Any]] = []
+
+    if isinstance(result, dict):
+        for item in result.get("results") or []:
+            if not isinstance(item, dict):
+                continue
+            web_items.append(
+                {
+                    "url": item.get("url"),
+                    "title": item.get("title") or item.get("name"),
+                    "description": item.get("content")
+                    or item.get("snippet")
+                    or item.get("description"),
+                    "source": item.get("source"),
+                    "score": item.get("score"),
+                }
+            )
+
+        for img in result.get("images") or []:
+            if not isinstance(img, dict):
+                continue
+            source = img.get("source")
+            image_items.append(
+                {
+                    "url": img.get("url"),
+                    "alt": img.get("alt") or img.get("description") or img.get("title"),
+                    # By requirement: "source" refers to the page URL for web images.
+                    "source": source,
+                    "page_url": source,
+                    "width": img.get("width"),
+                    "height": img.get("height"),
+                }
+            )
+
+    payload: Dict[str, Any] = {
+        "data": {"web": _dedupe_results(web_items, url_key="url")},
+        "fallback": {"source": "tavily", "include_images": bool(include_images)},
+    }
+    if include_images:
+        payload["data"]["images"] = _dedupe_results(image_items, url_key="url")
+    return payload
+
 
 def _firecrawl_agent_usage_key() -> str:
     api_key = settings.firecrawl_api_key or ""
@@ -251,23 +375,12 @@ def _build_kb_filters(context: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     return filters
 
 
-def _normalize_datetime(value: Optional[datetime]) -> Optional[datetime]:
-    if value is None:
-        return None
-    if value.tzinfo is None:
-        return value.replace(tzinfo=timezone.utc)
-    return value.astimezone(timezone.utc)
-
-
-def _parse_iso_datetime(value: Optional[str | datetime]) -> Optional[datetime]:
+def _parse_iso_datetime(value: Optional[str]) -> Optional[datetime]:
     if not value:
         return None
-    if isinstance(value, datetime):
-        return _normalize_datetime(value)
     try:
-        cleaned = value.replace("Z", "+00:00")
-        parsed = datetime.fromisoformat(cleaned)
-        return _normalize_datetime(parsed)
+        cleaned = value.replace("Z", "+00:00") if isinstance(value, str) else value
+        return datetime.fromisoformat(cleaned)
     except Exception:
         return None
 
@@ -680,7 +793,12 @@ async def _invoke_firecrawl_mcp_tool(
             tool_name, args, api_key=settings.firecrawl_api_key
         )
     except Exception as exc:
-        logger.warning("mcp_tool_failed", tool_name=tool_name, error=str(exc))
+        logger.warning(
+            "mcp_tool_failed",
+            tool_name=tool_name,
+            error=str(exc),
+            error_type=type(exc).__name__,
+        )
         return None
 
 
@@ -860,7 +978,7 @@ class FirecrawlFetchInput(BaseModel):
     )
     remove_base64_images: bool = Field(
         default=False,
-        description="Remove base64 encoded images to reduce response size.",
+        description="Rewrite base64 data-URI images into stored URLs (no base64 in outputs).",
     )
 
 
@@ -1048,7 +1166,7 @@ async def log_diagnoser_tool(
 
 
 @tool("web_search", args_schema=WebSearchInput)
-@rate_limited(TOOL_RATE_LIMIT_MODEL, fail_gracefully=True)
+@rate_limited(TOOL_RATE_LIMIT_BUCKET, fail_gracefully=True)
 async def web_search_tool(
     input: Optional[WebSearchInput] = None,
     query: Optional[str] = None,
@@ -1161,9 +1279,11 @@ async def web_search_tool(
                     )
                     fallback = await firecrawl_search_tool.ainvoke(
                         {
-                            "query": input.query,
-                            "limit": input.max_results,
-                            "sources": fallback_sources,
+                            "input": FirecrawlSearchInput(
+                                query=input.query,
+                                limit=input.max_results,
+                                sources=fallback_sources,
+                            )
                         }
                     )
                     if isinstance(fallback, dict) and not fallback.get("error"):
@@ -1182,7 +1302,7 @@ async def web_search_tool(
 
 
 @tool("tavily_extract", args_schema=TavilyExtractInput)
-@rate_limited(TOOL_RATE_LIMIT_MODEL, fail_gracefully=True)
+@rate_limited(TOOL_RATE_LIMIT_BUCKET, fail_gracefully=True)
 async def tavily_extract_tool(
     input: Optional[TavilyExtractInput] = None,
     urls: Optional[List[str]] = None,
@@ -1206,7 +1326,7 @@ async def tavily_extract_tool(
 
 
 @tool("grounding_search", args_schema=GroundingSearchInput)
-@rate_limited(TOOL_RATE_LIMIT_MODEL, fail_gracefully=True)
+@rate_limited(TOOL_RATE_LIMIT_BUCKET, fail_gracefully=True)
 async def grounding_search_tool(
     input: Optional[GroundingSearchInput] = None,
     query: Optional[str] = None,
@@ -1267,7 +1387,7 @@ async def grounding_search_tool(
 
 
 @tool("firecrawl_fetch", args_schema=FirecrawlFetchInput)
-@rate_limited(TOOL_RATE_LIMIT_MODEL, fail_gracefully=True)
+@rate_limited(TOOL_RATE_LIMIT_BUCKET, fail_gracefully=True)
 async def firecrawl_fetch_tool(
     input: Optional[FirecrawlFetchInput] = None,
     url: Optional[str] = None,
@@ -1313,6 +1433,24 @@ async def firecrawl_fetch_tool(
             if remove_base64_images is not None
             else False,
         )
+
+    if _firecrawl_circuit_open():
+        # Firecrawl is temporarily unavailable (rate limit / credits). Degrade gracefully to
+        # direct HTTP fetch so the run can still complete with citations and content.
+        try:
+            logger.info(
+                "firecrawl_fetch_circuit_open_http_fallback",
+                url=input.url,
+                reason=_firecrawl_circuit_reason(),
+            )
+            return await _http_fetch_fallback(input.url)
+        except Exception as exc:
+            logger.warning(
+                "firecrawl_fetch_circuit_open_http_fallback_failed",
+                url=input.url,
+                error=str(exc),
+            )
+            return {"error": str(exc)}
 
     max_retries = 3
     firecrawl = _firecrawl_client()
@@ -1361,7 +1499,8 @@ async def firecrawl_fetch_tool(
         "maxAge": input.max_age,
         "proxy": input.proxy,
         "parsers": input.parsers,
-        "removeBase64Images": input.remove_base64_images,
+        # Phase V: do NOT drop images; we rewrite base64 data URIs into URLs.
+        "removeBase64Images": False,
     }
     mcp_args = {k: v for k, v in mcp_args.items() if v not in (None, [], {})}
 
@@ -1372,7 +1511,16 @@ async def firecrawl_fetch_tool(
         ):
             logger.warning("firecrawl_mcp_scrape_error", error=mcp_result.get("error"))
         else:
-            return mcp_result
+            rewritten, replaced = await rewrite_base64_images(
+                mcp_result, path_prefix="firecrawl"
+            )
+            if replaced:
+                logger.info(
+                    "firecrawl_fetch_rewrote_base64_images",
+                    url=input.url,
+                    replaced=replaced,
+                )
+            return rewritten
 
     last_error: Optional[Exception] = None
     for attempt in range(max_retries):
@@ -1395,7 +1543,8 @@ async def firecrawl_fetch_tool(
                     max_age=input.max_age,
                     proxy=input.proxy,
                     parsers=input.parsers,
-                    remove_base64_images=input.remove_base64_images,
+                    # Phase V: keep images; rewrite base64 data URIs into URLs.
+                    remove_base64_images=False,
                 )
             else:
                 # Use fetch as default for grounding to reduce Gemini grounding calls in Zendesk flows
@@ -1406,7 +1555,14 @@ async def firecrawl_fetch_tool(
             )
             if isinstance(result, dict) and result.get("error"):
                 raise RuntimeError(result["error"])
-            return result
+            rewritten, replaced = await rewrite_base64_images(result, path_prefix="firecrawl")
+            if replaced:
+                logger.info(
+                    "firecrawl_fetch_rewrote_base64_images",
+                    url=input.url,
+                    replaced=replaced,
+                )
+            return rewritten
         except Exception as e:
             logger.warning(
                 f"firecrawl_fetch_tool_error url='{input.url}' attempt={attempt + 1} error='{str(e)}'"
@@ -1432,7 +1588,7 @@ async def firecrawl_fetch_tool(
 
 
 @tool("firecrawl_map", args_schema=FirecrawlMapInput)
-@rate_limited(TOOL_RATE_LIMIT_MODEL, fail_gracefully=True)
+@rate_limited(TOOL_RATE_LIMIT_BUCKET, fail_gracefully=True)
 async def firecrawl_map_tool(
     input: Optional[FirecrawlMapInput] = None,
     url: Optional[str] = None,
@@ -1506,7 +1662,7 @@ async def firecrawl_map_tool(
 
 
 @tool("firecrawl_crawl", args_schema=FirecrawlCrawlInput)
-@rate_limited(TOOL_RATE_LIMIT_MODEL, fail_gracefully=True)
+@rate_limited(TOOL_RATE_LIMIT_BUCKET, fail_gracefully=True)
 async def firecrawl_crawl_tool(
     input: Optional[FirecrawlCrawlInput] = None,
     url: Optional[str] = None,
@@ -1576,7 +1732,7 @@ async def firecrawl_crawl_tool(
 
 
 @tool("firecrawl_crawl_status", args_schema=FirecrawlCrawlStatusInput)
-@rate_limited(TOOL_RATE_LIMIT_MODEL, fail_gracefully=True)
+@rate_limited(TOOL_RATE_LIMIT_BUCKET, fail_gracefully=True)
 async def firecrawl_crawl_status_tool(
     input: Optional[FirecrawlCrawlStatusInput] = None,
     crawl_id: Optional[str] = None,
@@ -1624,12 +1780,13 @@ async def firecrawl_crawl_status_tool(
 
 
 @tool("firecrawl_extract", args_schema=FirecrawlExtractInput)
-@rate_limited(TOOL_RATE_LIMIT_MODEL, fail_gracefully=True)
+@rate_limited(TOOL_RATE_LIMIT_BUCKET, fail_gracefully=True)
 async def firecrawl_extract_tool(
     input: Optional[FirecrawlExtractInput] = None,
     urls: Optional[List[str]] = None,
     prompt: Optional[str] = None,
     schema: Optional[Dict[str, Any]] = None,
+    extraction_schema: Optional[Dict[str, Any]] = None,
     enable_web_search: bool = False,
 ) -> Dict[str, Any]:
     """Extract structured data from web pages using AI.
@@ -1643,10 +1800,11 @@ async def firecrawl_extract_tool(
     """
 
     if input is None:
+        resolved_schema = extraction_schema if extraction_schema is not None else schema
         input = FirecrawlExtractInput(
             urls=urls or [],
             prompt=prompt,
-            schema=schema,
+            schema=resolved_schema,
             enable_web_search=enable_web_search,
         )
 
@@ -1693,7 +1851,7 @@ async def firecrawl_extract_tool(
 
 
 @tool("firecrawl_search", args_schema=FirecrawlSearchInput)
-@rate_limited(TOOL_RATE_LIMIT_MODEL, fail_gracefully=True)
+@rate_limited(TOOL_RATE_LIMIT_BUCKET, fail_gracefully=True)
 async def firecrawl_search_tool(
     input: Optional[FirecrawlSearchInput] = None,
     query: Optional[str] = None,
@@ -1735,6 +1893,25 @@ async def firecrawl_search_tool(
         if not cleaned_scrape_options:
             cleaned_scrape_options = None
 
+    include_images = False
+    if input.sources:
+        for source in input.sources:
+            if isinstance(source, str) and source.lower() == "images":
+                include_images = True
+            elif isinstance(source, dict) and str(source.get("type") or "").lower() == "images":
+                include_images = True
+
+    if _firecrawl_circuit_open():
+        logger.info(
+            "firecrawl_search_circuit_open_fallback",
+            reason=_firecrawl_circuit_reason(),
+        )
+        return await _tavily_search_fallback_for_firecrawl(
+            query=str(input.query or ""),
+            limit=int(input.limit or 5),
+            include_images=include_images,
+        )
+
     mcp_sources = None
     if input.sources:
         mcp_sources = []
@@ -1756,7 +1933,17 @@ async def firecrawl_search_tool(
         if isinstance(mcp_result, dict) and (
             mcp_result.get("error") or mcp_result.get("success") is False
         ):
-            logger.warning("firecrawl_mcp_search_error", error=mcp_result.get("error"))
+            err_text = str(
+                mcp_result.get("error") or mcp_result.get("message") or ""
+            ).strip()
+            logger.warning("firecrawl_mcp_search_error", error=err_text or None)
+            if err_text and _is_firecrawl_unavailable_error(err_text):
+                _open_firecrawl_circuit(err_text)
+                return await _tavily_search_fallback_for_firecrawl(
+                    query=str(input.query or ""),
+                    limit=int(input.limit or 5),
+                    include_images=include_images,
+                )
         else:
             return mcp_result
 
@@ -1789,21 +1976,38 @@ async def firecrawl_search_tool(
             results=results_count,
         )
         if isinstance(result, dict) and result.get("error"):
-            raise RuntimeError(result["error"])
+            err_text = str(result.get("error") or "").strip()
+            if err_text and _is_firecrawl_unavailable_error(err_text):
+                _open_firecrawl_circuit(err_text)
+                return await _tavily_search_fallback_for_firecrawl(
+                    query=str(input.query or ""),
+                    limit=int(input.limit or 5),
+                    include_images=include_images,
+                )
+            raise RuntimeError(err_text)
         return result
     except Exception as e:
         query_hash = hashlib.sha256(str(getattr(input, "query", "")).encode("utf-8")).hexdigest()[:16]
-        logger.error("firecrawl_search_tool_error", query_hash=query_hash, error=str(e))
-        return {"error": str(e)}
+        err_text = str(e).strip()
+        logger.error("firecrawl_search_tool_error", query_hash=query_hash, error=err_text)
+        if err_text and _is_firecrawl_unavailable_error(err_text):
+            _open_firecrawl_circuit(err_text)
+            return await _tavily_search_fallback_for_firecrawl(
+                query=str(input.query or ""),
+                limit=int(getattr(input, "limit", 5) or 5),
+                include_images=include_images,
+            )
+        return {"error": err_text}
 
 
 @tool("firecrawl_agent", args_schema=FirecrawlAgentInput)
-@rate_limited(TOOL_RATE_LIMIT_MODEL, fail_gracefully=True)
+@rate_limited(TOOL_RATE_LIMIT_BUCKET, fail_gracefully=True)
 async def firecrawl_agent_tool(
     input: Optional[FirecrawlAgentInput] = None,
     prompt: Optional[str] = None,
     urls: Optional[List[str]] = None,
     schema: Optional[Dict[str, Any]] = None,
+    output_schema: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Autonomous web data gathering agent - Firecrawl's most powerful feature.
 
@@ -1830,10 +2034,11 @@ async def firecrawl_agent_tool(
     """
 
     if input is None:
+        resolved_schema = output_schema if output_schema is not None else schema
         input = FirecrawlAgentInput(
             prompt=prompt or "",
             urls=urls,
-            schema=schema,
+            schema=resolved_schema,
         )
 
     if not input.prompt:
@@ -1906,7 +2111,7 @@ async def firecrawl_agent_tool(
 
 
 @tool("firecrawl_agent_status", args_schema=FirecrawlAgentStatusInput)
-@rate_limited(TOOL_RATE_LIMIT_MODEL, fail_gracefully=True)
+@rate_limited(TOOL_RATE_LIMIT_BUCKET, fail_gracefully=True)
 async def firecrawl_agent_status_tool(
     input: Optional[FirecrawlAgentStatusInput] = None,
     agent_id: Optional[str] = None,
@@ -2470,8 +2675,8 @@ async def feedme_search_tool(
         logger.error("Failed to hydrate FeedMe conversations: %s", exc)
         conv_details = {}
 
-    start_date = _normalize_datetime(input.start_date)
-    end_date = _normalize_datetime(input.end_date)
+    start_date = input.start_date
+    end_date = input.end_date
     results: List[Dict[str, Any]] = []
 
     for conv_id, payload in aggregated.items():
@@ -2810,16 +3015,22 @@ async def db_unified_search_tool(
                     conv_id = int(conv_id)
                 except Exception:
                     continue
-                try:
-                    chunk_index = int(row.get("chunk_index"))
-                except Exception:
-                    continue
                 if conv_id not in conv_data:
                     conv_data[conv_id] = {
                         "matches": [],
                         "max_similarity": 0.0,
                     }
                 sim = float(row.get("similarity", 0.0))
+                chunk_index = (
+                    row.get("chunk_index")
+                    or row.get("chunkIndex")
+                    or row.get("chunk_order")
+                    or row.get("chunkOrder")
+                )
+                try:
+                    chunk_index = int(chunk_index)
+                except Exception:
+                    chunk_index = None
                 conv_data[conv_id]["matches"].append(
                     {
                         "chunk_index": chunk_index,
@@ -2843,6 +3054,8 @@ async def db_unified_search_tool(
                 for conv_id, data in ranked:
                     details = (conv_details or {}).get(conv_id, {})
 
+                    # Return excerpts by default (matched chunks only). Full transcripts are
+                    # accessible via db_context_search(source="feedme", doc_id=...).
                     matches = list(data.get("matches") or [])
                     match_scores: dict[int, float] = {}
                     match_text_by_index: dict[int, str] = {}
@@ -2850,6 +3063,8 @@ async def db_unified_search_tool(
                         if not isinstance(match, dict):
                             continue
                         idx = match.get("chunk_index")
+                        if idx is None:
+                            continue
                         try:
                             idx_int = int(idx)
                         except Exception:
@@ -2864,39 +3079,62 @@ async def db_unified_search_tool(
                         match_scores.keys(),
                         key=lambda i: (-match_scores.get(i, 0.0), i),
                     )
-                    excerpt_indices = sorted(matched_indices[:3])
-                    excerpt_blocks = [
-                        (match_text_by_index.get(idx) or "").strip()
-                        for idx in excerpt_indices
-                        if (match_text_by_index.get(idx) or "").strip()
-                    ]
-                    excerpt_content = "\n\n".join(excerpt_blocks)
-                    excerpt_content = redact_pii(excerpt_content)
 
-                    results.append(
-                        _format_result_with_content_type(
-                            source="feedme",
-                            title=details.get("title", f"Conversation {conv_id}"),
-                            content=excerpt_content,
-                            relevance_score=data["max_similarity"],
-                            metadata={
-                                "id": conv_id,
-                                "created_at": details.get("created_at"),
-                                "folder_id": details.get("folder_id"),
-                                "last_updated": details.get("updated_at"),
-                                "matched_chunk_indices": matched_indices,
-                                "matched_chunks": [
-                                    {
-                                        "chunk_index": idx,
-                                        "similarity": match_scores.get(idx, 0.0),
-                                    }
-                                    for idx in matched_indices
-                                ],
-                                "hydration": "matched_chunks_excerpt",
-                            },
-                            weight=weights.get("feedme", 1.0),
+                    excerpt_parts: list[str] = []
+                    included_indices: list[Any] = []
+                    if matched_indices:
+                        excerpt_indices = sorted(matched_indices[:3])
+                        for idx in excerpt_indices:
+                            chunk_text = (match_text_by_index.get(idx) or "").strip()
+                            if not chunk_text:
+                                continue
+                            chunk_text = _trim_content(redact_pii(chunk_text), max_chars=900)
+                            included_indices.append(idx)
+                            excerpt_parts.append(f"[chunk {idx}] {chunk_text}")
+                    else:
+                        matches.sort(
+                            key=lambda m: float(m.get("similarity") or 0.0),
+                            reverse=True,
                         )
+                        for match in matches[:3]:
+                            chunk_text = str(match.get("content") or "").strip()
+                            if not chunk_text:
+                                continue
+                            chunk_text = _trim_content(redact_pii(chunk_text), max_chars=900)
+                            chunk_idx = match.get("chunk_index")
+                            if chunk_idx is not None:
+                                included_indices.append(chunk_idx)
+                                excerpt_parts.append(f"[chunk {chunk_idx}] {chunk_text}")
+                            else:
+                                excerpt_parts.append(chunk_text)
+
+                    excerpt = "\n\n".join(excerpt_parts).strip()
+                    feedme_result = _format_result_with_content_type(
+                        source="feedme",
+                        title=details.get("title", f"Conversation {conv_id}"),
+                        content=excerpt,
+                        relevance_score=data["max_similarity"],
+                        metadata={
+                            "id": conv_id,
+                            "created_at": details.get("created_at"),
+                            "folder_id": details.get("folder_id"),
+                            "last_updated": details.get("updated_at"),
+                            "matched_chunk_indices": matched_indices,
+                            "matched_chunks": [
+                                {
+                                    "chunk_index": idx,
+                                    "similarity": match_scores.get(idx, 0.0),
+                                }
+                                for idx in matched_indices
+                            ],
+                            "included_chunk_indices": included_indices or None,
+                            "hydration": "matched_chunks_excerpt",
+                            "full_transcript_tool": "db_context_search",
+                        },
+                        weight=weights.get("feedme", 1.0),
                     )
+                    feedme_result["content_type"] = "excerpt"
+                    results.append(feedme_result)
             else:
                 no_results_sources.append("feedme")
         except Exception as exc:
@@ -3276,7 +3514,7 @@ class ImageGenerationInput(BaseModel):
     )
     resolution: str = Field(
         default="2K",
-        description="Resolution of the image. Options: 1K, 2K, 4K",
+        description="Resolution of the image. Options: 1K, 2K (4K requests are downgraded to 2K).",
     )
     model: str = Field(
         default="gemini-2.5-flash-image",
@@ -3286,6 +3524,16 @@ class ImageGenerationInput(BaseModel):
         default=None,
         description="Optional base64-encoded input image for editing mode.",
     )
+
+    @field_validator("resolution")
+    @classmethod
+    def clamp_resolution(cls, value: str) -> str:
+        normalized = (value or "").strip().upper()
+        if normalized == "4K":
+            return "2K"
+        if normalized in {"1K", "2K"}:
+            return normalized
+        return "2K"
 
 
 @tool("generate_image", args_schema=ImageGenerationInput)
@@ -3309,7 +3557,7 @@ async def generate_image_tool(
 
     Returns:
     - success: Whether generation succeeded
-    - image_base64: Base64-encoded image data
+    - image_url: Retrievable URL to the generated image (or image_base64 if storage fails)
     - description: Text description from the model
     - error: Error message if failed
     """
@@ -3372,7 +3620,7 @@ async def generate_image_tool(
 
         # Extract results
         text_output = None
-        image_base64 = None
+        image_bytes = None
         mime_type = "image/png"
 
         candidates = response.candidates or []
@@ -3390,16 +3638,33 @@ async def generate_image_tool(
             if hasattr(part, "text") and part.text:
                 text_output = part.text
             elif hasattr(part, "inline_data") and part.inline_data:
-                import base64 as b64
-
-                image_base64 = b64.b64encode(part.inline_data.data).decode("utf-8")
+                image_bytes = part.inline_data.data
                 mime_type = part.inline_data.mime_type or "image/png"
 
-        if not image_base64:
+        if not image_bytes:
             return {
                 "success": False,
                 "error": "No image generated - model returned text only",
                 "text_response": text_output,
+            }
+
+        try:
+            stored = await store_image_bytes(
+                image_bytes, mime_type=mime_type, path_prefix="generated"
+            )
+        except Exception as exc:
+            import base64 as b64
+
+            logger.warning("generate_image_storage_failed", error=str(exc))
+            image_base64 = b64.b64encode(image_bytes).decode("utf-8")
+            return {
+                "success": True,
+                "image_base64": image_base64,
+                "mime_type": mime_type,
+                "description": text_output,
+                "aspect_ratio": input.aspect_ratio,
+                "resolution": input.resolution,
+                "_large_payload": True,
             }
 
         logger.info(
@@ -3407,18 +3672,19 @@ async def generate_image_tool(
             f"has_image=True has_text={bool(text_output)}"
         )
 
-        # Return image_base64 for handler to emit, but mark for eviction
-        # The ToolResultEvictionMiddleware will strip this from conversation history
-        # to prevent context overflow (each 2K image is ~1-3MB of base64)
         return {
             "success": True,
-            "image_base64": image_base64,  # Handler reads this to emit to frontend
-            "mime_type": mime_type,
+            "image_url": stored.url,
+            "mime_type": stored.mime_type,
+            "width": stored.width,
+            "height": stored.height,
             "description": text_output,
             "aspect_ratio": input.aspect_ratio,
             "resolution": input.resolution,
-            # Marker for middleware/handler to know this result should be compacted
-            "_large_payload": True,
+            "_storage": {
+                "bucket": stored.bucket,
+                "path": stored.path,
+            },
         }
 
     except ImportError as e:
@@ -3453,18 +3719,155 @@ class ArticleInput(BaseModel):
     )
 
 
+_MARKDOWN_IMAGE_RE = re.compile(
+    r'!\[([^\]]*)\]\(([^)\s]+)(?:\s+"([^"]*)")?\)',
+    re.IGNORECASE,
+)
+
+_SUSPECT_IMAGE_URL_FRAGMENTS = (
+    "oaidalleapiprodscus.blob.core.windows.net/private/",
+    "oaidalleapiprodscus.blob.core.windows.net",
+    "/private/org-",
+    "org-abc123",
+    "user-xyz789",
+)
+
+
+def _is_suspect_article_image_url(url: str) -> bool:
+    if not url:
+        return False
+    lowered = url.lower()
+    if any(fragment in lowered for fragment in _SUSPECT_IMAGE_URL_FRAGMENTS):
+        return True
+    return False
+
+
+def _build_generated_image_prompt(
+    *,
+    alt_text: str,
+    title: str,
+    nearby_caption: str | None,
+) -> str:
+    base = alt_text.strip() or "Illustration for the article"
+    caption = (nearby_caption or "").strip()
+    if caption:
+        return (
+            f"{base}\n\n"
+            f"Caption/context: {caption}\n\n"
+            f"Create a high-quality, professional illustration for the article titled: {title}."
+        )
+    return (
+        f"{base}\n\n"
+        f"Create a high-quality, professional illustration for the article titled: {title}."
+    )
+
+
+def _extract_nearby_caption(content: str, start_index: int) -> str | None:
+    window = content[start_index : start_index + 400]
+    match = re.search(r"\*?Figure\s*\d+:[^\n]*", window, re.IGNORECASE)
+    if match:
+        return match.group(0).strip()
+    return None
+
+
+async def _rewrite_suspect_article_images(
+    *,
+    title: str,
+    content: str,
+    runtime: Optional[Any],
+    max_images: int = 6,
+) -> str:
+    matches = list(_MARKDOWN_IMAGE_RE.finditer(content))
+    if not matches:
+        return content
+
+    targets: list[dict[str, Any]] = []
+    for match in matches:
+        alt_text = match.group(1) or "Generated image"
+        url = match.group(2) or ""
+        image_title = match.group(3)
+        if not _is_suspect_article_image_url(url):
+            continue
+        targets.append(
+            {
+                "span": match.span(2),  # url span
+                "alt_text": alt_text,
+                "image_title": image_title,
+            }
+        )
+
+    if not targets:
+        return content
+
+    if len(targets) > max_images:
+        targets = targets[:max_images]
+
+    rewritten = content
+    offset = 0
+
+    for target in targets:
+        url_start, url_end = target["span"]
+        url_start += offset
+        url_end += offset
+
+        caption = _extract_nearby_caption(rewritten, url_end)
+        prompt = _build_generated_image_prompt(
+            alt_text=str(target["alt_text"] or ""),
+            title=title,
+            nearby_caption=caption,
+        )
+
+        result = await generate_image_tool.coroutine(
+            prompt=prompt,
+            aspect_ratio="16:9",
+            resolution="2K",
+            model="gemini-2.5-flash-image",
+            runtime=runtime,
+        )
+        if isinstance(result, dict) and not result.get("success"):
+            error = str(result.get("error") or "").lower()
+            if "text only" in error or "returned text" in error or "no image" in error:
+                result = await generate_image_tool.coroutine(
+                    prompt=prompt,
+                    aspect_ratio="16:9",
+                    resolution="2K",
+                    model="gemini-3-pro-image-preview",
+                    runtime=runtime,
+                )
+
+        if not isinstance(result, dict) or not result.get("success"):
+            logger.warning(
+                "write_article_image_rewrite_failed",
+                title=title,
+                prompt_preview=prompt[:120],
+                error=(result or {}).get("error"),
+            )
+            continue
+
+        image_url = result.get("image_url")
+        if not isinstance(image_url, str) or not image_url:
+            continue
+
+        rewritten = rewritten[:url_start] + image_url + rewritten[url_end:]
+        offset += len(image_url) - (url_end - url_start)
+
+    return rewritten
+
+
 @tool("write_article", args_schema=ArticleInput)
-def write_article_tool(
+async def write_article_tool(
     title: str,
     content: str,
     images: Optional[List[Dict[str, str]]] = None,
     runtime: Optional[Any] = None,
 ) -> Dict[str, Any]:
-    """Write a SINGLE comprehensive article with ALL content in one document.
+    """Write an article/report artifact (Markdown) for the user to view/edit in the UI.
 
-    IMPORTANT: Always create ONE complete article containing ALL sections requested.
-    Do NOT call this tool multiple times for different sections - combine everything
-    into a single, well-structured document.
+    IMPORTANT:
+    - Prefer ONE complete article containing all requested sections.
+    - If the requested output is very long (e.g., ~5k+ words) or you're hitting output limits,
+      split into multiple `write_article` calls titled like: `Title (Part 1/3)`, `Title (Part 2/3)`, etc.
+    - Do NOT dump the full article into the chat transcript; the content should live in artifacts.
 
     Use this tool to create professional articles, reports, or documents that the
     user can view and edit in a dedicated artifact panel.
@@ -3479,6 +3882,12 @@ def write_article_tool(
     - Use `code` for technical terms
     - Use > for blockquotes or callouts
     - Add blank lines between sections for readability
+    - Images MUST be URL-based (never data URIs / base64)
+    - Interleave images near relevant sections (avoid dumping all images at the end)
+    - For web-sourced images, include the source page URL using the image title field:
+      `![Caption](IMAGE_URL "PAGE_URL")`
+    - Also include a short visible attribution line under each image:
+      `Source: [PAGE_URL](PAGE_URL) · Image: [IMAGE_URL](IMAGE_URL)`
 
     Args:
         title: Main title of the article (displayed as header)
@@ -3496,6 +3905,13 @@ def write_article_tool(
         runtime.stream_writer.write(f"Creating article: {title}...")
 
     try:
+        if isinstance(content, str) and _MARKDOWN_IMAGE_RE.search(content):
+            content = await _rewrite_suspect_article_images(
+                title=title,
+                content=content,
+                runtime=runtime,
+            )
+
         # Return the content - the handler will emit the artifact
         # This is consistent with how generate_image_tool works
         logger.info(f"write_article_tool_success title='{title}'")

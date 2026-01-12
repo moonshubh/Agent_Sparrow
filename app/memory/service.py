@@ -14,6 +14,7 @@ from time import perf_counter
 from app.core.logging_config import get_logger
 from app.core.settings import settings
 from app.db.embedding_config import EXPECTED_DIM
+from app.core.config import get_models_config
 from app.memory.observability import memory_metrics
 from app.security.pii_redactor import redact_pii
 
@@ -34,13 +35,11 @@ except ImportError:  # pragma: no cover - handled gracefully when mem0 is missin
 
 logger = get_logger(__name__)
 
-TENANT_ID = getattr(settings, "memory_ui_tenant_id", "mailbot") or "mailbot"
+TENANT_ID = "mailbot"
 DEFAULT_MEMORY_TYPE = "fact"
 DEFAULT_SOURCE = "primary_agent"
 LOG_AGENT_ID = "log_analyst"
 LOG_MEMORY_TYPE = "log_pattern"
-GLOBAL_AGENT_ID = "global_feedback"
-GLOBAL_MEMORY_TYPE = "global_feedback"
 
 
 class MemoryService:
@@ -97,17 +96,8 @@ class MemoryService:
             return []
 
         raw_results = result.get("results", [])
-        approved_results: list[dict[str, Any]] = []
-        for item in raw_results:
-            meta = item.get("metadata") if isinstance(item, dict) else None
-            meta = meta if isinstance(meta, dict) else {}
-            status = str(meta.get("review_status") or "").strip().lower()
-            # Policy: missing review_status is treated as pending_review (exclude).
-            if status != "approved":
-                continue
-            approved_results.append(item)
         formatted: List[Dict[str, Any]] = []
-        for item in approved_results:
+        for item in raw_results:
             formatted.append(
                 {
                     "id": item.get("id"),
@@ -119,9 +109,9 @@ class MemoryService:
         duration_ms = (perf_counter() - start) * 1000.0
         memory_metrics.record_retrieval(
             "primary",
-            hit=bool(approved_results),
+            hit=bool(raw_results),
             duration_ms=duration_ms,
-            result_count=len(approved_results),
+            result_count=len(raw_results),
             error=False,
         )
         return formatted
@@ -131,8 +121,8 @@ class MemoryService:
         *,
         agent_id: str,
         limit: int = 200,
-        filters: dict[str, Any] | None = None,
-    ) -> list[dict[str, Any]]:
+        filters: Optional[Dict[str, Any]] = None,
+    ) -> List[Dict[str, Any]]:
         """
         List mem0 primary-collection memories using metadata filters.
 
@@ -142,37 +132,13 @@ class MemoryService:
             return []
 
         safe_limit = max(1, min(2000, int(limit)))
-        effective_filters = filters if filters is not None else {"tenant_id": TENANT_ID}
-
-        start = perf_counter()
-        try:
-            results = await self._get_by_filters(
-                collection_name=settings.memory_collection_primary,
-                filters=effective_filters,
-                agent_id=agent_id,
-                limit=safe_limit,
-            )
-        except Exception as exc:  # pragma: no cover - network/runtime failures
-            logger.exception("memory_list_primary_error", agent_id=agent_id, error=str(exc))
-            duration_ms = (perf_counter() - start) * 1000.0
-            memory_metrics.record_retrieval(
-                "list_primary",
-                hit=False,
-                duration_ms=duration_ms,
-                result_count=0,
-                error=True,
-            )
-            return []
-
-        duration_ms = (perf_counter() - start) * 1000.0
-        memory_metrics.record_retrieval(
-            "list_primary",
-            hit=bool(results),
-            duration_ms=duration_ms,
-            result_count=len(results),
-            error=False,
+        effective_filters = filters or {"tenant_id": TENANT_ID}
+        return await self._get_by_filters(
+            collection_name=settings.memory_collection_primary,
+            filters=effective_filters,
+            agent_id=agent_id,
+            limit=safe_limit,
         )
-        return results
 
     async def add_facts(
         self,
@@ -222,7 +188,7 @@ class MemoryService:
                 messages,
                 agent_id=agent_id,
                 metadata=metadata,
-                infer=False,
+                infer=settings.memory_llm_inference,
             )
             success = bool(response.get("results"))
             return response
@@ -352,7 +318,7 @@ class MemoryService:
                 messages,
                 agent_id=LOG_AGENT_ID,
                 metadata=metadata_payload,
-                infer=False,
+                infer=settings.memory_llm_inference,
             )
             if existing_id:
                 result["replaced_id"] = existing_id
@@ -370,177 +336,6 @@ class MemoryService:
                 duration_ms=duration_ms,
                 error=error_flag,
             )
-
-    async def add_global_knowledge_entry(
-        self,
-        *,
-        content: str,
-        metadata: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, Any]:
-        """
-        Persist enhanced global knowledge content into the primary memory collection.
-
-        Args:
-            content: Normalized text describing the feedback/correction.
-            metadata: Additional metadata including source_id, tags, etc.
-        """
-        if not self._is_configured():
-            return {"results": []}
-
-        text = redact_pii((content or "").strip())
-        if not text:
-            return {"results": []}
-
-        extra = dict(metadata or {})
-        source_id = extra.get("source_id")
-        existing_id: Optional[str] = None
-        existing_memory: Optional[str] = None
-        if source_id is not None:
-            lookup_start = perf_counter()
-            try:
-                existing = await self._get_by_filters(
-                    collection_name=settings.memory_collection_primary,
-                    filters={"tenant_id": TENANT_ID, "source_id": source_id},
-                    agent_id=GLOBAL_AGENT_ID,
-                    limit=1,
-                )
-            except Exception as exc:  # pragma: no cover
-                logger.warning("memory_global_lookup_failed", error=str(exc), source_id=source_id)
-                duration_ms = (perf_counter() - lookup_start) * 1000.0
-                memory_metrics.record_retrieval(
-                    "global_lookup",
-                    hit=False,
-                    duration_ms=duration_ms,
-                    result_count=0,
-                    error=True,
-                )
-            else:
-                duration_ms = (perf_counter() - lookup_start) * 1000.0
-                memory_metrics.record_retrieval(
-                    "global_lookup",
-                    hit=bool(existing),
-                    duration_ms=duration_ms,
-                    result_count=len(existing or []),
-                    error=False,
-                )
-                if existing:
-                    existing_id = existing[0].get("id")
-                    existing_memory = (existing[0].get("memory") or "").strip()
-                    if existing_memory == text:
-                        memory_metrics.record_write(
-                            "global_knowledge",
-                            success=True,
-                            duration_ms=0.0,
-                            error=False,
-                        )
-                        return {"results": [], "existing_id": existing_id, "unchanged": True}
-
-        metadata_payload = self._build_metadata(
-            agent_id=GLOBAL_AGENT_ID,
-            memory_type=GLOBAL_MEMORY_TYPE,
-            source="global_knowledge",
-            extra=extra,
-        )
-        messages = [{"role": "assistant", "content": text, "name": GLOBAL_AGENT_ID}]
-
-        start = perf_counter()
-        success = False
-        error_flag = False
-        try:
-            client = await self._get_client(settings.memory_collection_primary)
-            if existing_id:
-                try:
-                    await client.delete(existing_id)
-                except Exception as exc:  # pragma: no cover - best effort
-                    logger.warning(
-                        "memory_global_delete_failed",
-                        source_id=source_id,
-                        memory_id=existing_id,
-                        error=str(exc),
-                    )
-            response = await client.add(
-                messages,
-                agent_id=GLOBAL_AGENT_ID,
-                metadata=metadata_payload,
-                infer=False,
-            )
-            success = bool(response.get("results"))
-            if existing_id and success:
-                response.setdefault("replaced_id", existing_id)
-            elif existing_id and not success:
-                # restore flag so callers know we attempted replacement
-                response.setdefault("replaced_id", existing_id)
-            return response
-        except Exception as exc:  # pragma: no cover
-            logger.warning("memory_global_add_failed", error=str(exc))
-            error_flag = True
-            return {"results": [], "error": str(exc)}
-        finally:
-            duration_ms = (perf_counter() - start) * 1000.0
-            memory_metrics.record_write(
-                "global_knowledge",
-                success=success,
-                duration_ms=duration_ms,
-                error=error_flag,
-            )
-
-    async def delete_primary_memory(self, *, memory_id: str) -> bool:
-        """Best-effort delete of a primary-collection memory by mem0 ID."""
-        if not self._is_configured():
-            return False
-
-        mem_id = str(memory_id or "").strip()
-        if not mem_id:
-            return False
-
-        try:
-            client = await self._get_client(settings.memory_collection_primary)
-            await client.delete(mem_id)
-            return True
-        except Exception as exc:  # pragma: no cover - best effort
-            logger.warning(
-                "memory_primary_delete_failed",
-                memory_id=mem_id,
-                error=str(exc)[:180],
-            )
-            return False
-
-    async def delete_primary_memories_by_filters(
-        self,
-        *,
-        agent_id: str,
-        filters: dict[str, Any],
-        limit: int = 25,
-    ) -> list[str]:
-        """Best-effort delete of primary-collection memories matching metadata filters."""
-        if not self._is_configured():
-            return []
-
-        safe_limit = max(1, min(200, int(limit)))
-        try:
-            rows = await self._get_by_filters(
-                collection_name=settings.memory_collection_primary,
-                filters=filters,
-                agent_id=agent_id,
-                limit=safe_limit,
-            )
-        except Exception as exc:  # pragma: no cover
-            logger.warning("memory_primary_delete_lookup_failed", error=str(exc)[:180])
-            return []
-
-        ids: list[str] = []
-        for row in rows or []:
-            mid = row.get("id") if isinstance(row, dict) else None
-            if isinstance(mid, str) and mid.strip():
-                ids.append(mid.strip())
-        if not ids:
-            return []
-
-        deleted: list[str] = []
-        for mid in ids:
-            if await self.delete_primary_memory(memory_id=mid):
-                deleted.append(mid)
-        return deleted
 
     # ---------------------------------------------------------------------
     # Internal helpers
@@ -570,10 +365,12 @@ class MemoryService:
             )
             return False
 
-        if settings.memory_embed_dims != EXPECTED_DIM:
+        config = get_models_config()
+        embedding_cfg = config.internal["embedding"]
+        if (embedding_cfg.embedding_dims or EXPECTED_DIM) != EXPECTED_DIM:
             self._warn_once(
                 "_warned_dim_mismatch",
-                f"Configured memory embedding dims ({settings.memory_embed_dims}) "
+                f"Configured memory embedding dims ({embedding_cfg.embedding_dims}) "
                 f"do not match EXPECTED_DIM ({EXPECTED_DIM}).",
             )
 
@@ -599,29 +396,36 @@ class MemoryService:
             raise RuntimeError("mem0 AsyncMemory is unavailable in the current environment.")
 
         connection = settings.get_memory_connection_string()
+        config = get_models_config()
+        embedding_cfg = config.internal["embedding"]
+        embedding_dims = embedding_cfg.embedding_dims or EXPECTED_DIM
+        embedder_provider = embedding_cfg.provider or "google"
+        mem0_provider = "gemini" if embedder_provider == "google" else embedder_provider
+
         vector_config = VectorStoreConfig(
             provider=settings.memory_backend,
             config={
                 "connection_string": connection,
                 "collection_name": collection_name,
-                "embedding_model_dims": settings.memory_embed_dims,
+                "embedding_model_dims": embedding_dims,
                 "index_method": IndexMethod.IVFFLAT,  # Use IVFFlat to support 3072 dimensions
                 # IVFFlat has no dimension limit, unlike HNSW (max 2000)
             },
         )
         embedder_config = EmbedderConfig(
-            provider=settings.memory_embed_provider,
+            provider=mem0_provider,
             config={
-                "model": settings.memory_embed_model,
+                "model": embedding_cfg.model_id,
                 "api_key": settings.gemini_api_key,
-                "embedding_dims": settings.memory_embed_dims,
-                "output_dimensionality": settings.memory_embed_dims,
+                "embedding_dims": embedding_dims,
+                "output_dimensionality": embedding_dims,
             },
         )
+        coordinator_model = config.coordinators["google"].model_id
         llm_config = LlmConfig(
             provider="gemini",
             config={
-                "model": settings.primary_agent_model,
+                "model": coordinator_model,
                 "api_key": settings.gemini_api_key,
             },
         )

@@ -1,5 +1,5 @@
 """
-Agent wrapper for integrating rate limiting with existing Gemini agents.
+Agent wrapper for integrating bucket-based rate limiting with existing agents.
 
 Provides decorators and wrapper classes to seamlessly add rate limiting
 to existing agent implementations without major code changes.
@@ -10,7 +10,7 @@ import functools
 from typing import Any, Callable, Optional, TypeVar, Dict
 
 from app.core.logging_config import get_logger
-from .gemini_limiter import GeminiRateLimiter
+from .bucket_limiter import BucketRateLimiter
 from .config import RateLimitConfig
 from .exceptions import (
     RateLimitExceededException,
@@ -22,28 +22,28 @@ from .exceptions import (
 F = TypeVar('F', bound=Callable[..., Any])
 
 # Global rate limiter instance
-_global_rate_limiter: Optional[GeminiRateLimiter] = None
+_global_rate_limiter: Optional[BucketRateLimiter] = None
 
 
-def get_rate_limiter() -> GeminiRateLimiter:
+def get_rate_limiter() -> BucketRateLimiter:
     """Get or create the global rate limiter instance."""
     global _global_rate_limiter
     if _global_rate_limiter is None:
         config = RateLimitConfig.from_environment()
-        _global_rate_limiter = GeminiRateLimiter(config)
+        _global_rate_limiter = BucketRateLimiter(config)
     return _global_rate_limiter
 
 
-def rate_limited(model: str, fail_gracefully: bool = False):
+def rate_limited(bucket: str, fail_gracefully: bool = False):
     """
     Decorator to add rate limiting to agent functions.
     
     Args:
-        model: Gemini model name ("gemini-2.5-flash" or "gemini-2.5-pro")
+        bucket: Rate limit bucket name from models.yaml (e.g., "internal.helper")
         fail_gracefully: If True, return None on rate limit instead of raising
         
     Usage:
-        @rate_limited("gemini-2.5-flash")
+        @rate_limited("internal.helper")
         async def my_agent_function(messages):
             # Agent logic here
             return response
@@ -56,26 +56,26 @@ def rate_limited(model: str, fail_gracefully: bool = False):
             
             try:
                 return await limiter.execute_with_protection(
-                    model, func, *args, **kwargs
+                    bucket, func, *args, **kwargs
                 )
             except RateLimitExceededException as e:
-                logger.warning(f"Rate limit exceeded for {model}: {e.message}")
+                logger.warning(f"Rate limit exceeded for {bucket}: {e.message}")
                 if fail_gracefully:
                     return None
                 raise
             except CircuitBreakerOpenException as e:
-                logger.error(f"Circuit breaker open for {model}: {e.message}")
+                logger.error(f"Circuit breaker open for {bucket}: {e.message}")
                 if fail_gracefully:
                     return None
                 raise
             except GeminiServiceUnavailableException as e:
-                logger.error(f"Rate limiting service unavailable for {model}: {e.message}")
+                logger.error(f"Rate limiting service unavailable for {bucket}: {e.message}")
                 if fail_gracefully:
                     # Fail open when rate limiting infrastructure is unavailable (e.g., Redis down).
                     return await func(*args, **kwargs) if asyncio.iscoroutinefunction(func) else func(*args, **kwargs)
                 raise
             except Exception as e:
-                logger.error(f"Rate limiter error for {model}: {e}")
+                logger.error(f"Rate limiter error for {bucket}: {e}")
                 if fail_gracefully:
                     return None
                 raise
@@ -129,24 +129,25 @@ class RateLimitedAgent:
     def __init__(
         self,
         agent: Any,
-        model: str,
+        bucket: str,
         fail_gracefully: bool = False,
-        rate_limiter: Optional[GeminiRateLimiter] = None
+        rate_limiter: Optional[BucketRateLimiter] = None
     ):
         """
         Initialize rate limited agent wrapper.
         
         Args:
             agent: Original agent instance
-            model: Gemini model name
+            bucket: Rate limit bucket name
             fail_gracefully: If True, return errors instead of raising
             rate_limiter: Optional rate limiter instance
         """
         self.agent = agent
-        self.model = model
+        self.bucket = bucket
+        self.model = bucket  # Backward-compatible alias
         self.fail_gracefully = fail_gracefully
         self.rate_limiter = rate_limiter or get_rate_limiter()
-        self.logger = get_logger(f"rate_limited_agent_{model}")
+        self.logger = get_logger(f"rate_limited_agent_{bucket}")
         
         # Preserve original agent attributes
         for attr in dir(agent):
@@ -175,7 +176,7 @@ class RateLimitedAgent:
             # Check if original agent has invoke method
             if hasattr(self.agent, 'invoke'):
                 return await self.rate_limiter.execute_with_protection(
-                    self.model, self.agent.invoke, *args, **kwargs
+                    self.bucket, self.agent.invoke, *args, **kwargs
                 )
             else:
                 raise AttributeError(f"Agent {self.agent} does not have invoke method")
@@ -204,7 +205,7 @@ class RateLimitedAgent:
         
         For sync streaming, we check rate limits synchronously before streaming.
         """
-        self.logger.info(f"rate_limit_wrapper_stream_called model={self.model}")
+        self.logger.info(f"rate_limit_wrapper_stream_called bucket={self.bucket}")
         
         try:
             # Check rate limits synchronously before streaming
@@ -227,25 +228,25 @@ class RateLimitedAgent:
             # Check rate limits before streaming
             # Only run rate check if we have a usable loop (not running)
             if 'loop' in locals():
-                rate_check = loop.run_until_complete(self.rate_limiter.check_and_consume(self.model))
+                rate_check = loop.run_until_complete(self.rate_limiter.check_and_consume(self.bucket))
             else:
                 rate_check = None
             if rate_check is not None and not rate_check.allowed:
-                self.logger.warning(f"Rate limit exceeded for {self.model}")
+                self.logger.warning(f"Rate limit exceeded for {self.bucket}")
                 if self.fail_gracefully:
                     return self._create_error_stream_sync(
                         RateLimitExceededException(
-                            message=f"Rate limit exceeded for {self.model}",
+                            message=f"Rate limit exceeded for {self.bucket}",
                             retry_after=rate_check.retry_after,
                             limits=rate_check.metadata.dict(),
-                            model=self.model
+                            model=self.bucket,
                         )
                     )
                 raise RateLimitExceededException(
-                    message=f"Rate limit exceeded for {self.model}",
+                    message=f"Rate limit exceeded for {self.bucket}",
                     retry_after=rate_check.retry_after,
                     limits=rate_check.metadata.dict(),
-                    model=self.model
+                    model=self.bucket,
                 )
             
             self.logger.info("rate_limit_check_passed proceeding_with_stream")
@@ -257,7 +258,7 @@ class RateLimitedAgent:
         # Stream with circuit breaker protection
         if hasattr(self.agent, 'stream'):
             try:
-                circuit_breaker = self.rate_limiter.circuit_breakers[self.model]
+                circuit_breaker = self.rate_limiter.get_circuit_breaker(self.bucket)
                 return circuit_breaker.call_sync(self.agent.stream, *args, **kwargs)
             except Exception as e:
                 self.logger.error(f"Circuit breaker error in stream: {e}")
@@ -274,22 +275,22 @@ class RateLimitedAgent:
         """
         try:
             # Check rate limits first
-            rate_check = await self.rate_limiter.check_and_consume(self.model)
+            rate_check = await self.rate_limiter.check_and_consume(self.bucket)
             if rate_check is not None and not rate_check.allowed:
                 raise RateLimitExceededException(
-                    message=f"Rate limit exceeded for {self.model}",
+                    message=f"Rate limit exceeded for {self.bucket}",
                     retry_after=rate_check.retry_after,
                     limits=rate_check.metadata.dict(),
-                    model=self.model
+                    model=self.bucket,
                 )
             
             # Stream with circuit breaker protection
             if hasattr(self.agent, 'astream'):
-                circuit_breaker = self.rate_limiter.circuit_breakers[self.model]
+                circuit_breaker = self.rate_limiter.get_circuit_breaker(self.bucket)
                 return await circuit_breaker.call(self.agent.astream, *args, **kwargs)
             elif hasattr(self.agent, 'stream'):
                 # Fallback to sync stream
-                circuit_breaker = self.rate_limiter.circuit_breakers[self.model]
+                circuit_breaker = self.rate_limiter.get_circuit_breaker(self.bucket)
                 return await circuit_breaker.call_sync(self.agent.stream, *args, **kwargs)
             else:
                 raise AttributeError(f"Agent {self.agent} does not have stream method")
@@ -311,7 +312,7 @@ class RateLimitedAgent:
             "error": True,
             "error_type": type(error).__name__,
             "message": str(error),
-            "model": self.model
+            "model": self.bucket
         }
     
     async def _create_error_stream(self, error: Exception):
@@ -332,7 +333,7 @@ class RateLimitedAgent:
     async def health_check(self) -> Dict[str, Any]:
         """Check agent and rate limiter health."""
         health = await self.rate_limiter.health_check()
-        health["agent_model"] = self.model
+        health["agent_bucket"] = self.bucket
         health["fail_gracefully"] = self.fail_gracefully
         return health
 
@@ -347,6 +348,7 @@ class ChatGoogleGenerativeAIWrapper(RateLimitedAgent):
     def __init__(
         self,
         chat_model: Any,
+        bucket: str,
         model_name: str,
         fail_gracefully: bool = False
     ):
@@ -358,7 +360,7 @@ class ChatGoogleGenerativeAIWrapper(RateLimitedAgent):
             model_name: Model name for rate limiting
             fail_gracefully: Graceful failure mode
         """
-        super().__init__(chat_model, model_name, fail_gracefully)
+        super().__init__(chat_model, bucket, fail_gracefully)
         
         # Preserve LangChain-specific attributes
         self.model_name = model_name
@@ -378,13 +380,14 @@ class ChatGoogleGenerativeAIWrapper(RateLimitedAgent):
         return await self._call(messages, **kwargs)
 
 
-def wrap_gemini_agent(agent: Any, model: str, **kwargs) -> RateLimitedAgent:
+def wrap_gemini_agent(agent: Any, bucket: str, model_name: str, **kwargs) -> RateLimitedAgent:
     """
     Factory function to wrap any Gemini agent with rate limiting.
     
     Args:
         agent: Agent instance to wrap
-        model: Gemini model name
+        bucket: Rate limit bucket name
+        model_name: Gemini model name (for metadata)
         **kwargs: Additional arguments for RateLimitedAgent
         
     Returns:
@@ -394,9 +397,9 @@ def wrap_gemini_agent(agent: Any, model: str, **kwargs) -> RateLimitedAgent:
     agent_class_name = agent.__class__.__name__
     
     if agent_class_name == "ChatGoogleGenerativeAI":
-        return ChatGoogleGenerativeAIWrapper(agent, model, **kwargs)
+        return ChatGoogleGenerativeAIWrapper(agent, bucket, model_name, **kwargs)
     else:
-        return RateLimitedAgent(agent, model, **kwargs)
+        return RateLimitedAgent(agent, bucket, **kwargs)
 
 
 async def cleanup_rate_limiter():

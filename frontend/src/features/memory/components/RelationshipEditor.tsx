@@ -11,7 +11,6 @@ import {
   SlidersHorizontal,
   X,
 } from 'lucide-react';
-import { toast } from 'sonner';
 import {
   useAcknowledgeRelationship,
   useEntityRelatedMemories,
@@ -49,19 +48,6 @@ function formatShortId(id: string): string {
 
 type RelationshipEditorTab = 'edit' | 'ai' | 'evidence';
 
-interface RelationshipEditorProps {
-  edge: TreeEdge;
-  nodeById: Map<string, TreeNodeData>;
-  open: boolean;
-  initialRelationshipId?: string | null;
-  initialTab?: RelationshipEditorTab;
-  onClose: () => void;
-  onPreviewChange: (relationshipId: string, request: UpdateRelationshipRequest) => void;
-  onPreviewClear: () => void;
-  onNavigateToEntityId?: (entityId: string) => void;
-  onInspectMemoryId?: (memoryId: string, relationshipId: string) => void;
-}
-
 export function RelationshipEditor({
   edge,
   nodeById,
@@ -73,7 +59,18 @@ export function RelationshipEditor({
   onPreviewClear,
   onNavigateToEntityId,
   onInspectMemoryId,
-}: RelationshipEditorProps) {
+}: {
+  edge: TreeEdge;
+  nodeById: Map<string, TreeNodeData>;
+  open: boolean;
+  initialRelationshipId?: string | null;
+  initialTab?: RelationshipEditorTab;
+  onClose: () => void;
+  onPreviewChange: (relationshipId: string, request: UpdateRelationshipRequest) => void;
+  onPreviewClear: () => void;
+  onNavigateToEntityId?: (entityId: string) => void;
+  onInspectMemoryId?: (memoryId: string, relationshipId: string) => void;
+}) {
   const updateRelationship = useUpdateRelationship();
   const acknowledgeRelationship = useAcknowledgeRelationship();
   const mergeRelationships = useMergeRelationships();
@@ -431,13 +428,8 @@ export function RelationshipEditor({
                             className="relationship-editor__btn relationship-editor__btn--secondary"
                             onClick={async () => {
                               if (!selectedRelationshipId || !draft) return;
-                              try {
-                                await acknowledgeRelationship.mutateAsync(selectedRelationshipId);
-                                handleClose();
-                              } catch (err) {
-                                console.error('Failed to acknowledge relationship', err);
-                                toast.error('Failed to mark relationship as reviewed');
-                              }
+                              await acknowledgeRelationship.mutateAsync(selectedRelationshipId);
+                              handleClose();
                             }}
                             disabled={!selectedRelationshipId || acknowledgeRelationship.isPending || isReviewed}
                             title={isReviewed ? 'Already reviewed' : 'Mark relationship as reviewed'}
@@ -450,16 +442,11 @@ export function RelationshipEditor({
                             className="relationship-editor__btn relationship-editor__btn--primary"
                             onClick={async () => {
                               if (!selectedRelationshipId || !draft) return;
-                              try {
-                                await updateRelationship.mutateAsync({
-                                  relationshipId: selectedRelationshipId,
-                                  request: draft,
-                                });
-                                handleClose();
-                              } catch (err) {
-                                console.error('Failed to update relationship', err);
-                                toast.error('Failed to update relationship');
-                              }
+                              await updateRelationship.mutateAsync({
+                                relationshipId: selectedRelationshipId,
+                                request: draft,
+                              });
+                              handleClose();
                             }}
                             disabled={!canSubmit || updateRelationship.isPending}
                             type="button"
@@ -513,7 +500,6 @@ export function RelationshipEditor({
                                   handleClose();
                                 } catch (err) {
                                   console.error('Failed to merge relationships', err);
-                                  toast.error('Failed to merge relationships');
                                 }
                               }}
                               disabled={!canMerge || mergeRelationships.isPending}

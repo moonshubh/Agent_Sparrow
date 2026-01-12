@@ -140,8 +140,8 @@ class FractionBasedSummarizationMiddleware(SummarizationMiddleware if AGENT_MIDD
         if AGENT_MIDDLEWARE_AVAILABLE:
             super().__init__(
                 model=model,
-                max_tokens_before_summary=max_tokens,
-                messages_to_keep=messages_to_keep,
+                trigger=("tokens", max_tokens),
+                keep=("messages", messages_to_keep),
                 **kwargs,
             )
         else:

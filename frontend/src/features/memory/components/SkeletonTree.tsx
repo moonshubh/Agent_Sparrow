@@ -1,47 +1,39 @@
 'use client';
 
-import { useEffect, useMemo, useRef } from 'react';
+import { useMemo, useRef } from 'react';
 import { useFrame } from '@react-three/fiber';
-import { CatmullRomCurve3, CylinderGeometry, Group, SphereGeometry, TubeGeometry, Vector3 } from 'three';
+import * as THREE from 'three';
 
 export function SkeletonTree() {
   const trunkHeight = 3.2;
-  const groupRef = useRef<Group>(null);
+  const groupRef = useRef<THREE.Group>(null);
 
   const trunkGeometry = useMemo(
-    () => new CylinderGeometry(0.5, 0.68, trunkHeight, 16),
+    () => new THREE.CylinderGeometry(0.5, 0.68, trunkHeight, 16),
     [trunkHeight]
   );
 
   const branches = useMemo(() => {
-    const start = new Vector3(0, trunkHeight * 0.9, 0);
+    const start = new THREE.Vector3(0, trunkHeight * 0.9, 0);
     const endpoints = [
-      new Vector3(3.2, trunkHeight + 2.4, 0.6),
-      new Vector3(-2.8, trunkHeight + 2.1, 1.8),
-      new Vector3(-1.4, trunkHeight + 1.9, -2.6),
-      new Vector3(2.4, trunkHeight + 1.7, -2.2),
+      new THREE.Vector3(3.2, trunkHeight + 2.4, 0.6),
+      new THREE.Vector3(-2.8, trunkHeight + 2.1, 1.8),
+      new THREE.Vector3(-1.4, trunkHeight + 1.9, -2.6),
+      new THREE.Vector3(2.4, trunkHeight + 1.7, -2.2),
     ];
 
     return endpoints.map((end, idx) => {
-      const mid = new Vector3()
+      const mid = new THREE.Vector3()
         .addVectors(start, end)
         .multiplyScalar(0.5);
       mid.y += 0.8 + idx * 0.15;
-      const curve = new CatmullRomCurve3([start, mid, end]);
-      const geometry = new TubeGeometry(curve, 18, 0.09, 8, false);
+      const curve = new THREE.CatmullRomCurve3([start, mid, end]);
+      const geometry = new THREE.TubeGeometry(curve, 18, 0.09, 8, false);
       return { end, geometry };
     });
   }, [trunkHeight]);
 
-  const nodeGeometry = useMemo(() => new SphereGeometry(0.18, 12, 12), []);
-
-  useEffect(() => {
-    return () => {
-      trunkGeometry.dispose();
-      branches.forEach((branch) => branch.geometry.dispose());
-      nodeGeometry.dispose();
-    };
-  }, [branches, nodeGeometry, trunkGeometry]);
+  const nodeGeometry = useMemo(() => new THREE.SphereGeometry(0.18, 12, 12), []);
 
   useFrame((state) => {
     const group = groupRef.current;

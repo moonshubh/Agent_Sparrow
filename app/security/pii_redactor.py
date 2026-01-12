@@ -16,12 +16,8 @@ UUID_PATTERN = re.compile(
     r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b",
     re.IGNORECASE,
 )
-LICENSE_KEY_PATTERN = re.compile(
-    r"\b[a-z0-9]{4,6}(?:-[a-z0-9]{4,6}){2,}\b", re.IGNORECASE
-)
-MIXED_ALNUM_TOKEN_PATTERN = re.compile(
-    r"\b(?=[a-z0-9]{20,}\b)(?=.*[a-z])(?=.*\d)[a-z0-9]+\b", re.IGNORECASE
-)
+LICENSE_KEY_PATTERN = re.compile(r"\b[a-z0-9]{4,6}(?:-[a-z0-9]{4,6}){2,}\b", re.IGNORECASE)
+MIXED_ALNUM_TOKEN_PATTERN = re.compile(r"\b(?=[a-z0-9]{20,}\b)(?=.*[a-z])(?=.*\d)[a-z0-9]+\b", re.IGNORECASE)
 
 
 def contains_pii(text: str) -> bool:
@@ -30,14 +26,6 @@ def contains_pii(text: str) -> bool:
     if not text:
         return False
     return any(pattern.search(text) for pattern in _patterns())
-
-
-def contains_sensitive(text: str) -> bool:
-    """Return True if the string contains PII or sensitive tokens."""
-
-    if not text:
-        return False
-    return any(pattern.search(text) for pattern in _sensitive_patterns())
 
 
 def redact_pii(text: str) -> str:
@@ -99,16 +87,6 @@ def redact_sensitive_from_dict(data: Any) -> Any:
 
 
 def _patterns() -> Iterable[re.Pattern[str]]:
-    return (
-        EMAIL_PATTERN,
-        PHONE_PATTERN,
-        IPV4_PATTERN,
-        IPV6_PATTERN,
-        CREDIT_CARD_PATTERN,
-    )
-
-
-def _sensitive_patterns() -> Iterable[re.Pattern[str]]:
     return (
         EMAIL_PATTERN,
         PHONE_PATTERN,

@@ -43,8 +43,6 @@ LEARNED_ENTRIES_TABLE = "playbook_learned_entries"
 # Sentinel for import failure detection
 _IMPORT_FAILED = object()
 
-_background_tasks: set[asyncio.Task] = set()
-
 # Extraction prompt template
 EXTRACTION_PROMPT = """You are a support resolution analyst. Analyze the following conversation
 between a support agent and a customer to extract a playbook entry that can help resolve
@@ -470,15 +468,21 @@ class PlaybookEnricher:
                                 )
 
                                 embedding = await service.generate_embedding(content)
-                                await service.insert_memory_with_embedding(
-                                    memory_id=entry_id,
-                                    content=content,
-                                    metadata=metadata,
-                                    source_type="auto_extracted",
-                                    agent_id=agent_id,
-                                    tenant_id=tenant_id,
-                                    embedding=embedding,
-                                    review_status="pending_review",
+                                supabase = service._get_supabase()
+                                await supabase._exec(
+                                    lambda: supabase.client.table("memories")
+                                    .insert(
+                                        {
+                                            "id": entry_id,
+                                            "content": content,
+                                            "metadata": metadata,
+                                            "source_type": "auto_extracted",
+                                            "agent_id": agent_id,
+                                            "tenant_id": tenant_id,
+                                            "embedding": embedding,
+                                        }
+                                    )
+                                    .execute()
                                 )
                             except Exception as capture_exc:
                                 logger.debug(
@@ -486,9 +490,7 @@ class PlaybookEnricher:
                                     error=str(capture_exc)[:180],
                                 )
 
-                        task = asyncio.create_task(_capture_memory_ui())
-                        _background_tasks.add(task)
-                        task.add_done_callback(_background_tasks.discard)
+                        asyncio.create_task(_capture_memory_ui())
                 except Exception as exc:
                     logger.debug("memory_ui_capture_playbook_failed", error=str(exc)[:180])
 

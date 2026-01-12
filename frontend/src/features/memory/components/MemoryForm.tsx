@@ -21,7 +21,7 @@ import {
 } from 'lucide-react';
 import { useAddMemory, useUpdateMemory } from '../hooks';
 import type { Memory, SourceType } from '../types';
-import { SourceBadge } from './source-badge';
+import { SourceBadge } from './SourceBadge';
 
 interface MemoryFormProps {
   onClose: () => void;
@@ -330,9 +330,7 @@ export function MemoryForm({ onClose, onSuccess, memory }: MemoryFormProps) {
                 ref={textareaRef}
                 value={content}
                 onChange={(e) => setContent(e.target.value)}
-                placeholder={
-                  'Enter the memory content...\n\nExample: To resolve sync issues with Gmail, clear the OAuth cache by going to Settings > Accounts > Gmail > Reconnect.'
-                }
+                placeholder="Enter the memory content...&#10;&#10;Example: To resolve sync issues with Gmail, clear the OAuth cache by going to Settings > Accounts > Gmail > Reconnect."
                 className="add-memory-textarea add-memory-textarea-main"
                 autoFocus
               />

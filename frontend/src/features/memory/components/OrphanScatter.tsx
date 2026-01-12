@@ -2,7 +2,7 @@
 
 import { Html } from '@react-three/drei';
 import { useMemo, useState, type RefObject } from 'react';
-import { Color, DoubleSide, Euler, PlaneGeometry, Vector3 } from 'three';
+import * as THREE from 'three';
 import { ENTITY_COLORS } from '../types';
 import type { GraphNode, OrphanEntity } from '../types';
 import { hashStringToUint32, mulberry32 } from '../lib/tree3DGeometry';
@@ -25,8 +25,8 @@ function getFreshness(node: GraphNode): 'fresh' | 'stale' {
 }
 
 function mixColor(a: string, b: string, t: number): string {
-  const ca = new Color(a);
-  ca.lerp(new Color(b), Math.min(1, Math.max(0, t)));
+  const ca = new THREE.Color(a);
+  ca.lerp(new THREE.Color(b), Math.min(1, Math.max(0, t)));
   return `#${ca.getHexString()}`;
 }
 
@@ -44,7 +44,7 @@ export function OrphanScatter({
   const [hoveredId, setHoveredId] = useState<string | null>(null);
   const leafTexture = useMemo(() => getLeafTexture(), []);
 
-  const geometry = useMemo(() => new PlaneGeometry(0.7, 0.42, 1, 1), []);
+  const geometry = useMemo(() => new THREE.PlaneGeometry(0.7, 0.42, 1, 1), []);
 
   const placements = useMemo(() => {
     const inner = Math.max(3.2, groundSize * 0.18);
@@ -72,8 +72,8 @@ export function OrphanScatter({
       return {
         id: orphan.id,
         node: orphan.node,
-        position: new Vector3(x, y, z),
-        rotation: new Euler(-Math.PI / 2 + tilt, yaw, 0),
+        position: new THREE.Vector3(x, y, z),
+        rotation: new THREE.Euler(-Math.PI / 2 + tilt, yaw, 0),
         scale,
         color: earthy,
         freshness,
@@ -118,7 +118,7 @@ export function OrphanScatter({
             metalness={0.05}
             emissive={p.color}
             emissiveIntensity={0.08}
-            side={DoubleSide}
+            side={THREE.DoubleSide}
             depthWrite={false}
           />
         </mesh>

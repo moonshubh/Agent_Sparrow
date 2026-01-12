@@ -11,10 +11,12 @@ from __future__ import annotations
 import asyncio
 import threading
 from datetime import datetime, timezone
-from typing import Any, TYPE_CHECKING
+from typing import Any, Dict, List, Optional
 from uuid import UUID
 
 from app.core.logging_config import get_logger
+from app.core.rate_limiting.agent_wrapper import get_rate_limiter
+from app.core.rate_limiting.exceptions import RateLimitExceededException
 from app.core.settings import settings
 from app.db.embedding_config import EXPECTED_DIM, MODEL_NAME
 from app.db.supabase.client import get_supabase_client, SupabaseClient
@@ -22,9 +24,6 @@ from app.memory.title import ensure_memory_title
 from app.security.pii_redactor import redact_pii, redact_pii_from_dict
 
 logger = get_logger(__name__)
-
-if TYPE_CHECKING:
-    from langchain_google_genai.embeddings import GoogleGenerativeAIEmbeddings
 
 
 class MemoryUIService:
@@ -39,13 +38,12 @@ class MemoryUIService:
     MEMORY_SELECT_COLUMNS = (
         "id,content,metadata,source_type,confidence_score,retrieval_count,last_retrieved_at,"
         "feedback_positive,feedback_negative,resolution_success_count,resolution_failure_count,"
-        "review_status,reviewed_by,reviewed_at,"
         "agent_id,tenant_id,created_at,updated_at"
     )
 
     def __init__(self) -> None:
-        self._supabase: SupabaseClient | None = None
-        self._embedding_model: GoogleGenerativeAIEmbeddings | None = None
+        self._supabase: Optional[SupabaseClient] = None
+        self._embedding_model = None
         self._lock = asyncio.Lock()
 
     def _get_supabase(self) -> SupabaseClient:
@@ -54,7 +52,7 @@ class MemoryUIService:
             self._supabase = get_supabase_client()
         return self._supabase
 
-    def _get_embedding_model(self) -> GoogleGenerativeAIEmbeddings:
+    def _get_embedding_model(self):
         """
         Get or initialize the embedding model using LangChain's GoogleGenerativeAIEmbeddings.
         """
@@ -77,7 +75,12 @@ class MemoryUIService:
             logger.error("Failed to initialize Gemini embedding model: %s", exc)
             raise
 
-    async def generate_embedding(self, text: str) -> list[float]:
+    @staticmethod
+    def _estimate_tokens(text: str) -> int:
+        """Estimate tokens for embedding rate limiting (roughly 1 token per 4 chars)."""
+        return max(1, len(text) // 4)
+
+    async def generate_embedding(self, text: str) -> List[float]:
         """
         Generate a 3072-dimensional embedding vector using Google Gemini.
 
@@ -98,6 +101,20 @@ class MemoryUIService:
             model = self._get_embedding_model()
 
         try:
+            token_count = self._estimate_tokens(text)
+            limiter = get_rate_limiter()
+            rate_result = await limiter.check_and_consume(
+                "internal.embedding",
+                token_count=token_count,
+            )
+            if not rate_result.allowed:
+                raise RateLimitExceededException(
+                    message="Embedding rate limit exceeded",
+                    retry_after=rate_result.retry_after,
+                    limits=rate_result.metadata.dict(),
+                    model="internal.embedding",
+                )
+
             loop = asyncio.get_running_loop()
             embedding = await loop.run_in_executor(None, model.embed_query, text)
 
@@ -112,77 +129,14 @@ class MemoryUIService:
             logger.error("Failed to generate embedding: %s", exc)
             raise
 
-    async def insert_memory_with_embedding(
-        self,
-        *,
-        memory_id: UUID | str | None = None,
-        content: str,
-        metadata: dict[str, Any],
-        source_type: str,
-        agent_id: str,
-        tenant_id: str,
-        embedding: list[float],
-        review_status: str | None = None,
-    ) -> dict[str, Any]:
-        """Insert a memory record with a precomputed embedding."""
-        content = (content or "").strip()
-        if not content:
-            raise ValueError("Memory content cannot be empty")
-
-        if not agent_id:
-            raise ValueError("agent_id is required")
-        if not tenant_id:
-            raise ValueError("tenant_id is required")
-
-        if len(embedding) != EXPECTED_DIM:
-            raise ValueError(
-                f"Embedding dimension mismatch: got {len(embedding)}, expected {EXPECTED_DIM}"
-            )
-
-        content = redact_pii(content)
-        metadata = redact_pii_from_dict(metadata or {})
-        metadata = ensure_memory_title(metadata, content=content)
-
-        payload: dict[str, Any] = {
-            "content": content,
-            "metadata": metadata or {},
-            "source_type": source_type or "manual",
-            "agent_id": agent_id,
-            "tenant_id": tenant_id,
-            "embedding": embedding,
-            "created_at": datetime.now(timezone.utc).isoformat(),
-            "updated_at": datetime.now(timezone.utc).isoformat(),
-        }
-        if memory_id is not None:
-            payload["id"] = str(memory_id)
-        if review_status:
-            payload["review_status"] = str(review_status)
-
-        supabase = self._get_supabase()
-        try:
-            response = await supabase._exec(
-                lambda: supabase.client.table("memories").insert(payload).execute()
-            )
-
-            if response.data:
-                memory = response.data[0]
-                logger.info("Created memory with ID: %s", memory.get("id"))
-                return memory
-
-            raise RuntimeError("No data returned from memory creation")
-        except Exception as exc:
-            logger.error("Failed to create memory: %s", exc)
-            raise
-
     async def add_memory(
         self,
         content: str,
-        metadata: dict[str, Any],
+        metadata: Dict[str, Any],
         source_type: str,
         agent_id: str,
         tenant_id: str,
-        review_status: str | None = None,
-    ) -> dict[str, Any]:
+    ) -> Dict[str, Any]:
         """
         Add a new memory with Gemini embedding generation.
 
@@ -216,7 +170,7 @@ class MemoryUIService:
         # Generate embedding
         embedding = await self.generate_embedding(content)
 
-        payload: dict[str, Any] = {
+        payload: Dict[str, Any] = {
             "content": content,
             "metadata": metadata or {},
             "source_type": source_type or "manual",
@@ -226,8 +180,6 @@ class MemoryUIService:
             "created_at": datetime.now(timezone.utc).isoformat(),
             "updated_at": datetime.now(timezone.utc).isoformat(),
         }
-        if review_status:
-            payload["review_status"] = str(review_status)
 
         supabase = self._get_supabase()
         try:
@@ -249,8 +201,8 @@ class MemoryUIService:
         self,
         memory_id: UUID,
         content: str,
-        metadata: dict[str, Any],
-    ) -> dict[str, Any]:
+        metadata: Dict[str, Any],
+    ) -> Dict[str, Any]:
         """
         Update an existing memory, regenerating embedding if content changed.
 
@@ -296,7 +248,7 @@ class MemoryUIService:
         existing_content = (existing_response.data.get("content") or "").strip()
 
         # Build update payload
-        update_payload: dict[str, Any] = {
+        update_payload: Dict[str, Any] = {
             "content": content,
             "metadata": metadata or {},
             "updated_at": datetime.now(timezone.utc).isoformat(),
@@ -326,7 +278,7 @@ class MemoryUIService:
             logger.error("Failed to update memory %s: %s", memory_id_str, exc)
             raise
 
-    async def delete_memory(self, memory_id: UUID) -> dict[str, Any]:
+    async def delete_memory(self, memory_id: UUID) -> Dict[str, Any]:
         """
         Delete a memory from the memories table.
 
@@ -372,10 +324,10 @@ class MemoryUIService:
         memory_id: UUID,
         user_id: UUID,
         feedback_type: str,
-        session_id: str | None = None,
-        ticket_id: str | None = None,
-        notes: str | None = None,
-    ) -> dict[str, Any]:
+        session_id: Optional[str] = None,
+        ticket_id: Optional[str] = None,
+        notes: Optional[str] = None,
+    ) -> Dict[str, Any]:
         """
         Submit feedback for a memory using the record_memory_feedback database function.
 
@@ -392,7 +344,7 @@ class MemoryUIService:
         """
         supabase = self._get_supabase()
 
-        params: dict[str, Any] = {
+        params: Dict[str, Any] = {
             "p_memory_id": str(memory_id),
             "p_user_id": str(user_id),
             "p_feedback_type": feedback_type,
@@ -423,7 +375,7 @@ class MemoryUIService:
         keep_memory_id: UUID,
         reviewer_id: UUID,
         merged_content: str,
-    ) -> dict[str, Any]:
+    ) -> Dict[str, Any]:
         """
         Merge duplicate memories using the merge_duplicate_memories database function.
 
@@ -445,7 +397,7 @@ class MemoryUIService:
         # Generate embedding for merged content
         embedding = await self.generate_embedding(merged_content)
 
-        params: dict[str, Any] = {
+        params: Dict[str, Any] = {
             "p_candidate_id": str(candidate_id),
             "p_keep_memory_id": str(keep_memory_id),
             "p_reviewer_id": str(reviewer_id),
@@ -478,8 +430,8 @@ class MemoryUIService:
         self,
         candidate_id: UUID,
         reviewer_id: UUID,
-        notes: str | None = None,
-    ) -> dict[str, Any]:
+        notes: Optional[str] = None,
+    ) -> Dict[str, Any]:
         """
         Dismiss a duplicate candidate using the dismiss_duplicate_candidate database function.
 
@@ -493,7 +445,7 @@ class MemoryUIService:
         """
         supabase = self._get_supabase()
 
-        params: dict[str, Any] = {
+        params: Dict[str, Any] = {
             "p_candidate_id": str(candidate_id),
             "p_reviewer_id": str(reviewer_id),
             "p_notes": notes,
@@ -511,7 +463,7 @@ class MemoryUIService:
             logger.error("Failed to dismiss duplicate %s: %s", candidate_id, exc)
             raise
 
-    async def get_stats(self) -> dict[str, Any]:
+    async def get_stats(self) -> Dict[str, Any]:
         """
         Get memory statistics using the get_memory_stats database function.
 
@@ -546,7 +498,7 @@ class MemoryUIService:
         """
         supabase = self._get_supabase()
 
-        params: dict[str, Any] = {
+        params: Dict[str, Any] = {
             "p_memory_id": str(memory_id),
         }
 
@@ -572,7 +524,7 @@ class MemoryUIService:
             logger.error("Failed to detect duplicates for memory %s: %s", memory_id, exc)
             raise
 
-    async def get_memory_by_id(self, memory_id: UUID) -> dict[str, Any] | None:
+    async def get_memory_by_id(self, memory_id: UUID) -> Optional[Dict[str, Any]]:
         """
         Retrieve a single memory by its ID.
 
@@ -605,14 +557,13 @@ class MemoryUIService:
 
     async def list_memories(
         self,
-        agent_id: str | None = None,
-        tenant_id: str | None = None,
-        source_type: str | None = None,
-        review_status: str | None = None,
+        agent_id: Optional[str] = None,
+        tenant_id: Optional[str] = None,
+        source_type: Optional[str] = None,
         limit: int = 50,
         offset: int = 0,
         sort_order: str = "desc",
-    ) -> list[dict[str, Any]]:
+    ) -> List[Dict[str, Any]]:
         """
         List memories with optional filters and pagination.
 
@@ -641,8 +592,6 @@ class MemoryUIService:
                 query = query.eq("tenant_id", tenant_id)
             if source_type:
                 query = query.eq("source_type", source_type)
-            if review_status:
-                query = query.eq("review_status", review_status)
 
             query = query.order("created_at", desc=sort_order_norm == "desc").range(
                 offset, offset + limit - 1
@@ -660,11 +609,11 @@ class MemoryUIService:
     async def search_memories(
         self,
         query: str,
-        agent_id: str | None = None,
-        tenant_id: str | None = None,
+        agent_id: Optional[str] = None,
+        tenant_id: Optional[str] = None,
         limit: int = 10,
         similarity_threshold: float = 0.5,
-    ) -> list[dict[str, Any]]:
+    ) -> List[Dict[str, Any]]:
         """
         Search memories using semantic similarity.
 
@@ -693,7 +642,7 @@ class MemoryUIService:
         # Generate embedding for query
         embedding = await self.generate_embedding(query)
 
-        params: dict[str, Any] = {
+        params: Dict[str, Any] = {
             "query_embedding": embedding,
             "match_count": limit,
             "match_threshold": similarity_threshold,
@@ -718,7 +667,7 @@ class MemoryUIService:
 
 
 # Global singleton instance with thread-safe initialization
-_memory_ui_service: MemoryUIService | None = None
+_memory_ui_service: Optional[MemoryUIService] = None
 _memory_ui_service_lock = threading.Lock()
 
 

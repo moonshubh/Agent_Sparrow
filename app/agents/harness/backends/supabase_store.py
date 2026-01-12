@@ -1,7 +1,6 @@
 """Supabase-backed persistent storage following DeepAgents backend protocol.
 
 This backend provides persistent storage for:
-- Global knowledge persistence
 - Cross-session memory
 - Large tool result eviction
 """
@@ -33,7 +32,6 @@ class SupabaseStoreBackend:
     """Supabase-backed persistent storage following DeepAgents backend protocol.
 
     Used for:
-    - Global knowledge persistence
     - Cross-session memory
     - Large tool result eviction
 

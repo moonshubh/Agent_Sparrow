@@ -308,14 +308,14 @@ export function RelationshipAnalysisPanel({
 
     switch (action.kind) {
       case 'update_relationship': {
-        const payloadRelationshipId = action.payload.relationship_id;
+        const relationshipId = action.payload.relationship_id;
         const source_entity_id = action.payload.source_entity_id;
         const target_entity_id = action.payload.target_entity_id;
         const relationship_type = action.payload.relationship_type;
         const weight = action.payload.weight;
 
         if (
-          typeof payloadRelationshipId !== 'string' ||
+          typeof relationshipId !== 'string' ||
           typeof source_entity_id !== 'string' ||
           typeof target_entity_id !== 'string' ||
           !isRelationshipType(relationship_type) ||
@@ -325,7 +325,7 @@ export function RelationshipAnalysisPanel({
         }
 
         await updateRelationship.mutateAsync({
-          relationshipId: payloadRelationshipId,
+          relationshipId,
           request: {
             source_entity_id,
             target_entity_id,
@@ -364,11 +364,11 @@ export function RelationshipAnalysisPanel({
       }
 
       case 'delete_relationship': {
-        const payloadRelationshipId = action.payload.relationship_id;
-        if (typeof payloadRelationshipId !== 'string') {
+        const relationshipId = action.payload.relationship_id;
+        if (typeof relationshipId !== 'string') {
           throw new Error(`Invalid delete_relationship payload for action ${action.id}`);
         }
-        await deleteRelationship.mutateAsync(payloadRelationshipId);
+        await deleteRelationship.mutateAsync(relationshipId);
         return;
       }
 
@@ -429,9 +429,9 @@ export function RelationshipAnalysisPanel({
       }
 
       case 'split_relationship_commit': {
-        const payloadRelationshipId = action.payload.relationship_id;
+        const relationshipId = action.payload.relationship_id;
         const clusters = action.payload.clusters;
-        if (typeof payloadRelationshipId !== 'string' || !Array.isArray(clusters)) {
+        if (typeof relationshipId !== 'string' || !Array.isArray(clusters)) {
           throw new Error(`Invalid split_relationship_commit payload for action ${action.id}`);
         }
 
@@ -471,7 +471,7 @@ export function RelationshipAnalysisPanel({
         }
 
         await splitCommit.mutateAsync({
-          relationshipId: payloadRelationshipId,
+          relationshipId,
           request: { clusters: parsedClusters },
         });
         return;
@@ -529,10 +529,6 @@ export function RelationshipAnalysisPanel({
       appliedActionIdsRef.current.forEach((id) => next.delete(id));
       return next;
     });
-
-    if (appliedActionIdsRef.current.size > 0) {
-      onApplied?.();
-    }
   };
 
   const applySelectedActions = async () => {

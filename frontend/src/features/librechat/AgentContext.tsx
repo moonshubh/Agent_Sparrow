@@ -20,7 +20,6 @@ import {
   extractTodosFromPayload,
   formatIfStructuredLog,
 } from './utils';
-import { uploadImageToSupabase } from '@/services/storage/storage';
 
 /**
  * Serializable artifact data for persistence in message metadata.
@@ -36,7 +35,6 @@ export interface SerializedArtifact {
   index?: number;
   // Image artifact fields
   imageData?: string;
-  imageUrl?: string;
   mimeType?: string;
   altText?: string;
   aspectRatio?: string;
@@ -120,72 +118,76 @@ const stripMarkdownDataUriImages = (text: string): string => {
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 
-const MAX_PERSISTED_ARTIFACT_CHARS = 1_000_000;
-const ARTIFACT_UPLOAD_WAIT_MS = 20_000;
+const truncateText = (value: string, maxChars: number): string =>
+  value.length > maxChars ? `${value.slice(0, maxChars).trimEnd()}...` : value;
 
-const extFromMime = (mimeType: string): string => {
-  const normalized = mimeType.toLowerCase();
-  const map: Record<string, string> = {
-    'image/png': 'png',
-    'image/jpeg': 'jpg',
-    'image/jpg': 'jpg',
-    'image/webp': 'webp',
-    'image/gif': 'gif',
-    'image/svg+xml': 'svg',
-  };
-  return map[normalized] || 'bin';
+type LogAnalysisNoteMetadata = {
+  file_name?: string;
+  internal_notes?: string;
+  confidence?: number;
+  evidence?: string[];
+  recommended_actions?: string[];
+  open_questions?: string[];
+  created_at?: string;
 };
 
-const base64ToFile = (base64: string, mimeType: string, filename: string): File => {
-  const byteCharacters = atob(base64);
-  const byteNumbers = new Array(byteCharacters.length);
-  for (let i = 0; i < byteCharacters.length; i++) {
-    byteNumbers[i] = byteCharacters.charCodeAt(i);
-  }
-  const byteArray = new Uint8Array(byteNumbers);
-  const blob = new Blob([byteArray], { type: mimeType });
-  return new File([blob], filename, { type: mimeType });
-};
+const sanitizeLogAnalysisNotesForMetadata = (
+  raw: Record<string, unknown>
+): Record<string, LogAnalysisNoteMetadata> => {
+  const sanitized: Record<string, LogAnalysisNoteMetadata> = {};
 
-const coerceSessionId = (sessionId?: string | number): number | undefined => {
-  if (typeof sessionId === 'number') return sessionId;
-  if (typeof sessionId === 'string') {
-    const parsed = Number(sessionId);
-    return Number.isFinite(parsed) ? parsed : undefined;
-  }
-  return undefined;
-};
+  for (const [id, note] of Object.entries(raw)) {
+    if (!isRecord(note)) continue;
 
-const waitForUploads = async (uploads: Promise<void>[]) => {
-  if (!uploads.length) return;
-  await Promise.allSettled(
-    uploads.map((upload) => Promise.race([
-      upload,
-      new Promise<void>((resolve) => setTimeout(resolve, ARTIFACT_UPLOAD_WAIT_MS)),
-    ]))
-  );
-};
+    const fileNameValue =
+      typeof note.file_name === 'string'
+        ? note.file_name
+        : typeof note.fileName === 'string'
+          ? note.fileName
+          : '';
 
-const compactArtifactsForPersistence = (artifacts: SerializedArtifact[]): SerializedArtifact[] => {
-  const compacted = artifacts.map((artifact) => {
-    if (artifact.type !== 'image' || !artifact.imageData) {
-      return artifact;
+    const internalNotesValue =
+      typeof note.internal_notes === 'string'
+        ? note.internal_notes
+        : typeof note.internalNotes === 'string'
+          ? note.internalNotes
+          : '';
+
+    const confidenceRaw = note.confidence;
+    const confidence =
+      typeof confidenceRaw === 'number' && Number.isFinite(confidenceRaw)
+        ? confidenceRaw
+        : typeof confidenceRaw === 'string'
+          ? Number(confidenceRaw)
+          : undefined;
+    const confidenceValue =
+      confidence !== undefined && Number.isFinite(confidence) ? confidence : undefined;
+
+    const listOfStrings = (value: unknown, maxItems: number): string[] | undefined => {
+      if (!Array.isArray(value)) return undefined;
+      const items = value
+        .filter((item): item is string => typeof item === 'string')
+        .map((item) => truncateText(item, 600))
+        .slice(0, maxItems);
+      return items.length ? items : undefined;
+    };
+
+    const entry: LogAnalysisNoteMetadata = {
+      file_name: fileNameValue ? truncateText(fileNameValue, 180) : undefined,
+      internal_notes: internalNotesValue ? truncateText(internalNotesValue, 8000) : undefined,
+      confidence: confidenceValue,
+      evidence: listOfStrings(note.evidence, 12),
+      recommended_actions: listOfStrings(note.recommended_actions, 12),
+      open_questions: listOfStrings(note.open_questions, 12),
+      created_at: typeof note.created_at === 'string' ? note.created_at : undefined,
+    };
+
+    if (Object.values(entry).some((v) => v !== undefined)) {
+      sanitized[id] = entry;
     }
-    const { imageData, ...rest } = artifact;
-    return rest;
-  }).filter((artifact) => artifact.type !== 'image' || Boolean(artifact.imageUrl));
-
-  try {
-    const serialized = JSON.stringify({ artifacts: compacted });
-    if (serialized.length <= MAX_PERSISTED_ARTIFACT_CHARS) {
-      return compacted;
-    }
-  } catch {
-    // Fall through to dropping artifacts on serialization failure.
   }
 
-  console.warn('[Artifacts] Skipping artifact persistence due to payload size.');
-  return [];
+  return sanitized;
 };
 
 const isMessageRole = (value: unknown): value is Message['role'] =>
@@ -206,6 +208,30 @@ const safeJsonStringify = (value: unknown): string => {
   } catch {
     return '';
   }
+};
+
+const normalizeUnknownError = (value: unknown): Error => {
+  if (value instanceof Error) return value;
+  if (typeof value === 'string' && value.trim()) return new Error(value.trim());
+
+  if (isRecord(value)) {
+    const message =
+      (typeof value.message === 'string' && value.message.trim()) ||
+      (typeof value.error === 'string' && value.error.trim()) ||
+      (typeof value.detail === 'string' && value.detail.trim()) ||
+      undefined;
+
+    const code = typeof value.code === 'string' && value.code.trim() ? value.code.trim() : undefined;
+    if (message) return new Error(code ? `${message} (${code})` : message);
+
+    const serialized = safeJsonStringify(value);
+    if (serialized && serialized !== '{}') return new Error(serialized);
+  }
+
+  const serialized = safeJsonStringify(value);
+  if (serialized && serialized !== '{}') return new Error(serialized);
+
+  return new Error('Agent run failed');
 };
 
 const getStringFromRecord = (record: Record<string, unknown>, key: string): string | undefined => {
@@ -414,10 +440,32 @@ const stripLargeMetadata = (
   return Object.keys(rest).length > 0 ? rest : undefined;
 };
 
+const stripMetadataForRun = (
+  metadata: Record<string, unknown>
+): Record<string, unknown> | undefined => {
+  if (
+    !('attachments' in metadata) &&
+    !('artifacts' in metadata) &&
+    !('logAnalysisNotes' in metadata) &&
+    !('log_analysis_notes' in metadata)
+  ) {
+    return metadata;
+  }
+
+  const {
+    attachments: _attachments,
+    artifacts: _artifacts,
+    logAnalysisNotes: _logAnalysisNotes,
+    log_analysis_notes: _logAnalysisNotesSnake,
+    ...rest
+  } = metadata;
+  return Object.keys(rest).length > 0 ? rest : undefined;
+};
+
 const sanitizeMessagesForRun = (currentMessages: Message[]): Message[] =>
   currentMessages.map((message) => {
     if (!isRecord(message.metadata)) return message;
-    const sanitizedMetadata = stripLargeMetadata(message.metadata);
+    const sanitizedMetadata = stripMetadataForRun(message.metadata);
     if (sanitizedMetadata === message.metadata) return message;
     if (!sanitizedMetadata) {
       return { ...message, metadata: undefined };
@@ -729,20 +777,7 @@ export function AgentProvider({
   const persistedMessageIdRef = useRef<Record<string, string>>({});
   // Track artifacts created during the current run for persistence
   const pendingArtifactsRef = useRef<SerializedArtifact[]>([]);
-  const pendingArtifactUploadsRef = useRef<Record<string, Promise<void>>>({});
-
-  const updatePendingArtifact = (artifactId: string, updates: Partial<SerializedArtifact>) => {
-    pendingArtifactsRef.current = pendingArtifactsRef.current.map((artifact) =>
-      artifact.id === artifactId ? { ...artifact, ...updates } : artifact
-    );
-  };
-
-  const trackArtifactUpload = (artifactId: string, uploadPromise: Promise<void>) => {
-    pendingArtifactUploadsRef.current[artifactId] = uploadPromise;
-    uploadPromise.finally(() => {
-      delete pendingArtifactUploadsRef.current[artifactId];
-    });
-  };
+  const pendingLogAnalysisNotesRef = useRef<Record<string, unknown>>({});
   const sendMessage = useCallback(async (content: string, attachments?: AttachmentInput[]) => {
     if (!agent || isStreaming) return;
 
@@ -759,7 +794,7 @@ export function AgentProvider({
     assistantPersistedRef.current = false;
     lastRunUserMessageIdRef.current = null;
     pendingArtifactsRef.current = [];
-    pendingArtifactUploadsRef.current = {};
+    pendingLogAnalysisNotesRef.current = {};
 
     try {
       // Create abort controller for this request
@@ -791,11 +826,10 @@ export function AgentProvider({
         }));
       }
 
-      setMessages((prev) => {
-        const next = [...prev, userMessage];
-        messagesRef.current = next;
-        return next;
-      });
+      // Ensure messagesRef is updated synchronously before any streaming deltas arrive.
+      const nextUserMessages = [...messagesRef.current, userMessage];
+      messagesRef.current = nextUserMessages;
+      setMessages(nextUserMessages);
 
       // Add user message to agent's message list
       agent.addMessage(userMessage);
@@ -1056,15 +1090,26 @@ export function AgentProvider({
                     // Fall back to the last assistant we already showed (e.g., from streaming buffer)
                     const lastAssistantIdx = findLastIndex(messagesRef.current, (m) => m.role === 'assistant');
                     if (lastAssistantIdx >= 0) {
-                      nextMessages = [...nextMessages, messagesRef.current[lastAssistantIdx]];
+                      nextMessages = [
+                        ...nextMessages,
+                        { ...messagesRef.current[lastAssistantIdx], id: crypto.randomUUID() },
+                      ];
                     }
                   }
                 }
               }
 
-              const uiLastMessage = messagesRef.current[messagesRef.current.length - 1];
+              const runUserMessageId = lastRunUserMessageIdRef.current;
+              const uiRunUserIndex = runUserMessageId
+                ? findLastIndex(messagesRef.current, (m) => m.id === runUserMessageId)
+                : -1;
+              const uiLastIndex = messagesRef.current.length - 1;
+              const uiLastMessage = uiLastIndex >= 0 ? messagesRef.current[uiLastIndex] : undefined;
               const uiLastAssistant =
-                uiLastMessage && uiLastMessage.role === 'assistant' && uiLastMessage.content.trim()
+                uiLastMessage &&
+                uiLastMessage.role === 'assistant' &&
+                uiLastMessage.content.trim() &&
+                (uiRunUserIndex < 0 || uiLastIndex > uiRunUserIndex)
                   ? uiLastMessage
                   : null;
 
@@ -1090,6 +1135,7 @@ export function AgentProvider({
                       ...nextMessages,
                       {
                         ...uiLastAssistant,
+                        id: crypto.randomUUID(),
                         content: uiText,
                       },
                     ];
@@ -1204,24 +1250,45 @@ export function AgentProvider({
                   const nextTodos = normalizeTodoItems(maybeAgentEvent.value.todos);
                   console.debug('[AG-UI] Todos update:', nextTodos.length, 'items');
                   setTodos(nextTodos);
+                } else if (maybeAgentEvent.name === 'genui_state_update') {
+                  const value = maybeAgentEvent.value;
+                  const notes = isRecord(value) ? value.logAnalysisNotes : undefined;
+                  if (isRecord(notes)) {
+                    const sanitizedNotes = sanitizeLogAnalysisNotesForMetadata(notes);
+                    pendingLogAnalysisNotesRef.current = {
+                      ...pendingLogAnalysisNotesRef.current,
+                      ...sanitizedNotes,
+                    };
+                  }
                 } else if (maybeAgentEvent.name === 'image_artifact') {
                   const payload = maybeAgentEvent.value;
+                  const imageUrl = typeof payload?.imageUrl === 'string' ? payload.imageUrl : '';
+                  const imageData = typeof payload?.imageData === 'string' ? payload.imageData : '';
+
                   // Log summary only (avoid logging large base64 imageData)
-                  console.debug('[AG-UI] Image artifact event:', payload?.title, 'imageData length:', payload?.imageData?.length);
-                  if (payload?.imageData) {
-                    const mimeType = payload.mimeType || 'image/png';
+                  console.debug(
+                    '[AG-UI] Image artifact event:',
+                    payload?.title,
+                    'hasUrl:',
+                    Boolean(imageUrl),
+                    'imageData length:',
+                    imageData?.length
+                  );
+
+                  const hasRenderableImage = Boolean(imageUrl || imageData);
+                  if (hasRenderableImage) {
                     const store = getGlobalArtifactStore();
+                    const content = imageUrl || payload.content || '';
                     if (store) {
                       const state = store.getState();
                       state.addArtifact({
                         id: payload.id,
                         type: 'image',
                         title: payload.title || 'Generated Image',
-                        content: payload.content || '',
+                        content,
                         messageId: payload.messageId,
-                        imageData: payload.imageData,
-                        imageUrl: payload.imageUrl,
-                        mimeType,
+                        imageData: imageData || undefined,
+                        mimeType: payload.mimeType || 'image/png',
                         altText: payload.altText,
                         aspectRatio: payload.aspectRatio,
                         resolution: payload.resolution,
@@ -1234,42 +1301,13 @@ export function AgentProvider({
                       id: payload.id,
                       type: 'image',
                       title: payload.title || 'Generated Image',
-                      content: payload.content || '',
-                      imageData: payload.imageData,
-                      imageUrl: payload.imageUrl,
-                      mimeType,
+                      content,
+                      imageData: imageData || undefined,
+                      mimeType: payload.mimeType || 'image/png',
                       altText: payload.altText,
                       aspectRatio: payload.aspectRatio,
                       resolution: payload.resolution,
                     });
-
-                    if (!pendingArtifactUploadsRef.current[payload.id]) {
-                      const uploadPromise = (async () => {
-                        try {
-                          const extension = extFromMime(mimeType);
-                          const filename = `${payload.id}.${extension}`;
-                          const file = base64ToFile(payload.imageData, mimeType, filename);
-                          const imageUrl = await uploadImageToSupabase(
-                            file,
-                            coerceSessionId(sessionId)
-                          );
-                          if (!imageUrl) return;
-
-                          updatePendingArtifact(payload.id, { imageUrl });
-
-                          if (store) {
-                            const state = store.getState();
-                            const existing = state.getArtifact(payload.id);
-                            if (existing) {
-                              state.addArtifact({ ...existing, imageUrl });
-                            }
-                          }
-                        } catch (err) {
-                          console.error('[Artifacts] Failed to upload image artifact:', err);
-                        }
-                      })();
-                      trackArtifactUpload(payload.id, uploadPromise);
-                    }
                   }
                 }
                 return undefined;
@@ -1392,8 +1430,9 @@ export function AgentProvider({
 
             // Handle errors
             onRunFailed: ({ error: runError }: { error: unknown }) => {
-              console.error('[AG-UI] Run failed:', runError);
-              setError(runError instanceof Error ? runError : new Error('Agent run failed'));
+              const normalized = normalizeUnknownError(runError);
+              console.error('[AG-UI] Run failed:', normalized.message, runError);
+              setError(normalized);
             },
           },
         );
@@ -1429,11 +1468,19 @@ export function AgentProvider({
 
           const candidateIndex = findLastIndex(
             currentMessages,
-            (msg) => msg.role === 'assistant' && msg.content.trim().length > 0,
+            (msg) => msg.role === 'assistant',
           );
 
           // Early exit conditions - use nested if instead of return to avoid masking exceptions
-          const shouldPersist = runUserIndex >= 0 && candidateIndex > runUserIndex;
+          const hasPendingArtifacts = pendingArtifactsRef.current.length > 0;
+          const hasPendingLogNotes = Object.keys(pendingLogAnalysisNotesRef.current).length > 0;
+          const hasCandidateAssistant = candidateIndex > runUserIndex;
+          const candidateHasContent =
+            candidateIndex >= 0 && currentMessages[candidateIndex]?.content.trim().length > 0;
+          const shouldPersist =
+            runUserIndex >= 0 &&
+            hasCandidateAssistant &&
+            (candidateHasContent || hasPendingArtifacts || hasPendingLogNotes);
 
           // Only continue with persistence if conditions are met
           if (shouldPersist && candidateIndex >= 0) {
@@ -1446,18 +1493,54 @@ export function AgentProvider({
 
             // Only persist if we've advanced beyond the last successfully persisted assistant message.
             if (candidateIndex > lastPersistedIndex) {
-              const pendingUploads = Object.values(pendingArtifactUploadsRef.current);
-              if (pendingUploads.length > 0) {
-                await waitForUploads(pendingUploads);
-              }
               const artifacts = pendingArtifactsRef.current.length > 0
-                ? compactArtifactsForPersistence(pendingArtifactsRef.current)
+                ? pendingArtifactsRef.current
                 : undefined;
-              const mergedMetadata = artifacts && artifacts.length > 0
+              const contentToPersist = (() => {
+                const trimmed = candidate.content.trim();
+                if (trimmed && !looksLikeJsonPayload(trimmed)) return trimmed;
+
+                if (hasPendingArtifacts && artifacts) {
+                  const titles = artifacts
+                    .map((artifact) => artifact.title)
+                    .filter((title): title is string => Boolean(title && title.trim()));
+                  if (titles.length === 1) return `Created artifact: ${titles[0].trim()}.`;
+                  if (titles.length > 1) return `Created ${titles.length} artifacts: ${titles.map((t) => t.trim()).join(', ')}.`;
+                  return `Created ${artifacts.length} artifact${artifacts.length === 1 ? '' : 's'}.`;
+                }
+
+                if (hasPendingLogNotes) {
+                  return 'Log analysis complete. Open Technical details for per-file diagnostics.';
+                }
+
+                return trimmed ? 'Response generated.' : '';
+              })();
+              const mergedMetadata = artifacts
                 ? { ...(candidate.metadata ?? {}), artifacts }
                 : candidate.metadata;
+              const logNotes = pendingLogAnalysisNotesRef.current;
+              const logNotesCount = Object.keys(logNotes).length;
+              const withLogNotes =
+                logNotesCount > 0
+                  ? { ...(mergedMetadata ?? {}), logAnalysisNotes: logNotes }
+                  : mergedMetadata;
               const metadataToPersist =
-                mergedMetadata && Object.keys(mergedMetadata).length ? mergedMetadata : undefined;
+                withLogNotes && Object.keys(withLogNotes).length ? withLogNotes : undefined;
+
+              if (
+                (metadataToPersist && metadataToPersist !== candidate.metadata) ||
+                (contentToPersist && contentToPersist !== candidate.content)
+              ) {
+                setMessages((prev) => {
+                  const next = prev.map((msg) =>
+                    msg.id === candidate.id
+                      ? { ...msg, content: contentToPersist || msg.content, metadata: metadataToPersist }
+                      : msg
+                  );
+                  messagesRef.current = next;
+                  return next;
+                });
+              }
 
               assistantPersistedRef.current = true;
               const agentType = getPersistedAgentTypeFromState(agent.state);
@@ -1469,7 +1552,7 @@ export function AgentProvider({
 
             sessionsAPI.postMessage(sessionId, {
               message_type: 'assistant',
-              content: candidate.content,
+              content: contentToPersist || candidate.content,
               agent_type: agentType,
               metadata: metadataToPersist,
             }).then((record) => {

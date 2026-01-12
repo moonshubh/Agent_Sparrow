@@ -22,7 +22,13 @@ from bs4 import BeautifulSoup
 from google.api_core.exceptions import ResourceExhausted, InvalidArgument
 
 from app.core.settings import settings
-from app.core.config import get_registry
+from app.core.config import get_models_config
+from app.core.rate_limiting.agent_wrapper import get_rate_limiter
+from app.core.rate_limiting.exceptions import (
+    CircuitBreakerOpenException,
+    GeminiServiceUnavailableException,
+    RateLimitExceededException,
+)
 from app.feedme.schemas import ProcessingStatus, IssueType, ResolutionType
 
 logger = logging.getLogger(__name__)
@@ -30,9 +36,19 @@ logger = logging.getLogger(__name__)
 # HTML parsing functionality removed - PDF and manual text processing only
 
 
+def _get_feedme_rate_limits() -> tuple[int, int, int]:
+    config = get_models_config()
+    feedme_cfg = config.internal["feedme"]
+    rpm = feedme_cfg.rate_limits.rpm
+    rpd = feedme_cfg.rate_limits.rpd
+    tpm = feedme_cfg.rate_limits.tpm or (feedme_cfg.context_window * rpm)
+    return tpm, rpm, rpd
+
+
 def _get_feedme_model_name() -> str:
-    """Get FeedMe model name from registry."""
-    return get_registry().feedme.id
+    """Get FeedMe model name from models config."""
+    config = get_models_config()
+    return config.internal["feedme"].model_id
 
 
 @dataclass
@@ -47,13 +63,13 @@ class ExtractionConfig:
     
     # Intelligent rate limiting for Gemini free tier
     max_tokens_per_minute: int = field(
-        default_factory=lambda: getattr(settings, "feedme_max_tokens_per_minute", 250000)
+        default_factory=lambda: _get_feedme_rate_limits()[0]
     )
     max_requests_per_minute: int = field(
-        default_factory=lambda: getattr(settings, "feedme_rate_limit_per_minute", 15)
+        default_factory=lambda: _get_feedme_rate_limits()[1]
     )
     max_requests_per_day: int = field(
-        default_factory=lambda: getattr(settings, "feedme_requests_per_day_limit", 1000)
+        default_factory=lambda: _get_feedme_rate_limits()[2]
     )
     max_tokens_per_chunk: int = 8000    # Max tokens per single request
     chunk_overlap_tokens: int = 500     # Overlap between chunks for context
@@ -245,10 +261,11 @@ class GeminiExtractionEngine:
         self.config = config or ExtractionConfig()
         self.api_key = api_key or settings.gemini_api_key
         self.rate_limiter = RateLimitTracker(self.config)
+        self.bucket_limiter = get_rate_limiter()
 
         if not self.config.model_name:
-            # Fall back to configured default if the supplied config left the model blank
-            self.config.model_name = getattr(settings, "feedme_model_name", "gemini-2.5-flash-lite-preview-09-2025")
+            config = get_models_config()
+            self.config.model_name = config.internal["feedme"].model_id
 
         if not self.api_key:
             raise ValueError("Google AI API key is required for extraction engine")
@@ -434,6 +451,11 @@ HTML Content:
                 await self.rate_limiter.wait_for_rate_limit(delay_needed)
             
             try:
+                if self.bucket_limiter:
+                    await self.bucket_limiter.check_and_consume(
+                        "internal.feedme",
+                        token_count=estimated_tokens,
+                    )
                 # Make the API request
                 response = await self.model.generate_content_async(prompt)
                 
@@ -443,6 +465,9 @@ HTML Content:
                 
                 return response
                 
+            except (RateLimitExceededException, CircuitBreakerOpenException, GeminiServiceUnavailableException):
+                logger.warning("FeedMe bucket protection triggered; falling back")
+                return None
             except ResourceExhausted as e:
                 # More robust rate limit error detection
                 is_rate_limit_error = False

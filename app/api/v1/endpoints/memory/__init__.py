@@ -29,7 +29,7 @@ Endpoints:
 
 Usage:
     from app.api.v1.endpoints.memory import router
-    app.include_router(router, prefix="/api/v1")
+    app.include_router(router, prefix="/api/v1/memory")
 """
 
 from fastapi import APIRouter

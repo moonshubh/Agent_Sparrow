@@ -58,9 +58,6 @@ def derive_memory_title(content: str, *, max_length: int = 80) -> str:
     cut = trimmed.rfind(" ")
     if cut >= max(12, max_length - 24):
         trimmed = trimmed[:cut].rstrip()
-    else:
-        # Ensure room for ellipsis within max_length.
-        trimmed = trimmed[: max_length - 1].rstrip()
     return f"{trimmed}…"
 
 

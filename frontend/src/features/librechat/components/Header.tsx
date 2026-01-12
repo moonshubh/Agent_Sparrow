@@ -36,29 +36,18 @@ interface ProviderInfo {
 const FALLBACK_PROVIDERS: ProviderInfo[] = [
   {
     id: 'google',
-    name: 'Gemini',
+    name: 'Google',
     icon: '/icons/google.svg',
     models: [
       { id: 'gemini-3-flash-preview', name: 'Gemini 3.0 Flash' },
-      { id: 'gemini-2.5-pro', name: 'Gemini 2.5 Pro' },
-      { id: 'gemini-3-pro-preview', name: 'Gemini 3.0 Pro' },
     ],
   },
   {
     id: 'xai',
-    name: 'Grok',
+    name: 'xAI',
     icon: '/icons/xai.svg',
     models: [
       { id: 'grok-4-1-fast-reasoning', name: 'Grok 4.1 Fast' },
-    ],
-  },
-  {
-    id: 'openrouter',
-    name: 'OpenRouter',
-    icon: '/icons/openrouter.svg',
-    models: [
-      { id: 'x-ai/grok-4.1-fast', name: 'Grok 4.1 Fast' },
-      { id: 'minimax/minimax-m2.1', name: 'MiniMax M2.1' },
     ],
   },
 ];
@@ -110,13 +99,19 @@ export function Header({ onToggleSidebar, sidebarOpen }: HeaderProps) {
     void (async () => {
       try {
         const config = await modelsAPI.getConfig();
-        const providerOrder: ProviderId[] = ['google', 'xai', 'openrouter'];
+        const providerOrder: ProviderId[] = ['google', 'xai'];
+        const allowedModelsByProvider: Record<ProviderId, ReadonlySet<string>> = {
+          google: new Set(['gemini-3-flash-preview']),
+          xai: new Set(['grok-4-1-fast-reasoning']),
+          openrouter: new Set(),
+        };
 
         const nextProviders: ProviderInfo[] = providerOrder
           .filter((id) => Boolean(config.available_providers[id]))
           .map((id) => {
             const models = Object.entries(config.models)
               .filter(([, info]) => info.provider === id)
+              .filter(([modelId]) => allowedModelsByProvider[id].has(modelId))
               .sort((a, b) => {
                 const tierA = TIER_ORDER[a[1].tier];
                 const tierB = TIER_ORDER[b[1].tier];

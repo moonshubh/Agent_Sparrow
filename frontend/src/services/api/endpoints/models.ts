@@ -46,8 +46,8 @@ const FALLBACK_DISPLAY_NAMES: Record<string, string> = {
 
 // Human-readable provider labels
 export const PROVIDER_LABELS: Record<Provider, string> = {
-  google: 'Gemini',
-  xai: 'Grok',
+  google: 'Google',
+  xai: 'xAI',
   openrouter: 'OpenRouter',
 }
 

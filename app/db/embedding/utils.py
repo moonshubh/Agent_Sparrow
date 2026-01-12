@@ -68,10 +68,7 @@ load_dotenv(PROJECT_ROOT / '.env')
 
 # --- Configuration ---
 GEMINI_API_KEY = settings.gemini_api_key
-_cfg_name = settings.gemini_embed_model or EMB_MODEL_NAME_SOT
-if _cfg_name != EMB_MODEL_NAME_SOT:
-    raise ValueError(f"Embedding model must be '{EMB_MODEL_NAME_SOT}' but got '{_cfg_name}'")
-EMBEDDING_MODEL_NAME = _cfg_name
+EMBEDDING_MODEL_NAME = EMB_MODEL_NAME_SOT
 
 # --- Helpers ---
 

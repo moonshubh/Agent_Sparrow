@@ -22,6 +22,8 @@ import {
   ZoomIn,
   ZoomOut,
 } from 'lucide-react';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import {
   useAcknowledgeEntity,
   useEntityRelatedMemories,
@@ -35,31 +37,15 @@ import type { EntityType, GraphNode, Memory, RelationshipType, TreeEdge } from '
 import { buildRadialTree } from '../lib/treeTransform';
 import { isMemoryEdited } from '../lib/memoryFlags';
 import { ConfidenceBadge } from './ConfidenceBadge';
-import { SourceBadge } from './source-badge';
+import { MemoryForm } from './MemoryForm';
+import MemoryTree3D from './MemoryTree3D';
+import { SourceBadge } from './SourceBadge';
 import { OrphanSidebar } from './OrphanSidebar';
-import { ChildrenPopover } from './children-popover';
+import { ChildrenPopover } from './ChildrenPopover';
 import { type TreeTransformResult } from '../types';
+import { RelationshipEditor } from './RelationshipEditor';
 
 const MemoryTableFallback = React.lazy(() => import('./MemoryTable'));
-const MemoryForm = React.lazy(() =>
-  import('./MemoryForm').then((module) => ({ default: module.MemoryForm }))
-);
-const RelationshipEditor = React.lazy(() =>
-  import('./RelationshipEditor').then((module) => ({ default: module.RelationshipEditor }))
-);
-const MemoryMarkdown = React.lazy(() => import('./MemoryMarkdown'));
-const loadMemoryTree3D = () => import('./MemoryTree3D');
-const MemoryTree3D = React.lazy(loadMemoryTree3D);
-
-const MAX_CHILDREN_VISIBLE = 15;
-const MAX_DEPTH = 6;
-
-interface RelationshipPreviewOverride {
-  source: string;
-  target: string;
-  relationshipType: RelationshipType;
-  weight: number;
-}
 
 interface MemoryGraphProps {
   entityFilter?: readonly EntityType[];
@@ -87,7 +73,7 @@ export default function MemoryGraph({
   onPendingRelationshipOpenHandled,
 }: MemoryGraphProps) {
   const containerRef = useRef<HTMLDivElement>(null);
-  const htmlPortalRef = useRef<HTMLDivElement>(null!);
+  const htmlPortalRef = useRef<HTMLDivElement>(null as unknown as HTMLDivElement);
   const particleControlsRef = useRef<{
     zoomIn: () => void;
     zoomOut: () => void;
@@ -95,33 +81,9 @@ export default function MemoryGraph({
   } | null>(null);
   const nodeDetailDragControls = useDragControls();
   const [inspectedMemoryId, setInspectedMemoryId] = useState<string | null>(null);
-  useEffect(() => {
-    if (typeof window === 'undefined') return undefined;
-    let cancelled = false;
-    const preload = () => {
-      if (cancelled) return;
-      void loadMemoryTree3D();
-    };
 
-    const win = window as Window & {
-      requestIdleCallback?: (callback: () => void, options?: { timeout: number }) => number;
-      cancelIdleCallback?: (handle: number) => void;
-    };
-
-    if (win.requestIdleCallback) {
-      const idleId = win.requestIdleCallback(preload, { timeout: 1200 });
-      return () => {
-        cancelled = true;
-        win.cancelIdleCallback?.(idleId);
-      };
-    }
-
-    const timeoutId = window.setTimeout(preload, 500);
-    return () => {
-      cancelled = true;
-      window.clearTimeout(timeoutId);
-    };
-  }, []);
+  const MAX_CHILDREN_VISIBLE = 15;
+  const MAX_DEPTH = 6;
 
   const treeState = useTreeState();
   const acknowledgeEntity = useAcknowledgeEntity();
@@ -146,6 +108,13 @@ export default function MemoryGraph({
     action: 'expand' | 'collapse';
     at: number;
   } | null>(null);
+
+  type RelationshipPreviewOverride = {
+    source: string;
+    target: string;
+    relationshipType: RelationshipType;
+    weight: number;
+  };
 
   const [relationshipEditorEdge, setRelationshipEditorEdge] = useState<TreeEdge | null>(null);
   const [relationshipEditorSeed, setRelationshipEditorSeed] = useState<
@@ -173,7 +142,9 @@ export default function MemoryGraph({
     filterEntityTypes.length > 0 && selectedEntityCount === filterEntityTypes.length;
 
   // Fetch graph data with polling
-  const { data, isLoading, error, refetch } = useMemoryGraph();
+  const { data, isLoading, error, refetch } = useMemoryGraph({
+    pollInterval: 30000,
+  });
 
   const webglAvailable = useMemo(() => {
     if (typeof window === 'undefined') return true;
@@ -221,7 +192,7 @@ export default function MemoryGraph({
       rootId: treeState.rootNodeId ?? undefined,
       maxDepth: MAX_DEPTH,
     });
-  }, [treeState.rootNodeId, visualData]);
+  }, [MAX_DEPTH, treeState.rootNodeId, visualData]);
 
   const searchMatchIds = useMemo(() => {
     if (!treeResult) return [];
@@ -438,7 +409,6 @@ export default function MemoryGraph({
 
       if (event.key.toLowerCase() === 'r') {
         if (isEditableTarget(event.target)) return;
-        if (event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) return;
         event.preventDefault();
         resetCurrentView();
       }
@@ -509,56 +479,47 @@ export default function MemoryGraph({
       )}
 
       {/* 3D Tree View */}
-      <React.Suspense
-        fallback={
-          <div className="memory-graph-loading memory-graph-loading--transparent">
-            <div className="memory-loading-spinner" />
-            <p>Loading 3D view...</p>
-          </div>
-        }
-      >
-        <MemoryTree3D
-          tree={treeResult}
-          selectedNodeId={resolvedSelectedNode?.id ?? null}
-          viewMode={treeState.viewMode}
-          showAllLabels={treeState.showAllLabels}
-          expandedNodeIdSet={treeState.expandedNodeIdSet}
-          maxChildrenVisible={MAX_CHILDREN_VISIBLE}
-          entityTypeFilter={entityTypeFilterSet}
-          searchMatchIds={searchMatchIds}
-          activeSearchMatchId={activeSearchMatchId}
-          initialCameraState={treeState.initialCamera}
-          onCameraStateChange={handleCameraStateChange}
-          onBackgroundClick={() => {
-            setSelectedNodeId(null);
-            setNodePanelView('details');
-            setRelationshipEditorSeed(null);
-            setRelationshipEditorEdge(null);
-            onPendingRelationshipOpenHandled?.();
-            setRelationshipPreviewOverrides({});
-          }}
-          htmlPortal={htmlPortalRef as React.RefObject<HTMLElement>}
-          onNodeClick={handleNodeClick}
-          lastExpansionEvent={lastExpansionEvent}
-          onToggleExpanded={(nodeId) => {
-            const action = treeState.expandedNodeIdSet.has(nodeId) ? 'collapse' : 'expand';
-            treeState.toggleExpandedNode(nodeId);
-            setLastExpansionEvent({ nodeId, action, at: Date.now() });
-          }}
-          onShowChildren={(nodeId) => setChildrenPopoverNodeId(nodeId)}
-          onEdgeClick={(edge) => {
-            setRelationshipEditorEdge(edge);
-            setRelationshipEditorSeed(null);
-            onPendingRelationshipOpenHandled?.();
-            setRelationshipPreviewOverrides({});
-            setChildrenPopoverNodeId(null);
-          }}
-          onControlsReady={(api) => {
-            particleControlsRef.current = api;
-          }}
-          loading={showLoadingOverlay}
-        />
-      </React.Suspense>
+      <MemoryTree3D
+        tree={treeResult}
+        selectedNodeId={resolvedSelectedNode?.id ?? null}
+        viewMode={treeState.viewMode}
+        showAllLabels={treeState.showAllLabels}
+        expandedNodeIdSet={treeState.expandedNodeIdSet}
+        maxChildrenVisible={MAX_CHILDREN_VISIBLE}
+        entityTypeFilter={entityTypeFilterSet}
+        searchMatchIds={searchMatchIds}
+        activeSearchMatchId={activeSearchMatchId}
+        initialCameraState={treeState.initialCamera}
+        onCameraStateChange={handleCameraStateChange}
+        onBackgroundClick={() => {
+          setSelectedNodeId(null);
+          setNodePanelView('details');
+          setRelationshipEditorSeed(null);
+          setRelationshipEditorEdge(null);
+          onPendingRelationshipOpenHandled?.();
+          setRelationshipPreviewOverrides({});
+        }}
+        htmlPortal={htmlPortalRef}
+        onNodeClick={handleNodeClick}
+        lastExpansionEvent={lastExpansionEvent}
+        onToggleExpanded={(nodeId) => {
+          const action = treeState.expandedNodeIdSet.has(nodeId) ? 'collapse' : 'expand';
+          treeState.toggleExpandedNode(nodeId);
+          setLastExpansionEvent({ nodeId, action, at: Date.now() });
+        }}
+        onShowChildren={(nodeId) => setChildrenPopoverNodeId(nodeId)}
+        onEdgeClick={(edge) => {
+          setRelationshipEditorEdge(edge);
+          setRelationshipEditorSeed(null);
+          onPendingRelationshipOpenHandled?.();
+          setRelationshipPreviewOverrides({});
+          setChildrenPopoverNodeId(null);
+        }}
+        onControlsReady={(api) => {
+          particleControlsRef.current = api;
+        }}
+        loading={showLoadingOverlay}
+      />
 
       <div ref={htmlPortalRef} className="particle-tree-html-portal" />
 
@@ -707,43 +668,41 @@ export default function MemoryGraph({
 
       {/* Relationship editor */}
       {treeResult && effectiveRelationshipEditorEdge && (
-        <React.Suspense fallback={null}>
-          <div onClick={(e) => e.stopPropagation()}>
-            <RelationshipEditor
-              key={
-                effectiveRelationshipEditorEdge.relationships[0]?.id ??
-                `${effectiveRelationshipEditorEdge.sourceId}-${effectiveRelationshipEditorEdge.targetId}`
+        <div onClick={(e) => e.stopPropagation()}>
+          <RelationshipEditor
+            key={
+              effectiveRelationshipEditorEdge.relationships[0]?.id ??
+              `${effectiveRelationshipEditorEdge.sourceId}-${effectiveRelationshipEditorEdge.targetId}`
+            }
+            open={Boolean(effectiveRelationshipEditorEdge)}
+            edge={effectiveRelationshipEditorEdge}
+            nodeById={treeResult.byId}
+            initialRelationshipId={effectiveRelationshipEditorSeed?.relationshipId ?? null}
+            initialTab={effectiveRelationshipEditorSeed?.tab}
+            onClose={() => {
+              setRelationshipEditorSeed(null);
+              setRelationshipEditorEdge(null);
+              onPendingRelationshipOpenHandled?.();
+            }}
+            onPreviewChange={handleRelationshipPreviewChange}
+            onPreviewClear={handleRelationshipPreviewClear}
+            onNavigateToEntityId={(entityId) => {
+              const node = visualData.nodes.find((n) => n.id === entityId);
+              if (!node) return;
+              setSelectedNodeId(node.id);
+              setNodePanelView('details');
+              setRelationshipPreviewOverrides({});
+              onNodeClick?.(node);
+            }}
+            onInspectMemoryId={(memoryId, inspectedRelationshipId) => {
+              if (onInspectMemoryFromRelationship) {
+                onInspectMemoryFromRelationship(memoryId, inspectedRelationshipId);
+                return;
               }
-              open={Boolean(effectiveRelationshipEditorEdge)}
-              edge={effectiveRelationshipEditorEdge}
-              nodeById={treeResult.byId}
-              initialRelationshipId={effectiveRelationshipEditorSeed?.relationshipId ?? null}
-              initialTab={effectiveRelationshipEditorSeed?.tab}
-              onClose={() => {
-                setRelationshipEditorSeed(null);
-                setRelationshipEditorEdge(null);
-                onPendingRelationshipOpenHandled?.();
-              }}
-              onPreviewChange={handleRelationshipPreviewChange}
-              onPreviewClear={handleRelationshipPreviewClear}
-              onNavigateToEntityId={(entityId) => {
-                const node = visualData.nodes.find((n) => n.id === entityId);
-                if (!node) return;
-                setSelectedNodeId(node.id);
-                setNodePanelView('details');
-                setRelationshipPreviewOverrides({});
-                onNodeClick?.(node);
-              }}
-              onInspectMemoryId={(memoryId, inspectedRelationshipId) => {
-                if (onInspectMemoryFromRelationship) {
-                  onInspectMemoryFromRelationship(memoryId, inspectedRelationshipId);
-                  return;
-                }
-                setInspectedMemoryId(memoryId);
-              }}
-            />
-          </div>
-        </React.Suspense>
+              setInspectedMemoryId(memoryId);
+            }}
+          />
+        </div>
       )}
 
       {/* Memory detail overlay (used by AI reference clicks) */}
@@ -807,16 +766,9 @@ export default function MemoryGraph({
                     <div className="memory-detail-section">
                       <label>Content</label>
                       <div className="memory-detail-markdown">
-                        <React.Suspense
-                          fallback={
-                            <div className="memory-loading">
-                              <div className="memory-loading-spinner" />
-                              <p>Loading preview…</p>
-                            </div>
-                          }
-                        >
-                          <MemoryMarkdown content={inspectedMemoryQuery.data.content} />
-                        </React.Suspense>
+                        <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                          {inspectedMemoryQuery.data.content}
+                        </ReactMarkdown>
                       </div>
                     </div>
                     <div className="memory-detail-grid">
@@ -1232,13 +1184,11 @@ export default function MemoryGraph({
       {/* Edit Memory Modal */}
       <AnimatePresence>
         {editingMemory && (
-          <React.Suspense fallback={null}>
-            <MemoryForm
-              memory={editingMemory}
-              onClose={() => setEditingMemory(null)}
-              onSuccess={() => setEditingMemory(null)}
-            />
-          </React.Suspense>
+          <MemoryForm
+            memory={editingMemory}
+            onClose={() => setEditingMemory(null)}
+            onSuccess={() => setEditingMemory(null)}
+          />
         )}
       </AnimatePresence>
     </div>

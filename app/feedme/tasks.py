@@ -28,6 +28,7 @@ from app.db.embedding.utils import get_embedding_model, generate_feedme_embeddin
 from app.feedme.schemas import ProcessingStatus, ProcessingStage
 from app.feedme.websocket.schemas import ProcessingUpdate
 from app.api.v1.websocket.feedme_websocket import notify_processing_update
+from app.core.config import get_models_config
 from app.core.settings import get_settings
 from functools import lru_cache
 
@@ -283,8 +284,6 @@ def process_transcript(self, conversation_id: int, user_id: Optional[str] = None
                         max_pages=current_settings().feedme_ai_max_pages,
                         pages_per_call=current_settings().feedme_ai_pages_per_call,
                         api_key=user_api_key or current_settings().gemini_api_key,
-                        rpm_limit=current_settings().gemini_flash_rpm_limit,
-                        rpd_limit=current_settings().gemini_flash_rpd_limit
                     )
                     
                     if markdown_text:
@@ -677,17 +676,13 @@ def generate_text_chunks_and_embeddings(self, conversation_id: int, max_chunk_ch
             raise ValueError("No Gemini API key available")
         # Initialize Gemini client (handled by _embed_content helper)
         
-        # Get embedding rate tracker
-        from app.feedme.rate_limiting.gemini_tracker import get_embed_tracker
-        embed_tracker = get_embed_tracker(
-            daily_limit=current_settings().gemini_embed_rpd_limit,
-            rpm_limit=current_settings().gemini_embed_rpm_limit,
-            tpm_limit=current_settings().gemini_embed_tpm_limit
-        )
+        from app.core.rate_limiting.agent_wrapper import get_rate_limiter
+        from app.core.rate_limiting.exceptions import RateLimitExceededException
+        limiter = get_rate_limiter()
 
         # Insert and embed per chunk with rate limiting
         stored = 0
-        model_name = current_settings().gemini_embed_model or EMBEDDING_MODEL_NAME
+        model_name = EMBEDDING_MODEL_NAME
         if model_name != EMBEDDING_MODEL_NAME:
             raise ValueError(f"Embedding model must be '{EMBEDDING_MODEL_NAME}' but got '{model_name}'")
         
@@ -704,20 +699,28 @@ def generate_text_chunks_and_embeddings(self, conversation_id: int, max_chunk_ch
             chunk_id = ins.data[0]['id']
 
             try:
-                # Check rate limits
-                if not embed_tracker.can_request():
-                    logger.warning(f"Daily embedding limit reached, stopping at chunk {idx}")
-                    break
-                
                 # Estimate tokens (rough approximation: 1 token per 4 chars)
-                estimated_tokens = len(chunk) // 4
-                
-                # Throttle for RPM and TPM
-                embed_tracker.throttle()
-                embed_tracker.throttle_tokens(estimated_tokens)
-                
-                # Generate embedding
-                vec = _embed_content(api_key, model_name, chunk)
+                estimated_tokens = max(1, len(chunk) // 4)
+
+                # Generate embedding with bucket-based rate limiting
+                try:
+                    vec = asyncio.run(
+                        limiter.execute_with_protection(
+                            "internal.embedding",
+                            _embed_content,
+                            api_key,
+                            model_name,
+                            chunk,
+                            token_count=estimated_tokens,
+                        )
+                    )
+                except RateLimitExceededException as exc:
+                    logger.warning(
+                        "Embedding rate limit reached, stopping at chunk %s: %s",
+                        idx,
+                        exc,
+                    )
+                    break
                 
                 # Verify dimension based on model
                 try:
@@ -728,10 +731,6 @@ def generate_text_chunks_and_embeddings(self, conversation_id: int, max_chunk_ch
                 # Store embedding
                 client.client.table('feedme_text_chunks').update({ 'embedding': vec }).eq('id', chunk_id).execute()
                 stored += 1
-                
-                # Record usage
-                embed_tracker.record()
-                embed_tracker.record_tokens(estimated_tokens)
                 
             except Exception as e:
                 logger.warning(f"Embedding failed for chunk {chunk_id}: {e}")
@@ -791,11 +790,8 @@ def generate_ai_tags(self, conversation_id: int, max_input_chars: int = 4000) ->
             raise MissingAPIKeyError("Gemini API key missing for AI tag generation")
         # Gemini client initialization handled by _generate_content helper
 
-        model_name = (
-            getattr(cached_settings, 'feedme_model_name', None)
-            or getattr(fallback_settings, 'feedme_model_name', None)
-            or 'gemini-2.5-flash-lite-preview-09-2025'
-        )
+        config = get_models_config()
+        model_name = config.internal["feedme"].model_id
 
         # Chunked map-reduce summarization to capture the entire conversation
         # Map: summarize each chunk into 3-6 bullet points (no PII). Reduce: produce final JSON with tags and a concise multi-sentence comment.
@@ -827,15 +823,9 @@ def generate_ai_tags(self, conversation_id: int, max_input_chars: int = 4000) ->
             per_chunk_chars = 24000
         per_chunk_chars = max(8000, min(per_chunk_chars, 32000))
 
-        # Rate limiter for generative calls (RPM/RPD)
-        try:
-            from app.feedme.rate_limiting.gemini_tracker import get_tracker
-            tracker = get_tracker(
-                daily_limit=getattr(fallback_settings, 'gemini_flash_rpd_limit', 250),
-                rpm_limit=getattr(fallback_settings, 'gemini_flash_rpm_limit', 10),
-            )
-        except Exception:
-            tracker = None
+        from app.core.rate_limiting.agent_wrapper import get_rate_limiter
+        from app.core.rate_limiting.exceptions import RateLimitExceededException
+        limiter = get_rate_limiter()
 
         chunks = chunk_text(text, per_chunk_chars)
         map_summaries: list[str] = []
@@ -850,13 +840,18 @@ def generate_ai_tags(self, conversation_id: int, max_input_chars: int = 4000) ->
                 "Return STRICT JSON only: {\"tags\":[...],\"comment\":\"...\"}."
             )
             try:
-                if tracker and not tracker.can_request():
-                    raise RuntimeError("Daily limit reached")
-                if tracker:
-                    tracker.throttle()
-                out = _generate_content(api_key, model_name, single_prompt)
-                if tracker:
-                    tracker.record()
+                out = asyncio.run(
+                    limiter.execute_with_protection(
+                        "internal.feedme",
+                        _generate_content,
+                        api_key,
+                        model_name,
+                        single_prompt,
+                    )
+                )
+            except RateLimitExceededException as exc:
+                logger.warning("Gemini tagging rate limited: %s", exc)
+                out = ''
             except Exception as e:
                 logger.warning(f"Gemini tagging (single-pass) failed: {e}")
                 out = ''
@@ -868,12 +863,15 @@ def generate_ai_tags(self, conversation_id: int, max_input_chars: int = 4000) ->
             )
             for idx, ck in enumerate(chunks):
                 try:
-                    if tracker and not tracker.can_request():
-                        logger.warning("Gemini daily limit reached during map stage; stopping early")
-                        break
-                    if tracker:
-                        tracker.throttle()
-                    txt = _generate_content(api_key, model_name, map_prompt + ck)
+                    txt = asyncio.run(
+                        limiter.execute_with_protection(
+                            "internal.feedme",
+                            _generate_content,
+                            api_key,
+                            model_name,
+                            map_prompt + ck,
+                        )
+                    )
                     if txt and txt.strip():
                         # Normalize to lines starting with '- '
                         lines = [ln.strip() for ln in txt.strip().splitlines() if ln.strip()]
@@ -883,8 +881,9 @@ def generate_ai_tags(self, conversation_id: int, max_input_chars: int = 4000) ->
                                 ln = f"- {ln.lstrip('-• ')}"
                             norm.append(ln)
                         map_summaries.append("\n".join(norm))
-                    if tracker:
-                        tracker.record()
+                except RateLimitExceededException as exc:
+                    logger.warning("Gemini map stage rate limited: %s", exc)
+                    break
                 except Exception as e:
                     logger.warning(f"Map summarization failed for chunk {idx+1}/{len(chunks)}: {e}")
 
@@ -897,13 +896,18 @@ def generate_ai_tags(self, conversation_id: int, max_input_chars: int = 4000) ->
                 "Return only: {\"tags\":[...],\"comment\":\"...\"}."
             )
             try:
-                if tracker and not tracker.can_request():
-                    raise RuntimeError("Daily limit reached")
-                if tracker:
-                    tracker.throttle()
-                out = _generate_content(api_key, model_name, reduce_prompt)
-                if tracker:
-                    tracker.record()
+                out = asyncio.run(
+                    limiter.execute_with_protection(
+                        "internal.feedme",
+                        _generate_content,
+                        api_key,
+                        model_name,
+                        reduce_prompt,
+                    )
+                )
+            except RateLimitExceededException as exc:
+                logger.warning("Gemini reduce stage rate limited: %s", exc)
+                out = ''
             except Exception as e:
                 logger.warning(f"Gemini tagging (reduce stage) failed: {e}")
                 out = ''

@@ -36,7 +36,7 @@ class MemoryStats:
     relevance_scores: List[float] = field(default_factory=list)
     retrieval_error: Optional[str] = None
     # Memory IDs used in generating the response - enables feedback attribution
-    retrieved_memory_ids: list[str] = field(default_factory=list)
+    retrieved_memory_ids: List[str] = field(default_factory=list)
 
     write_attempted: bool = False
     write_success: bool = False

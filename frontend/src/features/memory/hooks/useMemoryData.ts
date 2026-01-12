@@ -24,10 +24,6 @@ import type {
   FeedbackType,
   ListMemoriesRequest,
   ImportMemorySourcesRequest,
-  ImportZendeskTaggedRequest,
-  ImportZendeskTaggedResponse,
-  ApproveMemoryResponse,
-  ReviewStatus,
   UpdateRelationshipRequest,
   MergeRelationshipsRequest,
   SplitRelationshipPreviewRequest,
@@ -62,33 +58,8 @@ export const memoryKeys = {
   duplicates: (status: 'pending' | 'all') =>
     [...memoryKeys.duplicatesBase(), status] as const,
   searches: () => [...memoryKeys.all, 'search'] as const,
-  search: (
-    query: string,
-    limit?: number,
-    minConfidence?: number,
-    reviewStatus?: ReviewStatus
-  ) => [...memoryKeys.searches(), query, limit, minConfidence, reviewStatus] as const,
+  search: (query: string) => [...memoryKeys.searches(), query] as const,
 };
-
-function resolveRefetchInterval(baseInterval: number): number | false {
-  if (typeof document !== 'undefined' && document.visibilityState === 'hidden') {
-    return false;
-  }
-
-  if (typeof navigator !== 'undefined') {
-    const connection = (navigator as Navigator & {
-      connection?: { saveData?: boolean; effectiveType?: string };
-    }).connection;
-    if (connection?.saveData) {
-      return baseInterval * 2;
-    }
-    if (connection?.effectiveType === '2g' || connection?.effectiveType === 'slow-2g') {
-      return baseInterval * 2;
-    }
-  }
-
-  return baseInterval;
-}
 
 // =============================================================================
 // Query Hooks
@@ -102,9 +73,7 @@ export function useMemoryStats(options?: { enabled?: boolean }) {
     queryKey: memoryKeys.stats(),
     queryFn: () => memoryAPI.getMemoryStats(),
     staleTime: TIMING.STATS_STALE_TIME_MS,
-    refetchInterval: () => resolveRefetchInterval(TIMING.STATS_POLL_INTERVAL_MS),
-    refetchIntervalInBackground: false,
-    refetchOnWindowFocus: true,
+    refetchInterval: TIMING.STATS_POLL_INTERVAL_MS,
     enabled: options?.enabled ?? true,
   });
 }
@@ -140,9 +109,7 @@ export function useMemoryGraph(options?: {
     queryKey: memoryKeys.graph(entityTypes),
     queryFn: () => memoryAPI.getGraphData(entityTypes),
     staleTime: TIMING.GRAPH_STALE_TIME_MS,
-    refetchInterval: () => resolveRefetchInterval(pollInterval),
-    refetchIntervalInBackground: false,
-    refetchOnWindowFocus: true,
+    refetchInterval: pollInterval,
     enabled,
   });
 }
@@ -177,21 +144,14 @@ export function useMemorySearch(
   options?: {
     limit?: number;
     minConfidence?: number;
-    reviewStatus?: ReviewStatus;
     enabled?: boolean;
   }
 ) {
-  const {
-    limit = 20,
-    minConfidence = 0,
-    reviewStatus,
-    enabled = true,
-  } = options || {};
+  const { limit = 20, minConfidence = 0, enabled = true } = options || {};
 
   return useQuery({
-    queryKey: memoryKeys.search(query, limit, minConfidence, reviewStatus),
-    queryFn: () =>
-      memoryAPI.searchMemories(query, limit, minConfidence, reviewStatus),
+    queryKey: memoryKeys.search(query),
+    queryFn: () => memoryAPI.searchMemories(query, limit, minConfidence),
     enabled: enabled && query.length >= 2,
     staleTime: 30 * 1000,
   });
@@ -400,41 +360,6 @@ export function useImportMemorySources() {
       queryClient.invalidateQueries({ queryKey: memoryKeys.stats() });
       queryClient.invalidateQueries({ queryKey: memoryKeys.graphBase() });
       queryClient.invalidateQueries({ queryKey: memoryKeys.duplicatesBase() });
-    },
-  });
-}
-
-/**
- * Hook to import Zendesk MB_playbook-tagged tickets into Pending Review (admin only)
- */
-export function useImportZendeskTagged() {
-  const queryClient = useQueryClient();
-
-  return useMutation({
-    mutationFn: (request: ImportZendeskTaggedRequest) =>
-      memoryAPI.importZendeskTagged(request),
-    onSuccess: (_result: ImportZendeskTaggedResponse) => {
-      queryClient.invalidateQueries({ queryKey: memoryKeys.lists() });
-      queryClient.invalidateQueries({ queryKey: memoryKeys.searches() });
-      queryClient.invalidateQueries({ queryKey: memoryKeys.stats() });
-    },
-  });
-}
-
-/**
- * Hook to approve a pending-review memory (admin only)
- */
-export function useApproveMemory() {
-  const queryClient = useQueryClient();
-
-  return useMutation({
-    mutationFn: (memoryId: string) => memoryAPI.approveMemory(memoryId),
-    onSuccess: (_result: ApproveMemoryResponse, memoryId: string) => {
-      queryClient.invalidateQueries({ queryKey: memoryKeys.detail(memoryId) });
-      queryClient.invalidateQueries({ queryKey: memoryKeys.lists() });
-      queryClient.invalidateQueries({ queryKey: memoryKeys.searches() });
-      queryClient.invalidateQueries({ queryKey: memoryKeys.stats() });
-      queryClient.invalidateQueries({ queryKey: memoryKeys.graphBase() });
     },
   });
 }

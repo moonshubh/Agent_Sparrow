@@ -8,7 +8,7 @@ conversation persistence, and example synchronization.
 import os
 import logging
 import threading
-from typing import Dict, List, Optional, Any, Tuple, Callable, TypeVar
+from typing import Dict, List, Optional, Any, Tuple
 from datetime import datetime, timezone
 import asyncio
 from contextlib import asynccontextmanager
@@ -20,8 +20,6 @@ from postgrest.exceptions import APIError
 from app.db.cache import get_analytics_cache, CACHE_TTL
 
 logger = logging.getLogger(__name__)
-
-T = TypeVar("T")
 
 
 class SupabaseConfig:
@@ -64,7 +62,7 @@ class SupabaseClient:
         # calls in a thread pool, concurrent requests can share the same client
         # across threads. Guard execution to avoid intermittent httpx/http2
         # "Server disconnected" errors in the Memory UI (split preview, analysis).
-        self._exec_lock: Optional[asyncio.Lock] = None
+        self._exec_lock = asyncio.Lock()
         
         if not self.mock_mode:
             self._initialize_client()
@@ -137,19 +135,13 @@ class SupabaseClient:
             return self.client.rpc(fn_name)
         return self.client.rpc(fn_name, params)
 
-    def _get_exec_lock(self) -> asyncio.Lock:
-        """Lazy-init lock to ensure an event loop is available."""
-        if self._exec_lock is None:
-            self._exec_lock = asyncio.Lock()
-        return self._exec_lock
-
-    async def _exec(self, fn: Callable[[], T], timeout: float = 30) -> T:
+    async def _exec(self, fn, timeout: float = 30):
         """Run blocking Supabase SDK call in a thread with a timeout.
 
         Note: The underlying client is not thread-safe. We serialize calls and
         do a single retry for transient disconnects.
         """
-        async with self._get_exec_lock():
+        async with self._exec_lock:
             for attempt in range(2):
                 try:
                     loop = asyncio.get_running_loop()
@@ -167,7 +159,7 @@ class SupabaseClient:
                     raise
     
     # =====================================================
-    # GLOBAL KNOWLEDGE OPERATIONS
+    # FEEDBACK OPERATIONS
     # =====================================================
 
     async def insert_sparrow_feedback(

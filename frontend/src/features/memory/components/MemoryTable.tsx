@@ -2,21 +2,13 @@
 
 import React, { useMemo, useState, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { ChevronDown, ChevronUp, ThumbsUp, ThumbsDown, Eye, Trash2, Pencil, Check } from 'lucide-react';
+import { ChevronDown, ChevronUp, ThumbsUp, ThumbsDown, Eye, Trash2, Pencil } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { toast } from 'sonner';
-import {
-  useApproveMemory,
-  useDeleteMemory,
-  useMemories,
-  useMemory,
-  useMemorySearch,
-  useSubmitFeedback,
-} from '../hooks';
+import { useMemories, useMemory, useMemorySearch, useSubmitFeedback, useDeleteMemory } from '../hooks';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/shared/ui/tooltip';
 import { ConfidenceBadge } from './ConfidenceBadge';
-import { SourceBadge } from './source-badge';
+import { SourceBadge } from './SourceBadge';
 import { MemoryForm } from './MemoryForm';
 import { isMemoryEdited } from '../lib/memoryFlags';
 import type { Memory, MemoryFilters, FeedbackType } from '../types';
@@ -24,7 +16,6 @@ import type { Memory, MemoryFilters, FeedbackType } from '../types';
 interface MemoryTableProps {
   searchQuery?: string;
   filters?: MemoryFilters;
-  isAdmin?: boolean;
   onSortChange?: (sortBy: MemoryFilters['sortBy'], sortOrder: MemoryFilters['sortOrder']) => void;
   focusMemoryId?: string | null;
   onClearFocus?: () => void;
@@ -57,7 +48,6 @@ function toFiltersSortBy(field: keyof Memory): MemoryFilters['sortBy'] | null {
 export default function MemoryTable({
   searchQuery,
   filters,
-  isAdmin = false,
   onSortChange,
   focusMemoryId,
   onClearFocus,
@@ -78,17 +68,13 @@ export default function MemoryTable({
   // Use search when query exists, otherwise list
   const { data: searchResults, isLoading: searchLoading, error: searchError } = useMemorySearch(
     searchQuery || '',
-    {
-      enabled: Boolean(searchQuery && searchQuery.length >= 2),
-      reviewStatus: filters?.reviewStatus,
-    }
+    { enabled: Boolean(searchQuery && searchQuery.length >= 2) }
   );
 
   const { data: listResults, isLoading: listLoading, error: listError } = useMemories({
     limit: pageSize,
     offset: page * pageSize,
     source_type: filters?.sourceType || undefined,
-    review_status: filters?.reviewStatus,
     sort_order: sortField === 'created_at' ? sortOrder : 'desc',
   });
 
@@ -108,7 +94,6 @@ export default function MemoryTable({
   // Mutations
   const submitFeedback = useSubmitFeedback();
   const deleteMemory = useDeleteMemory();
-  const approveMemory = useApproveMemory();
 
   const memoriesWithFocus = useMemo(() => {
     const base = memories ? [...memories] : [];
@@ -161,28 +146,13 @@ export default function MemoryTable({
     [filters, isControlledSort, localSortField, onSortChange, sortField, sortOrder]
   );
 
-  const handleSortKeyDown = useCallback(
-    (field: keyof Memory) => (event: React.KeyboardEvent<HTMLTableCellElement>) => {
-      if (event.key === 'Enter' || event.key === ' ') {
-        event.preventDefault();
-        handleSort(field);
-      }
-    },
-    [handleSort]
-  );
-
   // Feedback handler
   const handleFeedback = useCallback(
     async (memoryId: string, type: FeedbackType) => {
-      try {
-        await submitFeedback.mutateAsync({
-          memoryId,
-          request: { feedback_type: type },
-        });
-      } catch (error) {
-        console.error('Failed to submit feedback:', error);
-        toast.error('Failed to submit feedback');
-      }
+      await submitFeedback.mutateAsync({
+        memoryId,
+        request: { feedback_type: type },
+      });
     },
     [submitFeedback]
   );
@@ -191,31 +161,10 @@ export default function MemoryTable({
   const handleDelete = useCallback(
     async (memoryId: string) => {
       if (confirm('Are you sure you want to delete this memory?')) {
-        try {
-          await deleteMemory.mutateAsync(memoryId);
-        } catch (error) {
-          console.error('Failed to delete memory:', error);
-          toast.error('Failed to delete memory');
-        }
+        await deleteMemory.mutateAsync(memoryId);
       }
     },
     [deleteMemory]
-  );
-
-  const handleApprove = useCallback(
-    async (memoryId: string) => {
-      try {
-        const result = await approveMemory.mutateAsync(memoryId);
-        if (result.mem0_written) {
-          toast.success('Approved and written to mem0');
-        } else {
-          toast.success('Approved');
-        }
-      } catch (error: unknown) {
-        toast.error(error instanceof Error ? error.message : 'Failed to approve memory');
-      }
-    },
-    [approveMemory]
   );
 
   // Format date
@@ -270,57 +219,18 @@ export default function MemoryTable({
           <thead>
             <tr>
               <th className="memory-th-content">Content</th>
-              <th
-                className="memory-th-confidence"
-                onClick={() => handleSort('confidence_score')}
-                onKeyDown={handleSortKeyDown('confidence_score')}
-                tabIndex={0}
-                role="button"
-                aria-sort={
-                  sortField === 'confidence_score'
-                    ? sortOrder === 'asc'
-                      ? 'ascending'
-                      : 'descending'
-                    : undefined
-                }
-              >
+              <th className="memory-th-confidence" onClick={() => handleSort('confidence_score')}>
                 Confidence {renderSortIcon('confidence_score')}
               </th>
               <th className="memory-th-source">Source</th>
-              <th
-                className="memory-th-retrievals"
-                onClick={() => handleSort('retrieval_count')}
-                onKeyDown={handleSortKeyDown('retrieval_count')}
-                tabIndex={0}
-                role="button"
-                aria-sort={
-                  sortField === 'retrieval_count'
-                    ? sortOrder === 'asc'
-                      ? 'ascending'
-                      : 'descending'
-                    : undefined
-                }
-              >
+              <th className="memory-th-retrievals" onClick={() => handleSort('retrieval_count')}>
                 <span
                   title="Times this memory has been retrieved by the agent. This counter increments when the Unified Agent retrieves memories via the Memory UI store (ENABLE_MEMORY_UI_RETRIEVAL)."
                 >
                   Retrievals {renderSortIcon('retrieval_count')}
                 </span>
               </th>
-              <th
-                className="memory-th-date"
-                onClick={() => handleSort('created_at')}
-                onKeyDown={handleSortKeyDown('created_at')}
-                tabIndex={0}
-                role="button"
-                aria-sort={
-                  sortField === 'created_at'
-                    ? sortOrder === 'asc'
-                      ? 'ascending'
-                      : 'descending'
-                    : undefined
-                }
-              >
+              <th className="memory-th-date" onClick={() => handleSort('created_at')}>
                 Created {renderSortIcon('created_at')}
               </th>
               <th className="memory-th-actions">Actions</th>
@@ -354,25 +264,6 @@ export default function MemoryTable({
                   </td>
                   <td className="memory-td-actions">
                     <div className="memory-actions">
-                      {isAdmin && filters?.reviewStatus === 'pending_review' && (
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <button
-                              className="memory-action-icon memory-action-success"
-                              onClick={() => handleApprove(memory.id)}
-                              aria-label="Approve memory"
-                              disabled={approveMemory.isPending}
-                              title="Approve (also writes to mem0 and updates linked entries)"
-                            >
-                              <Check size={14} />
-                            </button>
-                          </TooltipTrigger>
-                          <TooltipContent className="memory-tooltip-content" side="top">
-                            Approve
-                          </TooltipContent>
-                        </Tooltip>
-                      )}
-
                       <Tooltip>
                         <TooltipTrigger asChild>
                           <button
@@ -415,16 +306,14 @@ export default function MemoryTable({
                       >
                         <Eye size={14} />
                       </button>
-                      {isAdmin && (
-                        <button
-                          className="memory-action-icon memory-action-danger"
-                          onClick={() => handleDelete(memory.id)}
-                          title="Delete memory"
-                          disabled={deleteMemory.isPending}
-                        >
-                          <Trash2 size={14} />
-                        </button>
-                      )}
+                      <button
+                        className="memory-action-icon memory-action-danger"
+                        onClick={() => handleDelete(memory.id)}
+                        title="Delete memory"
+                        disabled={deleteMemory.isPending}
+                      >
+                        <Trash2 size={14} />
+                      </button>
                     </div>
                   </td>
                 </motion.tr>
@@ -480,21 +369,19 @@ export default function MemoryTable({
               <div className="memory-detail-header">
                 <h3>Memory Details</h3>
                 <div className="memory-detail-header-actions">
-                  {isAdmin && (
-                    <button
-                      className="memory-action-icon"
-                      onClick={() => {
-                        if (focusMemoryId && effectiveSelectedMemory.id === focusMemoryId) {
-                          onClearFocus?.();
-                        }
-                        setEditingMemory(effectiveSelectedMemory);
-                        setSelectedMemory(null);
-                      }}
-                      title="Edit memory"
-                    >
-                      <Pencil size={14} />
-                    </button>
-                  )}
+                  <button
+                    className="memory-action-icon"
+                    onClick={() => {
+                      if (focusMemoryId && effectiveSelectedMemory.id === focusMemoryId) {
+                        onClearFocus?.();
+                      }
+                      setEditingMemory(effectiveSelectedMemory);
+                      setSelectedMemory(null);
+                    }}
+                    title="Edit memory"
+                  >
+                    <Pencil size={14} />
+                  </button>
                   <button
                     onClick={() => {
                       if (focusMemoryId && effectiveSelectedMemory.id === focusMemoryId) {

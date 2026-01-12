@@ -6,19 +6,17 @@ import { ChevronDown, Layers, Search, X } from 'lucide-react';
 import { ENTITY_COLORS, ENTITY_LABELS } from '../types';
 import type { OrphanEntity } from '../types';
 
-interface OrphanSidebarProps {
-  orphans: OrphanEntity[];
-  open: boolean;
-  onToggle: () => void;
-  onSelect: (entityId: string) => void;
-}
-
 export function OrphanSidebar({
   orphans,
   open,
   onToggle,
   onSelect,
-}: OrphanSidebarProps) {
+}: {
+  orphans: OrphanEntity[];
+  open: boolean;
+  onToggle: () => void;
+  onSelect: (entityId: string) => void;
+}) {
   const [query, setQuery] = useState('');
 
   const filtered = useMemo(() => {
@@ -78,7 +76,6 @@ export function OrphanSidebar({
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
                 placeholder="Search…"
-                aria-label="Search disconnected entities"
               />
               {query && (
                 <button
@@ -104,7 +101,7 @@ export function OrphanSidebar({
                   >
                     <span
                       className="orphan-sidebar__dot"
-                      style={{ backgroundColor: ENTITY_COLORS[o.node.entityType] ?? '#6B7280' }}
+                      style={{ backgroundColor: ENTITY_COLORS[o.node.entityType] }}
                     />
                     <div className="orphan-sidebar__item-main">
                       <span className="orphan-sidebar__item-name">

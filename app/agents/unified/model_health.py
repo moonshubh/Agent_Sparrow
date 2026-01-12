@@ -10,37 +10,44 @@ from typing import Dict, Optional, Union
 from loguru import logger
 
 from app.core.rate_limiting.agent_wrapper import get_rate_limiter
-from app.core.rate_limiting.config import RateLimitConfig
 from app.core.rate_limiting.schemas import CircuitState, RateLimitMetadata, UsageStats
 
 
 @dataclass
 class ModelHealth:
+    bucket: str
     model: str
+    provider: str
     available: bool
     rpm_used: int
     rpm_limit: int
     rpd_used: int
     rpd_limit: int
+    tpm_used: int
+    tpm_limit: Optional[int]
     circuit_state: str
     reason: Optional[str] = None
 
     def as_dict(self) -> Dict[str, Union[str, int, bool, None]]:
         """Convert health data to dictionary with proper type annotations."""
         return {
+            "bucket": self.bucket,
             "model": self.model,
+            "provider": self.provider,
             "available": self.available,
             "rpm_used": self.rpm_used,
             "rpm_limit": self.rpm_limit,
             "rpd_used": self.rpd_used,
             "rpd_limit": self.rpd_limit,
+            "tpm_used": self.tpm_used,
+            "tpm_limit": self.tpm_limit,
             "circuit_state": self.circuit_state,
             "reason": self.reason,
         }
 
 
 class ModelQuotaTracker:
-    """Thin wrapper around the Gemini rate limiter for read-only health checks."""
+    """Thin wrapper around the bucket rate limiter for read-only health checks."""
 
     def __init__(self, cache_ttl_seconds: float = 5.0, warning_threshold: float = 0.9) -> None:
         self._limiter = get_rate_limiter()
@@ -49,60 +56,44 @@ class ModelQuotaTracker:
         self._cache_ttl = max(1.0, cache_ttl_seconds)
         self._warning_threshold = warning_threshold
         self._lock = asyncio.Lock()
-        # Prefixes for Gemini models we track; configurable to avoid hardcoding as new SKUs appear.
-        self._gemini_prefixes: tuple[str, ...] = (
-            "gemini-3-pro",
-            "gemini-2.5-flash-lite",
-            "gemini-2.5-flash",
-            "gemini-2.5-pro",
-        )
 
-    async def get_health(self, model: str) -> ModelHealth:
+    async def get_health(self, bucket: str) -> ModelHealth:
         stats = await self._get_usage_stats()
-        base = self._normalize_model(model)
+        metadata = stats.buckets.get(bucket)
+        circuit = stats.circuits.get(bucket)
 
-        mapping = [
-            ("gemini-3-pro", stats.gemini_3_pro_stats, stats.gemini_3_pro_circuit),
-            ("gemini-2.5-flash-lite", stats.flash_lite_stats, stats.flash_lite_circuit),
-            ("gemini-2.5-flash", stats.flash_stats, stats.flash_circuit),
-            ("gemini-2.5-pro", stats.pro_stats, stats.pro_circuit),
-        ]
-
-        match = next(
-            (
-                (metadata, circuit)
-                for prefix, metadata, circuit in mapping
-                if base == prefix or base.startswith(prefix)
-            ),
-            None,
-        )
-
-        if match is None:
-            # Non-Gemini models (e.g., XAI/Grok) are not rate-limited via this tracker
-            # Return available=True so they can be used without fallback to Gemini
-            logger.debug("Non-Gemini model '%s' requested; skipping quota check", model)
+        if metadata is None:
+            logger.warning("Unknown rate-limit bucket requested: %s", bucket)
             return ModelHealth(
-                model=model,
-                available=True,  # Non-Gemini models bypass Gemini rate limiting
+                bucket=bucket,
+                model="unknown",
+                provider="unknown",
+                available=False,
                 rpm_used=0,
                 rpm_limit=0,
                 rpd_used=0,
                 rpd_limit=0,
-                circuit_state="ok",
-                reason=None,
+                tpm_used=0,
+                tpm_limit=None,
+                circuit_state="unknown",
+                reason="unknown_bucket",
             )
 
-        metadata, circuit = match
+        circuit_state = circuit.state if circuit else CircuitState.CLOSED
+        available, reason = self._evaluate_availability(metadata, circuit_state)
 
-        available, reason = self._evaluate_availability(metadata, circuit.state)
         return ModelHealth(
-            model=model,
+            bucket=bucket,
+            model=metadata.model,
+            provider=metadata.provider,
             available=available,
             rpm_used=metadata.rpm_used,
             rpm_limit=metadata.rpm_limit,
             rpd_used=metadata.rpd_used,
             rpd_limit=metadata.rpd_limit,
-            circuit_state=circuit.state.value,
+            tpm_used=metadata.tpm_used,
+            tpm_limit=metadata.tpm_limit,
+            circuit_state=circuit_state.value,
             reason=reason,
         )
 
@@ -120,15 +111,6 @@ class ModelQuotaTracker:
             self._cache_ts = now
             return stats
 
-    def _normalize_model(self, model: str) -> str:
-        try:
-            return RateLimitConfig.normalize_model_name(model)
-        except ValueError:
-            normalized = (model or "").strip().lower()
-            if normalized.startswith("models/"):
-                normalized = normalized.split("/", 1)[1]
-            return normalized
-
     def _evaluate_availability(self, metadata: RateLimitMetadata, circuit_state: CircuitState) -> tuple[bool, Optional[str]]:
         if circuit_state == CircuitState.OPEN:
             return False, "circuit_open"
@@ -142,6 +124,10 @@ class ModelQuotaTracker:
             return False, "rpm_exhausted"
         if rpd_ratio >= self._warning_threshold:
             return False, "rpd_exhausted"
+        if metadata.tpm_limit:
+            tpm_ratio = metadata.tpm_used / max(1, metadata.tpm_limit)
+            if tpm_ratio >= self._warning_threshold:
+                return False, "tpm_exhausted"
         return True, None
 
 

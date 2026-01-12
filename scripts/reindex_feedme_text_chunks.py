@@ -95,9 +95,9 @@ async def reindex_feedme_text_chunks(
         limit=limit_conversations,
     ):
         resp = await supa._exec(
-            lambda cid=conversation_id: supa.client.table("feedme_text_chunks")
+            lambda: supa.client.table("feedme_text_chunks")
             .select("id, chunk_index, content")
-            .eq("conversation_id", cid)
+            .eq("conversation_id", conversation_id)
             .order("chunk_index")
             .execute()
         )
@@ -135,9 +135,9 @@ async def reindex_feedme_text_chunks(
             vec = emb_model.embed_query(embed_input)
             assert_dim(vec, "feedme_text_chunks.embedding")
             await supa._exec(
-                lambda v=vec, cid=chunk_id: supa.client.table("feedme_text_chunks")
-                .update({"embedding": v})
-                .eq("id", cid)
+                lambda: supa.client.table("feedme_text_chunks")
+                .update({"embedding": vec})
+                .eq("id", chunk_id)
                 .execute()
             )
             updated += 1

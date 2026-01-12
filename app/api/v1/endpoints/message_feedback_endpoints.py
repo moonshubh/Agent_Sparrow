@@ -7,13 +7,13 @@ memories that were used to generate the response (for feedback attribution).
 from __future__ import annotations
 
 import logging
-from typing import Literal
+from typing import List, Literal, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 
-from app.db.supabase.client import SupabaseClient, get_supabase_client
+from app.db.supabase.client import get_supabase_client
 
 logger = logging.getLogger(__name__)
 
@@ -40,12 +40,12 @@ router = APIRouter(prefix="/feedback", tags=["Message Feedback"])
 class MessageFeedbackRequest(BaseModel):
     """Request payload for message feedback."""
     message_id: str = Field(..., min_length=1)
-    session_id: str | None = Field(default=None)
+    session_id: Optional[str] = Field(default=None)
     feedback_type: Literal["positive", "negative"] = Field(...)
     category: str = Field(..., min_length=1, max_length=100)
     # Optional: Memory IDs that were used to generate this response
     # If provided, feedback will be propagated to these memories
-    used_memory_ids: list[str] | None = Field(
+    used_memory_ids: Optional[List[str]] = Field(
         default=None,
         description="Memory IDs used to generate this response for feedback attribution"
     )
@@ -59,11 +59,11 @@ class MessageFeedbackResponse(BaseModel):
 
 
 async def _propagate_feedback_to_memories(
-    supabase: SupabaseClient,
-    memory_ids: list[str],
-    user_id: str | None,
+    supabase,
+    memory_ids: List[str],
+    user_id: Optional[str],
     feedback_type: str,
-    session_id: str | None,
+    session_id: Optional[str],
     message_id: str,
 ) -> int:
     """
@@ -127,16 +127,15 @@ async def _propagate_feedback_to_memories(
 
 
 async def _get_memory_ids_from_message(
-    supabase: SupabaseClient,
+    supabase,
     message_id: str,
-    session_id: str | None,
+    session_id: Optional[str],
     user_id: str,
-) -> list[str]:
+) -> List[str]:
     """
     Retrieve memory IDs from message metadata if available.
 
-    Looks up the chat message and extracts used_memory_ids from its metadata,
-    only if the message belongs to the requesting user.
+    Looks up the chat message and extracts used_memory_ids from its metadata.
     """
     try:
         # Try to parse message_id as integer (chat_messages uses serial ID)
@@ -146,41 +145,18 @@ async def _get_memory_ids_from_message(
             # Message ID might be a string/UUID format
             return []
 
-        # Query message metadata + session id
-        result = await supabase._exec(
-            lambda: supabase.table("chat_messages")
-            .select("metadata, session_id")
-            .eq("id", msg_id_int)
-            .maybe_single()
-            .execute()
-        )
+        # Query message metadata
+        query = supabase.table("chat_messages").select("metadata")
 
-        if not result.data:
-            return []
-
-        message_session_id = result.data.get("session_id")
-        if message_session_id is None:
-            return []
-
-        # If a session_id is provided, enforce it matches the message
-        if session_id is not None:
+        if session_id:
             try:
-                if int(session_id) != int(message_session_id):
-                    return []
+                session_id_int = int(session_id)
+                query = query.eq("session_id", session_id_int)
             except ValueError:
-                return []
+                pass
 
-        # Verify the session belongs to the requesting user
-        session_check = await supabase._exec(
-            lambda: supabase.table("chat_sessions")
-            .select("id")
-            .eq("id", int(message_session_id))
-            .eq("user_id", user_id)
-            .maybe_single()
-            .execute()
-        )
-        if not session_check.data:
-            return []
+        query = query.eq("id", msg_id_int)
+        result = await supabase._exec(lambda: query.maybe_single().execute())
 
         if result.data and isinstance(result.data.get("metadata"), dict):
             memory_ids = result.data["metadata"].get("used_memory_ids", [])
@@ -216,7 +192,7 @@ async def submit_message_feedback(
     try:
         supabase = get_supabase_client()
 
-        memory_user_id: str | None
+        memory_user_id: Optional[str]
         try:
             memory_user_id = str(UUID(user_id))
         except Exception:
@@ -248,19 +224,14 @@ async def submit_message_feedback(
                 detail="Failed to save feedback"
             )
 
-        # Get memory IDs to propagate feedback to (server-trusted only).
-        stored_memory_ids = await _get_memory_ids_from_message(
-            supabase, payload.message_id, payload.session_id, user_id
-        )
+        # Get memory IDs to propagate feedback to
+        memory_ids = payload.used_memory_ids or []
 
-        if payload.used_memory_ids:
-            allowed = {str(mid) for mid in stored_memory_ids}
-            memory_ids = [str(mid) for mid in payload.used_memory_ids if str(mid) in allowed]
-        else:
-            memory_ids = stored_memory_ids
-
-        if memory_ids:
-            memory_ids = list(dict.fromkeys(memory_ids))[:50]
+        # If no memory IDs provided, try to get them from message metadata
+        if not memory_ids:
+            memory_ids = await _get_memory_ids_from_message(
+                supabase, payload.message_id, payload.session_id, user_id
+            )
 
         # Propagate feedback to memories (best-effort)
         memories_updated = 0

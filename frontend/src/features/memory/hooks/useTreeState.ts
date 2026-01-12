@@ -183,7 +183,6 @@ export function useTreeState() {
   const cameraRef = useRef<TreeCameraState | null>(initial.camera ?? null);
 
   const persistTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const latestPayloadRef = useRef<PersistedTreeStateV2 | null>(null);
   const persist = useCallback(() => {
     if (typeof window === 'undefined') return;
 
@@ -191,19 +190,17 @@ export function useTreeState() {
       clearTimeout(persistTimerRef.current);
     }
 
-    const payload: PersistedTreeStateV2 = {
-      version: 2,
-      rootNodeId,
-      selectedNodeId,
-      expandedNodeIds,
-      viewMode,
-      showAllLabels,
-      camera: cameraRef.current,
-    };
-    latestPayloadRef.current = payload;
-
     persistTimerRef.current = setTimeout(() => {
       try {
+        const payload: PersistedTreeStateV2 = {
+          version: 2,
+          rootNodeId,
+          selectedNodeId,
+          expandedNodeIds,
+          viewMode,
+          showAllLabels,
+          camera: cameraRef.current,
+        };
         window.localStorage.setItem(STORAGE_KEY_V2, JSON.stringify(payload));
       } catch {
         // Ignore storage failures (private mode / quota).
@@ -216,15 +213,6 @@ export function useTreeState() {
     return () => {
       if (persistTimerRef.current) {
         clearTimeout(persistTimerRef.current);
-        persistTimerRef.current = null;
-        const payload = latestPayloadRef.current;
-        if (payload) {
-          try {
-            window.localStorage.setItem(STORAGE_KEY_V2, JSON.stringify(payload));
-          } catch {
-            // Ignore storage failures (private mode / quota).
-          }
-        }
       }
     };
   }, [persist]);
@@ -243,13 +231,9 @@ export function useTreeState() {
     });
   }, []);
 
-  const setCamera = useCallback(
-    (next: TreeCameraState | null) => {
-      cameraRef.current = next;
-      persist();
-    },
-    [persist]
-  );
+  const setCamera = useCallback((next: TreeCameraState | null) => {
+    cameraRef.current = next;
+  }, []);
 
   const reset = useCallback(() => {
     setRootNodeId(null);

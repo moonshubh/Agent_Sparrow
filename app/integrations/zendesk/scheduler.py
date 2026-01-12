@@ -11,6 +11,7 @@ import time
 
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
+from app.core.config import get_models_config, resolve_coordinator_config
 from app.core.settings import settings
 from app.db.supabase.client import get_supabase_client
 from .client import ZendeskClient, ZendeskRateLimitError
@@ -64,8 +65,6 @@ class ZendeskReplyResult:
     kb_articles_used: list[str]
     macros_used: list[str]
     learning_messages: list[Any]
-
-
 
 @dataclass(frozen=True, slots=True)
 class ZendeskQueryAgentProductContext:
@@ -1224,7 +1223,7 @@ async def _run_pattern_preflight(
     playbook_extractor: Any | None,
     max_hits: int,
     min_similarity: float,
-) -> dict[str, Any] | None:
+) -> Dict[str, Any]:
     """Populate workspace files for pattern-first Zendesk runs.
 
     Writes:
@@ -1286,8 +1285,17 @@ async def _run_pattern_preflight(
         top_sim = getattr(similar[0], "similarity", None)
         if not isinstance(top_sim, (int, float)) or float(top_sim) < 0.86:
             category = seed_category
+    playbook_compiled = False
+    playbook_path: str | None = None
+
     if not category:
-        return None
+        return {
+            "category": None,
+            "similar_count": len(similar),
+            "top_similarity": getattr(similar[0], "similarity", None) if similar else None,
+            "playbook_compiled": False,
+            "playbook_path": None,
+        }
 
     await workspace_store.write_file(
         "/context/ticket_category.json",
@@ -1302,8 +1310,6 @@ async def _run_pattern_preflight(
         ),
     )
 
-    playbook_compiled = False
-    playbook_path: str | None = None
     if category in _ZENDESK_PATTERN_CATEGORIES and playbook_extractor is not None:
         try:
             playbook = await playbook_extractor.build_playbook_with_learned(category)
@@ -1343,7 +1349,8 @@ async def _run_pattern_preflight(
 
     return {
         "category": category,
-        "similar_scenarios_path": "/context/similar_scenarios.md",
+        "similar_count": len(similar),
+        "top_similarity": getattr(similar[0], "similarity", None) if similar else None,
         "playbook_compiled": playbook_compiled,
         "playbook_path": playbook_path,
     }
@@ -2314,7 +2321,11 @@ def _format_internal_retrieval_context(
     query: str,
 ) -> Dict[str, Any]:
     macro_min = float(getattr(settings, "zendesk_macro_min_relevance", 0.55))
-    kb_min = float(getattr(settings, "primary_agent_min_kb_relevance", 0.35))
+    # Zendesk support prefers recall over aggressive KB filtering; keep thresholds
+    # aligned with the retrieval preflight (zendesk_internal_retrieval_min_relevance).
+    kb_min = float(
+        getattr(settings, "zendesk_internal_retrieval_min_relevance", 0.35)
+    )
     feedme_min = float(getattr(settings, "zendesk_feedme_min_relevance", 0.45))
     max_per_source = int(
         getattr(settings, "zendesk_internal_retrieval_max_per_source", 5)
@@ -3386,8 +3397,13 @@ async def _get_feature_state() -> Dict[str, Any]:
     """Read feature flag state from Supabase, fallback to env flags."""
     enabled = bool(getattr(settings, "zendesk_enabled", False))
     dry_run = bool(getattr(settings, "zendesk_dry_run", True))
-    provider = getattr(settings, "zendesk_agent_provider", None) or "google"
-    model = getattr(settings, "zendesk_agent_model", None) or "gemini-3-flash-preview"
+    config = get_models_config()
+    if config.zendesk is not None:
+        coordinator_cfg = resolve_coordinator_config(config, "google", zendesk=True)
+    else:
+        coordinator_cfg = resolve_coordinator_config(config, "google")
+    provider = coordinator_cfg.provider or "google"
+    model = coordinator_cfg.model_id
     last_run_at = None
     try:
         supa = get_supabase_client()
@@ -3404,10 +3420,6 @@ async def _get_feature_state() -> Dict[str, Any]:
             enabled = bool(val.get("enabled", enabled))
             if "dry_run" in val:
                 dry_run = bool(val.get("dry_run", dry_run))
-            if "provider" in val:
-                provider = str(val.get("provider", provider))
-            if "model" in val:
-                model = str(val.get("model", model))
         # Also track scheduler state under key 'zendesk_scheduler'
         resp2 = await supa._exec(
             lambda: supa.client.table("feature_flags")
@@ -3947,14 +3959,9 @@ async def _generate_reply(
         return caps
 
     logger.info(
-        "zendesk_context_caps ticket_id=%s caps=%s global_flags=%s",
+        "zendesk_context_caps ticket_id=%s caps=%s",
         ticket_id,
         _context_caps(),
-        {
-            "inject": getattr(settings, "global_knowledge_inject", None),
-            "store_adapter": getattr(settings, "global_knowledge_store_adapter", None),
-            "store_writes": getattr(settings, "global_knowledge_store_writes", None),
-        },
     )
 
     session_id = f"zendesk-{ticket_id}"
@@ -3962,7 +3969,6 @@ async def _generate_reply(
     result: Dict[str, Any] | None = None
     learning_messages: list[Any] = []
     inferred_category: str | None = None
-    pattern_info: dict[str, Any] | None = None
     kb_articles_used: list[str] = []
     macros_used: list[str] = []
 
@@ -3971,10 +3977,12 @@ async def _generate_reply(
             kb_ok = False
             macro_ok = False
             feedme_ok = False
+            pattern_ok = False
             internal_context: str | None = None
             web_context: str | None = None
             web_ok = False
             macro_choice: Dict[str, Any] | None = None
+            playbook_path: str | None = None
 
             # Fetch policy macros from Supabase so the agent can follow the correct, full procedures.
             policy_macros: List[Dict[str, Any]] = []
@@ -4054,55 +4062,9 @@ async def _generate_reply(
                 )
                 retrieved_results = list((retrieved or {}).get("results") or [])
 
-                # Hydrate FeedMe hits with FULL conversation content (all chunks).
-                feedme_items: list[tuple[dict[str, Any], int]] = []
-                for item in retrieved_results:
-                    if (
-                        not isinstance(item, dict)
-                        or str(item.get("source")) != "feedme"
-                    ):
-                        continue
-                    meta = item.get("metadata")
-                    meta = meta if isinstance(meta, dict) else {}
-                    conv_id = meta.get("id") or meta.get("conversation_id")
-                    try:
-                        conv_int = int(conv_id)
-                    except Exception:
-                        continue
-                    feedme_items.append((item, conv_int))
-
-                if feedme_items:
-                    tasks = [
-                        db_context_search_tool.ainvoke(
-                            {"source": "feedme", "doc_id": str(conv_id)}
-                        )
-                        for _, conv_id in feedme_items[:max_per_source]
-                    ]
-                    try:
-                        fetched = await asyncio.gather(*tasks, return_exceptions=True)
-                        for (item, _), payload in zip(
-                            feedme_items[:max_per_source], fetched, strict=False
-                        ):
-                            if isinstance(payload, Exception):
-                                continue
-                            if not isinstance(payload, dict) or not payload.get(
-                                "found"
-                            ):
-                                continue
-                            content = payload.get("content")
-                            if isinstance(content, str) and content.strip():
-                                item["content"] = content
-                                meta = item.get("metadata")
-                                meta = meta if isinstance(meta, dict) else {}
-                                hydrated_meta = payload.get("metadata")
-                                hydrated_meta = (
-                                    hydrated_meta
-                                    if isinstance(hydrated_meta, dict)
-                                    else {}
-                                )
-                                item["metadata"] = {**meta, **hydrated_meta}
-                    except Exception:
-                        pass
+                # NOTE: Do NOT auto-hydrate full FeedMe transcripts here.
+                # db_unified_search returns excerpts by default; the agent can
+                # call db_context_search for full transcripts when truly needed.
                 # Capture which KB/macros contributed (for post-resolution pattern memory)
                 for item in retrieved_results:
                     if not isinstance(item, dict):
@@ -4174,7 +4136,7 @@ async def _generate_reply(
                 except Exception:
                     playbook_extractor = None
 
-                pattern_info = await _run_pattern_preflight(
+                pattern_preflight = await _run_pattern_preflight(
                     ticket_id=str(ticket_id),
                     session_id=session_id,
                     ticket_text=user_query,
@@ -4188,27 +4150,70 @@ async def _generate_reply(
                         getattr(settings, "zendesk_issue_pattern_min_similarity", 0.62)
                     ),
                 )
-                inferred_category = (
-                    str(pattern_info.get("category"))
-                    if isinstance(pattern_info, dict) and pattern_info.get("category")
-                    else None
-                )
+
+                if isinstance(pattern_preflight, dict):
+                    raw_category = pattern_preflight.get("category")
+                    inferred_category = (
+                        str(raw_category) if isinstance(raw_category, str) and raw_category.strip() else None
+                    )
+                    raw_playbook_path = pattern_preflight.get("playbook_path")
+                    playbook_path = (
+                        str(raw_playbook_path)
+                        if isinstance(raw_playbook_path, str) and raw_playbook_path.strip()
+                        else None
+                    )
+
+                    similar_count = 0
+                    try:
+                        similar_count = int(pattern_preflight.get("similar_count") or 0)
+                    except Exception:
+                        similar_count = 0
+                    pattern_ok = bool(pattern_preflight.get("playbook_compiled")) or similar_count > 0
+
+                # Inline a bounded amount of pattern/playbook context so the agent
+                # can stay internal-first without immediately reaching for web search.
+                try:
+                    pattern_parts: list[str] = []
+                    if pattern_ok:
+                        similar_md = await workspace_store.read_file("/context/similar_scenarios.md")
+                        if isinstance(similar_md, str) and similar_md.strip():
+                            pattern_parts.append(
+                                "Similar internal scenarios (do NOT mention sources in the customer reply):\n\n"
+                                + _trim_block(similar_md, 5000)
+                            )
+                        if playbook_path:
+                            playbook_md = await workspace_store.read_file(playbook_path)
+                            if isinstance(playbook_md, str) and playbook_md.strip():
+                                pattern_parts.append(
+                                    "Verified internal playbook (do NOT mention sources in the customer reply):\n\n"
+                                    + _trim_block(playbook_md, 7000)
+                                )
+                    pattern_context = "\n\n".join([p for p in pattern_parts if p]).strip()
+                    if pattern_context:
+                        internal_context = "\n\n".join(
+                            [p for p in [internal_context, pattern_context] if p]
+                        ).strip()
+                except Exception:
+                    pass
             except Exception as exc:  # pragma: no cover - best effort
                 logger.debug(
                     "zendesk_pattern_preflight_failed ticket_id=%s error=%s",
                     ticket_id,
                     str(exc)[:180],
                 )
-                pattern_info = None
-                inferred_category = None
 
             # Hybrid KB preflight (vector + full-text) for better recall.
+            kb_ok_hybrid = False
             try:
                 kb_payload: Dict[str, Any] = {
                     "query": user_query,
                     "max_results": settings.primary_agent_min_kb_results,
                 }
-                min_conf = getattr(settings, "primary_agent_min_kb_relevance", None)
+                min_conf = getattr(
+                    settings, "zendesk_internal_retrieval_min_relevance", None
+                )
+                if min_conf is None:
+                    min_conf = getattr(settings, "primary_agent_min_kb_relevance", None)
                 if min_conf is not None:
                     kb_payload["min_confidence"] = min_conf
 
@@ -4216,16 +4221,17 @@ async def _generate_reply(
                 if isinstance(kb_result, str) and kb_result.strip():
                     try:
                         parsed = json.loads(kb_result)
-                        kb_ok = bool(int(parsed.get("result_count") or 0) > 0)
+                        kb_ok_hybrid = bool(int(parsed.get("result_count") or 0) > 0)
                     except Exception:
-                        kb_ok = len(kb_result.strip()) > 50
+                        kb_ok_hybrid = len(kb_result.strip()) > 50
             except Exception as e:
                 logger.debug(
                     f"KB preflight check failed: {e}, defaulting to web search"
                 )
-                kb_ok = False
 
-            internal_ok = bool(kb_ok or macro_ok or feedme_ok)
+            kb_ok = bool(kb_ok or kb_ok_hybrid)
+
+            internal_ok = bool(kb_ok or macro_ok or feedme_ok or pattern_ok)
             macro_selector_context = _format_macro_selector_context(macro_choice)
             if macro_selector_context:
                 internal_context = "\n\n".join(
@@ -4338,34 +4344,26 @@ async def _generate_reply(
                         str(e)[:180],
                     )
 
-            # Use provided provider/model from DB config, fallback to settings/registry defaults
-            use_provider = (
-                provider
-                or getattr(settings, "zendesk_agent_provider", None)
-                or getattr(settings, "primary_agent_provider", "google")
+            # Use configured provider/model from YAML (feature flag only controls enabled/dry_run).
+            config = get_models_config()
+            zendesk_configured = config.zendesk is not None
+            default_provider_cfg = resolve_coordinator_config(
+                config,
+                "google",
+                zendesk=zendesk_configured,
             )
-            try:
-                from app.core.config import get_registry
-
-                registry = get_registry()
-                default_google_model = (
-                    registry.coordinator_google.id
-                )  # Gemini 3 Flash (preview)
-                default_xai_model = registry.coordinator_xai.id
-            except Exception:
-                default_google_model = "gemini-3-flash-preview"
-                default_xai_model = "grok-4-1-fast-reasoning"
-
-            fallback_model = (
-                default_google_model
-                if str(use_provider).lower() == "google"
-                else default_xai_model
-            )
-            use_model = (
-                model
-                or getattr(settings, "zendesk_agent_model", None)
-                or fallback_model
-            )
+            use_provider = provider or (default_provider_cfg.provider or "google")
+            use_model = model
+            if not use_model:
+                try:
+                    coordinator_cfg = resolve_coordinator_config(
+                        config,
+                        str(use_provider),
+                        zendesk=zendesk_configured,
+                    )
+                except Exception:
+                    coordinator_cfg = resolve_coordinator_config(config, "google")
+                use_model = coordinator_cfg.model_id
 
             # Gemini 2.5 Pro currently trips quota/429 frequently when used with tool-enabled
             # LangGraph runs; run the unified agent on Flash and then do a Pro-only rewrite
@@ -4377,10 +4375,7 @@ async def _generate_reply(
             ).lower().startswith("gemini-2.5-pro"):
                 # Prefer the configured primary agent model (often a preview Flash variant)
                 # rather than hard-coding a stable ID that may not be enabled for the key.
-                candidate = (
-                    getattr(settings, "primary_agent_model", None)
-                    or "gemini-2.5-flash-preview-09-2025"
-                )
+                candidate = resolve_coordinator_config(config, "google").model_id
                 candidate = str(candidate)
                 if candidate.lower().startswith("gemini-2.5-pro"):
                     candidate = "gemini-2.5-flash-preview-09-2025"
@@ -4433,26 +4428,19 @@ async def _generate_reply(
                 session_id=session_id,
                 provider=use_provider,
                 model=agent_model,
-                use_server_memory=True,
                 attachments=attachments_for_agent,  # Pass multimodal attachments for vision processing
                 forwarded_props={
-                    "force_websearch": not (kb_ok or macro_ok or feedme_ok or web_ok),
+                    "force_websearch": not (
+                        kb_ok or macro_ok or feedme_ok or pattern_ok or web_ok
+                    ),
                     "websearch_max_results": None,
                     "is_final_response": True,  # Triggers writing/empathy skills
                     "task_type": "support",  # Support ticket context
                     "is_zendesk_ticket": True,  # Explicit Zendesk marker
                     # Pattern-based context engineering
                     "ticket_category": inferred_category,
-                    "similar_scenarios_path": (
-                        pattern_info.get("similar_scenarios_path")
-                        if isinstance(pattern_info, dict)
-                        else "/context/similar_scenarios.md"
-                    ),
-                    "playbook_path": (
-                        pattern_info.get("playbook_path")
-                        if isinstance(pattern_info, dict)
-                        else None
-                    ),
+                    "similar_scenarios_path": "/context/similar_scenarios.md",
+                    "playbook_path": playbook_path,
                 },
             )
 
@@ -5151,29 +5139,7 @@ async def _process_window(
                 .eq("id", row["id"])
                 .execute()
             )
-
-            # Post-resolution learning is gated by explicit Zendesk tag.
-            # Policy: only tickets tagged MB_playbook are eligible for capture.
-            try:
-                raw_tags = ticket.get("tags") if isinstance(ticket, dict) else None
-                tags_list: list[str] = []
-                if isinstance(raw_tags, list):
-                    tags_list = [str(t).strip() for t in raw_tags if str(t).strip()]
-                elif isinstance(raw_tags, str) and raw_tags.strip():
-                    tags_list = [t.strip() for t in raw_tags.replace(",", " ").split() if t.strip()]
-                should_learn = any(t.lower() == "mb_playbook" for t in tags_list)
-            except Exception:
-                should_learn = False
-
-            if should_learn:
-                try:
-                    _queue_post_resolution_learning(run, dry_run=dry_run)
-                except Exception as exc:  # pragma: no cover - best effort
-                    logger.debug(
-                        "post_resolution_learning_queue_failed ticket_id=%s error=%s",
-                        tid,
-                        str(exc)[:180],
-                    )
+            _queue_post_resolution_learning(run, dry_run=dry_run)
             processed += 1
             gemini_remaining = (
                 gemini_remaining if dry_run else max(0, gemini_remaining - 1)
@@ -5183,7 +5149,6 @@ async def _process_window(
             if retry_after is None:
                 retry_after = 60.0
             retry_after = max(5.0, float(retry_after) + 1.0)
-            rate_limit_error = str(e)[:500]
             next_at = (
                 datetime.now(timezone.utc) + timedelta(seconds=retry_after)
             ).isoformat()
@@ -5192,7 +5157,7 @@ async def _process_window(
                 .update(
                     {
                         "status": "retry",
-                        "last_error": rate_limit_error,
+                        "last_error": str(e)[:500],
                         "last_attempt_at": datetime.now(timezone.utc).isoformat(),
                         "next_attempt_at": next_at,
                     }
@@ -5232,6 +5197,26 @@ async def _process_window(
                 )
                 failures += 1
                 break
+
+            # 404s can happen when a ticket is deleted/merged; don't retry.
+            if "Zendesk update failed: 404" in err:
+                rc = (row.get("retry_count") or 0) + 1
+                await supa._exec(
+                    lambda: supa.client.table("zendesk_pending_tickets")
+                    .update(
+                        {
+                            "status": "failed",
+                            "retry_count": rc,
+                            "last_error": "zendesk_ticket_not_found",
+                            "last_attempt_at": datetime.now(timezone.utc).isoformat(),
+                            "next_attempt_at": None,
+                        }
+                    )
+                    .eq("id", row["id"])
+                    .execute()
+                )
+                failures += 1
+                continue
             rc = (row.get("retry_count") or 0) + 1
             if rc >= getattr(settings, "zendesk_max_retries", 5):
                 new_status = "failed"

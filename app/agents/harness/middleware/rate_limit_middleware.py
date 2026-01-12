@@ -13,6 +13,13 @@ from loguru import logger
 
 # Import shared stats from canonical location
 from app.agents.harness._stats import RateLimitStats
+from app.core.config import (
+    coordinator_bucket_name,
+    find_bucket_for_model,
+    get_models_config,
+    infer_provider,
+    get_registry,
+)
 
 if TYPE_CHECKING:
     from langgraph.config import RunnableConfig
@@ -33,16 +40,6 @@ except Exception:  # pragma: no cover - optional dependency
     ResourceExhausted = None
 
 
-# Fallback chain for model degradation
-FALLBACK_CHAIN: Dict[str, Optional[str]] = {
-    "gemini-3-pro-preview": "gemini-2.5-pro",
-    "gemini-3-pro": "gemini-2.5-pro",
-    "gemini-3-flash": "gemini-2.5-flash",
-    "gemini-3-flash-lite": "gemini-2.5-flash-lite",
-    "gemini-2.5-pro": "gemini-2.5-flash",
-    "gemini-2.5-flash": "gemini-2.5-flash-lite",
-    "gemini-2.5-flash-lite": None,  # Terminal - no more fallbacks
-}
 
 
 class SparrowRateLimitMiddleware(AgentMiddleware if AGENT_MIDDLEWARE_AVAILABLE else object):
@@ -75,7 +72,8 @@ class SparrowRateLimitMiddleware(AgentMiddleware if AGENT_MIDDLEWARE_AVAILABLE e
         Args:
             fallback_chain: Optional custom fallback chain.
         """
-        self.fallback_chain = fallback_chain or FALLBACK_CHAIN
+        registry = get_registry()
+        self.fallback_chain = fallback_chain or registry.get_fallback_chain("google")
         self._rate_limiter = None
         self._stats = RateLimitStats()
         self._reserved_slots: List[tuple[str, Optional[str]]] = []
@@ -127,11 +125,20 @@ class SparrowRateLimitMiddleware(AgentMiddleware if AGENT_MIDDLEWARE_AVAILABLE e
             attempt_info = {"model": current_model, "available": False, "reason": None}
 
             try:
+                bucket_name = self._resolve_bucket_name(current_model)
+                attempt_info["bucket"] = bucket_name
+                if not bucket_name:
+                    attempt_info["available"] = True
+                    attempt_info["reason"] = "unknown_bucket"
+                    async with self._stats_lock:
+                        self._stats.attempts.append(attempt_info)
+                    return current_model, current_model != model
+
                 if self.rate_limiter:
-                    result = await self.rate_limiter.check_and_consume(current_model)
+                    result = await self.rate_limiter.check_and_consume(bucket_name)
                     if getattr(result, "allowed", False):
                         self._reserved_slots.append(
-                            (current_model, getattr(result, "token_identifier", None))
+                            (bucket_name, getattr(result, "token_identifier", None))
                         )
                         attempt_info["available"] = True
                         async with self._stats_lock:
@@ -150,16 +157,16 @@ class SparrowRateLimitMiddleware(AgentMiddleware if AGENT_MIDDLEWARE_AVAILABLE e
 
             except RateLimitExceededException:
                 attempt_info["reason"] = "rate_limited"
-                logger.warning("model_rate_limited", model=current_model)
+                logger.warning("model_rate_limited", model=current_model, bucket=bucket_name)
             except CircuitBreakerOpenException:
                 attempt_info["reason"] = "circuit_open"
-                logger.warning("model_circuit_open", model=current_model)
+                logger.warning("model_circuit_open", model=current_model, bucket=bucket_name)
             except GeminiServiceUnavailableException as exc:
                 attempt_info["reason"] = f"unavailable: {exc}"
-                logger.warning("model_unavailable", model=current_model, error=str(exc))
+                logger.warning("model_unavailable", model=current_model, bucket=bucket_name, error=str(exc))
             except Exception as exc:
                 attempt_info["reason"] = f"error: {exc}"
-                logger.warning("model_check_failed", model=current_model, error=str(exc))
+                logger.warning("model_check_failed", model=current_model, bucket=bucket_name, error=str(exc))
 
             self._stats.attempts.append(attempt_info)
 
@@ -206,6 +213,17 @@ class SparrowRateLimitMiddleware(AgentMiddleware if AGENT_MIDDLEWARE_AVAILABLE e
                 return value
         return None
 
+    def _resolve_bucket_name(self, model_name: str) -> Optional[str]:
+        """Resolve a rate-limit bucket for a model name."""
+        if not model_name:
+            return None
+        config = get_models_config()
+        bucket = find_bucket_for_model(config, model_name)
+        if bucket:
+            return bucket
+        provider = infer_provider(model_name)
+        return coordinator_bucket_name(provider, with_subagents=True, zendesk=False)
+
     def _apply_fallback_model(self, model_obj: Any, fallback_model: str) -> bool:
         """Attempt to update the model object in-place for fallback."""
         for attr in ("model", "model_name"):
@@ -232,13 +250,13 @@ class SparrowRateLimitMiddleware(AgentMiddleware if AGENT_MIDDLEWARE_AVAILABLE e
         if not self.rate_limiter:
             return
 
-        for model_name, token_identifier in self._reserved_slots:
+        for bucket_name, token_identifier in self._reserved_slots:
             try:
-                await self.rate_limiter.release_slot(model_name, token_identifier)
+                await self.rate_limiter.release_slot(bucket_name, token_identifier)
             except Exception as exc:
                 logger.warning(
                     "rate_limit_slot_release_failed",
-                    model=model_name,
+                    bucket=bucket_name,
                     error=str(exc),
                 )
 
@@ -260,7 +278,11 @@ class SparrowRateLimitMiddleware(AgentMiddleware if AGENT_MIDDLEWARE_AVAILABLE e
 
         try:
             if self.rate_limiter:
-                result = await self.rate_limiter.check_and_consume(model_name)
+                bucket_name = self._resolve_bucket_name(model_name)
+                if not bucket_name:
+                    return await handler(request)
+
+                result = await self.rate_limiter.check_and_consume(bucket_name)
                 if not getattr(result, "allowed", False):
                     metadata = getattr(result, "metadata", None)
                     limits = metadata.dict() if hasattr(metadata, "dict") else (
@@ -270,10 +292,10 @@ class SparrowRateLimitMiddleware(AgentMiddleware if AGENT_MIDDLEWARE_AVAILABLE e
                         f"Rate limit exceeded for {model_name}",
                         retry_after=getattr(result, "retry_after", None),
                         limits=limits,
-                        model=model_name,
+                        model=bucket_name,
                     )
                 self._reserved_slots.append(
-                    (model_name, getattr(result, "token_identifier", None))
+                    (bucket_name, getattr(result, "token_identifier", None))
                 )
         except RateLimitExceededException:
             fallback = self.get_fallback(model_name)

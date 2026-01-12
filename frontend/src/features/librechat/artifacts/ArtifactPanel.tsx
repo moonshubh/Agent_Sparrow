@@ -9,7 +9,6 @@ import { useCurrentArtifact, useArtifactsVisible, useArtifactStore, useArtifactS
 import { MermaidEditor } from './MermaidEditor';
 import { ArticleEditor } from './ArticleEditor';
 import type { Artifact } from './types';
-import { resolveImageSrc } from './imageUtils';
 import { useAgent } from '@/features/librechat/AgentContext';
 import { sessionsAPI } from '@/services/api/endpoints/sessions';
 
@@ -534,7 +533,7 @@ export const ArtifactPanel = memo(function ArtifactPanel() {
     }
   }, [artifact]);
 
-  const handleDownload = useCallback(() => {
+  const handleDownload = useCallback(async () => {
     if (!artifact) return;
 
     // Handle image downloads
@@ -564,25 +563,28 @@ export const ArtifactPanel = memo(function ArtifactPanel() {
         return;
       }
 
-      const imageSrc = resolveImageSrc(artifact);
-      if (imageSrc) {
-        fetch(imageSrc)
-          .then((res) => res.blob())
-          .then((blob) => {
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = filename;
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
-            URL.revokeObjectURL(url);
-          })
-          .catch((err) => {
-            console.error('Failed to download image:', err);
-            window.open(imageSrc, '_blank', 'noopener,noreferrer');
-          });
-        return;
+      const imageUrl = artifact.content;
+      if (imageUrl) {
+        try {
+          const response = await fetch(imageUrl, { credentials: 'omit' });
+          if (!response.ok) {
+            throw new Error(`HTTP ${response.status}`);
+          }
+          const blob = await response.blob();
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = filename;
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+          URL.revokeObjectURL(url);
+          return;
+        } catch (error) {
+          console.warn('[ArtifactPanel] Failed to download image via fetch; opening URL', error);
+          window.open(imageUrl, '_blank', 'noopener,noreferrer');
+          return;
+        }
       }
     }
 
@@ -806,7 +808,9 @@ export const ArtifactPanel = memo(function ArtifactPanel() {
 
     switch (artifact.type) {
       case 'image': {
-        const imageSrc = resolveImageSrc(artifact);
+        const imageSrc = artifact.imageData
+          ? `data:${artifact.mimeType || 'image/png'};base64,${artifact.imageData}`
+          : artifact.content || null;
 
         if (!imageSrc) {
           return (

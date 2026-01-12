@@ -1,9 +1,9 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from 'react';
+import { useCallback, useEffect, useMemo, useRef, type RefObject } from 'react';
 import { Canvas } from '@react-three/fiber';
 import { OrbitControls } from '@react-three/drei';
-import { PerspectiveCamera, Vector3 } from 'three';
+import * as THREE from 'three';
 import type { EntityType, GraphNode, TreeEdge, TreeTransformResult, TreeViewMode } from '../types';
 import { TreeScene } from './TreeScene';
 import type { TreeCameraState } from '../hooks/useTreeState';
@@ -15,7 +15,7 @@ export type MemoryTree3DControlsApi = {
 };
 
 type OrbitControlsHandle = {
-  target: Vector3;
+  target: THREE.Vector3;
   minDistance?: number;
   maxDistance?: number;
   update: () => void;
@@ -69,14 +69,12 @@ export default function MemoryTree3D({
   loading?: boolean;
 }) {
   const controlsRef = useRef<OrbitControlsHandle | null>(null);
-  const cameraRef = useRef<PerspectiveCamera | null>(null);
+  const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
   const hydratedCameraRef = useRef(false);
   const lastCameraEmitRef = useRef(0);
-  const [controlsReady, setControlsReady] = useState(false);
-  const [cameraReady, setCameraReady] = useState(false);
 
-  const initialCameraPosition = useMemo(() => new Vector3(0, 12, 22), []);
-  const initialTarget = useMemo(() => new Vector3(0, 6, 0), []);
+  const initialCameraPosition = useMemo(() => new THREE.Vector3(0, 12, 22), []);
+  const initialTarget = useMemo(() => new THREE.Vector3(0, 6, 0), []);
 
   const emitCameraState = useCallback(() => {
     const camera = cameraRef.current;
@@ -107,7 +105,7 @@ export default function MemoryTree3D({
     );
     controls.update();
     hydratedCameraRef.current = true;
-  }, [initialCameraState, cameraReady, controlsReady]);
+  }, [initialCameraState]);
 
   const reset = useCallback(() => {
     const camera = cameraRef.current;
@@ -125,7 +123,7 @@ export default function MemoryTree3D({
     const controls = controlsRef.current;
     if (!camera || !controls) return;
 
-    const dir = new Vector3().subVectors(camera.position, controls.target);
+    const dir = new THREE.Vector3().subVectors(camera.position, controls.target);
     const distance = dir.length();
     const next = clamp(
       distance * factor,
@@ -151,9 +149,7 @@ export default function MemoryTree3D({
   }, [onControlsReady, reset, zoomByFactor]);
 
   const setOrbitControlsRef = useCallback((instance: unknown) => {
-    const next = instance ? (instance as OrbitControlsHandle) : null;
-    controlsRef.current = next;
-    setControlsReady(Boolean(next));
+    controlsRef.current = instance ? (instance as OrbitControlsHandle) : null;
   }, []);
 
   const lighting = viewMode === 'celebrate_strengths'
@@ -180,15 +176,13 @@ export default function MemoryTree3D({
         shadows
         camera={{ position: [0, 12, 22], fov: 48 }}
         gl={{ antialias: true, alpha: true }}
-        dpr={[1, 1.5]}
         style={{ background: 'transparent' }}
         onPointerMissed={() => {
           onBackgroundClick?.();
         }}
         onCreated={({ camera }) => {
-          if (camera instanceof PerspectiveCamera) {
+          if (camera instanceof THREE.PerspectiveCamera) {
             cameraRef.current = camera;
-            setCameraReady(true);
           }
         }}
       >

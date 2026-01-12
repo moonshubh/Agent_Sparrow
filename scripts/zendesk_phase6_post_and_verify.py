@@ -8,7 +8,7 @@ import re
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Dict, List, Optional
 
 import sys
 
@@ -100,7 +100,7 @@ class Phase6TicketRun:
     finished_at: str
 
 
-def _best_effort_reply_text_from_comment(comment: dict[str, Any]) -> tuple[str, bool]:
+def _best_effort_reply_text_from_comment(comment: Dict[str, Any]) -> tuple[str, bool]:
     if not isinstance(comment, dict):
         return "", False
     html_body = comment.get("html_body")
@@ -362,10 +362,10 @@ async def _process_one_ticket(
             )
             posted_risk = scheduler._risk_statement_issues(
                 posted_text,
-                ticket_text=ticket_text,
-                evidence_text=evidence_text,
-                intent=intent,
-            )
+                    ticket_text=ticket_text,
+                    evidence_text=evidence_text,
+                    intent=intent,
+                )
     elif verify_posted:
         comments = await asyncio.to_thread(zc.get_ticket_comments, ticket_id, 10)
         comment = None

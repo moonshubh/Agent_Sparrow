@@ -1,32 +1,20 @@
 'use client';
 
-import { useEffect, useMemo, useRef } from 'react';
+import { useMemo, useRef } from 'react';
 import { useFrame } from '@react-three/fiber';
-import {
-  BufferAttribute,
-  BufferGeometry,
-  Color,
-  IcosahedronGeometry,
-  Mesh,
-  MeshStandardMaterial,
-  Points,
-  PointsMaterial,
-  Texture,
-  Vector3,
-} from 'three';
+import * as THREE from 'three';
 import { clamp, getFoliageColor, hashStringToUint32, mulberry32 } from '../lib/tree3DGeometry';
 import type { TreeViewMode } from '../types';
 
 export interface FoliageClusterProps {
   id: string;
-  center: Vector3;
+  center: THREE.Vector3;
   count: number;
   freshness: 'fresh' | 'stale';
   isDimmed: boolean;
   isSelected: boolean;
   viewMode: TreeViewMode;
-  leafTexture: Texture | null;
-  animate?: boolean;
+  leafTexture: THREE.Texture | null;
 }
 
 export function FoliageCluster({
@@ -38,10 +26,9 @@ export function FoliageCluster({
   isSelected,
   viewMode,
   leafTexture,
-  animate = true,
 }: FoliageClusterProps) {
-  const pointsRef = useRef<Points>(null);
-  const canopyRef = useRef<Mesh>(null);
+  const pointsRef = useRef<THREE.Points>(null);
+  const canopyRef = useRef<THREE.Mesh>(null);
   const seedOffset = useMemo(() => (hashStringToUint32(id) % 1000) / 140, [id]);
 
   const geometry = useMemo(() => {
@@ -55,7 +42,7 @@ export function FoliageCluster({
     const base = getFoliageColor(freshness);
     const baseHsl = { h: 0, s: 0, l: 0 };
     base.getHSL(baseHsl);
-    const tmp = new Color();
+    const tmp = new THREE.Color();
 
     for (let i = 0; i < count; i += 1) {
       const phi = rng() * Math.PI * 2;
@@ -76,20 +63,19 @@ export function FoliageCluster({
       colors[i * 3 + 2] = tmp.b;
     }
 
-    const geo = new BufferGeometry();
-    geo.setAttribute('position', new BufferAttribute(positions, 3));
-    geo.setAttribute('color', new BufferAttribute(colors, 3));
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
     return geo;
   }, [count, freshness, id]);
 
   const canopyRadius = useMemo(() => 0.78 + Math.min(1.25, count / 140) * 0.86, [count]);
   const canopyGeometry = useMemo(
-    () => new IcosahedronGeometry(canopyRadius, 1),
+    () => new THREE.IcosahedronGeometry(canopyRadius, 1),
     [canopyRadius]
   );
 
   useFrame((state) => {
-    if (!animate) return;
     if (!pointsRef.current) return;
     const t = state.clock.elapsedTime;
     const sway = Math.sin(t * 0.6 + seedOffset) * 0.035;
@@ -98,7 +84,7 @@ export function FoliageCluster({
     pointsRef.current.position.set(center.x, center.y + sway, center.z);
 
     const mat = pointsRef.current.material;
-    if (!(mat instanceof PointsMaterial)) return;
+    if (!(mat instanceof THREE.PointsMaterial)) return;
 
     const baseOpacity = isDimmed
       ? 0.16
@@ -131,8 +117,8 @@ export function FoliageCluster({
           ? 0.82
           : 0.62;
 
-    return new PointsMaterial({
-      color: new Color('#ffffff'),
+    return new THREE.PointsMaterial({
+      color: new THREE.Color('#ffffff'),
       map: leafTexture ?? undefined,
       transparent: true,
       alphaTest: 0.2,
@@ -148,41 +134,17 @@ export function FoliageCluster({
     const baseColor = getFoliageColor(freshness).multiplyScalar(0.55);
     const glow = viewMode === 'surface_gaps' ? '#22d3ee' : '#ffcd40';
     const opacity = isDimmed ? 0.03 : isSelected ? 0.095 : viewMode === 'celebrate_strengths' ? 0.075 : 0.06;
-    return new MeshStandardMaterial({
+    return new THREE.MeshStandardMaterial({
       color: baseColor,
       transparent: true,
       opacity,
       depthWrite: false,
-      emissive: new Color(glow),
+      emissive: new THREE.Color(glow),
       emissiveIntensity: viewMode === 'surface_gaps' ? 0.12 : 0.08,
       roughness: 0.95,
       metalness: 0,
     });
   }, [freshness, isDimmed, isSelected, viewMode]);
-
-  useEffect(() => {
-    return () => {
-      geometry.dispose();
-    };
-  }, [geometry]);
-
-  useEffect(() => {
-    return () => {
-      canopyGeometry.dispose();
-    };
-  }, [canopyGeometry]);
-
-  useEffect(() => {
-    return () => {
-      material.dispose();
-    };
-  }, [material]);
-
-  useEffect(() => {
-    return () => {
-      canopyMaterial.dispose();
-    };
-  }, [canopyMaterial]);
 
   return (
     <>

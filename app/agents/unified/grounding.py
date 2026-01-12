@@ -16,10 +16,12 @@ from typing import Any, Dict, List, Optional
 import httpx
 
 from app.core.logging_config import get_logger
+from app.core.config import get_models_config
 from app.core.settings import settings
+from app.core.rate_limiting.agent_wrapper import get_rate_limiter
 from app.tools.research_tools import FirecrawlTool, TavilySearchTool
 
-from .quota_manager import QuotaExceededError, QuotaManager
+from .quota_manager import QuotaExceededError
 
 GROUNDING_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
 
@@ -38,16 +40,18 @@ class GeminiGroundingService:
     def __init__(
         self,
         *,
-        quota_manager: Optional[QuotaManager] = None,
+        rate_limiter: Optional[Any] = None,
         api_key: Optional[str] = None,
         model: Optional[str] = None,
         enabled: Optional[bool] = None,
         timeout: Optional[float] = None,
     ) -> None:
         self.logger = get_logger("gemini_grounding")
-        self.quota_manager = quota_manager or QuotaManager()
+        self.rate_limiter = rate_limiter or get_rate_limiter()
         self.api_key = api_key or settings.gemini_api_key
-        self.model = model or settings.grounding_model
+        config = get_models_config()
+        grounding_cfg = config.internal["grounding"]
+        self.model = model or grounding_cfg.model_id
         self.timeout = timeout or settings.grounding_timeout_sec
         resolved_enabled = enabled if enabled is not None else settings.enable_grounding_search
         self.enabled = bool(resolved_enabled and self.api_key)
@@ -64,8 +68,10 @@ class GeminiGroundingService:
             return {"source": "gemini_grounding", "results": [], "langsmith_metadata": {}}
 
         limit = self._resolve_limit(max_results)
-        if not self.quota_manager.check_and_track("grounding"):
-            raise QuotaExceededError("grounding")
+        if self.rate_limiter:
+            result = await self.rate_limiter.check_and_consume("internal.grounding")
+            if not getattr(result, "allowed", False):
+                raise QuotaExceededError("grounding")
 
         try:
             payload = await self._call_grounding_api(normalized_query, limit)

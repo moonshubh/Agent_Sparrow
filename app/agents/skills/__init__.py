@@ -18,7 +18,14 @@ logger = logging.getLogger(__name__)
 SKILL_TRIGGERS: dict[str, list[str]] = {
     # Document processing - file extensions and keywords
     "pdf": [r"\.pdf\b", r"\bpdf\b", r"pdf file", r"pdf document", r"extract.*pdf"],
-    "docx": [r"\.docx?\b", r"\bword\b", r"word doc", r"\.doc\b", r"word document"],
+    # NOTE: Avoid matching generic "word" (e.g., "10,000 word article")
+    # which caused false positives.
+    "docx": [
+        r"\.docx?\b",
+        r"\bword document\b",
+        r"\bms word\b",
+        r"\bword file\b",
+    ],
     "xlsx": [r"\.xlsx?\b", r"\bexcel\b", r"spreadsheet", r"\.xls\b", r"workbook"],
     "pptx": [r"\.pptx?\b", r"\bpowerpoint\b", r"presentation", r"\.ppt\b", r"slide"],
     # Data analysis

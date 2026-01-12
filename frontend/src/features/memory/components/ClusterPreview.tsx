@@ -73,6 +73,7 @@ export function ClusterPreview({
     requestIdRef.current += 1;
     const requestId = requestIdRef.current;
 
+    if (requestIdRef.current !== requestId) return;
     setError(null);
     setPreview(null);
     setClusters([]);
@@ -111,11 +112,7 @@ export function ClusterPreview({
         },
       }
     );
-    // Intentionally omit `previewMutation` from deps: React Query mutation objects
-    // change identity as their internal state updates, which can cause this effect
-    // to re-run and spam the backend with repeated preview requests.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, relationshipId]);
+  }, [open, previewMutation.mutate, relationshipId]);
 
   const existingRelationshipCount = preview?.existing_relationship_ids?.length ?? 0;
 

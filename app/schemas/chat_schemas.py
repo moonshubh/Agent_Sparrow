@@ -5,10 +5,10 @@ Data structures for chat session persistence and message management.
 Following the established MB-Sparrow patterns from FeedMe schemas.
 """
 
-from typing import Dict, List, Optional, Any
+from typing import Optional, Any
 from datetime import datetime
 from enum import Enum
-from pydantic import BaseModel, Field, field_validator, FieldValidationInfo, ConfigDict
+from pydantic import BaseModel, Field, field_validator, ValidationInfo, ConfigDict
 
 
 class MessageType(str, Enum):
@@ -32,7 +32,7 @@ class ChatSessionBase(BaseModel):
     """Base model for chat sessions"""
     title: str = Field(..., min_length=1, max_length=255, description="Session title or topic")
     agent_type: AgentType = Field(default=AgentType.PRIMARY, description="Agent type handling this session")
-    metadata: Dict[str, Any] = Field(default_factory=dict, description="Additional metadata")
+    metadata: dict[str, Any] = Field(default_factory=dict, description="Additional metadata")
     is_active: bool = Field(default=True, description="Whether session is active")
 
     @field_validator('title')
@@ -48,9 +48,9 @@ class ChatMessageBase(BaseModel):
     content: str = Field(..., min_length=1, description="Message content")
     message_type: MessageType = Field(default=MessageType.USER, description="Type of message")
     agent_type: Optional[AgentType] = Field(None, description="Agent that generated assistant messages")
-    metadata: Dict[str, Any] = Field(default_factory=dict, description="Additional metadata including follow-up questions")
-    environmental_context: Optional[Dict[str, Any]] = Field(default_factory=dict, description="Environmental context information for the message")
-    correlation_analysis: Optional[Dict[str, Any]] = Field(default_factory=dict, description="Correlation analysis data for message relationships")
+    metadata: dict[str, Any] = Field(default_factory=dict, description="Additional metadata including follow-up questions")
+    environmental_context: Optional[dict[str, Any]] = Field(default_factory=dict, description="Environmental context information for the message")
+    correlation_analysis: Optional[dict[str, Any]] = Field(default_factory=dict, description="Correlation analysis data for message relationships")
 
     @field_validator('content')
     def validate_content(cls, v):
@@ -60,7 +60,7 @@ class ChatMessageBase(BaseModel):
         return v.strip()
 
     @field_validator('agent_type')
-    def validate_agent_type_for_assistant(cls, v, info: FieldValidationInfo):
+    def validate_agent_type_for_assistant(cls, v, info: ValidationInfo):
         """Validate that assistant messages have an agent_type"""
         if (info.data.get('message_type') == MessageType.ASSISTANT) and not v:
             raise ValueError("Assistant messages must specify an agent_type")
@@ -95,7 +95,7 @@ class ChatSessionUpdate(BaseModel):
     """Model for updating chat sessions"""
     title: Optional[str] = Field(None, min_length=1, max_length=255, description="Updated session title")
     is_active: Optional[bool] = Field(None, description="Updated active status")
-    metadata: Optional[Dict[str, Any]] = Field(None, description="Updated metadata")
+    metadata: Optional[dict[str, Any]] = Field(None, description="Updated metadata")
 
     @field_validator('title')
     def validate_title(cls, v):
@@ -132,14 +132,14 @@ class ChatMessage(ChatMessageBase):
 
 class ChatSessionWithMessages(ChatSession):
     """Chat session with embedded messages"""
-    messages: List[ChatMessage] = Field(default_factory=list, description="Messages in this session")
+    messages: list[ChatMessage] = Field(default_factory=list, description="Messages in this session")
 
 
 # List Response Models
 
 class ChatSessionListResponse(BaseModel):
     """Response model for listing chat sessions"""
-    sessions: List[ChatSession]
+    sessions: list[ChatSession]
     total_count: int
     page: int = Field(default=1, ge=1)
     page_size: int = Field(default=10, ge=1, le=100)
@@ -149,7 +149,7 @@ class ChatSessionListResponse(BaseModel):
 
 class ChatMessageListResponse(BaseModel):
     """Response model for listing chat messages"""
-    messages: List[ChatMessage]
+    messages: list[ChatMessage]
     total_count: int
     page: int = Field(default=1, ge=1)
     page_size: int = Field(default=50, ge=1, le=200)
@@ -182,7 +182,7 @@ class ChatSessionStats(BaseModel):
     total_sessions: int
     active_sessions: int
     inactive_sessions: int
-    sessions_by_agent_type: Dict[str, int]
+    sessions_by_agent_type: dict[str, int]
     total_messages: int
     average_messages_per_session: float
 
@@ -193,7 +193,7 @@ class UserChatStats(BaseModel):
     total_sessions: int
     active_sessions: int
     total_messages: int
-    sessions_by_agent_type: Dict[str, int]
+    sessions_by_agent_type: dict[str, int]
     most_recent_session: Optional[datetime]
     oldest_session: Optional[datetime]
 
@@ -211,12 +211,12 @@ class ChatErrorResponse(BaseModel):
 
 class BulkSessionUpdate(BaseModel):
     """Model for bulk updating sessions"""
-    session_ids: List[int] = Field(..., min_length=1, description="List of session IDs to update")
+    session_ids: list[int] = Field(..., min_length=1, description="List of session IDs to update")
     updates: ChatSessionUpdate = Field(..., description="Updates to apply")
 
 
 class BulkSessionUpdateResponse(BaseModel):
     """Response for bulk session updates"""
     updated_count: int
-    failed_updates: List[Dict[str, Any]] = Field(default_factory=list)
+    failed_updates: list[dict[str, Any]] = Field(default_factory=list)
     success: bool

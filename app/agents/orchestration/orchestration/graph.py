@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Optional
 
 from app.agents.harness.persistence.memory_checkpointer import SanitizingMemorySaver
+from langgraph.config import RunnableConfig
 from langgraph.graph import StateGraph, END
 from langchain_core.messages import AIMessage, ToolMessage
 
@@ -230,7 +231,10 @@ def _build_tool_node():
     return ParallelToolNode()
 
 
-async def _run_agent_with_retry(state: GraphState, config: Optional[dict] = None) -> dict:
+async def _run_agent_with_retry(
+    state: GraphState,
+    config: RunnableConfig | None = None,
+) -> dict:
     """Run the unified agent with lightweight retry/backoff for transient errors."""
 
     from app.agents.unified.agent_sparrow import run_unified_agent

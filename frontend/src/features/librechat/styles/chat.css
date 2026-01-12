@@ -2117,3 +2117,92 @@
   background-color: var(--lc-border-light);
   margin: 6px 0;
 }
+
+/* Log analysis technical details dropdown */
+.lc-log-notes {
+  margin-top: 12px;
+  border: 1px solid var(--lc-border);
+  border-radius: 10px;
+  background-color: var(--lc-surface-secondary);
+}
+
+.lc-log-notes-summary {
+  cursor: pointer;
+  padding: 10px 12px;
+  color: var(--lc-text-secondary);
+  font-size: 13px;
+  user-select: none;
+}
+
+.lc-log-notes[open] .lc-log-notes-summary {
+  border-bottom: 1px solid var(--lc-border-light);
+  color: var(--lc-text-primary);
+}
+
+.lc-log-notes-body {
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.lc-log-note {
+  border: 1px solid var(--lc-border-light);
+  border-radius: 10px;
+  padding: 10px 12px;
+  background-color: var(--lc-surface-tertiary);
+}
+
+.lc-log-note-header {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 10px;
+}
+
+.lc-log-note-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--lc-text-primary);
+}
+
+.lc-log-note-meta {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  font-size: 12px;
+  color: var(--lc-text-tertiary);
+}
+
+.lc-log-note-section {
+  margin-top: 10px;
+}
+
+.lc-log-note-section-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--lc-text-secondary);
+  margin-bottom: 6px;
+}
+
+.lc-log-note-pre {
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: var(--lc-font-mono);
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--lc-text-primary);
+  background-color: rgba(0, 0, 0, 0.12);
+  border: 1px solid var(--lc-border-light);
+  border-radius: 8px;
+  padding: 10px;
+  margin: 0;
+}
+
+.lc-log-note-list {
+  margin: 0;
+  padding-left: 18px;
+  color: var(--lc-text-secondary);
+  font-size: 12px;
+  line-height: 1.55;
+}

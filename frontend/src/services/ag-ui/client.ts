@@ -320,7 +320,23 @@ async function processEvent(
 
     case 'RUN_ERROR':
     case 'run_error': {
-      handlers.onRunFailed?.({ error: event.error || event });
+      const rawError = event.error;
+      const hasErrorObject =
+        rawError &&
+        typeof rawError === 'object' &&
+        !Array.isArray(rawError) &&
+        Object.keys(rawError as Record<string, unknown>).length > 0;
+
+      const normalized =
+        typeof rawError === 'string' && rawError.trim()
+          ? rawError
+          : typeof event.message === 'string' && event.message.trim()
+            ? event.message
+            : hasErrorObject
+              ? rawError
+              : event;
+
+      handlers.onRunFailed?.({ error: normalized });
       break;
     }
 

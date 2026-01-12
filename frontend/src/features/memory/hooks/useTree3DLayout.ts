@@ -1,6 +1,6 @@
 import { hierarchy, tree as d3Tree } from 'd3-hierarchy';
 import { useMemo } from 'react';
-import { Vector3 } from 'three';
+import * as THREE from 'three';
 import type { CycleEdge, EntityType, TreeEdge, TreeNodeData, TreeTransformResult } from '../types';
 import { clamp, getParticleCount, hashStringToUint32, mulberry32 } from '../lib/tree3DGeometry';
 import { spatialKMeans, type Vec3 } from '../lib/spatialClustering';
@@ -13,7 +13,7 @@ export interface TreeNode3D {
   kind: 'entity';
   id: string;
   data: TreeNodeData;
-  position: Vector3;
+  position: THREE.Vector3;
   depth: number;
   parentId: string | null;
   childCount: number;
@@ -27,7 +27,7 @@ export interface TreeNode3D {
 export interface TreeCluster3D {
   kind: 'cluster';
   id: string;
-  position: Vector3;
+  position: THREE.Vector3;
   depth: number;
   parentId: string | null;
   memberCount: number;
@@ -406,7 +406,7 @@ export function useTree3DLayout(
         const clusterNode: TreeCluster3D = {
           kind: 'cluster',
           id: n.data.id,
-          position: new Vector3(x + jitterX, y, z + jitterZ),
+          position: new THREE.Vector3(x + jitterX, y, z + jitterZ),
           depth: n.depth,
           parentId: renderParentId,
           memberCount: n.data.memberNodeIds.length,
@@ -429,7 +429,7 @@ export function useTree3DLayout(
         kind: 'entity',
         id: n.data.id,
         data: n.data.treeNode,
-        position: new Vector3(x + jitterX, y, z + jitterZ),
+        position: new THREE.Vector3(x + jitterX, y, z + jitterZ),
         depth: n.depth,
         parentId: renderParentId,
         childCount,

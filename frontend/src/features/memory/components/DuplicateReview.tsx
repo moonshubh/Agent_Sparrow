@@ -3,7 +3,6 @@
 import React, { useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { GitMerge, X, CheckCircle, XCircle, Clock, ArrowRight } from 'lucide-react';
-import { toast } from 'sonner';
 import { useDuplicateCandidates, useMergeMemories, useDismissDuplicate } from '../hooks';
 import { ConfidenceBadge } from './ConfidenceBadge';
 import type { DuplicateCandidate } from '../types';
@@ -20,10 +19,9 @@ export default function DuplicateReview() {
           duplicate_candidate_id: candidate.id,
           keep_memory_id: keepMemoryId,
         });
-        await refetch();
+        refetch();
       } catch (err: unknown) {
         console.error('Failed to merge:', err);
-        toast.error('Failed to merge memories');
       }
     },
     [mergeMemories, refetch]
@@ -33,10 +31,9 @@ export default function DuplicateReview() {
     async (candidateId: string) => {
       try {
         await dismissDuplicate.mutateAsync({ candidateId });
-        await refetch();
+        refetch();
       } catch (err: unknown) {
         console.error('Failed to dismiss:', err);
-        toast.error('Failed to dismiss duplicate');
       }
     },
     [dismissDuplicate, refetch]
@@ -47,10 +44,9 @@ export default function DuplicateReview() {
     async (candidateId: string) => {
       try {
         await dismissDuplicate.mutateAsync({ candidateId, notes: 'Deferred for later review' });
-        await refetch();
+        refetch();
       } catch (err: unknown) {
         console.error('Failed to defer:', err);
-        toast.error('Failed to defer duplicate');
       }
     },
     [dismissDuplicate, refetch]

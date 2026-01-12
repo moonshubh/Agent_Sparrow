@@ -16,10 +16,10 @@ export function SettingsButtonV2() {
   const settingsParam = useMemo(() => (searchParams?.get('settings') || '').toLowerCase(), [searchParams])
 
   const allowedTabs = useMemo(() => (
-    new Set(['general', 'api-keys', 'zendesk', 'global-knowledge', 'rate-limits', 'account'])
+    new Set(['general', 'api-keys', 'zendesk', 'rate-limits', 'account'])
   ), [])
   const paramTab = allowedTabs.has(settingsParam) ? settingsParam : null
-  const defaultTab = (paramTab ?? 'general') as 'general' | 'api-keys' | 'zendesk' | 'global-knowledge' | 'rate-limits' | 'account'
+  const defaultTab = (paramTab ?? 'general') as 'general' | 'api-keys' | 'zendesk' | 'rate-limits' | 'account'
   const isOpen = manualOpen || Boolean(paramTab)
 
   const handleClose = () => {

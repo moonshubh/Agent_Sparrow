@@ -3,16 +3,16 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type MutableRefObject, type RefObject } from 'react';
 import { useFrame, useThree } from '@react-three/fiber';
 import { Html } from '@react-three/drei';
-import { Box3, PerspectiveCamera, Sphere, Vector3 } from 'three';
+import * as THREE from 'three';
 import type { EntityType, GraphNode, TreeEdge, TreeTransformResult, TreeViewMode } from '../types';
 import { useTree3DLayout } from '../hooks/useTree3DLayout';
-import { CycleConnection } from './cycle-connection';
+import { CycleConnection } from './CycleConnection';
 import { GroundPlane } from './GroundPlane';
-import { NodeCluster } from './node-cluster';
+import { NodeCluster } from './NodeCluster';
 import { OrphanScatter } from './OrphanScatter';
 import { SkeletonTree } from './SkeletonTree';
-import { TreeBranch } from './tree-branch';
-import { TreeNode } from './tree-node';
+import { TreeBranch } from './TreeBranch';
+import { TreeNode } from './TreeNode';
 import { TreeTrunk } from './TreeTrunk';
 import { getLeafTexture } from '../lib/textureLoader';
 import { useLOD } from '../hooks/useLOD';
@@ -69,7 +69,7 @@ export function TreeScene({
   onShowChildren?: (nodeId: string) => void;
   onEdgeClick?: (edge: TreeEdge) => void;
   orbitControlsRef?: MutableRefObject<{
-    target: Vector3;
+    target: THREE.Vector3;
     minDistance?: number;
     maxDistance?: number;
     update: () => void;
@@ -102,10 +102,10 @@ export function TreeScene({
   const flightRef = useRef<{
     startAt: number | null;
     duration: number;
-    fromCamera: Vector3;
-    toCamera: Vector3;
-    fromTarget: Vector3;
-    toTarget: Vector3;
+    fromCamera: THREE.Vector3;
+    toCamera: THREE.Vector3;
+    fromTarget: THREE.Vector3;
+    toTarget: THREE.Vector3;
   } | null>(null);
 
   const layout = useTree3DLayout(tree, {
@@ -136,21 +136,11 @@ export function TreeScene({
     return reviewed;
   }, [tree]);
 
-  const lodConfig = useMemo(() => {
-    const nodeCount = layout.nodes.length;
-    if (nodeCount > 600) {
-      return { highDistance: 8, mediumDistance: 22, updateIntervalSeconds: 0.32 };
-    }
-    if (nodeCount > 400) {
-      return { highDistance: 10, mediumDistance: 28, updateIntervalSeconds: 0.28 };
-    }
-    if (nodeCount > 250) {
-      return { highDistance: 12, mediumDistance: 34, updateIntervalSeconds: 0.24 };
-    }
-    return { highDistance: 14, mediumDistance: 42, updateIntervalSeconds: 0.2 };
-  }, [layout.nodes.length]);
-
-  const lodById = useLOD(layout.nodes, lodConfig);
+  const lodById = useLOD(layout.nodes, {
+    highDistance: 14,
+    mediumDistance: 42,
+    updateIntervalSeconds: 0.2,
+  });
 
   const ghostedById = useMemo(() => {
     if (entityTypeFilter == null) return null;
@@ -192,39 +182,6 @@ export function TreeScene({
     return focus;
   }, [layout.nodes, layout.renderableById, selectedNodeId]);
 
-  const protectedNodeIdSet = useMemo(() => {
-    const set = new Set<string>();
-    if (tree?.rootId) {
-      set.add(tree.rootId);
-    }
-    if (selectedNodeId) {
-      set.add(selectedNodeId);
-    }
-    if (focusNodeIdSet) {
-      focusNodeIdSet.forEach((id) => set.add(id));
-    }
-    if (searchMatchIds) {
-      searchMatchIds.forEach((id) => set.add(id));
-    }
-    if (activeSearchMatchId) {
-      set.add(activeSearchMatchId);
-    }
-    return set;
-  }, [activeSearchMatchId, focusNodeIdSet, searchMatchIds, selectedNodeId, tree]);
-
-  const culledNodeIdSet = useMemo(() => {
-    const set = new Set<string>();
-    if (layout.nodes.length < 200) return set;
-    for (const node of layout.nodes) {
-      if (node.kind !== 'entity') continue;
-      const lod = lodById.get(node.id) ?? 'high';
-      if (lod === 'low' && !protectedNodeIdSet.has(node.id)) {
-        set.add(node.id);
-      }
-    }
-    return set;
-  }, [layout.nodes, lodById, protectedNodeIdSet]);
-
   const cyclesToShow = useMemo(() => {
     if (!selectedNodeId) return [];
     return layout.cycles.filter(
@@ -241,7 +198,7 @@ export function TreeScene({
   const searchMarkers = useMemo(() => {
     if (!searchMatchIds || searchMatchIds.length === 0) return [];
     const max = Math.min(9, searchMatchIds.length);
-    const out: Array<{ id: string; label: string; position: Vector3 }> = [];
+    const out: Array<{ id: string; label: string; position: THREE.Vector3 }> = [];
     for (let idx = 0; idx < max; idx += 1) {
       const id = searchMatchIds[idx];
       if (!id) continue;
@@ -258,13 +215,13 @@ export function TreeScene({
     if (!selected) return;
     const controls = orbitControlsRef?.current;
     if (!controls) return;
-    if (!(camera instanceof PerspectiveCamera)) return;
+    if (!(camera instanceof THREE.PerspectiveCamera)) return;
 
     const fromTarget = controls.target.clone();
     const fromCamera = camera.position.clone();
     const toTarget = selected.position.clone();
 
-    const dir = new Vector3().subVectors(fromCamera, fromTarget);
+    const dir = new THREE.Vector3().subVectors(fromCamera, fromTarget);
     const currentDistance = dir.length() || 10;
     const minDistance = controls.minDistance ?? 0;
     const maxDistance = controls.maxDistance ?? Number.POSITIVE_INFINITY;
@@ -293,7 +250,7 @@ export function TreeScene({
 
     const controls = orbitControlsRef?.current;
     if (!controls) return;
-    if (!(camera instanceof PerspectiveCamera)) return;
+    if (!(camera instanceof THREE.PerspectiveCamera)) return;
 
     const childrenByParentId = new Map<string, string[]>();
     for (const node of layout.nodes) {
@@ -320,7 +277,7 @@ export function TreeScene({
 
     if (ids.size < 2) return;
 
-    const box = new Box3();
+    const box = new THREE.Box3();
     ids.forEach((id) => {
       const node = layout.renderableById.get(id);
       if (!node) return;
@@ -332,14 +289,14 @@ export function TreeScene({
     box.expandByScalar(2.2);
 
     const corners = [
-      new Vector3(box.min.x, box.min.y, box.min.z),
-      new Vector3(box.min.x, box.min.y, box.max.z),
-      new Vector3(box.min.x, box.max.y, box.min.z),
-      new Vector3(box.min.x, box.max.y, box.max.z),
-      new Vector3(box.max.x, box.min.y, box.min.z),
-      new Vector3(box.max.x, box.min.y, box.max.z),
-      new Vector3(box.max.x, box.max.y, box.min.z),
-      new Vector3(box.max.x, box.max.y, box.max.z),
+      new THREE.Vector3(box.min.x, box.min.y, box.min.z),
+      new THREE.Vector3(box.min.x, box.min.y, box.max.z),
+      new THREE.Vector3(box.min.x, box.max.y, box.min.z),
+      new THREE.Vector3(box.min.x, box.max.y, box.max.z),
+      new THREE.Vector3(box.max.x, box.min.y, box.min.z),
+      new THREE.Vector3(box.max.x, box.min.y, box.max.z),
+      new THREE.Vector3(box.max.x, box.max.y, box.min.z),
+      new THREE.Vector3(box.max.x, box.max.y, box.max.z),
     ];
 
     camera.updateMatrixWorld();
@@ -369,7 +326,7 @@ export function TreeScene({
 
     if (alreadyFits) return;
 
-    const sphere = new Sphere();
+    const sphere = new THREE.Sphere();
     box.getBoundingSphere(sphere);
 
     const fov = (camera.fov * Math.PI) / 180;
@@ -386,7 +343,7 @@ export function TreeScene({
     const fromCamera = camera.position.clone();
     const toTarget = sphere.center.clone();
 
-    const dir = new Vector3().subVectors(fromCamera, fromTarget);
+    const dir = new THREE.Vector3().subVectors(fromCamera, fromTarget);
     if (dir.lengthSq() < 1e-4) dir.set(0, 0.35, 1);
     dir.normalize().multiplyScalar(distance);
     const toCamera = toTarget.clone().add(dir);
@@ -405,7 +362,7 @@ export function TreeScene({
     const flight = flightRef.current;
     const controls = orbitControlsRef?.current;
     if (!flight || !controls) return;
-    if (!(camera instanceof PerspectiveCamera)) return;
+    if (!(camera instanceof THREE.PerspectiveCamera)) return;
 
     if (flight.startAt === null) {
       flight.startAt = state.clock.elapsedTime;
@@ -453,22 +410,9 @@ export function TreeScene({
           <TreeTrunk height={layout.trunkHeight} />
 
           {layout.links.map((link) => {
-            const isCulled =
-              culledNodeIdSet.has(link.source.id) || culledNodeIdSet.has(link.target.id);
-            if (isCulled) return null;
-
             const isDimmed =
               Boolean(focusNodeIdSet) &&
               !(focusNodeIdSet?.has(link.source.id) && focusNodeIdSet?.has(link.target.id));
-
-            const sourceLod = lodById.get(link.source.id) ?? 'high';
-            const targetLod = lodById.get(link.target.id) ?? 'high';
-            const linkLod =
-              sourceLod === 'low' && targetLod === 'low'
-                ? 'low'
-                : sourceLod === 'high' || targetLod === 'high'
-                  ? 'high'
-                  : 'medium';
 
             return (
               <TreeBranch
@@ -480,7 +424,6 @@ export function TreeScene({
                 isGhosted={Boolean(
                   ghostedById?.get(link.source.id) || ghostedById?.get(link.target.id)
                 )}
-                lod={linkLod}
                 onClick={(edge) => onEdgeClick?.(edge)}
               />
             );
@@ -497,7 +440,6 @@ export function TreeScene({
           ))}
 
           {layout.nodes.map((node) => {
-            if (culledNodeIdSet.has(node.id)) return null;
             const selected = node.id === selectedNodeId;
             const hovered = node.id === hoveredNodeId;
             const isRoot = node.id === tree!.rootId;

@@ -1,12 +1,11 @@
 import { useFrame, useThree } from '@react-three/fiber';
 import { useMemo, useRef, useState } from 'react';
-import { Camera } from 'three';
-import type { Vector3 } from 'three';
+import * as THREE from 'three';
 
 export type LODLevel = 'high' | 'medium' | 'low';
 
 export function useLOD(
-  nodes: readonly { id: string; position: Vector3 }[],
+  nodes: readonly { id: string; position: THREE.Vector3 }[],
   options?: {
     readonly highDistance?: number;
     readonly mediumDistance?: number;
@@ -28,7 +27,7 @@ export function useLOD(
   const lastUpdateRef = useRef<number>(-1);
 
   useFrame((state) => {
-    if (!(camera instanceof Camera)) return;
+    if (!(camera instanceof THREE.Camera)) return;
     const now = state.clock.elapsedTime;
     if (lastUpdateRef.current >= 0 && now - lastUpdateRef.current < updateIntervalSeconds) {
       return;
@@ -58,3 +57,4 @@ export function useLOD(
     return out;
   }, [cameraPos, highDistance, mediumDistance, nodes]);
 }
+

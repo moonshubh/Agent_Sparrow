@@ -182,11 +182,6 @@
   color: var(--memory-text);
 }
 
-.memory-sidebar-toggle:focus-visible {
-  outline: none;
-  box-shadow: 0 0 0 2px var(--memory-primary);
-}
-
 /* Navigation */
 .memory-sidebar-nav {
   flex: 1;
@@ -218,11 +213,6 @@
 .memory-nav-item:hover {
   background: var(--memory-surface-hover);
   color: var(--memory-text);
-}
-
-.memory-nav-item:focus-visible {
-  outline: none;
-  box-shadow: 0 0 0 2px var(--memory-primary);
 }
 
 .memory-nav-item.active {
@@ -328,11 +318,6 @@
 .memory-back-link:hover {
   background: var(--memory-surface-hover);
   color: var(--memory-text);
-}
-
-.memory-back-link:focus-visible {
-  outline: none;
-  box-shadow: 0 0 0 2px var(--memory-primary);
 }
 
 .memory-back-label {
