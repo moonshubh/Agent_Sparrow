@@ -2,7 +2,7 @@
 fastapi==0.128.0
 fastapi-limiter==0.1.6
 slowapi==0.1.9
-redis==7.1.0  # Must be <6.5 for kombu[redis] compatibility
+redis==6.4.0  # Must be <6.5 for kombu[redis] compatibility
 uvicorn==0.40.0
 python-multipart==0.0.21
 pydantic==2.12.5
