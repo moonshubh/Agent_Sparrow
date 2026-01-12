@@ -13,6 +13,7 @@ Usage:
 
 from __future__ import annotations
 
+import inspect
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Sequence, TYPE_CHECKING
 
@@ -124,6 +125,31 @@ class SparrowAgentConfig:
             BASE_AGENT_PROMPT,
         ]
         return "\n\n".join(part for part in parts if part)
+
+
+def _create_summarization_middleware(
+    model: BaseChatModel,
+    max_tokens_before_summary: int,
+    messages_to_keep: int,
+) -> AgentMiddleware:
+    """Create SummarizationMiddleware across langchain versions."""
+    try:
+        params = inspect.signature(SummarizationMiddleware).parameters
+    except (TypeError, ValueError):
+        params = {}
+
+    if "trigger" in params and "keep" in params:
+        return SummarizationMiddleware(
+            model=model,
+            trigger=("tokens", max_tokens_before_summary),
+            keep=("messages", messages_to_keep),
+        )
+
+    return SummarizationMiddleware(
+        model=model,
+        max_tokens_before_summary=max_tokens_before_summary,
+        messages_to_keep=messages_to_keep,
+    )
 
 
 def create_sparrow_agent(
@@ -283,10 +309,10 @@ def _build_middleware_stack(config: SparrowAgentConfig) -> List[Any]:
     if config.subagents:
         # Build subagent middleware for each subagent
         subagent_default_middleware = [
-            SummarizationMiddleware(
+            _create_summarization_middleware(
                 model=config.model,
-                trigger=("tokens", config.max_tokens_before_summary),
-                keep=("messages", config.messages_to_keep),
+                max_tokens_before_summary=config.max_tokens_before_summary,
+                messages_to_keep=config.messages_to_keep,
             ),
             PatchToolCallsMiddleware(),
         ]
@@ -303,10 +329,10 @@ def _build_middleware_stack(config: SparrowAgentConfig) -> List[Any]:
 
     # 6. Summarization middleware
     middleware.append(
-        SummarizationMiddleware(
+        _create_summarization_middleware(
             model=config.model,
-            trigger=("tokens", config.max_tokens_before_summary),
-            keep=("messages", config.messages_to_keep),
+            max_tokens_before_summary=config.max_tokens_before_summary,
+            messages_to_keep=config.messages_to_keep,
         )
     )
 
@@ -352,10 +378,10 @@ def create_lightweight_agent(
         raise ImportError("DeepAgents middleware is required")
 
     middleware = [
-        SummarizationMiddleware(
+        _create_summarization_middleware(
             model=model,
-            trigger=("tokens", 100000),
-            keep=("messages", 4),
+            max_tokens_before_summary=100000,
+            messages_to_keep=4,
         ),
         PatchToolCallsMiddleware(),
     ]
