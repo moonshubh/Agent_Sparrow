@@ -108,7 +108,8 @@ class ToolResultEvictionManager:
 
         # Sanitize tool call ID for path
         sanitized_id = re.sub(r'[^a-zA-Z0-9_-]', '_', tool_call_id)[:50]
-        evicted_path = f"/large_tool_results/{tool_name}/{sanitized_id}"
+        # Store in session-scoped workspace so the agent can retrieve via read_workspace_file.
+        evicted_path = f"/knowledge/tool_results/{tool_name}/{sanitized_id}.txt"
 
         # Get sample content (first 10 lines or 500 chars)
         lines = content.split('\n')[:10]
@@ -137,7 +138,7 @@ class ToolResultEvictionManager:
         reference_msg = f"""Tool result too large ({len(content):,} chars, ~{len(content)//4:,} tokens).
 Full result saved at: {evicted_path}
 
-To access the full result, use read_file with offset/limit parameters.
+To access the full result, use read_workspace_file(path=..., offset=..., limit=...).
 
 Preview (first 10 lines):
 {sample}"""

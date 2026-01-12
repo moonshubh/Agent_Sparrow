@@ -3015,16 +3015,22 @@ async def db_unified_search_tool(
                     conv_id = int(conv_id)
                 except Exception:
                     continue
-                try:
-                    chunk_index = int(row.get("chunk_index"))
-                except Exception:
-                    continue
                 if conv_id not in conv_data:
                     conv_data[conv_id] = {
                         "matches": [],
                         "max_similarity": 0.0,
                     }
                 sim = float(row.get("similarity", 0.0))
+                chunk_index = (
+                    row.get("chunk_index")
+                    or row.get("chunkIndex")
+                    or row.get("chunk_order")
+                    or row.get("chunkOrder")
+                )
+                try:
+                    chunk_index = int(chunk_index)
+                except Exception:
+                    chunk_index = None
                 conv_data[conv_id]["matches"].append(
                     {
                         "chunk_index": chunk_index,
@@ -3048,6 +3054,8 @@ async def db_unified_search_tool(
                 for conv_id, data in ranked:
                     details = (conv_details or {}).get(conv_id, {})
 
+                    # Return excerpts by default (matched chunks only). Full transcripts are
+                    # accessible via db_context_search(source="feedme", doc_id=...).
                     matches = list(data.get("matches") or [])
                     match_scores: dict[int, float] = {}
                     match_text_by_index: dict[int, str] = {}
@@ -3055,6 +3063,8 @@ async def db_unified_search_tool(
                         if not isinstance(match, dict):
                             continue
                         idx = match.get("chunk_index")
+                        if idx is None:
+                            continue
                         try:
                             idx_int = int(idx)
                         except Exception:
@@ -3069,39 +3079,62 @@ async def db_unified_search_tool(
                         match_scores.keys(),
                         key=lambda i: (-match_scores.get(i, 0.0), i),
                     )
-                    excerpt_indices = sorted(matched_indices[:3])
-                    excerpt_blocks = [
-                        (match_text_by_index.get(idx) or "").strip()
-                        for idx in excerpt_indices
-                        if (match_text_by_index.get(idx) or "").strip()
-                    ]
-                    excerpt_content = "\n\n".join(excerpt_blocks)
-                    excerpt_content = redact_pii(excerpt_content)
 
-                    results.append(
-                        _format_result_with_content_type(
-                            source="feedme",
-                            title=details.get("title", f"Conversation {conv_id}"),
-                            content=excerpt_content,
-                            relevance_score=data["max_similarity"],
-                            metadata={
-                                "id": conv_id,
-                                "created_at": details.get("created_at"),
-                                "folder_id": details.get("folder_id"),
-                                "last_updated": details.get("updated_at"),
-                                "matched_chunk_indices": matched_indices,
-                                "matched_chunks": [
-                                    {
-                                        "chunk_index": idx,
-                                        "similarity": match_scores.get(idx, 0.0),
-                                    }
-                                    for idx in matched_indices
-                                ],
-                                "hydration": "matched_chunks_excerpt",
-                            },
-                            weight=weights.get("feedme", 1.0),
+                    excerpt_parts: list[str] = []
+                    included_indices: list[Any] = []
+                    if matched_indices:
+                        excerpt_indices = sorted(matched_indices[:3])
+                        for idx in excerpt_indices:
+                            chunk_text = (match_text_by_index.get(idx) or "").strip()
+                            if not chunk_text:
+                                continue
+                            chunk_text = _trim_content(redact_pii(chunk_text), max_chars=900)
+                            included_indices.append(idx)
+                            excerpt_parts.append(f"[chunk {idx}] {chunk_text}")
+                    else:
+                        matches.sort(
+                            key=lambda m: float(m.get("similarity") or 0.0),
+                            reverse=True,
                         )
+                        for match in matches[:3]:
+                            chunk_text = str(match.get("content") or "").strip()
+                            if not chunk_text:
+                                continue
+                            chunk_text = _trim_content(redact_pii(chunk_text), max_chars=900)
+                            chunk_idx = match.get("chunk_index")
+                            if chunk_idx is not None:
+                                included_indices.append(chunk_idx)
+                                excerpt_parts.append(f"[chunk {chunk_idx}] {chunk_text}")
+                            else:
+                                excerpt_parts.append(chunk_text)
+
+                    excerpt = "\n\n".join(excerpt_parts).strip()
+                    feedme_result = _format_result_with_content_type(
+                        source="feedme",
+                        title=details.get("title", f"Conversation {conv_id}"),
+                        content=excerpt,
+                        relevance_score=data["max_similarity"],
+                        metadata={
+                            "id": conv_id,
+                            "created_at": details.get("created_at"),
+                            "folder_id": details.get("folder_id"),
+                            "last_updated": details.get("updated_at"),
+                            "matched_chunk_indices": matched_indices,
+                            "matched_chunks": [
+                                {
+                                    "chunk_index": idx,
+                                    "similarity": match_scores.get(idx, 0.0),
+                                }
+                                for idx in matched_indices
+                            ],
+                            "included_chunk_indices": included_indices or None,
+                            "hydration": "matched_chunks_excerpt",
+                            "full_transcript_tool": "db_context_search",
+                        },
+                        weight=weights.get("feedme", 1.0),
                     )
+                    feedme_result["content_type"] = "excerpt"
+                    results.append(feedme_result)
             else:
                 no_results_sources.append("feedme")
         except Exception as exc:

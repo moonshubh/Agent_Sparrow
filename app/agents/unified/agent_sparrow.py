@@ -584,7 +584,46 @@ def _build_deep_agent(state: GraphState, runtime: AgentRuntimeConfig):
     # Zendesk tickets use a curated toolset (safer, support-focused) to reduce leakage risk
     # and keep replies aligned with internal support playbooks/macros.
     is_zendesk = (state.forwarded_props or {}).get("is_zendesk_ticket") is True
-    tools = get_registered_support_tools() if is_zendesk else get_registered_tools()
+    tools = list(
+        get_registered_support_tools() if is_zendesk else get_registered_tools()
+    )
+
+    # Inject workspace tools so agents can read persisted context (e.g. playbooks,
+    # similar scenarios, evicted tool results) without keeping large blobs in memory.
+    try:
+        from app.agents.harness.store import SparrowWorkspaceStore
+        from app.agents.unified.workspace_tools import (
+            create_append_workspace_file,
+            create_list_workspace_files,
+            create_read_workspace_file,
+            create_search_workspace,
+            create_write_workspace_file,
+        )
+
+        session_id = getattr(state, "session_id", None) or getattr(state, "trace_id", None)
+        forwarded = state.forwarded_props or {}
+        customer_id = None
+        if isinstance(forwarded, dict):
+            customer_id = forwarded.get("customer_id") or forwarded.get("customerId")
+
+        store = SparrowWorkspaceStore(session_id=str(session_id), customer_id=customer_id)
+        workspace_tools = [
+            create_read_workspace_file(store),
+            create_list_workspace_files(store),
+            create_search_workspace(store),
+        ]
+        if not is_zendesk:
+            workspace_tools.extend(
+                [create_write_workspace_file(store), create_append_workspace_file(store)]
+            )
+        tools.extend(workspace_tools)
+        logger.debug(
+            "workspace_tools_injected",
+            is_zendesk=is_zendesk,
+            count=len(workspace_tools),
+        )
+    except Exception as exc:
+        logger.debug("workspace_tools_not_injected", error=str(exc)[:180])
     logger.debug("tool_registry_selected", mode="support" if is_zendesk else "standard")
     subagents = get_subagent_specs(provider=runtime.provider, zendesk=is_zendesk)
 
