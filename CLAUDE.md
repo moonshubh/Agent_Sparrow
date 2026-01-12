@@ -95,6 +95,7 @@ React/Next.js application with native AG-UI protocol integration:
 - **Entry Points**:
   - Main chat: `frontend/src/app/chat/page.tsx` → uses `frontend/src/features/ag-ui/AgUiChatClient.tsx`
   - FeedMe v2.0: `frontend/src/app/feedme/` - Document processing UI
+  - Memory UI: `frontend/src/app/memory/page.tsx` - 3D knowledge graph visualization
 
 - **AG-UI Integration**:
   - `/services/ag-ui/` - AG-UI client and types
@@ -104,9 +105,23 @@ React/Next.js application with native AG-UI protocol integration:
 
 - **Key Features**:
   - `/features/chat/` - Chat components with reasoning panel
+  - `/features/memory/` - 3D knowledge graph using react-three-fiber
   - `/services/` - API clients and utility services
   - `/shared/` - Reusable UI components
   - Human-in-the-loop interrupts via CUSTOM events
+
+### Memory UI Module (Jan 2026)
+The Memory UI provides a 3D knowledge graph visualization for managing agent memories:
+
+- **Backend**: `app/api/v1/endpoints/memory/` - CRUD endpoints for memories, entities, relationships
+- **Service**: `app/memory/memory_ui_service.py` - Memory search, feedback, confidence scoring
+- **Frontend**: `frontend/src/features/memory/` - 3D visualization with react-three-fiber
+
+**Key Components:**
+- Entity nodes and relationship edges in 3D space
+- Confidence-based ordering and duplicate detection
+- Feedback loop: message thumbs up/down → memory confidence updates
+- Semantic search across memory content
 
 ### State Management
 - **Backend**: LangGraph state in `app/agents/orchestration/orchestration/state.py`
@@ -281,6 +296,10 @@ Key tables (see `docs/Database.md`):
 - `web_research_snapshots` - Cached web research
 - `langgraph_*` - LangGraph checkpointing
 - `feedme_*` - Document processing queue
+- `memories_new` - Knowledge graph memories with embeddings
+- `entities` - Graph nodes (topics, concepts)
+- `relationships` - Graph edges between entities
+- `memory_feedback` - User feedback on memory accuracy
 
 ## Testing Strategy
 
@@ -323,8 +342,11 @@ All metrics are captured as LangSmith metadata and tags:
 - Tags: `model:gemini-2.5-flash`, `coordinator_mode:heavy/light`
 
 #### 2. **Memory Operations** (`app/agents/unified/agent_sparrow.py`)
-- Retrieval stats: Facts retrieved, relevance scores, query length
-- Write stats: Facts extracted/written, response length
+- **Dual retrieval**: Queries both mem0 and Memory UI sources
+- **Retrieval stats**: Facts retrieved, relevance scores, query length
+- **Memory ID tracking**: Retrieved memory IDs tracked for feedback attribution
+- **Write stats**: Facts extracted/written, response length
+- **Feedback propagation**: Message thumbs up/down updates memory confidence scores
 - Stored in: `state.scratchpad["_system"]["memory_stats"]`
 
 #### 3. **Search Services** (`app/agents/unified/grounding.py`)
@@ -786,6 +808,7 @@ asyncio.run(test())
 ### Port Allocation
 - Backend API: `http://localhost:8000`
 - Frontend UI: `http://localhost:3000`
+- Celery Health: `http://localhost:8001` (auto-detects port collision)
 - Redis: Default port 6379
 
 ## Key Integration Points

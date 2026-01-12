@@ -44,6 +44,8 @@ export interface Artifact {
   // Image artifact specific fields
   /** Base64-encoded image data (for image artifacts) */
   imageData?: string;
+  /** Public URL for stored images (for persisted artifacts) */
+  imageUrl?: string;
   /** MIME type of the image (e.g., 'image/png', 'image/jpeg') */
   mimeType?: string;
   /** Alt text for accessibility */

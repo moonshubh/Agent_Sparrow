@@ -17,6 +17,16 @@ from loguru import logger
 import json
 
 try:
+    from langchain_google_genai.chat_models import ChatGoogleGenerativeAIError
+except Exception:  # pragma: no cover - optional dependency
+    ChatGoogleGenerativeAIError = None
+
+try:
+    from app.agents.unified.quota_manager import QuotaExceededError
+except Exception:  # pragma: no cover - defensive import
+    QuotaExceededError = None
+
+try:
     from opentelemetry import trace
     from opentelemetry.trace import Status, StatusCode
     OTEL_AVAILABLE = True
@@ -387,13 +397,19 @@ class StreamEventHandler:
 
             # Try fallback invoke with retry and exponential backoff (LangGraph pattern)
             # Retry transient errors up to 3 times with jitter to avoid thundering herd
+            retryable_exceptions: list[type] = [ConnectionError, TimeoutError, OSError]
+            if ChatGoogleGenerativeAIError is not None:
+                retryable_exceptions.append(ChatGoogleGenerativeAIError)
+            if QuotaExceededError is not None:
+                retryable_exceptions.append(QuotaExceededError)
+
             retry_config = RetryConfig(
                 max_attempts=3,
                 initial_interval=1.0,
                 max_interval=10.0,
                 backoff_factor=2.0,
                 jitter=0.5,
-                retry_exceptions=(ConnectionError, TimeoutError, OSError),
+                retry_exceptions=tuple(retryable_exceptions),
             )
 
             try:

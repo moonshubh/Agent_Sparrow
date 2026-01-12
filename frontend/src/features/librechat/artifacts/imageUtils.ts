@@ -5,13 +5,20 @@ export function normalizeImageRef(value: string): string {
 }
 
 export function resolveImageSrc(artifact: Artifact): string | null {
+  if (artifact.imageUrl) {
+    return artifact.imageUrl;
+  }
+
   if (artifact.imageData) {
     const mimeType = artifact.mimeType || 'image/png';
     return `data:${mimeType};base64,${artifact.imageData}`;
   }
 
   if (artifact.content) {
-    return artifact.content;
+    const trimmed = artifact.content.trim();
+    if (/^(https?:|data:|blob:)/i.test(trimmed)) {
+      return trimmed;
+    }
   }
 
   return null;

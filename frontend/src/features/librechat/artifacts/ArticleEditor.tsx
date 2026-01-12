@@ -110,7 +110,9 @@ export function ArticleEditor({ artifact }: ArticleEditorProps) {
       item.type === 'article' || item.type === 'kb-article' || item.type === 'image'
     );
     if (!artifacts.length) return;
-    const serialized = artifacts.map(serializeArtifact);
+    const serialized = artifacts
+      .map(serializeArtifact)
+      .filter((item) => item.type !== 'image' || Boolean(item.imageUrl));
 
     const persistedId = resolvePersistedMessageId(messageId);
     if (!persistedId) return;
