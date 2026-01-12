@@ -12,9 +12,6 @@ from langchain_core.messages import BaseMessage, SystemMessage
 from langgraph.graph import add_messages
 from pydantic import BaseModel, Field, ConfigDict, field_validator, model_serializer
 
-from app.agents.unified.thread_state import ThreadState
-
-
 # Type variable for reducer functions
 T = TypeVar("T")
 
