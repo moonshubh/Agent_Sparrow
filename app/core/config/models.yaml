@@ -148,19 +148,17 @@ internal:
 subagents:
   # Default model for all subagents (if not specified individually)
   _default:
-    model_id: "minimax/minimax-m2.1"
-    provider: "openrouter"
-    temperature: 0.3
-    context_window: 204800
-    always_enable_reasoning: true
-    supports_vision: false
+    model_id: "gemini-3-flash-preview"
+    provider: "google"
+    temperature: 1.0
+    context_window: 1048576
     rate_limits:
       rpm: 60
       rpd: 1000
 
   # IMPORTANT: Keys are the runtime subagent names (match `subagents.py`).
   research-agent:
-    # Uses _default (MiniMax M2.1 via OpenRouter)
+    # Uses _default (Gemini 3 Flash Preview)
 
   log-diagnoser:
     # Uses _default
