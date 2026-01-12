@@ -161,6 +161,10 @@ class RateLimitedAgent:
                 continue
             except Exception:
                 continue
+            try:
+                setattr(self, attr, value)
+            except Exception:
+                continue
 
     @property
     def _llm_type(self) -> str:
@@ -169,10 +173,6 @@ class RateLimitedAgent:
         if isinstance(llm_type, str) and llm_type:
             return llm_type
         return self.agent.__class__.__name__
-            try:
-                setattr(self, attr, value)
-            except Exception:
-                continue
     
     async def invoke(self, *args, **kwargs) -> Any:
         """
