@@ -25,7 +25,7 @@ import {
   Sparkles,
 } from 'lucide-react';
 import { toast } from 'sonner';
-import { useMemoryStats, useDuplicateCandidates, useImportMemorySources } from '../hooks';
+import { useMemoryMe, useMemoryStats, useDuplicateCandidates, useImportMemorySources } from '../hooks';
 import { MemorySearch } from './MemorySearch';
 import { MemoryForm } from './MemoryForm';
 import { GraphErrorBoundary } from './GraphErrorBoundary';
@@ -85,8 +85,11 @@ export default function MemoryClient() {
   >(null);
 
   // Data hooks
+  const meQuery = useMemoryMe();
   const { data: stats, isLoading: statsLoading, refetch: refetchStats } = useMemoryStats();
-  const { data: duplicates } = useDuplicateCandidates('pending');
+  const isLocalBypass = process.env.NEXT_PUBLIC_LOCAL_AUTH_BYPASS === 'true';
+  const isAdmin = isLocalBypass ? true : meQuery.data?.is_admin ?? false;
+  const { data: duplicates } = useDuplicateCandidates('pending', { enabled: isAdmin });
   const importSources = useImportMemorySources();
 
   const availableEntityTypes = useMemo(() => {
@@ -166,7 +169,12 @@ export default function MemoryClient() {
     setSidebarCollapsed((prev) => !prev);
   }, []);
 
-  const pendingDuplicatesCount = duplicates?.length || 0;
+  const pendingDuplicatesCount = isAdmin ? duplicates?.length || 0 : 0;
+
+  const navItems = useMemo(() => {
+    if (isAdmin) return NAV_ITEMS;
+    return NAV_ITEMS.filter((item) => item.id !== 'duplicates');
+  }, [isAdmin]);
 
   return (
     <div className="memory-container">
@@ -289,7 +297,7 @@ export default function MemoryClient() {
 
           {/* Navigation Items */}
           <nav className="memory-sidebar-nav">
-            {NAV_ITEMS.map((item) => {
+            {navItems.map((item) => {
               const Icon = item.icon;
               const isActive = viewMode === item.id;
               const hasBadge = item.id === 'duplicates' && pendingDuplicatesCount > 0;
@@ -431,51 +439,53 @@ export default function MemoryClient() {
           </AnimatePresence>
 
           {/* Sidebar Actions */}
-          <div className="memory-sidebar-actions">
-            <motion.button
-              className="memory-sidebar-action"
-              onClick={() => setShowAddForm(true)}
-              whileHover={{ scale: 1.02 }}
-              whileTap={{ scale: 0.98 }}
-              transition={springConfig}
-            >
-              <SquarePen size={18} />
-              <AnimatePresence>
-                {!sidebarCollapsed && (
-                  <motion.span
-                    initial={{ opacity: 0 }}
-                    animate={{ opacity: 1 }}
-                    exit={{ opacity: 0 }}
-                  >
-                    Add Memory
-                  </motion.span>
-                )}
-              </AnimatePresence>
-            </motion.button>
+          {isAdmin && (
+            <div className="memory-sidebar-actions">
+              <motion.button
+                className="memory-sidebar-action"
+                onClick={() => setShowAddForm(true)}
+                whileHover={{ scale: 1.02 }}
+                whileTap={{ scale: 0.98 }}
+                transition={springConfig}
+              >
+                <SquarePen size={18} />
+                <AnimatePresence>
+                  {!sidebarCollapsed && (
+                    <motion.span
+                      initial={{ opacity: 0 }}
+                      animate={{ opacity: 1 }}
+                      exit={{ opacity: 0 }}
+                    >
+                      Add Memory
+                    </motion.span>
+                  )}
+                </AnimatePresence>
+              </motion.button>
 
-            <motion.button
-              className="memory-sidebar-action"
-              onClick={handleImportSources}
-              disabled={importSources.isPending}
-              whileHover={{ scale: 1.02 }}
-              whileTap={{ scale: 0.98 }}
-              transition={springConfig}
-              title="Backfill Memory UI from issue patterns + playbooks"
-            >
-              <ArrowDownToLine size={18} />
-              <AnimatePresence>
-                {!sidebarCollapsed && (
-                  <motion.span
-                    initial={{ opacity: 0 }}
-                    animate={{ opacity: 1 }}
-                    exit={{ opacity: 0 }}
-                  >
-                    {importSources.isPending ? 'Importing…' : 'Import Knowledge'}
-                  </motion.span>
-                )}
-              </AnimatePresence>
-            </motion.button>
-          </div>
+              <motion.button
+                className="memory-sidebar-action"
+                onClick={handleImportSources}
+                disabled={importSources.isPending}
+                whileHover={{ scale: 1.02 }}
+                whileTap={{ scale: 0.98 }}
+                transition={springConfig}
+                title="Backfill Memory UI from issue patterns + playbooks"
+              >
+                <ArrowDownToLine size={18} />
+                <AnimatePresence>
+                  {!sidebarCollapsed && (
+                    <motion.span
+                      initial={{ opacity: 0 }}
+                      animate={{ opacity: 1 }}
+                      exit={{ opacity: 0 }}
+                    >
+                      {importSources.isPending ? 'Importing…' : 'Import Knowledge'}
+                    </motion.span>
+                  )}
+                </AnimatePresence>
+              </motion.button>
+            </div>
+          )}
 
           {/* Back to Chat Link */}
           <div className="memory-sidebar-footer">
@@ -614,6 +624,7 @@ export default function MemoryClient() {
                       }}
                       focusMemoryId={focusedMemoryId}
                       onClearFocus={() => setFocusedMemoryId(null)}
+                      isAdmin={isAdmin}
                     />
                   )}
                   {viewMode === 'duplicates' && <DuplicateReview />}
@@ -647,7 +658,7 @@ export default function MemoryClient() {
 
       {/* Add Memory Modal */}
       <AnimatePresence>
-        {showAddForm && (
+        {showAddForm && isAdmin && (
           <MemoryForm
             onClose={() => setShowAddForm(false)}
             onSuccess={() => {

@@ -74,6 +74,16 @@ const USE_BACKEND_READS =
   (process.env.NEXT_PUBLIC_BYPASS_AUTH === 'true' &&
     process.env.NEXT_PUBLIC_DEV_MODE === 'true');
 
+function hasAdminRole(value: unknown): boolean {
+  if (typeof value === 'string') {
+    return value.trim().toLowerCase() === 'admin';
+  }
+  if (Array.isArray(value)) {
+    return value.some((item) => typeof item === 'string' && item.trim().toLowerCase() === 'admin');
+  }
+  return false;
+}
+
 /**
  * In dev/auth-bypass scenarios the UI may not have a Supabase session, which means
  * direct PostgREST reads run as `anon` and get filtered by RLS (often returning empty lists).
@@ -83,7 +93,19 @@ async function shouldUseBackendReads(): Promise<boolean> {
   if (USE_BACKEND_READS) return true;
   try {
     const { data } = await supabase.auth.getSession();
-    return !data.session?.access_token;
+    const session = data.session;
+    if (!session?.access_token) return true;
+
+    const userMeta = session.user?.user_metadata;
+    const appMeta = session.user?.app_metadata;
+    const isAdmin = [
+      userMeta?.role,
+      userMeta?.roles,
+      appMeta?.role,
+      appMeta?.roles,
+    ].some(hasAdminRole);
+
+    return !isAdmin;
   } catch {
     return true;
   }

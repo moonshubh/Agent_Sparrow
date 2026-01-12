@@ -19,6 +19,7 @@ interface MemoryTableProps {
   onSortChange?: (sortBy: MemoryFilters['sortBy'], sortOrder: MemoryFilters['sortOrder']) => void;
   focusMemoryId?: string | null;
   onClearFocus?: () => void;
+  isAdmin?: boolean;
 }
 
 function toMemorySortField(sortBy: MemoryFilters['sortBy']): keyof Memory {
@@ -51,6 +52,7 @@ export default function MemoryTable({
   onSortChange,
   focusMemoryId,
   onClearFocus,
+  isAdmin = false,
 }: MemoryTableProps) {
   const [localSortField, setLocalSortField] = useState<keyof Memory>('created_at');
   const [localSortOrder, setLocalSortOrder] = useState<'asc' | 'desc'>('desc');
@@ -90,6 +92,7 @@ export default function MemoryTable({
 
   const effectiveSelectedMemory =
     focusMemoryId && focusedMemoryQuery.data ? focusedMemoryQuery.data : selectedMemory;
+  const canEdit = Boolean(isAdmin);
 
   // Mutations
   const submitFeedback = useSubmitFeedback();
@@ -306,14 +309,16 @@ export default function MemoryTable({
                       >
                         <Eye size={14} />
                       </button>
-                      <button
-                        className="memory-action-icon memory-action-danger"
-                        onClick={() => handleDelete(memory.id)}
-                        title="Delete memory"
-                        disabled={deleteMemory.isPending}
-                      >
-                        <Trash2 size={14} />
-                      </button>
+                      {canEdit && (
+                        <button
+                          className="memory-action-icon memory-action-danger"
+                          onClick={() => handleDelete(memory.id)}
+                          title="Delete memory"
+                          disabled={deleteMemory.isPending}
+                        >
+                          <Trash2 size={14} />
+                        </button>
+                      )}
                     </div>
                   </td>
                 </motion.tr>
@@ -369,19 +374,21 @@ export default function MemoryTable({
               <div className="memory-detail-header">
                 <h3>Memory Details</h3>
                 <div className="memory-detail-header-actions">
-                  <button
-                    className="memory-action-icon"
-                    onClick={() => {
-                      if (focusMemoryId && effectiveSelectedMemory.id === focusMemoryId) {
-                        onClearFocus?.();
-                      }
-                      setEditingMemory(effectiveSelectedMemory);
-                      setSelectedMemory(null);
-                    }}
-                    title="Edit memory"
-                  >
-                    <Pencil size={14} />
-                  </button>
+                  {canEdit && (
+                    <button
+                      className="memory-action-icon"
+                      onClick={() => {
+                        if (focusMemoryId && effectiveSelectedMemory.id === focusMemoryId) {
+                          onClearFocus?.();
+                        }
+                        setEditingMemory(effectiveSelectedMemory);
+                        setSelectedMemory(null);
+                      }}
+                      title="Edit memory"
+                    >
+                      <Pencil size={14} />
+                    </button>
+                  )}
                   <button
                     onClick={() => {
                       if (focusMemoryId && effectiveSelectedMemory.id === focusMemoryId) {
@@ -436,7 +443,7 @@ export default function MemoryTable({
 
       {/* Edit Modal */}
       <AnimatePresence>
-        {editingMemory && (
+        {editingMemory && canEdit && (
           <MemoryForm
             memory={editingMemory}
             onClose={() => setEditingMemory(null)}

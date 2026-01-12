@@ -161,6 +161,14 @@ class RateLimitedAgent:
                 continue
             except Exception:
                 continue
+
+    @property
+    def _llm_type(self) -> str:
+        """Expose underlying LLM type for LangChain compatibility."""
+        llm_type = getattr(self.agent, "_llm_type", None)
+        if isinstance(llm_type, str) and llm_type:
+            return llm_type
+        return self.agent.__class__.__name__
             try:
                 setattr(self, attr, value)
             except Exception:
