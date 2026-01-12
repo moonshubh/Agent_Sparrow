@@ -178,12 +178,15 @@ class StreamEventEmitter:
 
     def emit_image_artifact(
         self,
-        image_base64: str,
+        *,
+        image_url: Optional[str] = None,
+        image_base64: Optional[str] = None,
         mime_type: str = "image/png",
         title: str = "Generated Image",
         prompt: Optional[str] = None,
         aspect_ratio: Optional[str] = None,
         resolution: Optional[str] = None,
+        page_url: Optional[str] = None,
     ) -> None:
         """Emit image artifact via CUSTOM event for frontend display.
 
@@ -191,14 +194,18 @@ class StreamEventEmitter:
         the frontend when generated in parallel (e.g., Grok generating 8 images).
 
         Args:
-            image_base64: Base64-encoded image data
+            image_url: Retrievable URL to the image (preferred; Phase V)
+            image_base64: Base64-encoded image data (legacy fallback)
             mime_type: MIME type of the image (e.g., 'image/png')
             title: Display title for the artifact
             prompt: Original prompt used to generate the image
             aspect_ratio: Aspect ratio of the image
             resolution: Resolution of the image
+            page_url: Optional source page URL for web-sourced images
         """
-        if self.writer is None or not image_base64:
+        if self.writer is None:
+            return
+        if image_url is None and image_base64 is None:
             return
 
         # Throttle: wait if last emission was too recent
@@ -218,18 +225,25 @@ class StreamEventEmitter:
         message_id = getattr(self, "_current_message_id", None) or f"msg-{self.root_id}"
 
         # Use emit_custom_event for consistent event format with other custom events
-        self.emit_custom_event("image_artifact", {
+        payload: Dict[str, Any] = {
             "id": artifact_id,
             "type": "image",
             "title": title,
             "content": prompt or "",
             "messageId": message_id,
-            "imageData": image_base64,
             "mimeType": mime_type,
             "altText": prompt or title,
             "aspectRatio": aspect_ratio,
             "resolution": resolution,
-        })
+        }
+        if image_url is not None:
+            payload["imageUrl"] = image_url
+        if image_base64 is not None:
+            payload["imageData"] = image_base64
+        if page_url is not None:
+            payload["pageUrl"] = page_url
+
+        self.emit_custom_event("image_artifact", payload)
 
         # Update last emission time after successful emit
         self._last_image_emission_time = time.time()
@@ -710,12 +724,7 @@ class StreamEventEmitter:
         """Update the todo list from raw tool output."""
         # Debug logging to understand the raw_todos structure
         raw_type = type(raw_todos).__name__
-        raw_repr_str = repr(raw_todos)[:500] if raw_todos else "None"
-        logger.info(
-            "write_todos_debug: type={}, repr={!r}",
-            raw_type,
-            raw_repr_str,
-        )
+        logger.debug("write_todos_debug: type=%s", raw_type)
 
         normalized = normalize_todos(raw_todos, self.root_id)
         if not normalized:
@@ -797,11 +806,7 @@ class StreamEventEmitter:
             todo_dict["id"] = unique_id
             seen_ids.add(unique_id)
 
-        logger.info(
-            "write_todos_normalized",
-            normalized_count=len(normalized),
-            todos=safe_json_value(normalized),
-        )
+        logger.info("write_todos_normalized normalized_count=%s", len(normalized))
 
         # Convert to TodoItem objects
         self.todo_items.clear()

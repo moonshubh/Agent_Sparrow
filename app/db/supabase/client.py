@@ -58,6 +58,11 @@ class SupabaseClient:
         self.config = config or SupabaseConfig()
         self._client: Optional[Client] = None
         self.mock_mode = getattr(self.config, 'mock_mode', False)
+        # Supabase-py uses a synchronous HTTP client under the hood. Because we run
+        # calls in a thread pool, concurrent requests can share the same client
+        # across threads. Guard execution to avoid intermittent httpx/http2
+        # "Server disconnected" errors in the Memory UI (split preview, analysis).
+        self._exec_lock = asyncio.Lock()
         
         if not self.mock_mode:
             self._initialize_client()
@@ -131,16 +136,30 @@ class SupabaseClient:
         return self.client.rpc(fn_name, params)
 
     async def _exec(self, fn, timeout: float = 30):
-        """Run blocking Supabase SDK call in a thread with a timeout."""
-        try:
-            loop = asyncio.get_running_loop()
-            return await asyncio.wait_for(loop.run_in_executor(None, fn), timeout=timeout)
-        except Exception as e:
-            logger.error(f"Supabase exec failed: {e}")
-            raise
+        """Run blocking Supabase SDK call in a thread with a timeout.
+
+        Note: The underlying client is not thread-safe. We serialize calls and
+        do a single retry for transient disconnects.
+        """
+        async with self._exec_lock:
+            for attempt in range(2):
+                try:
+                    loop = asyncio.get_running_loop()
+                    return await asyncio.wait_for(
+                        loop.run_in_executor(None, fn),
+                        timeout=timeout,
+                    )
+                except Exception as e:
+                    msg = str(e).lower()
+                    if attempt == 0 and ("server disconnected" in msg or "connection reset" in msg):
+                        logger.warning("Supabase exec transient error (%s). Retrying once...", e)
+                        await asyncio.sleep(0.15)
+                        continue
+                    logger.error(f"Supabase exec failed: {e}")
+                    raise
     
     # =====================================================
-    # GLOBAL KNOWLEDGE OPERATIONS
+    # FEEDBACK OPERATIONS
     # =====================================================
 
     async def insert_sparrow_feedback(

@@ -9,6 +9,7 @@ from uuid import uuid4
 
 from langchain_google_genai import ChatGoogleGenerativeAI
 from app.core.settings import settings
+from app.core.config import find_bucket_for_model, find_model_config, get_models_config
 from app.providers.limits import wrap_gemini_agent
 from app.core.logging_config import get_logger
 from app.core.user_context import get_current_user_context
@@ -29,16 +30,28 @@ class AgentConfig:
     def __init__(self):
         """Load configuration from environment with sensible defaults.
 
-        Note: Defaults to gemini-2.5-pro for superior reasoning and analysis quality.
-        Log analysis benefits from the Pro model's deeper understanding capabilities.
+        Defaults come from models.yaml (coordinator heavy).
         """
-        self.model_name = os.getenv("SIMPLIFIED_LOG_MODEL", "gemini-2.5-pro")
-        self.temperature = float(os.getenv("LOG_AGENT_TEMPERATURE", "0.1"))
+        models_config = get_models_config()
+        default_cfg = models_config.coordinators.get("heavy") or models_config.coordinators["google"]
+        override_model = os.getenv("SIMPLIFIED_LOG_MODEL")
+        if override_model:
+            match = find_model_config(models_config, override_model)
+            self.model_name = match.model_id if match else default_cfg.model_id
+        else:
+            self.model_name = default_cfg.model_id
+
+        temp_override = os.getenv("LOG_AGENT_TEMPERATURE")
+        self.temperature = float(temp_override) if temp_override else default_cfg.temperature
         self.max_log_size = int(os.getenv("MAX_LOG_SIZE", "500000"))
         self.context_window = int(os.getenv("LOG_CONTEXT_WINDOW", "50"))
         self.max_sections = int(os.getenv("MAX_LOG_SECTIONS", "3"))
         self.max_issues = int(os.getenv("MAX_ISSUES", "5"))
         self.max_solutions = int(os.getenv("MAX_SOLUTIONS", "5"))
+        self.bucket_name = (
+            find_bucket_for_model(models_config, self.model_name, prefix="coordinators.")
+            or "coordinators.heavy"
+        )
         
     def __repr__(self) -> str:
         """String representation for debugging."""
@@ -122,7 +135,7 @@ class SimplifiedLogAnalysisAgent:
             temperature=self.config.temperature,
             google_api_key=api_key,
         )
-        return wrap_gemini_agent(llm_base, self.config.model_name)
+        return wrap_gemini_agent(llm_base, self.config.bucket_name, self.config.model_name)
     
     def _preprocess_log(self, log_content: str) -> str:
         """

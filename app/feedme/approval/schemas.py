@@ -5,10 +5,10 @@ Pydantic models for approval workflow data structures, validation, and API contr
 """
 
 from datetime import datetime
-from typing import List, Dict, Optional, Any, Union
+from typing import Optional, Any, Union
 from enum import Enum
 
-from pydantic import BaseModel, Field, field_validator, model_validator, ConfigDict, ValidationError, FieldValidationInfo
+from pydantic import BaseModel, Field, field_validator, model_validator, ConfigDict, ValidationError, ValidationInfo
 import numpy as np
 
 
@@ -68,8 +68,8 @@ class TempExampleCreate(BaseModel):
     
     # Optional categorization
     issue_category: Optional[str] = Field(None, max_length=50)
-    tags: Optional[List[str]] = Field(default_factory=list)
-    metadata: Optional[Dict[str, Any]] = Field(default_factory=dict)
+    tags: Optional[list[str]] = Field(default_factory=list)
+    metadata: Optional[dict[str, Any]] = Field(default_factory=dict)
 
     @field_validator('question_text', 'answer_text')
     def validate_text_content(cls, v):
@@ -117,8 +117,8 @@ class TempExampleUpdate(BaseModel):
     reviewer_usefulness_score: Optional[float] = Field(None, ge=0.0, le=1.0)
     
     # Metadata updates
-    tags: Optional[List[str]] = Field(None)
-    metadata: Optional[Dict[str, Any]] = Field(None)
+    tags: Optional[list[str]] = Field(None)
+    metadata: Optional[dict[str, Any]] = Field(None)
 
 
 class TempExampleResponse(BaseModel):
@@ -133,9 +133,9 @@ class TempExampleResponse(BaseModel):
     context_after: Optional[str] = None
     
     # Embeddings (excluded from API responses by default)
-    question_embedding: Optional[List[float]] = Field(None, exclude=True)
-    answer_embedding: Optional[List[float]] = Field(None, exclude=True)
-    combined_embedding: Optional[List[float]] = Field(None, exclude=True)
+    question_embedding: Optional[list[float]] = Field(None, exclude=True)
+    answer_embedding: Optional[list[float]] = Field(None, exclude=True)
+    combined_embedding: Optional[list[float]] = Field(None, exclude=True)
     
     # AI extraction metadata
     extraction_method: str
@@ -164,8 +164,8 @@ class TempExampleResponse(BaseModel):
     auto_approval_reason: Optional[str] = None
     
     # Metadata
-    tags: List[str] = Field(default_factory=list)
-    metadata: Dict[str, Any] = Field(default_factory=dict)
+    tags: list[str] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
     
     # Timestamps
     created_at: datetime
@@ -228,7 +228,7 @@ class BulkApprovalRequest(BaseModel):
     """Schema for bulk approval operations"""
     model_config = ConfigDict(str_strip_whitespace=True)
     
-    temp_example_ids: List[int] = Field(..., min_length=1, max_length=100)
+    temp_example_ids: list[int] = Field(..., min_length=1, max_length=100)
     action: ApprovalAction
     reviewer_id: str = Field(..., min_length=1, max_length=255)
     
@@ -252,7 +252,7 @@ class BulkApprovalResponse(BaseModel):
     processed_count: int
     successful_count: int
     failed_count: int
-    failures: List[Dict[str, Any]] = Field(default_factory=list)
+    failures: list[dict[str, Any]] = Field(default_factory=list)
     processing_time_ms: Optional[float] = None
 
 
@@ -283,7 +283,7 @@ class WorkflowMetrics(BaseModel):
     avg_reviewer_confidence: Optional[float] = None
     
     # Reviewer efficiency
-    reviewer_efficiency: Dict[str, int] = Field(default_factory=dict)
+    reviewer_efficiency: dict[str, int] = Field(default_factory=dict)
     
     # Time period
     period_start: datetime
@@ -305,12 +305,12 @@ class ReviewerWorkload(BaseModel):
 
 class ReviewerWorkloadSummary(BaseModel):
     """Schema for overall reviewer workload summary"""
-    reviewers: List[ReviewerWorkload]
+    reviewers: list[ReviewerWorkload]
     total_pending: int
     avg_workload: float
     max_workload: int
     min_workload: int
-    recommendations: List[str] = Field(default_factory=list)
+    recommendations: list[str] = Field(default_factory=list)
 
 
 # ===========================
@@ -338,7 +338,7 @@ class WorkflowConfig(BaseModel):
     require_dual_review_threshold: float = Field(default=0.5, ge=0.0, le=1.0)
 
     @field_validator('high_confidence_threshold')
-    def validate_threshold_order(cls, v, info: FieldValidationInfo):
+    def validate_threshold_order(cls, v, info: ValidationInfo):
         """Ensure thresholds are in correct order"""
         auto_threshold = info.data.get('auto_approval_threshold', 0.9)
         if v >= auto_threshold:
@@ -352,7 +352,7 @@ class WorkflowConfig(BaseModel):
 
 class PaginatedTempExampleResponse(BaseModel):
     """Paginated response for temp examples"""
-    items: List[TempExampleResponse]
+    items: list[TempExampleResponse]
     total: int
     page: int
     page_size: int
@@ -377,7 +377,7 @@ class ApprovalSummary(BaseModel):
 class WorkflowSummary(BaseModel):
     """High-level workflow summary"""
     total_items: int
-    status_breakdown: List[ApprovalSummary]
+    status_breakdown: list[ApprovalSummary]
     avg_processing_time_hours: Optional[float] = None
-    bottlenecks: List[str] = Field(default_factory=list)
-    recommendations: List[str] = Field(default_factory=list)
+    bottlenecks: list[str] = Field(default_factory=list)
+    recommendations: list[str] = Field(default_factory=list)

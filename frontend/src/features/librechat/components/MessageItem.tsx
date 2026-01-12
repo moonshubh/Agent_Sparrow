@@ -10,6 +10,7 @@ import { Copy, Check, RefreshCw, Pencil } from 'lucide-react';
 import { AttachmentPreviewList } from '@/features/librechat/components/AttachmentPreview';
 import { EnhancedMarkdown } from '@/features/librechat/components/EnhancedMarkdown';
 import { FeedbackPopover } from './FeedbackPopover';
+import { LogAnalysisNotesDropdown } from './log-analysis-notes-dropdown';
 
 const TipTapEditor = dynamic(
   () => import('./tiptap/TipTapEditor').then((mod) => mod.TipTapEditor),
@@ -79,6 +80,146 @@ function extractThinking(
     hadThinking,
   };
 }
+
+type ParsedLogDiagnoserNote = {
+  file_name?: string;
+  internal_notes?: string;
+  confidence?: number;
+  evidence?: string[];
+  recommended_actions?: string[];
+  open_questions?: string[];
+};
+
+const looksLikeLogDiagnoserPayload = (text: string): boolean => {
+  const sample = text.slice(0, 20000);
+  return sample.includes('"customer_ready"') && sample.includes('"internal_notes"') && sample.includes('"file_name"');
+};
+
+const extractJsonObjects = (text: string): string[] => {
+  const objects: string[] = [];
+  const startIdx = text.indexOf('{');
+  if (startIdx < 0) return objects;
+
+  let idx = startIdx;
+  while (idx >= 0 && idx < text.length) {
+    const start = text.indexOf('{', idx);
+    if (start < 0) break;
+
+    let depth = 0;
+    let inString = false;
+    let escape = false;
+    for (let i = start; i < text.length; i += 1) {
+      const ch = text[i];
+      if (inString) {
+        if (escape) {
+          escape = false;
+        } else if (ch === '\\') {
+          escape = true;
+        } else if (ch === '"') {
+          inString = false;
+        }
+        continue;
+      }
+      if (ch === '"') {
+        inString = true;
+        continue;
+      }
+      if (ch === '{') depth += 1;
+      if (ch === '}') depth -= 1;
+      if (depth === 0) {
+        objects.push(text.slice(start, i + 1));
+        idx = i + 1;
+        break;
+      }
+    }
+
+    if (depth !== 0) break;
+  }
+
+  return objects;
+};
+
+const parseLogDiagnoserPayload = (
+  text: string,
+  metadata?: Record<string, unknown>
+): { answer: string; notes: Record<string, ParsedLogDiagnoserNote> } | null => {
+  if (!looksLikeLogDiagnoserPayload(text)) return null;
+
+  const candidates = extractJsonObjects(text);
+  if (!candidates.length) return null;
+
+  const parsed = candidates
+    .map((raw) => {
+      try {
+        const obj = JSON.parse(raw);
+        return obj && typeof obj === 'object' ? (obj as Record<string, unknown>) : null;
+      } catch {
+        return null;
+      }
+    })
+    .filter((obj): obj is Record<string, unknown> => Boolean(obj));
+
+  const notes: Record<string, ParsedLogDiagnoserNote> = {};
+  const recommendedActions: string[] = [];
+
+  parsed.forEach((obj, idx) => {
+    const fileName = typeof obj.file_name === 'string' ? obj.file_name : '';
+    const key = fileName || `log-${idx + 1}`;
+
+    const evidence = Array.isArray(obj.evidence) ? obj.evidence.filter((v): v is string => typeof v === 'string') : undefined;
+    const actions = Array.isArray(obj.recommended_actions)
+      ? obj.recommended_actions.filter((v): v is string => typeof v === 'string')
+      : undefined;
+    const questions = Array.isArray(obj.open_questions)
+      ? obj.open_questions.filter((v): v is string => typeof v === 'string')
+      : undefined;
+
+    if (actions?.length) {
+      actions.forEach((action) => {
+        if (!recommendedActions.includes(action)) recommendedActions.push(action);
+      });
+    }
+
+    const confidenceRaw = obj.confidence;
+    const confidence = typeof confidenceRaw === 'number' && Number.isFinite(confidenceRaw) ? confidenceRaw : undefined;
+
+    notes[key] = {
+      file_name: fileName || undefined,
+      internal_notes: typeof obj.internal_notes === 'string' ? obj.internal_notes : undefined,
+      confidence,
+      evidence,
+      recommended_actions: actions,
+      open_questions: questions,
+    };
+  });
+
+  const artifactTitle = (() => {
+    const artifacts = metadata?.artifacts;
+    if (!Array.isArray(artifacts) || artifacts.length === 0) return null;
+    const first = artifacts[0];
+    if (!isRecord(first)) return null;
+    const title = first.title;
+    return typeof title === 'string' && title.trim() ? title.trim() : null;
+  })();
+
+  const lines: string[] = [];
+  if (artifactTitle) {
+    lines.push(`Created artifact: ${artifactTitle}.`);
+  } else {
+    lines.push(`Analyzed ${parsed.length} attached log file${parsed.length === 1 ? '' : 's'}.`);
+  }
+
+  if (recommendedActions.length) {
+    lines.push('', 'Recommended next steps:');
+    recommendedActions.slice(0, 12).forEach((action) => {
+      lines.push(`- ${action}`);
+    });
+  } else {
+    lines.push('', 'Open Technical details for per-file diagnostics.');
+  }
+
+  return { answer: lines.join('\n'), notes };
+};
 
 const MessageAvatar = memo(function MessageAvatar({ role }: { role: 'user' | 'assistant' }) {
   if (role === 'user') {
@@ -205,6 +346,7 @@ export const MessageItem = memo(function MessageItem({
   const metadata = isRecord(message.metadata) ? message.metadata : undefined;
   const attachmentsOnly = metadata?.attachments_only === true;
   const attachmentLabel = attachments.length === 1 ? 'Attachment' : `${attachments.length} attachments`;
+  const logAnalysisNotes = metadata?.logAnalysisNotes ?? metadata?.log_analysis_notes;
 
   // Content comes directly from message (updated by context)
   const rawContent = typeof message.content === 'string' ? message.content : '';
@@ -218,6 +360,39 @@ export const MessageItem = memo(function MessageItem({
   const showThinking = !isUserMessage && (thinking || (isLast && thinkingTrace.length > 0));
   const showToolIndicator = isLast && !isUserMessage && activeTools.length > 0;
   const roleName = isUserMessage ? 'You' : 'Agent Sparrow';
+
+  const derivedLogPayload = !isUserMessage ? parseLogDiagnoserPayload(displayContent, metadata) : null;
+  const looksLikeLogPayload = !isUserMessage && looksLikeLogDiagnoserPayload(displayContent);
+  const artifactTitle = (() => {
+    const artifacts = metadata?.artifacts;
+    if (!Array.isArray(artifacts) || artifacts.length === 0) return null;
+    const first = artifacts[0];
+    if (!isRecord(first)) return null;
+    const title = first.title;
+    return typeof title === 'string' && title.trim() ? title.trim() : null;
+  })();
+  const fallbackNotes = (() => {
+    if (!looksLikeLogPayload) return null;
+    if (logAnalysisNotes || derivedLogPayload?.notes) return null;
+    const payload = displayContent.trim();
+    if (!payload) return null;
+    return {
+      raw_payload: {
+        file_name: 'Raw log analysis payload',
+        internal_notes: payload,
+      },
+    } satisfies Record<string, ParsedLogDiagnoserNote>;
+  })();
+  const markdownContent = (() => {
+    if (derivedLogPayload) return derivedLogPayload.answer;
+    if (looksLikeLogPayload) {
+      return artifactTitle
+        ? `Created artifact: ${artifactTitle}.`
+        : 'Log analysis complete. Open Technical details for per-file diagnostics.';
+    }
+    return hadThinking ? mainContent : displayContent;
+  })();
+  const notesForDropdown = logAnalysisNotes ?? derivedLogPayload?.notes ?? fallbackNotes;
 
   const isLongUserMessage = isUserMessage && displayContent.length > LONG_MESSAGE_THRESHOLD;
   const userDisplayContent = isLongUserMessage && !isUserExpanded
@@ -320,13 +495,16 @@ export const MessageItem = memo(function MessageItem({
             ) : showStreaming ? (
               <StreamingIndicator />
             ) : (
-              <EnhancedMarkdown
-                content={hadThinking ? mainContent : displayContent}
-                isLatestMessage={isLast && isStreaming}
-                messageId={message.id}
-                registerArtifacts={shouldRegisterArtifacts}
-                variant="librechat"
-              />
+              <>
+                <EnhancedMarkdown
+                  content={markdownContent}
+                  isLatestMessage={isLast && isStreaming}
+                  messageId={message.id}
+                  registerArtifacts={shouldRegisterArtifacts}
+                  variant="librechat"
+                />
+                {notesForDropdown ? <LogAnalysisNotesDropdown notes={notesForDropdown} /> : null}
+              </>
             )}
           </div>
         )}

@@ -533,32 +533,59 @@ export const ArtifactPanel = memo(function ArtifactPanel() {
     }
   }, [artifact]);
 
-  const handleDownload = useCallback(() => {
+  const handleDownload = useCallback(async () => {
     if (!artifact) return;
 
     // Handle image downloads
-    if (artifact.type === 'image' && artifact.imageData) {
+    if (artifact.type === 'image') {
       const mimeType = artifact.mimeType || 'image/png';
       const extension = mimeType.split('/')[1] || 'png';
+      const filename = `${artifact.title.replace(/\s+/g, '_')}.${extension}`;
 
-      // Convert base64 to blob
-      const byteCharacters = atob(artifact.imageData);
-      const byteNumbers = new Array(byteCharacters.length);
-      for (let i = 0; i < byteCharacters.length; i++) {
-        byteNumbers[i] = byteCharacters.charCodeAt(i);
+      if (artifact.imageData) {
+        // Convert base64 to blob
+        const byteCharacters = atob(artifact.imageData);
+        const byteNumbers = new Array(byteCharacters.length);
+        for (let i = 0; i < byteCharacters.length; i++) {
+          byteNumbers[i] = byteCharacters.charCodeAt(i);
+        }
+        const byteArray = new Uint8Array(byteNumbers);
+        const blob = new Blob([byteArray], { type: mimeType });
+
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        return;
       }
-      const byteArray = new Uint8Array(byteNumbers);
-      const blob = new Blob([byteArray], { type: mimeType });
 
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `${artifact.title.replace(/\s+/g, '_')}.${extension}`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-      return;
+      const imageUrl = artifact.content;
+      if (imageUrl) {
+        try {
+          const response = await fetch(imageUrl, { credentials: 'omit' });
+          if (!response.ok) {
+            throw new Error(`HTTP ${response.status}`);
+          }
+          const blob = await response.blob();
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = filename;
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+          URL.revokeObjectURL(url);
+          return;
+        } catch (error) {
+          console.warn('[ArtifactPanel] Failed to download image via fetch; opening URL', error);
+          window.open(imageUrl, '_blank', 'noopener,noreferrer');
+          return;
+        }
+      }
     }
 
     const extension = artifact.type === 'mermaid' ? 'mmd'

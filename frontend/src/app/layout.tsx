@@ -7,6 +7,7 @@ import './globals.css';
 import { Toaster } from '@/shared/ui/sonner';
 import { AuthProvider } from '@/shared/contexts/AuthContext';
 import { ChunkErrorRecovery } from '@/shared/components/utils/ChunkErrorRecovery';
+import { QueryProvider } from '@/shared/providers/QueryProvider';
 
 const lora = Lora({
   subsets: ['latin'],
@@ -77,10 +78,12 @@ export default function RootLayout({
           enableSystem
           disableTransitionOnChange
         >
-          <AuthProvider>
-            <ChunkErrorRecovery />
-            {children}
-          </AuthProvider>
+          <QueryProvider>
+            <AuthProvider>
+              <ChunkErrorRecovery />
+              {children}
+            </AuthProvider>
+          </QueryProvider>
           <Toaster />
         </ThemeProvider>
       </body>

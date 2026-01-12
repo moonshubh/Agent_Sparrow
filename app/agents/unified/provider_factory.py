@@ -21,50 +21,19 @@ Usage:
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import Optional, cast
 
 from langchain_core.language_models import BaseChatModel
 from loguru import logger
 
 from app.core.settings import settings
-from app.core.config import get_registry
+from app.core.config import find_model_config, get_models_config
 from app.core.config.model_registry import get_model_by_id
+from app.core.rate_limiting.agent_wrapper import RateLimitedAgent, wrap_gemini_agent
 
 
 # Type alias for supported providers
 Provider = str  # "google" | "xai" | "openrouter"
-
-# =============================================================================
-# TEMPERATURE CONFIGURATION BY ROLE
-# Based on prompt tier and task requirements
-# =============================================================================
-
-# Temperature configuration for non-Gemini-3 models (Grok, Gemini 2.5, etc.)
-# These temperatures are used when the model is NOT a Gemini 3 model
-LEGACY_TEMPERATURE_CONFIG: dict[str, float] = {
-    # Heavy tier - deterministic reasoning
-    "coordinator": 0.2,
-    "coordinator_heavy": 0.2,
-    "log_analysis": 0.1,  # High precision for error diagnosis
-    # Standard tier - balanced
-    "research": 0.5,  # Creative synthesis of sources
-    "grounding": 0.3,
-    # Lite tier - exact matching
-    "db_retrieval": 0.1,
-    "feedme": 0.3,
-    # Default fallback
-    "default": 0.3,
-}
-
-# Gemini 3 models: Google strongly recommends temperature 1.0
-# "Changing the temperature (setting it below 1.0) may lead to unexpected behavior,
-# such as looping or degraded performance, particularly in complex mathematical
-# or reasoning tasks."
-# See: https://ai.google.dev/gemini-api/docs/gemini-3#temperature
-GEMINI_3_TEMPERATURE: float = 1.0
-
-# Backward compatibility alias
-TEMPERATURE_CONFIG = LEGACY_TEMPERATURE_CONFIG
 
 # =============================================================================
 # GROK CONFIGURATION - Always enabled reasoning for maximum quality
@@ -102,24 +71,23 @@ def _is_gemini_3_model(model: str) -> bool:
 
 
 def get_temperature_for_role(role: str, model: str | None = None) -> float:
-    """Get the configured temperature for a specific agent role and model.
+    """Resolve temperature from models.yaml (model-first, role fallback)."""
+    config = get_models_config()
 
-    For Gemini 3 models, returns 1.0 (Google's strong recommendation).
-    For other models (Grok, Gemini 2.5, etc.), returns role-based temperatures.
+    if model:
+        match = find_model_config(config, model)
+        if match is not None:
+            return match.temperature
 
-    Args:
-        role: The agent role (coordinator, log_analysis, research, etc.)
-        model: Optional model identifier. If provided and is Gemini 3, returns 1.0.
+    role_key = (role or "").strip().lower()
+    if role_key in {"summarization", "state_extraction"} and "summarizer" in config.internal:
+        return config.internal["summarizer"].temperature
+    if role_key == "feedme" and "feedme" in config.internal:
+        return config.internal["feedme"].temperature
+    if role_key in {"db_retrieval", "lightweight"} and "helper" in config.internal:
+        return config.internal["helper"].temperature
 
-    Returns:
-        Temperature value for the role/model combination.
-    """
-    # Gemini 3 models: Google strongly recommends temperature 1.0
-    if model and _is_gemini_3_model(model):
-        return GEMINI_3_TEMPERATURE
-
-    # Non-Gemini-3 models: use role-based temperatures
-    return LEGACY_TEMPERATURE_CONFIG.get(role.lower().strip(), LEGACY_TEMPERATURE_CONFIG["default"])
+    return 0.3
 
 
 def build_chat_model(
@@ -136,8 +104,7 @@ def build_chat_model(
         model: The model identifier (e.g., "gemini-3-flash-preview", "grok-4-1-fast-reasoning").
         temperature: Sampling temperature for the model (0.0-2.0).
             If None, temperature is determined automatically:
-            - Gemini 3 models: Always 1.0 (Google's strong recommendation)
-            - Other models: Role-based temperature from LEGACY_TEMPERATURE_CONFIG
+            - Pulled from models.yaml for the selected model/role
             Explicit temperature values will override these defaults.
         reasoning_enabled: For XAI models, whether to enable reasoning mode.
             If None, uses GROK_CONFIG["reasoning_enabled"] (always True).
@@ -158,14 +125,8 @@ def build_chat_model(
     provider = provider.lower().strip()
 
     # Determine temperature: explicit > model-aware role-based > default
-    # For Gemini 3 models, always use 1.0 unless explicitly overridden
     if temperature is None:
-        if role:
-            temperature = get_temperature_for_role(role, model)
-        elif _is_gemini_3_model(model):
-            temperature = GEMINI_3_TEMPERATURE
-        else:
-            temperature = LEGACY_TEMPERATURE_CONFIG["default"]
+        temperature = get_temperature_for_role(role or "default", model)
 
     if provider == "google":
         return _build_google_model(model, temperature)
@@ -177,8 +138,8 @@ def build_chat_model(
         return _build_openrouter_model(model, temperature, role=role)
 
     else:
-        registry = get_registry()
-        fallback_model = registry.coordinator_google.id
+        config = get_models_config()
+        fallback_model = config.coordinators["google"].model_id
         logger.warning(
             "provider_unavailable",
             provider=provider,
@@ -187,6 +148,27 @@ def build_chat_model(
             fallback_model=fallback_model,
         )
         return _build_google_model(fallback_model, temperature)
+
+
+def build_summarization_model() -> BaseChatModel:
+    """Build the fixed summarization/state-extraction model.
+
+    Spec requirement:
+    - Always uses Google direct Gemini 2.5 Flash Preview (Sep 2025).
+    - Must not depend on the coordinator provider/model selection.
+    """
+    config = get_models_config()
+    summarizer = config.internal["summarizer"]
+    model_id = summarizer.model_id
+    model = build_chat_model(
+        provider="google",
+        model=model_id,
+        temperature=summarizer.temperature,
+        role="summarization",
+    )
+    if model.__class__.__name__ == "ChatGoogleGenerativeAI":
+        return cast(BaseChatModel, wrap_gemini_agent(model, "internal.summarizer", model_id))
+    return cast(BaseChatModel, RateLimitedAgent(model, "internal.summarizer"))
 
 
 def _build_google_model(model: str, temperature: float) -> BaseChatModel:
@@ -272,8 +254,8 @@ def _build_xai_model(
         A configured ChatXAI instance, or falls back to Google if XAI key not configured.
     """
     # Check if XAI API key is configured
-    registry = get_registry()
-    fallback_model = registry.coordinator_google.id
+    config = get_models_config()
+    fallback_model = config.coordinators["google"].model_id
 
     if not settings.xai_api_key:
         logger.warning(
@@ -338,8 +320,8 @@ def _build_openrouter_model(
 
     api_key = getattr(settings, "openrouter_api_key", None)
     if not api_key:
-        registry = get_registry()
-        fallback_model = registry.coordinator_google.id
+        config = get_models_config()
+        fallback_model = config.coordinators["google"].model_id
         logger.warning(
             "provider_unavailable",
             provider="openrouter",
@@ -414,10 +396,10 @@ def get_default_model_for_provider(provider: str) -> str:
     Returns:
         The default model identifier for the provider.
     """
-    registry = get_registry()
+    config = get_models_config()
     defaults = {
-        "google": registry.coordinator_google.id,
-        "xai": registry.coordinator_xai.id,
-        "openrouter": registry.coordinator_openrouter.id,
+        "google": config.coordinators["google"].model_id,
+        "xai": config.coordinators["xai"].model_id,
+        "openrouter": config.coordinators["openrouter"].model_id,
     }
-    return defaults.get(provider.lower(), registry.coordinator_google.id)
+    return defaults.get(provider.lower(), config.coordinators["google"].model_id)

@@ -2029,3 +2029,180 @@
   background-color: var(--lc-accent);
   opacity: 1;
 }
+
+/* ================================================ */
+/* Tools Dropdown Menu (FeedMe & Memory)           */
+/* ================================================ */
+
+.lc-tools-dropdown-trigger {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 10px !important;
+}
+
+.lc-dropdown-chevron {
+  color: var(--lc-text-tertiary);
+  transition: transform 0.2s ease;
+}
+
+[data-state="open"] .lc-dropdown-chevron {
+  transform: rotate(180deg);
+}
+
+.lc-tools-dropdown-content {
+  min-width: 200px;
+  background-color: var(--lc-surface-tertiary);
+  border: 1px solid var(--lc-border);
+  border-radius: 12px;
+  padding: 8px;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.4);
+  z-index: 1000;
+  animation: slideDownFadeIn 0.15s ease-out;
+}
+
+@keyframes slideDownFadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.lc-tools-dropdown-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 12px 14px;
+  border-radius: 8px;
+  cursor: pointer;
+  color: var(--lc-text-primary);
+  font-size: 14px;
+  font-weight: 500;
+  text-decoration: none;
+  transition: background-color 0.15s ease;
+  position: relative;
+}
+
+.lc-tools-dropdown-item svg {
+  position: absolute;
+  right: 14px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--lc-text-tertiary);
+}
+
+.lc-tools-dropdown-item:hover,
+.lc-tools-dropdown-item:focus {
+  background-color: var(--lc-surface-hover);
+  outline: none;
+}
+
+.lc-tools-dropdown-item:hover svg,
+.lc-tools-dropdown-item:focus svg {
+  color: var(--lc-accent);
+}
+
+.lc-tools-dropdown-desc {
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--lc-text-tertiary);
+}
+
+.lc-tools-dropdown-separator {
+  height: 1px;
+  background-color: var(--lc-border-light);
+  margin: 6px 0;
+}
+
+/* Log analysis technical details dropdown */
+.lc-log-notes {
+  margin-top: 12px;
+  border: 1px solid var(--lc-border);
+  border-radius: 10px;
+  background-color: var(--lc-surface-secondary);
+}
+
+.lc-log-notes-summary {
+  cursor: pointer;
+  padding: 10px 12px;
+  color: var(--lc-text-secondary);
+  font-size: 13px;
+  user-select: none;
+}
+
+.lc-log-notes[open] .lc-log-notes-summary {
+  border-bottom: 1px solid var(--lc-border-light);
+  color: var(--lc-text-primary);
+}
+
+.lc-log-notes-body {
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.lc-log-note {
+  border: 1px solid var(--lc-border-light);
+  border-radius: 10px;
+  padding: 10px 12px;
+  background-color: var(--lc-surface-tertiary);
+}
+
+.lc-log-note-header {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 10px;
+}
+
+.lc-log-note-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--lc-text-primary);
+}
+
+.lc-log-note-meta {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  font-size: 12px;
+  color: var(--lc-text-tertiary);
+}
+
+.lc-log-note-section {
+  margin-top: 10px;
+}
+
+.lc-log-note-section-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--lc-text-secondary);
+  margin-bottom: 6px;
+}
+
+.lc-log-note-pre {
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: var(--lc-font-mono);
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--lc-text-primary);
+  background-color: rgba(0, 0, 0, 0.12);
+  border: 1px solid var(--lc-border-light);
+  border-radius: 8px;
+  padding: 10px;
+  margin: 0;
+}
+
+.lc-log-note-list {
+  margin: 0;
+  padding-left: 18px;
+  color: var(--lc-text-secondary);
+  font-size: 12px;
+  line-height: 1.55;
+}

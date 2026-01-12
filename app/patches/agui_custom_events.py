@@ -67,11 +67,78 @@ def _normalize_tool_end_output(event: Any) -> Any:
     if not isinstance(data, dict):
         return event
 
+    def _coerce_tool_name(value: Any) -> str:
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+        return "tool"
+
+    def _ensure_tool_message_name(tool_msg: ToolMessage, fallback: str) -> ToolMessage:
+        name = getattr(tool_msg, "name", None)
+        if isinstance(name, str) and name.strip():
+            return tool_msg
+        try:
+            return tool_msg.model_copy(update={"name": fallback})
+        except Exception:
+            return ToolMessage(
+                content=tool_msg.content,
+                tool_call_id=str(getattr(tool_msg, "tool_call_id", "") or ""),
+                name=fallback,
+                id=getattr(tool_msg, "id", None),
+                additional_kwargs=getattr(tool_msg, "additional_kwargs", {}) or {},
+                response_metadata=getattr(tool_msg, "response_metadata", {}) or {},
+                artifact=getattr(tool_msg, "artifact", None),
+                status=getattr(tool_msg, "status", "success") or "success",
+            )
+
+    fallback_tool_name = _coerce_tool_name(event.get("name") or data.get("name"))
+
     output = data.get("output")
     if isinstance(output, (ToolMessage, Command)):
-        return event
+        if isinstance(output, ToolMessage):
+            updated_tool_msg = _ensure_tool_message_name(output, fallback_tool_name)
+            if updated_tool_msg is output:
+                return event
+            normalized = dict(data)
+            normalized["output"] = updated_tool_msg
+            updated = dict(event)
+            updated["data"] = normalized
+            return updated
+
+        # Command output - ensure any ToolMessages have a valid name.
+        try:
+            update = getattr(output, "update", None)
+            messages = update.get("messages") if isinstance(update, dict) else None
+            if isinstance(messages, list):
+                changed = False
+                normalized_messages = []
+                for msg in messages:
+                    if isinstance(msg, ToolMessage):
+                        normalized_msg = _ensure_tool_message_name(msg, fallback_tool_name)
+                        changed = changed or (normalized_msg is not msg)
+                        normalized_messages.append(normalized_msg)
+                    else:
+                        normalized_messages.append(msg)
+                if not changed:
+                    return event
+
+                new_update = dict(update)
+                new_update["messages"] = normalized_messages
+                normalized = dict(data)
+                normalized["output"] = Command(
+                    graph=getattr(output, "graph", None),
+                    update=new_update,
+                    resume=getattr(output, "resume", None),
+                    goto=getattr(output, "goto", ()),
+                )
+                updated = dict(event)
+                updated["data"] = normalized
+                return updated
+        except Exception:
+            # Fall back to leaving the event as-is; downstream will handle failures.
+            return event
 
     if isinstance(output, list) and output and all(isinstance(item, ToolMessage) for item in output):
+        output = [_ensure_tool_message_name(item, fallback_tool_name) for item in output]
         normalized = dict(data)
         normalized["output"] = Command(update={"messages": output})
         updated = dict(event)
@@ -79,7 +146,7 @@ def _normalize_tool_end_output(event: Any) -> Any:
         return updated
 
     tool_call_id = data.get("tool_call_id") or data.get("id") or "unknown"
-    tool_name = event.get("name") or data.get("name") or "tool"
+    tool_name = fallback_tool_name
     safe_output = make_json_safe_with_cycle_detection(output)
 
     if isinstance(safe_output, str):

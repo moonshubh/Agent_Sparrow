@@ -50,16 +50,14 @@ from app.api.v1.endpoints import chat_session_endpoints  # Chat session persiste
 from app.api.v1.endpoints import rate_limit_endpoints  # Rate limiting monitoring
 from app.api.v1.endpoints import feedme_intelligence  # FeedMe AI intelligence endpoints
 from app.api.v1.endpoints import agent_interrupt_endpoints  # HITL interrupt controls
+from app.api.v1.endpoints import memory  # Memory UI endpoints
 # from app.api.v1.endpoints import secure_log_analysis  # Secure Log Analysis endpoints - Disabled due to reasoning engine removal
 from app.api.v1.endpoints import (
-    global_knowledge_observability,  # Global knowledge observability APIs
-    global_knowledge_feedback,  # Global knowledge submission APIs
     message_feedback_endpoints,  # Message thumbs up/down feedback
 )
 from app.api.v1.websocket import feedme_websocket  # FeedMe WebSocket endpoints
 from app.core.settings import settings
 from app.core.logging_setup import configure_logging
-from app.db.embedding_config import EXPECTED_DIM
 from app.integrations.zendesk import router as zendesk_router
 from app.integrations.zendesk.admin_endpoints import router as zendesk_admin_router
 from app.integrations.zendesk.scheduler import start_background_scheduler
@@ -237,9 +235,9 @@ app.include_router(agui_endpoints.router, prefix="/api/v1", tags=["AG-UI"])  # /
 app.include_router(models_endpoints.router, prefix="/api/v1", tags=["Models"])  # /api/v1/models
 app.include_router(agents_endpoints.router, prefix="/api/v1", tags=["Agents"])  # /api/v1/agents
 app.include_router(metadata_endpoints.router, prefix="/api/v1", tags=["Metadata"])  # /api/v1/metadata - Phase 6
-app.include_router(global_knowledge_observability.router, prefix="/api/v1", tags=["Global Knowledge"])
-app.include_router(global_knowledge_feedback.router, prefix="/api/v1", tags=["Global Knowledge"])
 app.include_router(message_feedback_endpoints.router, prefix="/api/v1", tags=["Message Feedback"])  # /api/v1/feedback/message
+# Register Memory UI routes
+app.include_router(memory.router, prefix="/api/v1", tags=["Memory UI"])  # /api/v1/memory/*
 # Register FeedMe routes (modular package)
 app.include_router(feedme.router, prefix="/api/v1", tags=["FeedMe"])
 # Register FeedMe Text Approval routes  
@@ -292,21 +290,6 @@ async def startup_event():
     jwt_configured = bool(jwt_val) and str(jwt_val) != "change-this-in-production"
     logging.info(f"JWT Secret Configured: {jwt_configured}")
 
-    logging.info("=== Global Knowledge Configuration ===")
-    logging.info(
-        "Global Knowledge Flags: inject=%s, store_adapter=%s, store_writes=%s, retrieval_primary=%s",
-        settings.enable_global_knowledge_injection,
-        settings.enable_store_adapter,
-        settings.enable_store_writes,
-        settings.get_retrieval_primary(),
-    )
-    logging.info(
-        "Global Knowledge Effective: should_enable=%s, should_use_store_adapter=%s, should_enable_store_writes=%s, store_configured=%s",
-        settings.should_enable_global_knowledge(),
-        settings.should_use_store_adapter(),
-        settings.should_enable_store_writes(),
-        settings.has_global_store_configuration(),
-    )
     logging.info("=======================================")
     
     if not is_production:
@@ -316,6 +299,30 @@ async def startup_event():
         logging.warning("Some security endpoints are disabled - ensure this is intentional")
     
     logging.info("==========================================")
+
+    # Run model health checks on startup (non-fatal; uses real API calls).
+    try:
+        from app.core.config.health_check import run_startup_health_checks
+        from app.agents.unified.model_router import model_router
+
+        results = await run_startup_health_checks()
+        if results:
+            allowed = {model_id for model_id, payload in results.items() if payload.get("ok")}
+            if allowed:
+                model_router.allowed_models = allowed
+                logging.info(
+                    "Model health checks complete: %s/%s models available",
+                    len(allowed),
+                    len(results),
+                )
+            else:
+                logging.warning(
+                    "Model health checks completed but no models passed; router left unrestricted"
+                )
+        else:
+            logging.info("Model health checks skipped or empty; router left unrestricted")
+    except Exception as exc:  # pragma: no cover - best effort startup checks
+        logging.warning("Model health checks failed: %s", exc)
 
     # Start Zendesk background scheduler (feature guarded internally)
     try:
@@ -332,14 +339,10 @@ async def shutdown_event():
 
     # Clear rate limiters and stop cleanup tasks
     try:
-        from app.core.rate_limiting.memory_limiter import get_rate_limiter, get_gemini_limiter
-        rate_limiter = get_rate_limiter()
-        if hasattr(rate_limiter, 'stop'):
-            await rate_limiter.stop()
-        gemini_limiter = get_gemini_limiter()
-        if hasattr(gemini_limiter, 'stop'):
-            await gemini_limiter.stop()
-        logging.info("Rate limiters stopped")
+        from app.core.rate_limiting.agent_wrapper import cleanup_rate_limiter
+
+        await cleanup_rate_limiter()
+        logging.info("Rate limiter cleanup complete")
     except Exception as e:
         logging.warning(f"Rate limiter cleanup failed: {e}")
 
@@ -517,53 +520,6 @@ async def health_check():
                 "service": "mb-sparrow-agent-server",
                 "error": "Service unavailable"
             }
-        )
-
-
-@app.get("/health/global-knowledge", tags=["General"])
-async def global_knowledge_health_check():
-    """Health probe reporting global knowledge feature readiness."""
-    flags = {
-        "enable_global_knowledge_injection": bool(settings.enable_global_knowledge_injection),
-        "enable_store_adapter": bool(settings.enable_store_adapter),
-        "enable_store_writes": bool(settings.enable_store_writes),
-        "retrieval_primary": settings.get_retrieval_primary(),
-    }
-    try:
-        store_configured = settings.has_global_store_configuration()
-        default_state = (
-            not flags["enable_global_knowledge_injection"]
-            and not flags["enable_store_adapter"]
-            and not flags["enable_store_writes"]
-            and flags["retrieval_primary"] == "rpc"
-        )
-        store_required = settings.should_use_store_adapter() or settings.should_enable_store_writes()
-
-        if default_state:
-            ready = True
-        elif store_required:
-            ready = store_configured
-        else:
-            ready = True
-        status = "ready" if ready else "degraded"
-
-        return {
-            "status": status,
-            "flags": flags,
-            "store_configured": store_configured,
-            "embedding_expected_dim": EXPECTED_DIM,
-        }
-    except Exception as exc:  # pragma: no cover - defensive safeguard
-        logging.error("Global knowledge health probe failed: %s", exc, exc_info=True)
-        return JSONResponse(
-            status_code=503,
-            content={
-                "status": "degraded",
-                "flags": flags,
-                "store_configured": settings.has_global_store_configuration(),
-                "embedding_expected_dim": EXPECTED_DIM,
-                "error": "probe_failed",
-            },
         )
 
 

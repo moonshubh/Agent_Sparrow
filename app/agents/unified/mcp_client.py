@@ -157,7 +157,10 @@ FIRECRAWL_TOOL_CONFIGS: Dict[str, MCPToolConfig] = {
         name="firecrawl_agent",
         max_age_ms=0,  # Disable local caching for agent jobs
         rate_limit_rpm=10,  # Agent is expensive
-        timeout_sec=180.0,  # 3 minutes - agent can take time
+        # The MCP agent endpoint can be slower/unreliable; keep the timeout low so we
+        # can quickly fall back to the Firecrawl SDK path in `tools.py`.
+        timeout_sec=60.0,
+        retry_count=1,
     ),
     "firecrawl_check_crawl_status": MCPToolConfig(
         name="firecrawl_check_crawl_status",
@@ -591,6 +594,7 @@ async def create_logging_interceptor() -> Callable:
                 "mcp_tool_call_error",
                 tool_name=request.name,
                 error=str(e),
+                error_type=type(e).__name__,
             )
             raise
 
@@ -615,6 +619,27 @@ async def create_retry_interceptor(max_retries: int = 3, base_delay: float = 1.0
             try:
                 return await handler(request)
             except Exception as e:
+                # Firecrawl frequently returns non-recoverable billing/limit errors.
+                # Retrying just burns time and delays fallbacks (e.g., Tavily).
+                lower = str(e).lower()
+                if any(
+                    phrase in lower
+                    for phrase in (
+                        "insufficient credits",
+                        "rate limit exceeded",
+                        "upgrade your plan",
+                        "payment required",
+                        "quota exceeded",
+                    )
+                ):
+                    logger.warning(
+                        "mcp_tool_no_retry",
+                        tool_name=request.name,
+                        attempt=attempt + 1,
+                        max_retries=effective_retries,
+                        error=str(e),
+                    )
+                    raise
                 last_error = e
                 if attempt < effective_retries - 1:
                     wait_time = max(0.0, base_delay) * (2**attempt)

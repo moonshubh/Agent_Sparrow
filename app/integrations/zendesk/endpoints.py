@@ -10,6 +10,7 @@ import re
 from fastapi import APIRouter, HTTPException, Request, status
 from pydantic import BaseModel
 
+from app.core.config import get_models_config, resolve_coordinator_config
 from app.core.settings import settings
 from app.db.supabase.client import get_supabase_client
 from .exclusions import compute_ticket_exclusion
@@ -20,8 +21,6 @@ router = APIRouter(prefix="/integrations/zendesk", tags=["Zendesk"])
 logger = logging.getLogger(__name__)
 
 # Default model for Zendesk - centralized to ensure consistency
-ZENDESK_DEFAULT_MODEL = "gemini-3-flash-preview"
-ZENDESK_DEFAULT_PROVIDER = "google"
 
 # Basic PII redactors for emails and phone numbers
 _EMAIL_RE = re.compile(r'([A-Za-z0-9._%+-]{1,})@([A-Za-z0-9.-]{1,})')
@@ -198,8 +197,13 @@ async def _get_feature_state_snapshot() -> Dict[str, Any]:
     """Return current feature flag state (enabled/dry_run/provider/model)."""
     enabled = await _get_feature_enabled()
     dry_run = bool(getattr(settings, "zendesk_dry_run", True))
-    provider = getattr(settings, "zendesk_agent_provider", None) or ZENDESK_DEFAULT_PROVIDER
-    model = getattr(settings, "zendesk_agent_model", None) or ZENDESK_DEFAULT_MODEL
+    config = get_models_config()
+    if config.zendesk is not None:
+        coordinator_cfg = resolve_coordinator_config(config, "google", zendesk=True)
+    else:
+        coordinator_cfg = resolve_coordinator_config(config, "google")
+    provider = coordinator_cfg.provider or "google"
+    model = coordinator_cfg.model_id
     try:
         supa = get_supabase_client()
         resp = await supa._exec(
@@ -214,10 +218,6 @@ async def _get_feature_state_snapshot() -> Dict[str, Any]:
             val = data["value"]
             if "dry_run" in val:
                 dry_run = bool(val.get("dry_run", dry_run))
-            if "provider" in val:
-                provider = str(val.get("provider", provider))
-            if "model" in val:
-                model = str(val.get("model", model))
     except Exception:
         pass
     return {"enabled": enabled, "dry_run": dry_run, "provider": provider, "model": model}
@@ -259,8 +259,8 @@ async def health(request: Request) -> Dict[str, Any]:
     return {
         "enabled": feature_state["enabled"],
         "dry_run": feature_state["dry_run"],
-        "provider": feature_state.get("provider", ZENDESK_DEFAULT_PROVIDER),
-        "model": feature_state.get("model", ZENDESK_DEFAULT_MODEL),
+        "provider": feature_state["provider"],
+        "model": feature_state["model"],
         "brand_id": getattr(settings, "zendesk_brand_id", None),
         "usage": usage,
         "queue": q_counts,
@@ -271,8 +271,6 @@ async def health(request: Request) -> Dict[str, Any]:
 class FeatureToggleRequest(BaseModel):
     enabled: bool
     dry_run: bool | None = None
-    provider: str | None = None  # google, xai, openrouter
-    model: str | None = None  # model ID
 
 
 # Available models for Zendesk - all support vision/multimodal (images, PDFs, logs)
@@ -317,11 +315,17 @@ async def get_available_models(request: Request) -> Dict[str, Any]:
     if getattr(settings, "openrouter_api_key", None):
         available_providers.append("openrouter")
 
+    config = get_models_config()
+    if config.zendesk is not None:
+        coordinator_cfg = resolve_coordinator_config(config, "google", zendesk=True)
+    else:
+        coordinator_cfg = resolve_coordinator_config(config, "google")
+
     return {
         "models": ZENDESK_MODEL_OPTIONS,
         "available_providers": available_providers,
-        "default_provider": ZENDESK_DEFAULT_PROVIDER,
-        "default_model": ZENDESK_DEFAULT_MODEL,
+        "default_provider": coordinator_cfg.provider or "google",
+        "default_model": coordinator_cfg.model_id,
     }
 
 
@@ -353,10 +357,6 @@ async def set_feature(request: Request, payload: FeatureToggleRequest) -> Dict[s
     value: Dict[str, Any] = {**existing, "enabled": bool(payload.enabled)}
     if payload.dry_run is not None:
         value["dry_run"] = bool(payload.dry_run)
-    if payload.provider is not None:
-        value["provider"] = str(payload.provider)
-    if payload.model is not None:
-        value["model"] = str(payload.model)
 
     try:
         supa = get_supabase_client()

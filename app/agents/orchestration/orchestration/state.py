@@ -165,6 +165,87 @@ def bounded_add_messages(max_messages: int = 30):
     return reducer
 
 
+class ThreadStateDecision(BaseModel):
+    """A single decision plus rationale captured in thread state."""
+
+    decision: str = Field(default="", description="Decision made by the system.")
+    rationale: str = Field(default="", description="Why the decision was made.")
+
+    model_config = ConfigDict(extra="ignore")
+
+
+class ThreadState(BaseModel):
+    """Ephemeral structured thread state ("compressed truth").
+
+    This is persisted via the LangGraph checkpointer as part of GraphState and is
+    intended to provide stable, compact context for long-running runs.
+    """
+
+    one_line_status: str = Field(
+        default="",
+        description="Single-line status including what's happening + next TODOs.",
+    )
+    user_intent: str = Field(default="", description="Best-effort user intent summary.")
+    constraints: List[str] = Field(default_factory=list, description="Known constraints.")
+    decisions: List[ThreadStateDecision] = Field(
+        default_factory=list, description="Key decisions and rationales."
+    )
+    active_todos: List[str] = Field(
+        default_factory=list,
+        description="Active tasks/todos the system believes are in-progress or pending.",
+    )
+    progress_so_far: str = Field(
+        default="",
+        description="High-signal summary of progress, tool evidence, and outcomes so far.",
+    )
+
+    open_questions: List[str] = Field(default_factory=list, description="Open questions.")
+    artifacts: List[str] = Field(default_factory=list, description="Artifact IDs/links only.")
+    risks: List[str] = Field(default_factory=list, description="Known risks.")
+    assumptions: List[str] = Field(default_factory=list, description="Assumptions being made.")
+    last_updated_at: Optional[str] = Field(
+        default=None,
+        description="UTC timestamp (ISO-8601) of last update.",
+    )
+
+    model_config = ConfigDict(extra="ignore")
+
+
+class LogAnalysisNote(BaseModel):
+    """Persisted per-file log analysis notes (customer-ready + internal)."""
+
+    file_name: str = Field(default="", description="Best-effort log filename.")
+    customer_ready: str = Field(
+        default="",
+        description="Customer-ready response (safe to paste; no internal IDs/tools).",
+    )
+    internal_notes: str = Field(
+        default="",
+        description="Internal diagnostic notes (technical detail for support/engineering).",
+    )
+    confidence: float = Field(
+        default=0.0,
+        ge=0.0,
+        le=1.0,
+        description="Confidence in the analysis (0-1).",
+    )
+    evidence: List[str] = Field(default_factory=list, description="Key evidence strings.")
+    recommended_actions: List[str] = Field(
+        default_factory=list,
+        description="Suggested next actions or remediation steps.",
+    )
+    open_questions: List[str] = Field(
+        default_factory=list,
+        description="Open questions / missing info to confirm root cause.",
+    )
+    created_at: Optional[str] = Field(
+        default=None,
+        description="UTC timestamp (ISO-8601) when this note was captured.",
+    )
+
+    model_config = ConfigDict(extra="ignore")
+
+
 class GraphState(BaseModel):
     """Typed state shared across the unified LangGraph execution.
 
@@ -228,6 +309,18 @@ class GraphState(BaseModel):
     todos: Annotated[List[Dict[str, Any]], operator.add] = Field(
         default_factory=list,
         description="Optional todo list shared across the run (e.g., from planning middleware).",
+    )
+
+    # Thread State ("compressed truth") - replace semantics
+    thread_state: Optional[ThreadState] = Field(
+        default=None,
+        description="Ephemeral structured state compacting key context across long runs.",
+    )
+
+    # Persisted internal notes (checkpointed)
+    log_analysis_notes: Annotated[Dict[str, LogAnalysisNote], merge_forwarded_props] = Field(
+        default_factory=dict,
+        description="Per-file log analysis notes keyed by tool_call_id.",
     )
 
     # Step counter for safety caps

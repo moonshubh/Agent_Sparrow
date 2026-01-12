@@ -1,0 +1,226 @@
+# =============================================================================
+# Agent Sparrow Model Configuration
+# Single source of truth for all LLM model specifications
+# =============================================================================
+# Provider auto-inference: if omitted, inferred from model_id pattern:
+#   - "gemini-*" → google
+#   - "grok-*" → xai
+#   - "*/*" (contains slash) → openrouter
+#   - "models/*" → google (Gemini embeddings)
+#   - Otherwise → google (default)
+# =============================================================================
+
+# Global quota enforcement configuration.
+# Safety margin is applied to all quotas to avoid accidental overage.
+# Rate limits in this file are internal budgets, not provider guarantees.
+rate_limiting:
+  safety_margin: 0.06   # ~6% headroom (configurable)
+
+# -----------------------------------------------------------------------------
+# COORDINATOR MODELS - Primary agents that interact with users
+# -----------------------------------------------------------------------------
+coordinators:
+  # Default coordinator for Google provider
+  google:
+    model_id: "gemini-3-flash-preview"
+    temperature: 1.0          # Gemini 3.x recommended
+    context_window: 1048576
+    rate_limits:
+      rpm: 1000
+      rpd: 10000
+
+  # Coordinator quota bucket when subagent orchestration is enabled.
+  # NOTE: Model can be identical to `coordinators.google` but limits are separate.
+  google_with_subagents:
+    model_id: "gemini-3-flash-preview"
+    temperature: 1.0
+    context_window: 1048576
+    rate_limits:
+      rpm: 600
+      rpd: 6000
+
+  # Default coordinator for XAI provider
+  xai:
+    model_id: "grok-4-1-fast-reasoning"
+    temperature: 0.2
+    context_window: 2000000
+    rate_limits:
+      rpm: 60
+      rpd: 1000
+
+  xai_with_subagents:
+    model_id: "grok-4-1-fast-reasoning"
+    temperature: 0.2
+    context_window: 2000000
+    rate_limits:
+      rpm: 45
+      rpd: 750
+
+  # Default coordinator for OpenRouter provider
+  openrouter:
+    model_id: "x-ai/grok-4.1-fast"
+    provider: "openrouter"
+    temperature: 0.2
+    context_window: 2000000
+    always_enable_reasoning: true
+    rate_limits:
+      rpm: 60
+      rpd: 1000
+
+  openrouter_with_subagents:
+    model_id: "x-ai/grok-4.1-fast"
+    provider: "openrouter"
+    temperature: 0.2
+    context_window: 2000000
+    always_enable_reasoning: true
+    rate_limits:
+      rpm: 45
+      rpd: 750
+
+  # Heavy reasoning coordinator (complex tasks, log analysis)
+  heavy:
+    model_id: "gemini-3-pro-preview"
+    temperature: 1.0
+    context_window: 1048576
+    rate_limits:
+      rpm: 5
+      rpd: 200
+
+# -----------------------------------------------------------------------------
+# INTERNAL MODELS - System components (not user-selectable)
+# -----------------------------------------------------------------------------
+internal:
+  # Summarization / thread-state extraction
+  summarizer:
+    model_id: "gemini-2.5-flash-preview-09-2025"
+    provider: "google"        # Explicit: always Google direct
+    temperature: 0.2
+    context_window: 1048576
+    rate_limits:
+      rpm: 10
+      rpd: 250
+
+  # Helper model for lightweight rewrite/rerank/summarize (GemmaHelper)
+  helper:
+    model_id: "gemini-2.5-flash-lite-preview-09-2025"
+    provider: "google"
+    temperature: 0.2
+    context_window: 1048576
+    rate_limits:
+      rpm: 50
+      rpd: 2000
+
+  # FeedMe extraction / structured parsing
+  feedme:
+    model_id: "gemini-2.5-flash-lite-preview-09-2025"
+    provider: "google"
+    temperature: 0.3
+    context_window: 1048576
+    rate_limits:
+      rpm: 30
+      rpd: 1500
+
+  # Gemini Search Grounding model
+  grounding:
+    model_id: "gemini-2.5-flash-preview-09-2025"
+    provider: "google"
+    temperature: 0.2
+    context_window: 1048576
+    rate_limits:
+      rpm: 30
+      rpd: 1000
+
+  # Vector embeddings
+  embedding:
+    model_id: "models/gemini-embedding-001"
+    provider: "google"
+    context_window: 2048
+    embedding_dims: 3072
+    rate_limits:
+      rpm: 100
+      tpm: 30000
+      rpd: 1000
+
+# -----------------------------------------------------------------------------
+# SUBAGENT MODELS - DeepAgents subagents for specialized tasks
+# Each subagent can have its own model, or fallback to default
+# -----------------------------------------------------------------------------
+subagents:
+  # Default model for all subagents (if not specified individually)
+  _default:
+    model_id: "minimax/minimax-m2.1"
+    provider: "openrouter"
+    temperature: 0.3
+    context_window: 204800
+    always_enable_reasoning: true
+    supports_vision: false
+    rate_limits:
+      rpm: 60
+      rpd: 1000
+
+  # IMPORTANT: Keys are the runtime subagent names (match `subagents.py`).
+  research-agent:
+    # Uses _default (MiniMax M2.1 via OpenRouter)
+
+  log-diagnoser:
+    # Uses _default
+
+  db-retrieval:
+    # Uses _default
+
+  # Explorer subagent - broad discovery
+  explorer:
+    # Uses _default
+
+# -----------------------------------------------------------------------------
+# ZENDESK MODELS - Separate coordinator/subagent config and quotas
+# -----------------------------------------------------------------------------
+zendesk:
+  coordinators:
+    google:
+      model_id: "gemini-3-flash-preview"
+      temperature: 1.0
+      context_window: 1048576
+      rate_limits:
+        rpm: 150
+        rpd: 5000
+
+    google_with_subagents:
+      model_id: "gemini-3-flash-preview"
+      temperature: 1.0
+      context_window: 1048576
+      rate_limits:
+        rpm: 120
+        rpd: 4000
+
+    heavy:
+      model_id: "gemini-3-pro-preview"
+      temperature: 1.0
+      context_window: 1048576
+      rate_limits:
+        rpm: 5
+        rpd: 250
+
+  subagents:
+    _default:
+      model_id: "gemini-3-flash-preview"
+      provider: "google"
+      temperature: 0.1
+      context_window: 1048576
+      rate_limits:
+        rpm: 60
+        rpd: 1000
+
+    # Explicit null entries fall back to _default (Gemini 3 Flash Preview).
+    research-agent:
+    log-diagnoser:
+    db-retrieval:
+    explorer:
+
+# -----------------------------------------------------------------------------
+# FALLBACK CONFIGURATION
+# -----------------------------------------------------------------------------
+fallback:
+  # When a subagent/internal model fails, fallback to coordinator
+  strategy: "coordinator"     # Options: "coordinator", "none"
+  coordinator_provider: "google"

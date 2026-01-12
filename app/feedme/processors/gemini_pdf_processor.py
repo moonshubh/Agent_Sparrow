@@ -10,7 +10,7 @@ Concatenates chunk outputs into a final Markdown transcript.
 Budget controls:
 - Max pages per PDF (default: 10)
 - Pages per call (default: 3)
-- Simple per-minute and daily pacing via gemini_tracker
+- Bucket-based rate limiting via models.yaml
 
 Memory optimization:
 - Pages are streamed in batches instead of loading all at once
@@ -19,6 +19,7 @@ Memory optimization:
 Note: This module is best-effort and aims to stay within free-tier quotas.
 """
 
+import asyncio
 import base64
 import gc
 import io
@@ -44,8 +45,9 @@ except ImportError:  # pragma: no cover
         )
 
 from app.core.settings import settings
-from app.core.config import get_registry
-from app.feedme.rate_limiting.gemini_tracker import get_tracker
+from app.core.config import get_models_config
+from app.core.rate_limiting.agent_wrapper import get_rate_limiter
+from app.core.rate_limiting.exceptions import RateLimitExceededException
 
 logger = logging.getLogger(__name__)
 
@@ -118,12 +120,8 @@ def _final_merge_prompt() -> str:
 def _ensure_model(api_key: str) -> str:
     """Initialize the Gemini client and return the model name from registry."""
     global _genai_client, _genai_client_api_key
-    registry = get_registry()
-    if not hasattr(registry, "feedme") or not getattr(registry, "feedme", None):
-        raise ValueError("Registry missing 'feedme' configuration")
-    model_name = getattr(registry.feedme, "id", None)
-    if not model_name:
-        raise ValueError("Registry feedme.id is empty")
+    config = get_models_config()
+    model_name = config.internal["feedme"].model_id
 
     if GENAI_SDK == "google.genai":
         # New SDK (google-genai 1.0+) uses Client pattern
@@ -188,8 +186,6 @@ def process_pdf_to_markdown(
     max_pages: Optional[int] = None,
     pages_per_call: Optional[int] = None,
     api_key: Optional[str] = None,
-    rpm_limit: Optional[int] = None,
-    rpd_limit: Optional[int] = None,
 ) -> Tuple[str, Dict[str, Any]]:
     """
     Render PDF → images → Gemini calls → Markdown.
@@ -199,16 +195,13 @@ def process_pdf_to_markdown(
     """
     max_pages = max_pages or settings.feedme_ai_max_pages
     pages_per_call = pages_per_call or settings.feedme_ai_pages_per_call
-    rpm = rpm_limit or settings.gemini_flash_rpm_limit
-    rpd = rpd_limit or settings.gemini_flash_rpd_limit
-
     if not api_key:
         if not settings.gemini_api_key:
             raise ValueError("No Gemini API key available")
         api_key = settings.gemini_api_key
 
     model_name = _ensure_model(api_key)
-    tracker = get_tracker(daily_limit=rpd, rpm_limit=rpm)
+    limiter = get_rate_limiter()
 
     # Get page count without loading all images into memory
     # Try pypdf first for efficiency, fallback to pdf2image
@@ -274,16 +267,21 @@ def process_pdf_to_markdown(
     calls_used = 0
 
     for idx, chunk in enumerate(chunks):
-        if not tracker.can_request():
-            logger.warning("Gemini daily limit reached; stopping early")
-            break
-        tracker.throttle()
         try:
             parts = [prompt] + chunk
-            text = _generate_content(model_name, parts)
+            text = asyncio.run(
+                limiter.execute_with_protection(
+                    "internal.feedme",
+                    _generate_content,
+                    model_name,
+                    parts,
+                )
+            )
             md_segments.append(text or "")
             calls_used += 1
-            tracker.record()
+        except RateLimitExceededException as exc:
+            logger.warning("Gemini feedme rate limit reached: %s", exc)
+            break
         except Exception as e:
             logger.error(f"Gemini extraction failed on chunk {idx+1}/{len(chunks)}: {e}")
             md_segments.append("\n> [Extraction failed for this chunk]\n")
@@ -293,16 +291,22 @@ def process_pdf_to_markdown(
 
     # Optional: final micro-merge if more than 1 segment and non-empty
     if len(md_segments) > 1 and concatenated:
-        if tracker.can_request():
-            tracker.throttle()
-            try:
-                merge_prompt = _final_merge_prompt()
-                final_text = _generate_content(model_name, [merge_prompt, concatenated])
-                if final_text:
-                    concatenated = final_text
-                tracker.record()
-            except Exception as e:
-                logger.warning(f"Gemini final merge failed, using concatenated: {e}")
+        try:
+            merge_prompt = _final_merge_prompt()
+            final_text = asyncio.run(
+                limiter.execute_with_protection(
+                    "internal.feedme",
+                    _generate_content,
+                    model_name,
+                    [merge_prompt, concatenated],
+                )
+            )
+            if final_text:
+                concatenated = final_text
+        except RateLimitExceededException as exc:
+            logger.warning("Gemini final merge rate limited: %s", exc)
+        except Exception as e:
+            logger.warning(f"Gemini final merge failed, using concatenated: {e}")
 
     info: Dict[str, Any] = {
         "pages_processed": use_pages,

@@ -11,6 +11,7 @@ from typing import Dict, Any
 from fastapi import APIRouter, HTTPException, BackgroundTasks
 
 from app.core.settings import settings
+from app.core.rate_limiting.agent_wrapper import get_rate_limiter
 from app.db.supabase.client import get_supabase_client
 from app.feedme.schemas import (
     ProcessingStatus,
@@ -170,27 +171,33 @@ async def reprocess_conversation(conversation_id: int, background_tasks: Backgro
 
 @router.get("/gemini-usage", response_model=Dict[str, Any])
 async def get_gemini_usage():
-    """Get current Gemini vision API usage statistics."""
+    """Get current FeedMe model usage statistics (internal.feedme bucket)."""
     if not settings.feedme_enabled:
         raise HTTPException(status_code=503, detail="FeedMe service is currently disabled")
 
     try:
-        from app.feedme.rate_limiting.gemini_tracker import get_tracker_info
+        limiter = get_rate_limiter()
+        stats = await limiter.get_usage_stats()
+        metadata = stats.buckets.get("internal.feedme")
+        if metadata is None:
+            raise HTTPException(status_code=404, detail="FeedMe bucket not configured")
 
-        usage_info = get_tracker_info(
-            daily_limit=settings.gemini_flash_rpd_limit,
-            rpm_limit=settings.gemini_flash_rpm_limit
-        )
+        now = datetime.utcnow()
+        window_remaining = max(0, int((metadata.reset_time_rpm - now).total_seconds()))
+        utilization = {
+            "daily": metadata.rpd_used / max(1, metadata.rpd_limit),
+            "rpm": metadata.rpm_used / max(1, metadata.rpm_limit),
+        }
 
         return {
-            "daily_used": usage_info["daily_used"],
-            "daily_limit": usage_info["daily_limit"],
-            "rpm_limit": usage_info["rpm_limit"],
-            "calls_in_window": usage_info["calls_in_window"],
-            "window_seconds_remaining": usage_info["window_seconds_remaining"],
-            "utilization": usage_info["utilization"],
-            "status": "healthy" if usage_info["utilization"]["daily"] < 0.9 else "warning",
-            "day": usage_info["day"]
+            "daily_used": metadata.rpd_used,
+            "daily_limit": metadata.rpd_limit,
+            "rpm_limit": metadata.rpm_limit,
+            "calls_in_window": metadata.rpm_used,
+            "window_seconds_remaining": window_remaining,
+            "utilization": utilization,
+            "status": "healthy" if utilization["daily"] < 0.9 else "warning",
+            "day": now.strftime("%Y-%m-%d"),
         }
 
     except Exception as e:
@@ -200,34 +207,43 @@ async def get_gemini_usage():
 
 @router.get("/embedding-usage", response_model=Dict[str, Any])
 async def get_embedding_usage():
-    """Get current embedding API usage statistics."""
+    """Get current embedding API usage statistics (internal.embedding bucket)."""
     if not settings.feedme_enabled:
         raise HTTPException(status_code=503, detail="FeedMe service is currently disabled")
 
     try:
-        from app.feedme.rate_limiting.gemini_tracker import get_embed_tracker_info
+        limiter = get_rate_limiter()
+        stats = await limiter.get_usage_stats()
+        metadata = stats.buckets.get("internal.embedding")
+        if metadata is None:
+            raise HTTPException(status_code=404, detail="Embedding bucket not configured")
 
-        usage_info = get_embed_tracker_info(
-            daily_limit=settings.gemini_embed_rpd_limit,
-            rpm_limit=settings.gemini_embed_rpm_limit,
-            tpm_limit=settings.gemini_embed_tpm_limit
+        now = datetime.utcnow()
+        window_remaining = max(0, int((metadata.reset_time_rpm - now).total_seconds()))
+        token_window_remaining = (
+            max(0, int((metadata.reset_time_tpm - now).total_seconds()))
+            if metadata.reset_time_tpm
+            else 0
         )
-
-        utilization = usage_info.get("utilization", {})
-        utilization_max = max(utilization.values(), default=0) if utilization else 0
+        utilization = {
+            "daily": metadata.rpd_used / max(1, metadata.rpd_limit),
+            "rpm": metadata.rpm_used / max(1, metadata.rpm_limit),
+            "tpm": (metadata.tpm_used / max(1, metadata.tpm_limit)) if metadata.tpm_limit else 0.0,
+        }
+        utilization_max = max(utilization.values(), default=0)
 
         return {
-            "daily_used": usage_info["daily_used"],
-            "daily_limit": usage_info["daily_limit"],
-            "rpm_limit": usage_info["rpm_limit"],
-            "tpm_limit": usage_info["tpm_limit"],
-            "calls_in_window": usage_info["calls_in_window"],
-            "tokens_in_window": usage_info["tokens_in_window"],
-            "window_seconds_remaining": usage_info["window_seconds_remaining"],
-            "token_window_seconds_remaining": usage_info["token_window_seconds_remaining"],
+            "daily_used": metadata.rpd_used,
+            "daily_limit": metadata.rpd_limit,
+            "rpm_limit": metadata.rpm_limit,
+            "tpm_limit": metadata.tpm_limit,
+            "calls_in_window": metadata.rpm_used,
+            "tokens_in_window": metadata.tpm_used,
+            "window_seconds_remaining": window_remaining,
+            "token_window_seconds_remaining": token_window_remaining,
             "utilization": utilization,
             "status": "healthy" if utilization_max < 0.9 else "warning",
-            "day": usage_info["day"]
+            "day": now.strftime("%Y-%m-%d"),
         }
 
     except Exception as e:

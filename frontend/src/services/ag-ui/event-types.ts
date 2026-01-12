@@ -183,11 +183,16 @@ export interface ImageArtifactEvent {
   title: string;
   content: string;
   messageId: string;
-  imageData: string;
+  /** Preferred (Phase V): retrievable image URL (no base64 payloads). */
+  imageUrl?: string;
+  /** Legacy (pre-Phase V): base64 image payload. */
+  imageData?: string;
   mimeType: string;
   altText?: string;
   aspectRatio?: string;
   resolution?: string;
+  /** Optional source page URL for web-sourced images. */
+  pageUrl?: string;
 }
 
 // -----------------------------------------------------------------------------

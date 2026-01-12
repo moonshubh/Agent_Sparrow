@@ -285,8 +285,8 @@ def _build_middleware_stack(config: SparrowAgentConfig) -> List[Any]:
         subagent_default_middleware = [
             SummarizationMiddleware(
                 model=config.model,
-                max_tokens_before_summary=config.max_tokens_before_summary,
-                messages_to_keep=config.messages_to_keep,
+                trigger=("tokens", config.max_tokens_before_summary),
+                keep=("messages", config.messages_to_keep),
             ),
             PatchToolCallsMiddleware(),
         ]
@@ -297,7 +297,7 @@ def _build_middleware_stack(config: SparrowAgentConfig) -> List[Any]:
             subagents=[spec.to_dict() for spec in config.subagents],
             default_middleware=subagent_default_middleware,
             default_interrupt_on=config.interrupt_on,
-            general_purpose_agent=True,
+            general_purpose_agent=False,
         )
         middleware.append(coordinator_middleware)
 
@@ -305,8 +305,8 @@ def _build_middleware_stack(config: SparrowAgentConfig) -> List[Any]:
     middleware.append(
         SummarizationMiddleware(
             model=config.model,
-            max_tokens_before_summary=config.max_tokens_before_summary,
-            messages_to_keep=config.messages_to_keep,
+            trigger=("tokens", config.max_tokens_before_summary),
+            keep=("messages", config.messages_to_keep),
         )
     )
 
@@ -354,8 +354,8 @@ def create_lightweight_agent(
     middleware = [
         SummarizationMiddleware(
             model=model,
-            max_tokens_before_summary=100000,
-            messages_to_keep=4,
+            trigger=("tokens", 100000),
+            keep=("messages", 4),
         ),
         PatchToolCallsMiddleware(),
     ]

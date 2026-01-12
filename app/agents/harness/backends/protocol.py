@@ -103,7 +103,6 @@ class BackendProtocol(Protocol):
 
     Backends implementing this protocol provide consistent storage
     operations for:
-    - Global knowledge persistence
     - Cross-session memory
     - Large tool result eviction
     - Scratchpad operations

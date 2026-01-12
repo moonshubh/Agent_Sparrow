@@ -4,15 +4,14 @@ import React, { useMemo, useState } from "react"
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/shared/ui/dialog"
 import { Separator } from "@/shared/ui/separator"
 import { cn } from "@/shared/lib/utils"
-import { Settings, Key, User, LifeBuoy, BarChart3, Gauge } from "lucide-react"
+import { Settings, Key, User, LifeBuoy, Gauge } from "lucide-react"
 import { GeneralPanel } from "./panels/GeneralPanel"
 import { APIKeysPanel } from "./panels/APIKeysPanel"
 import { AccountPanel } from "./panels/AccountPanel"
 import { ZendeskPanel } from "./panels/ZendeskPanel"
-import { GlobalKnowledgePanel } from "./panels/GlobalKnowledgePanel"
 import { RateLimitsPanel } from "./panels/RateLimitsPanel"
 
-type TabKey = "general" | "api-keys" | "account" | "zendesk" | "global-knowledge" | "rate-limits"
+type TabKey = "general" | "api-keys" | "account" | "zendesk" | "rate-limits"
 
 interface SettingsDialogV2Props {
   isOpen: boolean
@@ -26,7 +25,6 @@ const navItems: { id: TabKey; label: string; icon: NavIcon }[] = [
   { id: "general", label: "General", icon: Settings },
   { id: "api-keys", label: "API Keys", icon: Key },
   { id: "zendesk", label: "Zendesk (Admin)", icon: LifeBuoy },
-  { id: "global-knowledge", label: "Global Knowledge", icon: BarChart3 },
   { id: "rate-limits", label: "Rate Limits", icon: Gauge },
   { id: "account", label: "Account", icon: User },
 ]
@@ -42,8 +40,6 @@ export function SettingsDialogV2({ isOpen, onClose, defaultTab = "general" }: Se
         return <APIKeysPanel />
       case "zendesk":
         return <ZendeskPanel />
-      case "global-knowledge":
-        return <GlobalKnowledgePanel />
       case "rate-limits":
         return <RateLimitsPanel />
       case "account":

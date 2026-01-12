@@ -118,6 +118,78 @@ const stripMarkdownDataUriImages = (text: string): string => {
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 
+const truncateText = (value: string, maxChars: number): string =>
+  value.length > maxChars ? `${value.slice(0, maxChars).trimEnd()}...` : value;
+
+type LogAnalysisNoteMetadata = {
+  file_name?: string;
+  internal_notes?: string;
+  confidence?: number;
+  evidence?: string[];
+  recommended_actions?: string[];
+  open_questions?: string[];
+  created_at?: string;
+};
+
+const sanitizeLogAnalysisNotesForMetadata = (
+  raw: Record<string, unknown>
+): Record<string, LogAnalysisNoteMetadata> => {
+  const sanitized: Record<string, LogAnalysisNoteMetadata> = {};
+
+  for (const [id, note] of Object.entries(raw)) {
+    if (!isRecord(note)) continue;
+
+    const fileNameValue =
+      typeof note.file_name === 'string'
+        ? note.file_name
+        : typeof note.fileName === 'string'
+          ? note.fileName
+          : '';
+
+    const internalNotesValue =
+      typeof note.internal_notes === 'string'
+        ? note.internal_notes
+        : typeof note.internalNotes === 'string'
+          ? note.internalNotes
+          : '';
+
+    const confidenceRaw = note.confidence;
+    const confidence =
+      typeof confidenceRaw === 'number' && Number.isFinite(confidenceRaw)
+        ? confidenceRaw
+        : typeof confidenceRaw === 'string'
+          ? Number(confidenceRaw)
+          : undefined;
+    const confidenceValue =
+      confidence !== undefined && Number.isFinite(confidence) ? confidence : undefined;
+
+    const listOfStrings = (value: unknown, maxItems: number): string[] | undefined => {
+      if (!Array.isArray(value)) return undefined;
+      const items = value
+        .filter((item): item is string => typeof item === 'string')
+        .map((item) => truncateText(item, 600))
+        .slice(0, maxItems);
+      return items.length ? items : undefined;
+    };
+
+    const entry: LogAnalysisNoteMetadata = {
+      file_name: fileNameValue ? truncateText(fileNameValue, 180) : undefined,
+      internal_notes: internalNotesValue ? truncateText(internalNotesValue, 8000) : undefined,
+      confidence: confidenceValue,
+      evidence: listOfStrings(note.evidence, 12),
+      recommended_actions: listOfStrings(note.recommended_actions, 12),
+      open_questions: listOfStrings(note.open_questions, 12),
+      created_at: typeof note.created_at === 'string' ? note.created_at : undefined,
+    };
+
+    if (Object.values(entry).some((v) => v !== undefined)) {
+      sanitized[id] = entry;
+    }
+  }
+
+  return sanitized;
+};
+
 const isMessageRole = (value: unknown): value is Message['role'] =>
   value === 'user' || value === 'assistant' || value === 'system' || value === 'tool';
 
@@ -136,6 +208,30 @@ const safeJsonStringify = (value: unknown): string => {
   } catch {
     return '';
   }
+};
+
+const normalizeUnknownError = (value: unknown): Error => {
+  if (value instanceof Error) return value;
+  if (typeof value === 'string' && value.trim()) return new Error(value.trim());
+
+  if (isRecord(value)) {
+    const message =
+      (typeof value.message === 'string' && value.message.trim()) ||
+      (typeof value.error === 'string' && value.error.trim()) ||
+      (typeof value.detail === 'string' && value.detail.trim()) ||
+      undefined;
+
+    const code = typeof value.code === 'string' && value.code.trim() ? value.code.trim() : undefined;
+    if (message) return new Error(code ? `${message} (${code})` : message);
+
+    const serialized = safeJsonStringify(value);
+    if (serialized && serialized !== '{}') return new Error(serialized);
+  }
+
+  const serialized = safeJsonStringify(value);
+  if (serialized && serialized !== '{}') return new Error(serialized);
+
+  return new Error('Agent run failed');
 };
 
 const getStringFromRecord = (record: Record<string, unknown>, key: string): string | undefined => {
@@ -344,10 +440,32 @@ const stripLargeMetadata = (
   return Object.keys(rest).length > 0 ? rest : undefined;
 };
 
+const stripMetadataForRun = (
+  metadata: Record<string, unknown>
+): Record<string, unknown> | undefined => {
+  if (
+    !('attachments' in metadata) &&
+    !('artifacts' in metadata) &&
+    !('logAnalysisNotes' in metadata) &&
+    !('log_analysis_notes' in metadata)
+  ) {
+    return metadata;
+  }
+
+  const {
+    attachments: _attachments,
+    artifacts: _artifacts,
+    logAnalysisNotes: _logAnalysisNotes,
+    log_analysis_notes: _logAnalysisNotesSnake,
+    ...rest
+  } = metadata;
+  return Object.keys(rest).length > 0 ? rest : undefined;
+};
+
 const sanitizeMessagesForRun = (currentMessages: Message[]): Message[] =>
   currentMessages.map((message) => {
     if (!isRecord(message.metadata)) return message;
-    const sanitizedMetadata = stripLargeMetadata(message.metadata);
+    const sanitizedMetadata = stripMetadataForRun(message.metadata);
     if (sanitizedMetadata === message.metadata) return message;
     if (!sanitizedMetadata) {
       return { ...message, metadata: undefined };
@@ -659,6 +777,7 @@ export function AgentProvider({
   const persistedMessageIdRef = useRef<Record<string, string>>({});
   // Track artifacts created during the current run for persistence
   const pendingArtifactsRef = useRef<SerializedArtifact[]>([]);
+  const pendingLogAnalysisNotesRef = useRef<Record<string, unknown>>({});
   const sendMessage = useCallback(async (content: string, attachments?: AttachmentInput[]) => {
     if (!agent || isStreaming) return;
 
@@ -675,6 +794,7 @@ export function AgentProvider({
     assistantPersistedRef.current = false;
     lastRunUserMessageIdRef.current = null;
     pendingArtifactsRef.current = [];
+    pendingLogAnalysisNotesRef.current = {};
 
     try {
       // Create abort controller for this request
@@ -706,11 +826,10 @@ export function AgentProvider({
         }));
       }
 
-      setMessages((prev) => {
-        const next = [...prev, userMessage];
-        messagesRef.current = next;
-        return next;
-      });
+      // Ensure messagesRef is updated synchronously before any streaming deltas arrive.
+      const nextUserMessages = [...messagesRef.current, userMessage];
+      messagesRef.current = nextUserMessages;
+      setMessages(nextUserMessages);
 
       // Add user message to agent's message list
       agent.addMessage(userMessage);
@@ -971,15 +1090,26 @@ export function AgentProvider({
                     // Fall back to the last assistant we already showed (e.g., from streaming buffer)
                     const lastAssistantIdx = findLastIndex(messagesRef.current, (m) => m.role === 'assistant');
                     if (lastAssistantIdx >= 0) {
-                      nextMessages = [...nextMessages, messagesRef.current[lastAssistantIdx]];
+                      nextMessages = [
+                        ...nextMessages,
+                        { ...messagesRef.current[lastAssistantIdx], id: crypto.randomUUID() },
+                      ];
                     }
                   }
                 }
               }
 
-              const uiLastMessage = messagesRef.current[messagesRef.current.length - 1];
+              const runUserMessageId = lastRunUserMessageIdRef.current;
+              const uiRunUserIndex = runUserMessageId
+                ? findLastIndex(messagesRef.current, (m) => m.id === runUserMessageId)
+                : -1;
+              const uiLastIndex = messagesRef.current.length - 1;
+              const uiLastMessage = uiLastIndex >= 0 ? messagesRef.current[uiLastIndex] : undefined;
               const uiLastAssistant =
-                uiLastMessage && uiLastMessage.role === 'assistant' && uiLastMessage.content.trim()
+                uiLastMessage &&
+                uiLastMessage.role === 'assistant' &&
+                uiLastMessage.content.trim() &&
+                (uiRunUserIndex < 0 || uiLastIndex > uiRunUserIndex)
                   ? uiLastMessage
                   : null;
 
@@ -1005,6 +1135,7 @@ export function AgentProvider({
                       ...nextMessages,
                       {
                         ...uiLastAssistant,
+                        id: crypto.randomUUID(),
                         content: uiText,
                       },
                     ];
@@ -1119,21 +1250,44 @@ export function AgentProvider({
                   const nextTodos = normalizeTodoItems(maybeAgentEvent.value.todos);
                   console.debug('[AG-UI] Todos update:', nextTodos.length, 'items');
                   setTodos(nextTodos);
+                } else if (maybeAgentEvent.name === 'genui_state_update') {
+                  const value = maybeAgentEvent.value;
+                  const notes = isRecord(value) ? value.logAnalysisNotes : undefined;
+                  if (isRecord(notes)) {
+                    const sanitizedNotes = sanitizeLogAnalysisNotesForMetadata(notes);
+                    pendingLogAnalysisNotesRef.current = {
+                      ...pendingLogAnalysisNotesRef.current,
+                      ...sanitizedNotes,
+                    };
+                  }
                 } else if (maybeAgentEvent.name === 'image_artifact') {
                   const payload = maybeAgentEvent.value;
+                  const imageUrl = typeof payload?.imageUrl === 'string' ? payload.imageUrl : '';
+                  const imageData = typeof payload?.imageData === 'string' ? payload.imageData : '';
+
                   // Log summary only (avoid logging large base64 imageData)
-                  console.debug('[AG-UI] Image artifact event:', payload?.title, 'imageData length:', payload?.imageData?.length);
-                  if (payload?.imageData) {
+                  console.debug(
+                    '[AG-UI] Image artifact event:',
+                    payload?.title,
+                    'hasUrl:',
+                    Boolean(imageUrl),
+                    'imageData length:',
+                    imageData?.length
+                  );
+
+                  const hasRenderableImage = Boolean(imageUrl || imageData);
+                  if (hasRenderableImage) {
                     const store = getGlobalArtifactStore();
+                    const content = imageUrl || payload.content || '';
                     if (store) {
                       const state = store.getState();
                       state.addArtifact({
                         id: payload.id,
                         type: 'image',
                         title: payload.title || 'Generated Image',
-                        content: payload.content || '',
+                        content,
                         messageId: payload.messageId,
-                        imageData: payload.imageData,
+                        imageData: imageData || undefined,
                         mimeType: payload.mimeType || 'image/png',
                         altText: payload.altText,
                         aspectRatio: payload.aspectRatio,
@@ -1147,8 +1301,8 @@ export function AgentProvider({
                       id: payload.id,
                       type: 'image',
                       title: payload.title || 'Generated Image',
-                      content: payload.content || '',
-                      imageData: payload.imageData,
+                      content,
+                      imageData: imageData || undefined,
                       mimeType: payload.mimeType || 'image/png',
                       altText: payload.altText,
                       aspectRatio: payload.aspectRatio,
@@ -1276,8 +1430,9 @@ export function AgentProvider({
 
             // Handle errors
             onRunFailed: ({ error: runError }: { error: unknown }) => {
-              console.error('[AG-UI] Run failed:', runError);
-              setError(runError instanceof Error ? runError : new Error('Agent run failed'));
+              const normalized = normalizeUnknownError(runError);
+              console.error('[AG-UI] Run failed:', normalized.message, runError);
+              setError(normalized);
             },
           },
         );
@@ -1313,11 +1468,19 @@ export function AgentProvider({
 
           const candidateIndex = findLastIndex(
             currentMessages,
-            (msg) => msg.role === 'assistant' && msg.content.trim().length > 0,
+            (msg) => msg.role === 'assistant',
           );
 
           // Early exit conditions - use nested if instead of return to avoid masking exceptions
-          const shouldPersist = runUserIndex >= 0 && candidateIndex > runUserIndex;
+          const hasPendingArtifacts = pendingArtifactsRef.current.length > 0;
+          const hasPendingLogNotes = Object.keys(pendingLogAnalysisNotesRef.current).length > 0;
+          const hasCandidateAssistant = candidateIndex > runUserIndex;
+          const candidateHasContent =
+            candidateIndex >= 0 && currentMessages[candidateIndex]?.content.trim().length > 0;
+          const shouldPersist =
+            runUserIndex >= 0 &&
+            hasCandidateAssistant &&
+            (candidateHasContent || hasPendingArtifacts || hasPendingLogNotes);
 
           // Only continue with persistence if conditions are met
           if (shouldPersist && candidateIndex >= 0) {
@@ -1333,11 +1496,51 @@ export function AgentProvider({
               const artifacts = pendingArtifactsRef.current.length > 0
                 ? pendingArtifactsRef.current
                 : undefined;
+              const contentToPersist = (() => {
+                const trimmed = candidate.content.trim();
+                if (trimmed && !looksLikeJsonPayload(trimmed)) return trimmed;
+
+                if (hasPendingArtifacts && artifacts) {
+                  const titles = artifacts
+                    .map((artifact) => artifact.title)
+                    .filter((title): title is string => Boolean(title && title.trim()));
+                  if (titles.length === 1) return `Created artifact: ${titles[0].trim()}.`;
+                  if (titles.length > 1) return `Created ${titles.length} artifacts: ${titles.map((t) => t.trim()).join(', ')}.`;
+                  return `Created ${artifacts.length} artifact${artifacts.length === 1 ? '' : 's'}.`;
+                }
+
+                if (hasPendingLogNotes) {
+                  return 'Log analysis complete. Open Technical details for per-file diagnostics.';
+                }
+
+                return trimmed ? 'Response generated.' : '';
+              })();
               const mergedMetadata = artifacts
                 ? { ...(candidate.metadata ?? {}), artifacts }
                 : candidate.metadata;
+              const logNotes = pendingLogAnalysisNotesRef.current;
+              const logNotesCount = Object.keys(logNotes).length;
+              const withLogNotes =
+                logNotesCount > 0
+                  ? { ...(mergedMetadata ?? {}), logAnalysisNotes: logNotes }
+                  : mergedMetadata;
               const metadataToPersist =
-                mergedMetadata && Object.keys(mergedMetadata).length ? mergedMetadata : undefined;
+                withLogNotes && Object.keys(withLogNotes).length ? withLogNotes : undefined;
+
+              if (
+                (metadataToPersist && metadataToPersist !== candidate.metadata) ||
+                (contentToPersist && contentToPersist !== candidate.content)
+              ) {
+                setMessages((prev) => {
+                  const next = prev.map((msg) =>
+                    msg.id === candidate.id
+                      ? { ...msg, content: contentToPersist || msg.content, metadata: metadataToPersist }
+                      : msg
+                  );
+                  messagesRef.current = next;
+                  return next;
+                });
+              }
 
               assistantPersistedRef.current = true;
               const agentType = getPersistedAgentTypeFromState(agent.state);
@@ -1349,7 +1552,7 @@ export function AgentProvider({
 
             sessionsAPI.postMessage(sessionId, {
               message_type: 'assistant',
-              content: candidate.content,
+              content: contentToPersist || candidate.content,
               agent_type: agentType,
               metadata: metadataToPersist,
             }).then((record) => {

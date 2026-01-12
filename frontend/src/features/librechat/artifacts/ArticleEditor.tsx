@@ -77,6 +77,12 @@ interface ArticleEditorProps {
   artifact: Artifact;
 }
 
+interface LightboxImage {
+  src: string;
+  alt: string;
+  pageUrl?: string;
+}
+
 
 /**
  * ArticleEditor - Rich article editor with markdown support
@@ -146,10 +152,25 @@ export function ArticleEditor({ artifact }: ArticleEditorProps) {
   }, []);
 
   // State for image lightbox
-  const [lightboxImage, setLightboxImage] = useState<{ src: string; alt: string } | null>(null);
+  const [lightboxImage, setLightboxImage] = useState<LightboxImage | null>(null);
 
   // Track failed images
   const [failedImages, setFailedImages] = useState<Set<string>>(new Set());
+
+  const resolveHttpUrl = useCallback((value?: string) => {
+    if (!value) return undefined;
+    const trimmed = value.trim();
+    if (!trimmed) return undefined;
+    try {
+      const url = new URL(trimmed);
+      if (url.protocol === 'http:' || url.protocol === 'https:') {
+        return url.toString();
+      }
+      return undefined;
+    } catch {
+      return undefined;
+    }
+  }, []);
 
   // Custom markdown components for preview
   const markdownComponents = useMemo((): Partial<Components> => ({
@@ -158,6 +179,7 @@ export function ArticleEditor({ artifact }: ArticleEditorProps) {
       node: _node,
       src,
       alt,
+      title,
       className,
       ...props
     }: React.ImgHTMLAttributes<HTMLImageElement> & { node?: unknown }) => {
@@ -165,6 +187,7 @@ export function ArticleEditor({ artifact }: ArticleEditorProps) {
       const caption = typeof alt === 'string' ? alt : '';
       const displayAlt = caption || 'Article image';
       const isBase64 = srcString?.startsWith('data:') ?? false;
+      const pageUrl = resolveHttpUrl(typeof title === 'string' ? title : undefined);
       const hasFailed = Boolean(srcString && failedImages.has(srcString));
       const isMissing = !srcString;
       const shouldShowCaption = caption && caption !== 'Article image';
@@ -194,7 +217,7 @@ export function ArticleEditor({ artifact }: ArticleEditorProps) {
       }
 
       const openLightbox = () => {
-        setLightboxImage({ src: srcString, alt: displayAlt });
+        setLightboxImage({ src: srcString, alt: displayAlt, pageUrl });
       };
 
       return (
@@ -396,7 +419,7 @@ export function ArticleEditor({ artifact }: ArticleEditorProps) {
         {children}
       </a>
     ),
-  }), [failedImages]);
+  }), [failedImages, resolveHttpUrl]);
 
   return (
     <div className="flex flex-col h-full">
@@ -495,7 +518,10 @@ export function ArticleEditor({ artifact }: ArticleEditorProps) {
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm"
           onClick={() => setLightboxImage(null)}
         >
-          <div className="relative max-w-[90vw] max-h-[90vh]">
+          <div
+            className="relative max-w-[90vw] max-h-[90vh]"
+            onClick={(event) => event.stopPropagation()}
+          >
             <img
               src={lightboxImage.src}
               alt={lightboxImage.alt}
@@ -504,6 +530,26 @@ export function ArticleEditor({ artifact }: ArticleEditorProps) {
             {lightboxImage.alt && lightboxImage.alt !== 'Article image' && (
               <p className="text-center text-white/80 mt-3 text-sm">{lightboxImage.alt}</p>
             )}
+            <div className="flex items-center justify-center gap-4 mt-3 text-sm">
+              <a
+                href={lightboxImage.src}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-white/80 hover:text-white underline underline-offset-4"
+              >
+                Open image
+              </a>
+              {lightboxImage.pageUrl && (
+                <a
+                  href={lightboxImage.pageUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-white/80 hover:text-white underline underline-offset-4"
+                >
+                  Open source page
+                </a>
+              )}
+            </div>
             <button
               onClick={() => setLightboxImage(null)}
               className="absolute -top-3 -right-3 bg-background text-foreground rounded-full p-2 shadow-lg hover:bg-secondary transition-colors"

@@ -9,7 +9,7 @@
 
 import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { createSparrowAgent, type SparrowAgent, type Message } from '@/services/ag-ui/client';
-import { sessionsAPI, type ChatMessageRecord } from '@/services/api/endpoints/sessions';
+import { sessionsAPI, type ChatMessageRecord, type AgentType as SessionAgentType } from '@/services/api/endpoints/sessions';
 import { modelsAPI, Provider } from '@/services/api/endpoints/models';
 import { AgentProvider, type SerializedArtifact } from '@/features/librechat/AgentContext';
 import { ArtifactProvider, getGlobalArtifactStore } from '@/features/librechat/artifacts';
@@ -23,6 +23,33 @@ function convertToMessage(record: ChatMessageRecord): Message {
     content: record.content,
     metadata: record.metadata || undefined,
   };
+}
+
+function inferSessionAgentType(messages: Message[]): SessionAgentType {
+  for (const msg of messages) {
+    const metadata = msg.metadata as Record<string, unknown> | undefined;
+    const notes =
+      metadata && ('logAnalysisNotes' in metadata || 'log_analysis_notes' in metadata)
+        ? metadata
+        : null;
+    if (notes) {
+      return 'log_analysis';
+    }
+
+    const attachments = metadata?.attachments;
+    if (Array.isArray(attachments)) {
+      const hasLog = attachments.some((att) => {
+        if (!att || typeof att !== 'object') return false;
+        const name = (att as { name?: unknown }).name;
+        return typeof name === 'string' && name.toLowerCase().endsWith('.log');
+      });
+      if (hasLog) {
+        return 'log_analysis';
+      }
+    }
+  }
+
+  return 'primary';
 }
 
 /**
@@ -53,7 +80,7 @@ function restoreArtifactsFromMessages(messages: Message[]): void {
     console.debug('[Artifacts] Found', artifacts.length, 'artifacts in message', message.id);
 
     for (const artifact of artifacts) {
-      // Validate required fields - image artifacts may have empty content but must have imageData
+      // Validate required fields - image artifacts may use URL content or legacy base64 imageData
       const hasRequiredFields = artifact.id && artifact.type;
       const hasContent = artifact.content || (artifact.type === 'image' && artifact.imageData);
       if (!hasRequiredFields || !hasContent) {
@@ -141,6 +168,20 @@ export default function LibreChatClient() {
   const initializedRef = useRef(false);
   const artifactRestoreTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  const getActiveModelSelection = useCallback((): { provider: Provider; model: string } => {
+    const agentState = agent?.state as Record<string, unknown> | undefined;
+    const candidateProvider =
+      typeof agentState?.provider === 'string' ? agentState.provider : provider;
+    const candidateModel =
+      typeof agentState?.model === 'string' ? agentState.model : model;
+
+    const normalizedProvider = String(candidateProvider).toLowerCase();
+    const resolvedProvider: Provider =
+      normalizedProvider === 'google' || normalizedProvider === 'xai' ? normalizedProvider : 'google';
+
+    return { provider: resolvedProvider, model: String(candidateModel) };
+  }, [agent, model, provider]);
+
   const initialize = useCallback(async () => {
     if (initializedRef.current) return;
     initializedRef.current = true;
@@ -155,7 +196,8 @@ export default function LibreChatClient() {
 
       try {
         const config = await modelsAPI.getConfig();
-        const availableProvider = Object.entries(config.available_providers).find(([, available]) => available)?.[0] as Provider | undefined;
+        const preferredProviders: Provider[] = ['google', 'xai'];
+        const availableProvider = preferredProviders.find((p) => config.available_providers[p]) as Provider | undefined;
         if (availableProvider) {
           activeProvider = availableProvider;
           activeModel = config.defaults[availableProvider] || DEFAULT_MODELS[availableProvider];
@@ -221,12 +263,13 @@ export default function LibreChatClient() {
         }
 
         const newTraceId = `trace-${mostRecent.id}`;
+        const inferredAgentType = inferSessionAgentType(messages);
         const newAgent = createSparrowAgent({
           sessionId: mostRecent.id,
           traceId: newTraceId,
           provider: activeProvider,
           model: activeModel,
-          agentType: 'primary',
+          agentType: inferredAgentType,
         });
 
         // Set loaded messages on the agent
@@ -308,6 +351,8 @@ export default function LibreChatClient() {
   // Handle new chat
   const handleNewChat = useCallback(async () => {
     try {
+      const { provider: selectedProvider, model: selectedModel } = getActiveModelSelection();
+
       // Enforce conversation limit: delete oldest if at max
       if (conversations.length >= CHAT_CONFIG.maxConversations) {
         // Sort by timestamp (oldest first). Treat missing timestamps as newest (Infinity) to preserve them.
@@ -340,8 +385,8 @@ export default function LibreChatClient() {
       const newAgent = createSparrowAgent({
         sessionId: newSessionId,
         traceId: newTraceId,
-        provider,
-        model,
+        provider: selectedProvider,
+        model: selectedModel,
         agentType: 'primary',
       });
 
@@ -369,13 +414,15 @@ export default function LibreChatClient() {
     } catch (err) {
       console.error('Failed to create new chat:', err);
     }
-  }, [provider, model, conversations]);
+  }, [conversations, getActiveModelSelection]);
 
   // Handle conversation selection
   const handleSelectConversation = useCallback(async (conversationId: string) => {
     if (conversationId === currentConversationId) return;
 
     try {
+      const { provider: selectedProvider, model: selectedModel } = getActiveModelSelection();
+
       // Load messages for the selected conversation
       let messages: Message[] = [];
       try {
@@ -387,12 +434,13 @@ export default function LibreChatClient() {
 
       // Create agent for selected conversation
       const selectedTraceId = `trace-${conversationId}`;
+      const inferredAgentType = inferSessionAgentType(messages);
       const newAgent = createSparrowAgent({
         sessionId: conversationId,
         traceId: selectedTraceId,
-        provider,
-        model,
-        agentType: 'primary',
+        provider: selectedProvider,
+        model: selectedModel,
+        agentType: inferredAgentType,
       });
 
       // Set loaded messages on the agent
@@ -414,7 +462,7 @@ export default function LibreChatClient() {
     } catch (err) {
       console.error('Failed to switch conversation:', err);
     }
-  }, [currentConversationId, provider, model]);
+  }, [currentConversationId, getActiveModelSelection]);
 
   // Handle conversation rename
   const handleRenameConversation = useCallback(async (conversationId: string, newTitle: string) => {

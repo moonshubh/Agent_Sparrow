@@ -1,14 +1,13 @@
 """
-Rate limiting module for MB-Sparrow Gemini API usage.
+Rate limiting module for MB-Sparrow.
 
-This module provides comprehensive rate limiting to ensure the system
-operates entirely within Google Gemini's free tier limits.
+Provides provider-agnostic, bucket-based rate limiting driven by models.yaml.
 """
 
 from .token_bucket import TokenBucket
 from .redis_limiter import RedisRateLimiter
 from .circuit_breaker import CircuitBreaker
-from .gemini_limiter import GeminiRateLimiter
+from .bucket_limiter import BucketRateLimiter
 from .exceptions import (
     CircuitBreakerOpenException,
     GeminiQuotaExhaustedException,
@@ -28,7 +27,7 @@ __all__ = [
     "TokenBucket",
     "RedisRateLimiter",
     "CircuitBreaker",
-    "GeminiRateLimiter",
+    "BucketRateLimiter",
     "CircuitState",
     "CircuitBreakerOpenException",
     "GeminiQuotaExhaustedException",

@@ -4,6 +4,7 @@ import React, { createContext, useContext, useEffect, useState, useCallback, use
 import { User } from '@supabase/supabase-js'
 import { supabase } from '@/services/supabase'
 import { authAPI } from '@/services/api/api-client'
+import { initializeLocalAuth } from '@/services/auth/local-auth'
 // Avoid useRouter in providers mounted at RootLayout to prevent
 // "expected app router to be mounted" during server render.
 import { toast } from 'sonner'
@@ -59,6 +60,17 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         // Bypass authentication in local development mode
         if (localAuthBypass || (bypassAuth && devMode)) {
           console.log('🚀 Local auth bypass enabled - creating mock user')
+
+          // Ensure backend auth headers work (local JWT) when local auth bypass is enabled.
+          // This allows authenticated FastAPI routes (including Memory UI) to work without
+          // requiring a manual login flow during local development.
+          if (localAuthBypass) {
+            try {
+              await initializeLocalAuth()
+            } catch (e) {
+              console.warn('Local auth token init failed (continuing in UI-only bypass):', e)
+            }
+          }
           
           // Check if we have a local token
           const localUser = localStorage.getItem('user')

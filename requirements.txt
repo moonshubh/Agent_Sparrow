@@ -1,55 +1,55 @@
 # Core Application & Agent Dependencies
-fastapi==0.123.3
+fastapi==0.128.0
 fastapi-limiter==0.1.6
 slowapi==0.1.9
-redis==5.2.1  # Must be <6.5 for kombu[redis] compatibility
-uvicorn==0.38.0
-python-multipart==0.0.20
+redis==7.1.0  # Must be <6.5 for kombu[redis] compatibility
+uvicorn==0.40.0
+python-multipart==0.0.21
 pydantic==2.12.5
 pydantic-settings==2.12.0
 email-validator==2.3.0
 python-dotenv==1.2.1
 
 # Langchain Stack
-langchain==1.1.0
-langchain-core==1.1.0  # langchain-xai 1.1.0 requires langchain-core>=1.1.0
+langchain==1.2.0
+langchain-core==1.2.5  # langchain-xai 1.1.0 requires langchain-core>=1.1.0
 # langchain-community>=0.3.14,<0.4.0  # Removed - conflicts with langchain-core 1.x, not used by unified agent
-langchain-google-genai==3.2.0  # Latest; re-verify Gemini 3 breaking changes
+langchain-google-genai==4.1.2  # Latest; re-verify Gemini 3 breaking changes
 langchain-xai==1.1.0  # XAI/Grok integration - pinned for fast resolution
-langchain-openai==1.1.0  # Required by langchain-xai 1.x
-langgraph==1.0.4
+langchain-openai==1.1.6  # Required by langchain-xai 1.x
+langgraph==1.0.5
 langgraph-prebuilt==1.0.5
-langgraph-sdk==0.2.10  # Required for AG-UI protocol
-langsmith==0.4.49
-langchain-mcp-adapters==0.2.0  # MCP protocol for Firecrawl tools
+langgraph-sdk==0.3.1  # Required for AG-UI protocol
+langsmith==0.5.2
+langchain-mcp-adapters==0.2.1  # MCP protocol for Firecrawl tools
 # copilotkit removed - migrated to native AG-UI client
 ag-ui-langgraph==0.0.22  # AG-UI protocol adapter for LangGraph (latest)
 ag-ui-protocol==0.1.10  # AG-UI protocol definitions
 
 # Google AI SDK (explicitly required for FeedMe modules only)
-google-genai==1.52.0
+google-genai==1.56.0
 google-ai-generativelanguage==0.9.0  # Required by langchain-google-genai>=0.7
 
 # OpenAI SDK
-openai==2.8.1  # Latest OpenAI SDK (v2 responses have breaking changes)
+openai==2.14.0  # Latest OpenAI SDK (v2 responses have breaking changes)
 
 # Deep Agents (>=0.2.8 for Skills support)
-deepagents==0.2.8
+deepagents==0.3.1
 
 # Torch (CPU version - comment out if using GPU)
 torch==2.9.1
 torchvision==0.24.1
 
 # Database & Auth
-supabase==2.24.0
-supabase-auth==2.24.0  # required for direct supabase_auth imports (supabase-py 2.24)
-qdrant-client==1.16.1
+supabase==2.27.0
+supabase-auth==2.27.0  # required for direct supabase_auth imports (supabase-py 2.24)
+qdrant-client==1.16.2
 PyJWT==2.10.1
 python-jose[cryptography]==3.5.0
 cryptography==46.0.3
 psycopg2-binary==2.9.11
-sqlalchemy==2.0.44
-pgvector==0.4.1
+sqlalchemy==2.0.45
+pgvector==0.4.2
 asyncpg==0.31.0
 # Memory service (legacy - not used by unified agent)
 # NOTE: Removed for unified agent compatibility - memory.service not imported by unified system
@@ -59,19 +59,19 @@ asyncpg==0.31.0
 # vecs==0.4.2  # Conflicts with pgvector 0.4.1, requires pgvector==0.1.*
 
 # External Tools
-tavily-python==0.7.13
-firecrawl-py==4.10.0
+tavily-python==0.7.17
+firecrawl-py==4.12.0
 
 # HTML Parsing (for Zendesk ticket support)
 beautifulsoup4==4.14.3
 lxml==6.0.2
 bleach==6.3.0  # For HTML sanitization in FeedMe security
-mistune==3.0.2  # Markdown parsing for Zendesk note formatter (v2)
+mistune==3.2.0  # Markdown parsing for Zendesk note formatter (v2)
 
 # PDF Processing (for PDF ticket support)
 pdfplumber==0.11.8
-pypdf==6.4.0
-reportlab==4.4.5  # For PDF generation in tests
+pypdf==6.5.0
+reportlab==4.4.7  # For PDF generation in tests
 
 # Enhanced PDF Processing with OCR Support
 pytesseract==0.3.13  # OCR text extraction
@@ -80,13 +80,13 @@ easyocr==1.7.2  # EasyOCR for advanced text extraction from PDFs
 pdf2image==1.17.0  # PDF to image conversion
 
 # Celery & Async Processing
-celery[redis]==5.6.0
-kombu==5.6.1
+celery[redis]==5.6.1
+kombu==5.6.2
 flower==2.0.1  # Optional: For monitoring Celery tasks
 
 # Agent Dependencies
-faiss-cpu==1.13.0
-sentence-transformers==5.1.2
+faiss-cpu==1.13.2
+sentence-transformers==5.2.0
 typing-extensions==4.15.0
 
 # HTTP & Async
@@ -94,21 +94,21 @@ httpx==0.28.1
 aiohttp==3.13.2
 
 # Observability & Logging
-opentelemetry-api==1.38.0
-opentelemetry-sdk==1.38.0
-opentelemetry-instrumentation-fastapi==0.59b0
-opentelemetry-exporter-otlp==1.38.0
-opentelemetry-exporter-otlp-proto-http==1.38.0
+opentelemetry-api==1.39.1
+opentelemetry-sdk==1.39.1
+opentelemetry-instrumentation-fastapi==0.60b1
+opentelemetry-exporter-otlp==1.39.1
+opentelemetry-exporter-otlp-proto-http==1.39.1
 structlog==25.5.0
 loguru==0.7.3
 
 # Additional Utilities
 tiktoken==0.12.0  # Updated for langchain-openai compatibility
 transformers==4.57.3
-chromadb==1.3.5
+chromadb==1.4.0
 pypika==0.48.9  # Required by chromadb
 scipy==1.16.3
-numpy==2.3.5
+numpy==2.4.0
 pandas==2.3.3
 requests==2.32.5
 websockets==15.0.1
@@ -116,19 +116,24 @@ itsdangerous==2.2.0
 passlib==1.7.4
 pyyaml==6.0.3
 chardet==5.2.0
-sqlparse==0.5.4
-psutil==7.1.3
+sqlparse==0.5.5
+psutil==7.2.1
 python-dateutil==2.9.0.post0
 click==8.3.1
 rich==14.2.0
-faker==38.2.0
+faker==40.1.0
 nltk==3.9.2  # Natural language processing for word corpus
-networkx==3.6  # Graph analysis for log correlation
-scikit-learn==1.7.2  # Machine learning for pattern detection
+networkx==3.6.1  # Graph analysis for log correlation
+scikit-learn==1.8.0  # Machine learning for pattern detection
 tenacity==9.1.2  # Retry logic for API calls
 
 # Testing
-pytest==9.0.1
+pytest==9.0.2
 pytest-asyncio==1.3.0
 pytest-cov==7.0.0
 pytest-benchmark==5.2.3
+
+# Security Patches (Transitive Dependencies)
+# These packages are not direct dependencies but need explicit pins to ensure patched versions
+filelock>=3.20.1  # CVE-2025-68146
+setuptools>=78.1.1  # PYSEC-2022-43012, PYSEC-2025-49, CVE-2024-6345

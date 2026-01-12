@@ -106,11 +106,15 @@ export const ImageArtifactEventSchema = z.object({
   title: z.string(),
   content: z.string(),
   messageId: z.string(),
-  imageData: z.string(),
+  imageUrl: z.string().url().optional(),
+  imageData: z.string().optional(),
   mimeType: z.string(),
   altText: z.string().optional(),
   aspectRatio: z.string().optional(),
   resolution: z.string().optional(),
+  pageUrl: z.string().url().optional(),
+}).refine((value) => Boolean(value.imageUrl || value.imageData), {
+  message: 'imageUrl or imageData required',
 });
 
 export const ArticleArtifactEventSchema = z.object({

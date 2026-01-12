@@ -12,7 +12,7 @@ from typing import Any, Dict, List, Optional, Set
 
 from loguru import logger
 
-from app.core.config import get_registry
+from app.core.config import coordinator_bucket_name, get_registry
 from .model_health import ModelHealth, quota_tracker
 
 
@@ -142,6 +142,9 @@ class ModelRouter:
         task_type: CoordinatorTask,
         *,
         user_override: Optional[str] = None,
+        provider: str = "google",
+        zendesk: bool = False,
+        with_subagents: bool = True,
     ) -> "ModelSelectionResult":
         """Resolve a model while collecting quota/circuit health telemetry."""
 
@@ -152,7 +155,14 @@ class ModelRouter:
         fallback_reason = None
 
         if user_override:
-            health = await quota_tracker.get_health(user_override)
+            bucket = self._resolve_bucket(
+                user_override,
+                normalized_task,
+                provider,
+                zendesk=zendesk,
+                with_subagents=with_subagents,
+            )
+            health = await quota_tracker.get_health(bucket)
             health_trace.append(health)
             fallback_chain.append(user_override)
             # Only return override if it's available
@@ -174,7 +184,14 @@ class ModelRouter:
         first_candidate = candidate
 
         while candidate:
-            health = await quota_tracker.get_health(candidate)
+            bucket = self._resolve_bucket(
+                candidate,
+                normalized_task,
+                provider,
+                zendesk=zendesk,
+                with_subagents=with_subagents,
+            )
+            health = await quota_tracker.get_health(bucket)
             health_trace.append(health)
             fallback_chain.append(candidate)
 
@@ -225,6 +242,25 @@ class ModelRouter:
             fallback_reason=fallback_reason or "final_fallback"
         )
 
+    @staticmethod
+    def _resolve_bucket(
+        model_id: str,
+        task_type: str,
+        provider: str,
+        *,
+        zendesk: bool,
+        with_subagents: bool,
+    ) -> str:
+        normalized_task = (task_type or "coordinator").strip().lower()
+        if normalized_task in {"db_retrieval", "lightweight"}:
+            return "internal.helper"
+        if normalized_task in {"embeddings", "embedding"}:
+            return "internal.embedding"
+        if provider == "google" and normalized_task in {"coordinator_heavy", "log_analysis"}:
+            return "zendesk.coordinators.heavy" if zendesk else "coordinators.heavy"
+
+        return coordinator_bucket_name(provider, with_subagents=with_subagents, zendesk=zendesk)
+
 
 # Shared router instance for coordinator + subagents
 model_router = ModelRouter()
@@ -259,9 +295,15 @@ class ModelSelectionResult:
         if self.health_trace:
             final_health = self.health_trace[-1]
             metadata["final_model_health"] = {
+                "bucket": final_health.bucket,
                 "available": final_health.available,
                 "rpm_usage": f"{final_health.rpm_used}/{final_health.rpm_limit}",
                 "rpd_usage": f"{final_health.rpd_used}/{final_health.rpd_limit}",
+                "tpm_usage": (
+                    f"{final_health.tpm_used}/{final_health.tpm_limit}"
+                    if final_health.tpm_limit
+                    else None
+                ),
                 "circuit_state": final_health.circuit_state,
             }
 

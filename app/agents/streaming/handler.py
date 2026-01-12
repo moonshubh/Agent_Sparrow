@@ -330,6 +330,15 @@ class StreamEventHandler:
         )
         # Phase emission guards (deterministic trace fallbacks)
         self._phase_emitted: set[str] = set()
+        self._root_end_processed = False
+        self._root_run_id: str | None = None
+        self._root_run_name: str | None = None
+        # Track tool runs so nested model calls (e.g., DeepAgents subagents) don't stream
+        # user-visible text into the main chat transcript.
+        self._tool_run_ids: set[str] = set()
+        # Track model runs that appear to be streaming structured tool payloads (JSON contracts).
+        self._json_payload_prefix: dict[str, str] = {}
+        self._json_payload_runs: set[str] = set()
 
     async def stream_and_process(self) -> dict[str, Any] | None:
         """Main streaming loop with event processing.
@@ -350,6 +359,14 @@ class StreamEventHandler:
                 )
             async for event in self._event_generator():
                 await self._handle_event(event)
+
+            # Some LangChain/LangGraph versions do not reliably emit `on_graph_end`
+            # for the top-level graph, and nested graphs/tools may emit their own
+            # end events. Ensure the root operation is always marked complete once
+            # the stream finishes.
+            if not self._root_end_processed:
+                self.emitter.complete_root()
+                self._root_end_processed = True
         except Exception as e:
             logger.opt(exception=True).error("Error during agent streaming: {}", e)
 
@@ -392,6 +409,10 @@ class StreamEventHandler:
                     _fallback_invoke,
                     config=retry_config,
                 )
+
+                # The non-streaming fallback does not generate tool-end events, but
+                # tools may still have produced valid artifacts (images/articles).
+                await self._emit_artifacts_from_fallback_output(self.final_output)
 
                 # Emit success event after fallback completes
                 self.emitter.emit_custom_event(
@@ -436,6 +457,42 @@ class StreamEventHandler:
                 self.final_output = None
 
         return self.final_output
+
+    async def _emit_artifacts_from_fallback_output(self, output: Any) -> None:
+        """Emit artifacts from a non-streaming `ainvoke` result.
+
+        When streaming fails, we fall back to `agent.ainvoke`, which does not
+        yield tool events. Tool execution may still have produced valid
+        `generate_image` / `write_article` outputs; this method replays the
+        corresponding artifact emissions so the UI and persistence can capture them.
+        """
+        if not output or not isinstance(output, dict):
+            return
+
+        candidate = output.get("messages")
+        if not isinstance(candidate, list):
+            inner = output.get("output")
+            if isinstance(inner, dict):
+                candidate = inner.get("messages")
+
+        if not isinstance(candidate, list) or not candidate:
+            return
+
+        from langchain_core.messages import ToolMessage
+
+        for message in candidate:
+            if not isinstance(message, ToolMessage):
+                continue
+
+            tool_name = getattr(message, "name", None)
+            if not tool_name:
+                additional = getattr(message, "additional_kwargs", {}) or {}
+                tool_name = additional.get("tool_name") or additional.get("name")
+
+            if tool_name == "generate_image":
+                await self._handle_image_generation(message)
+            elif tool_name == "write_article":
+                await self._handle_article_generation(message)
 
     async def _event_generator(self):
         """Async generator that yields events from the agent stream."""
@@ -488,6 +545,8 @@ class StreamEventHandler:
         """Route event to appropriate handler."""
         event_type = event.get("event")
         handlers = {
+            "on_chain_start": self._on_chain_start,
+            "on_graph_start": self._on_chain_start,
             "on_tool_start": self._on_tool_start,
             "on_tool_end": self._on_tool_end,
             "on_tool_error": self._on_tool_error,
@@ -504,8 +563,38 @@ class StreamEventHandler:
         if handler:
             await handler(event)
 
+    async def _on_chain_start(self, event: dict[str, Any]) -> None:
+        """Capture the top-level graph run id for reliable end-of-run detection."""
+        run_id = event.get("run_id")
+        if run_id is None:
+            return
+        name = event.get("name")
+        parent_run_id = event.get("parent_run_id")
+
+        if self._root_run_id is None:
+            if name == "LangGraph" and not parent_run_id:
+                self._root_run_id = str(run_id)
+                self._root_run_name = "LangGraph"
+                return
+            if not parent_run_id:
+                self._root_run_id = str(run_id)
+                self._root_run_name = str(name) if isinstance(name, str) and name else None
+                return
+
+        if (
+            self._root_run_name != "LangGraph"
+            and name == "LangGraph"
+            and not parent_run_id
+        ):
+            self._root_run_id = str(run_id)
+            self._root_run_name = "LangGraph"
+
     async def _on_tool_start(self, event: dict[str, Any]) -> None:
         """Handle tool start event."""
+        run_id = event.get("run_id")
+        if run_id is not None:
+            self._tool_run_ids.add(str(run_id))
+
         tool_data = event.get("data", {})
         tool_call_id = str(tool_data.get("tool_call_id", "unknown"))
         tool_name = self._extract_tool_name(event.get("name"), tool_call_id)
@@ -598,6 +687,9 @@ class StreamEventHandler:
 
     async def _on_tool_end(self, event: dict[str, Any]) -> None:
         """Handle tool end event."""
+        run_id = event.get("run_id")
+        if run_id is not None:
+            self._tool_run_ids.discard(str(run_id))
         tool_data = event.get("data", {})
         output = tool_data.get("output")
         tool_call_id = str(tool_data.get("tool_call_id", "unknown"))
@@ -673,6 +765,9 @@ class StreamEventHandler:
 
     async def _on_tool_error(self, event: dict[str, Any]) -> None:
         """Handle tool error event."""
+        run_id = event.get("run_id")
+        if run_id is not None:
+            self._tool_run_ids.discard(str(run_id))
         tool_data = event.get("data", {}) or {}
         tool_call_id = str(tool_data.get("tool_call_id", "unknown"))
         raw_error = (
@@ -813,6 +908,9 @@ class StreamEventHandler:
         # Clean up thinking tracker for this run
         if run_id_str and hasattr(self, "_thinking_trackers"):
             self._thinking_trackers.pop(run_id_str, None)
+        if run_id_str:
+            self._json_payload_prefix.pop(run_id_str, None)
+            self._json_payload_runs.discard(run_id_str)
 
     async def _on_model_stream(self, event: dict[str, Any]) -> None:
         """Handle chat model streaming event.
@@ -827,6 +925,12 @@ class StreamEventHandler:
         """
         run_id = event.get("run_id")
         if not run_id:
+            return
+        run_id_str = str(run_id)
+
+        parent_run_id = event.get("parent_run_id")
+        if parent_run_id is not None and str(parent_run_id) in self._tool_run_ids:
+            # Tool/subagent model output must never stream into the main chat transcript.
             return
 
         stream_data = event.get("data", {})
@@ -896,12 +1000,46 @@ class StreamEventHandler:
             # Use a per-run tracker to filter thinking blocks for all providers.
             if not hasattr(self, "_thinking_trackers"):
                 self._thinking_trackers: dict[str, ThinkingBlockTracker] = {}
-            run_id_str = str(run_id)
             if run_id_str not in self._thinking_trackers:
                 self._thinking_trackers[run_id_str] = ThinkingBlockTracker()
             tracker = self._thinking_trackers[run_id_str]
 
             visible_content, is_thinking_chunk = tracker.process_chunk(chunk_text)
+
+            # Detect and suppress streamed structured tool payloads (e.g., strict JSON log analysis outputs).
+            # These frequently arrive in partial chunks, so we keep a short prefix buffer per run.
+            if visible_content and run_id_str not in self._json_payload_runs:
+                prefix = self._json_payload_prefix.get(run_id_str, "")
+                if len(prefix) < 400:
+                    prefix = (prefix + visible_content)[:400]
+                    self._json_payload_prefix[run_id_str] = prefix
+
+                sniff = prefix.lstrip()
+                sniff_lower = sniff.lower()
+                looks_like_json_start = (
+                    sniff.startswith("{")
+                    or sniff.startswith("[")
+                    or sniff_lower.startswith("```json")
+                    or "```json" in sniff_lower[:40]
+                )
+                if looks_like_json_start:
+                    contract_markers = (
+                        '"file_name"',
+                        '"customer_ready"',
+                        '"internal_notes"',
+                        '"recommended_actions"',
+                        '"open_questions"',
+                        '"confidence"',
+                        '"overall_summary"',
+                        '"identified_issues"',
+                        '"proposed_solutions"',
+                    )
+                    if any(marker in sniff_lower for marker in contract_markers):
+                        self._json_payload_runs.add(run_id_str)
+                        return
+
+            if run_id_str in self._json_payload_runs:
+                return
 
             # Filter markdown data-URI images before any early returns (including Gemini buffering).
             if visible_content and MARKDOWN_DATA_URI_PATTERN.search(visible_content):
@@ -987,12 +1125,10 @@ class StreamEventHandler:
                     return
                 visible_content = cleaned
 
-            looks_like_json = normalized.startswith(("{", "[")) and normalized.endswith(("}", "]"))
-
             # Emit as TEXT_MESSAGE_CONTENT for the main chat display
             # Only emit text content when not streaming tool call arguments,
-            # not JSON payloads, and not inside a dedicated thinking block.
-            if not has_tool_calls and not looks_like_json and visible_content and not is_thinking_chunk:
+            # and not inside a dedicated thinking block.
+            if not has_tool_calls and visible_content and not is_thinking_chunk:
                 self.emitter.emit_text_content(visible_content)
         else:
             # Empty chunk (no text, no tool calls) — log for diagnostics (common with some providers)
@@ -1011,25 +1147,41 @@ class StreamEventHandler:
 
     async def _on_chain_end(self, event: dict[str, Any]) -> None:
         """Handle chain/graph end event."""
-        # Only emit a final "result" trace step at the end of the compiled graph.
-        # on_chain_end fires for many nested runnables and will otherwise spam the UI
-        # with internal objects (Overwrite(...), additional_kwargs, tool calls, etc.).
         event_type = event.get("event")
-        if event_type != "on_graph_end":
+        if event_type not in {"on_chain_end", "on_graph_end"}:
             return
 
         data = event.get("data", {})
-        self.emitter.complete_root()
+        output = data.get("output")
 
-        if settings.trace_mode == "off":
-            output = data.get("output")
-            if isinstance(output, dict):
-                self.final_output = output
+        # Always capture dict-shaped LangGraph outputs when present.
+        if isinstance(output, dict):
+            self.final_output = output
+        elif output is not None and self.final_output is None:
+            # Only set this fallback once; the final LangGraph output will overwrite it.
+            self.final_output = {"output": output}
+
+        # Only finalize the root operation once, and only when we are confident
+        # this is the top-level graph run.
+        if self._root_end_processed:
             return
 
-        output = data.get("output")
-        if output:
-            # Deterministic phase fallback before emitting the final result.
+        run_id = event.get("run_id")
+        run_id_str = str(run_id) if run_id is not None else None
+        is_root = bool(run_id_str and self._root_run_id and run_id_str == self._root_run_id)
+        if not is_root:
+            # Fallback heuristic when we didn't capture root run id (defensive).
+            is_root = (
+                event.get("name") == "LangGraph"
+                and not event.get("parent_run_id")
+                and isinstance(output, dict)
+            )
+        if not is_root:
+            return
+
+        self.emitter.complete_root()
+
+        if settings.trace_mode != "off" and output:
             writing_detail = self._build_writing_phase_detail()
             writing_content = "**Writing answer**"
             if writing_detail:
@@ -1041,7 +1193,6 @@ class StreamEventHandler:
             )
             final_text = self._extract_final_assistant_text(output)
             if final_text:
-                # Safety net: strip any stray thinking markers before UI display.
                 final_text = ThinkingBlockTracker.sanitize_final_content(final_text)
                 self.emitter.add_trace_step(
                     step_type="result",
@@ -1049,8 +1200,7 @@ class StreamEventHandler:
                     metadata={"source": event_type, "final": True},
                 )
 
-            if isinstance(output, dict):
-                self.final_output = output
+        self._root_end_processed = True
 
     # -------------------------------------------------------------------------
     # Helper methods
@@ -1637,26 +1787,15 @@ class StreamEventHandler:
         """Handle write_todos tool output and return normalized todos."""
         from langchain_core.messages import ToolMessage
 
-        # Debug: Log the actual type and value being passed
         output_type = type(output).__name__
-        output_repr_str = repr(output)[:500] if output else "None"
-        logger.info(
-            "write_todos_handler_input: type={}, repr={!r}",
-            output_type,
-            output_repr_str,
-        )
+        logger.debug("write_todos_handler_input: type=%s", output_type)
 
         # Extract content from ToolMessage if needed
         raw_output = output
         if isinstance(output, ToolMessage):
             raw_output = output.content
             content_type = type(raw_output).__name__
-            content_repr_str = repr(raw_output)[:500] if raw_output else "None"
-            logger.info(
-                "write_todos_extracted_from_toolmessage: type={}, repr={!r}",
-                content_type,
-                content_repr_str,
-            )
+            logger.debug("write_todos_extracted_from_toolmessage: type=%s", content_type)
 
         self.emitter.update_todos(raw_output)
 
@@ -1673,6 +1812,7 @@ class StreamEventHandler:
         """Handle generate_image tool output - emit as artifact for frontend display."""
         from langchain_core.messages import ToolMessage
         import json
+        from app.agents.unified.image_store import store_image_base64
 
         # Extract content from ToolMessage if needed
         raw_output = output
@@ -1695,14 +1835,25 @@ class StreamEventHandler:
             logger.debug("image_generation_not_successful: %s", raw_output.get("error"))
             return
 
-        image_base64 = raw_output.get("image_base64")
-        if not image_base64:
-            logger.debug("image_generation_no_image_data")
-            return
+        image_url = raw_output.get("image_url") or raw_output.get("imageUrl") or raw_output.get("url")
+        image_base64 = raw_output.get("image_base64") or raw_output.get("imageBase64")
+
+        # Phase V: Prefer URL-based images (no base64 payloads).
+        if not image_url and isinstance(image_base64, str) and image_base64.strip():
+            try:
+                stored = await store_image_base64(
+                    image_base64,
+                    mime_type=raw_output.get("mime_type", "image/png"),
+                    path_prefix="generated",
+                )
+                image_url = stored.url
+            except Exception as exc:
+                logger.warning("image_generation_store_failed", error=str(exc))
 
         # Emit image artifact for frontend display
         self.emitter.emit_image_artifact(
-            image_base64=image_base64,
+            image_url=image_url,
+            image_base64=image_base64 if not image_url else None,
             mime_type=raw_output.get("mime_type", "image/png"),
             title="Generated Image",
             prompt=raw_output.get("description"),
@@ -1739,23 +1890,30 @@ class StreamEventHandler:
         # Check if this is an image result with base64 data
         if not isinstance(raw_output, dict):
             return output
-        if not raw_output.get("success") or not raw_output.get("image_base64"):
+        if not raw_output.get("success"):
             return output
 
         # Create compact version without base64
+        image_url = raw_output.get("image_url") or raw_output.get("imageUrl") or raw_output.get("url")
         compact = {
             "success": True,
             "image_generated": True,  # Flag that image was created
+            "image_url": image_url,
             "description": raw_output.get("description"),
             "aspect_ratio": raw_output.get("aspect_ratio"),
             "resolution": raw_output.get("resolution"),
             "mime_type": raw_output.get("mime_type"),
+            "width": raw_output.get("width"),
+            "height": raw_output.get("height"),
             # Note for model: image was sent to user's display
-            "status": "Image generated and displayed to user",
+            "status": "Image generated and available at image_url" if image_url else "Image generated and displayed to user",
         }
 
-        logger.debug("image_output_compacted: stripped %d bytes of base64",
-                    len(raw_output.get("image_base64", "")))
+        if raw_output.get("image_base64"):
+            logger.debug(
+                "image_output_compacted: stripped %d bytes of base64",
+                len(raw_output.get("image_base64", "")),
+            )
 
         # Return appropriate type
         if is_tool_message:
@@ -1770,6 +1928,7 @@ class StreamEventHandler:
         """Handle write_article tool output - emit as artifact for frontend display."""
         from langchain_core.messages import ToolMessage
         import json
+        from app.agents.unified.image_store import rewrite_base64_images_in_text
 
         # Extract content from ToolMessage if needed
         raw_output = output
@@ -1798,6 +1957,32 @@ class StreamEventHandler:
         title = raw_output.get("title", "Article")
         content = raw_output.get("content", "")
         images = raw_output.get("images")
+
+        # Phase V: rewrite any base64 data-URI images into stored URLs.
+        if isinstance(content, str) and "data:image" in content.lower():
+            content, replaced = await rewrite_base64_images_in_text(
+                content, path_prefix="article"
+            )
+            if replaced:
+                logger.info("article_artifact_rewrote_base64_images", replaced=replaced)
+
+        if isinstance(images, list):
+            sanitized_images = []
+            for img in images:
+                if not isinstance(img, dict):
+                    sanitized_images.append(img)
+                    continue
+                url = img.get("url")
+                if isinstance(url, str) and "data:image" in url.lower():
+                    rewritten_url, _ = await rewrite_base64_images_in_text(
+                        url, path_prefix="article"
+                    )
+                    next_img = dict(img)
+                    next_img["url"] = rewritten_url
+                    sanitized_images.append(next_img)
+                    continue
+                sanitized_images.append(img)
+            images = sanitized_images
 
         # Emit if we have content OR images (not just content)
         # This ensures image-only articles are properly displayed

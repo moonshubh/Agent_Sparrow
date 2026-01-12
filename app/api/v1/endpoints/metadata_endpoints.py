@@ -12,12 +12,12 @@ from fastapi import APIRouter, HTTPException, Depends, Path, Query
 from pydantic import BaseModel, Field
 
 from app.core.auth import get_current_user, User
-from app.core.settings import settings
 from app.db.supabase.client import get_supabase_client
-from app.agents.unified.quota_manager import QuotaManager
 from app.agents.unified.model_health import quota_tracker
+from app.core.config import coordinator_bucket_name
 from app.memory.service import MemoryService
 from app.core.logging_config import get_logger
+from app.core.rate_limiting.agent_wrapper import get_rate_limiter
 
 logger = get_logger("metadata_endpoints")
 router = APIRouter(prefix="/metadata", tags=["Metadata"])
@@ -46,6 +46,7 @@ class QuotaStatus(BaseModel):
     gemini_pro: Dict[str, Any] = Field(default_factory=dict)
     gemini_flash: Dict[str, Any] = Field(default_factory=dict)
     grounding: Dict[str, Any] = Field(default_factory=dict)
+    embeddings: Dict[str, Any] = Field(default_factory=dict)
 
 class TraceMetadata(BaseModel):
     """Enhanced trace metadata from LangSmith"""
@@ -156,11 +157,16 @@ async def get_quota_status(
     Returns usage percentages and warnings for rate limits approaching.
     """
     try:
-        quota_manager = QuotaManager()
+        coordinator_bucket = coordinator_bucket_name("google", with_subagents=True, zendesk=False)
+        heavy_bucket = "coordinators.heavy"
+        grounding_bucket = "internal.grounding"
+        embedding_bucket = "internal.embedding"
 
         # Get current usage for each service
-        gemini_pro_health = await quota_tracker.get_health("gemini-2.5-pro")
-        gemini_flash_health = await quota_tracker.get_health("gemini-2.5-flash")
+        gemini_pro_health = await quota_tracker.get_health(heavy_bucket)
+        gemini_flash_health = await quota_tracker.get_health(coordinator_bucket)
+        grounding_health = await quota_tracker.get_health(grounding_bucket)
+        embedding_health = await quota_tracker.get_health(embedding_bucket)
 
         # Calculate percentages
         def calculate_percentage(used: int, limit: int) -> float:
@@ -177,9 +183,14 @@ async def get_quota_status(
             gemini_flash_health.rpd_limit
         )
 
-        # Get grounding usage (simplified - you may want to track this separately)
-        grounding_pct = quota_manager.get_usage_percentage("grounding")
-        embeddings_pct = quota_manager.get_usage_percentage("embeddings")
+        grounding_pct = calculate_percentage(
+            grounding_health.rpd_used,
+            grounding_health.rpd_limit,
+        )
+        embeddings_pct = calculate_percentage(
+            embedding_health.rpd_used,
+            embedding_health.rpd_limit,
+        )
 
         # Generate warnings
         warnings = []
@@ -189,6 +200,8 @@ async def get_quota_status(
             warnings.append(f"Gemini Flash usage at {gemini_flash_pct:.0f}%")
         if grounding_pct > 80:
             warnings.append(f"Grounding service approaching limit ({grounding_pct:.0f}%)")
+        if embeddings_pct > 80:
+            warnings.append(f"Embeddings usage at {embeddings_pct:.0f}%")
 
         # Detailed breakdowns
         gemini_pro_details = {
@@ -210,9 +223,25 @@ async def get_quota_status(
         }
 
         grounding_details = {
-            "requests_today": quota_manager.get_usage("grounding"),
-            "limit_per_day": quota_manager.get_limit("grounding"),
-            "available": quota_manager.check_quota("grounding")
+            "bucket": grounding_health.bucket,
+            "rpm_used": grounding_health.rpm_used,
+            "rpm_limit": grounding_health.rpm_limit,
+            "rpd_used": grounding_health.rpd_used,
+            "rpd_limit": grounding_health.rpd_limit,
+            "circuit_state": grounding_health.circuit_state,
+            "available": grounding_health.available,
+        }
+
+        embedding_details = {
+            "bucket": embedding_health.bucket,
+            "rpm_used": embedding_health.rpm_used,
+            "rpm_limit": embedding_health.rpm_limit,
+            "rpd_used": embedding_health.rpd_used,
+            "rpd_limit": embedding_health.rpd_limit,
+            "tpm_used": embedding_health.tpm_used,
+            "tpm_limit": embedding_health.tpm_limit,
+            "circuit_state": embedding_health.circuit_state,
+            "available": embedding_health.available,
         }
 
         return QuotaStatus(
@@ -223,7 +252,8 @@ async def get_quota_status(
             warnings=warnings,
             gemini_pro=gemini_pro_details,
             gemini_flash=gemini_flash_details,
-            grounding=grounding_details
+            grounding=grounding_details,
+            embeddings=embedding_details,
         )
 
     except Exception as e:
@@ -313,17 +343,16 @@ async def health_check():
     Check health of metadata services.
     """
     try:
-        quota_manager = QuotaManager()
-
-        # Check if services are accessible
-        redis_ok = quota_manager.redis_client.ping() if quota_manager.redis_client else False
+        rate_limiter = get_rate_limiter()
+        limiter_health = await rate_limiter.health_check()
+        redis_ok = limiter_health.get("redis", False)
 
         return {
             "status": "healthy" if redis_ok else "degraded",
             "services": {
                 "redis": "healthy" if redis_ok else "unavailable",
                 "memory": "healthy",  # Could check Supabase connection
-                "quotas": "healthy"
+                "quotas": "healthy" if limiter_health.get("overall") == "healthy" else "degraded",
             },
             "timestamp": datetime.utcnow().isoformat()
         }
@@ -334,18 +363,3 @@ async def health_check():
             "error": str(e),
             "timestamp": datetime.utcnow().isoformat()
         }
-
-# ============================================
-# Utility Functions
-# ============================================
-
-def get_usage_percentage(service_name: str, quota_manager: QuotaManager) -> float:
-    """Helper to calculate usage percentage for a service"""
-    try:
-        used = quota_manager.get_usage(service_name)
-        limit = quota_manager.get_limit(service_name)
-        if limit == 0:
-            return 0.0
-        return min(100.0, (used / limit) * 100)
-    except:
-        return 0.0

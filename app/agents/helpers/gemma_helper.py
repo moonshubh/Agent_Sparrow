@@ -1,16 +1,20 @@
-"""Lightweight Gemma helper utilities for summarization and reranking.
+"""Lightweight helper utilities for summarization and reranking.
 
-These helpers are intentionally minimal: they use Google's hosted Gemma model
-to cheaply compress or rerank inputs before the primary (Gemini) model runs.
+Historically this used Google's hosted Gemma models, but in practice Gemma's
+paid-tier TPM limits can be too low for long-running sessions. The configured
+helper model is therefore controlled via `GEMMA_HELPER_MODEL` and defaults to a
+high-quota Gemini model.
 """
 
 from __future__ import annotations
 
-from typing import List, Optional
+from typing import Any, List, Optional
 
 from loguru import logger
 
+from app.core.config import get_models_config
 from app.core.settings import settings
+from app.core.rate_limiting.agent_wrapper import wrap_gemini_agent
 
 
 try:
@@ -26,20 +30,23 @@ class GemmaHelper:
     def __init__(self, *, max_calls: int = 10) -> None:
         self.max_calls = max_calls
         self._calls = 0
-        self._client: Optional[ChatGoogleGenerativeAI] = None
+        self._client: Optional[Any] = None
 
     def _get_client(self):
         if self._client is not None:
             return self._client
         if ChatGoogleGenerativeAI is None:
             raise RuntimeError("langchain_google_genai is not available")
-        model = getattr(settings, "gemma_helper_model", None) or "gemma-3-27b-it"
-        self._client = ChatGoogleGenerativeAI(
+        config = get_models_config()
+        helper_cfg = config.internal["helper"]
+        model = helper_cfg.model_id
+        client = ChatGoogleGenerativeAI(
             model=model,
-            temperature=0.2,
+            temperature=helper_cfg.temperature,
             max_output_tokens=512,
             google_api_key=settings.gemini_api_key,
         )
+        self._client = wrap_gemini_agent(client, "internal.helper", model)
         return self._client
 
     def _remaining(self) -> int:

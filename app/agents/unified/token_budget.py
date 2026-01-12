@@ -18,12 +18,8 @@ from typing import Any, Dict, List, Optional
 from loguru import logger
 
 # Shared model context metadata
-from app.agents.unified.model_context import (
-    DEFAULT_CONTEXT_WINDOW,
-    MODEL_CONTEXT_WINDOWS,
-    PROVIDER_DEFAULT_CONTEXT,
-    get_model_context_window,
-)
+from app.agents.unified.model_context import get_model_context_window
+from app.core.config import get_models_config, iter_model_configs
 
 
 
@@ -185,39 +181,15 @@ def _budget(model_name: str, provider: Optional[str] = None) -> TokenBudget:
     return TokenBudget.for_model(model_name, provider)
 
 
-# Pre-configured budgets for common models across all providers (align with shared metadata)
-BUDGETS = {
-    # Google Gemini models
-    "gemini-3-pro-preview": _budget("gemini-3-pro-preview", provider="google"),
-    "gemini-2.5-flash": _budget("gemini-2.5-flash", provider="google"),
-    "gemini-2.5-flash-lite": _budget("gemini-2.5-flash-lite", provider="google"),
-    "gemini-2.5-pro": _budget("gemini-2.5-pro", provider="google"),
-    "gemini-2.0-flash": _budget("gemini-2.0-flash", provider="google"),
-    "gemini-2.0-flash-lite": _budget("gemini-2.0-flash-lite", provider="google"),
-    # XAI Grok models
-    "grok-4-1-fast-reasoning": _budget("grok-4-1-fast-reasoning", provider="xai"),
-    "grok-4-fast": _budget("grok-4-fast", provider="xai"),
-    "grok-4": _budget("grok-4", provider="xai"),
-    "grok-3": _budget("grok-3", provider="xai"),
-    "grok-3-fast": _budget("grok-3-fast", provider="xai"),
-    # OpenAI models
-    "gpt-5.1": _budget("gpt-5.1", provider="openai"),
-    "gpt-5": _budget("gpt-5", provider="openai"),
-    "gpt-5-mini": _budget("gpt-5-mini", provider="openai"),
-    "gpt-4.1": _budget("gpt-4.1", provider="openai"),
-    "gpt-4.1-mini": _budget("gpt-4.1-mini", provider="openai"),
-    "gpt-4o": _budget("gpt-4o", provider="openai"),
-    "gpt-4o-mini": _budget("gpt-4o-mini", provider="openai"),
-    "gpt-4-turbo": _budget("gpt-4-turbo", provider="openai"),
-    "gpt-4": _budget("gpt-4", provider="openai"),
-    # Anthropic Claude models
-    "claude-sonnet-4": _budget("claude-sonnet-4", provider="anthropic"),
-    "claude-sonnet-4.5": _budget("claude-sonnet-4.5", provider="anthropic"),
-    "claude-3-opus": _budget("claude-3-opus", provider="anthropic"),
-    "claude-3-sonnet": _budget("claude-3-sonnet", provider="anthropic"),
-    "claude-3.5-sonnet": _budget("claude-3.5-sonnet", provider="anthropic"),
-    "claude-3-haiku": _budget("claude-3-haiku", provider="anthropic"),
-}
+def _build_budget_index() -> dict[str, TokenBudget]:
+    config = get_models_config()
+    budgets: dict[str, TokenBudget] = {}
+    for _, _, model_cfg in iter_model_configs(config):
+        budgets[model_cfg.model_id] = _budget(model_cfg.model_id)
+    return budgets
+
+
+BUDGETS = _build_budget_index()
 
 
 class TokenBudgetTracker:

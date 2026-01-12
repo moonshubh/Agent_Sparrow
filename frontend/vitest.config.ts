@@ -60,13 +60,7 @@ export default defineConfig({
     teardownTimeout: 5000,
     // Parallel execution for faster test runs
     pool: 'threads',
-    poolOptions: {
-      threads: {
-        singleThread: false,
-        maxThreads: 4,
-        minThreads: 1,
-      },
-    },
+    maxWorkers: 4,
     // Test file patterns
     include: [
       '**/__tests__/**/*.{test,spec}.{js,ts,jsx,tsx}',

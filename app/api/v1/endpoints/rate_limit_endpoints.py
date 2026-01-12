@@ -8,14 +8,8 @@ from typing import Dict, Any, Optional
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 
-from app.core.rate_limiting import (
-    GeminiRateLimiter,
-    RateLimitConfig,
-    UsageStats,
-    RateLimitExceededException,
-    CircuitBreakerOpenException,
-    GeminiServiceUnavailableException
-)
+from app.core.rate_limiting import BucketRateLimiter, RateLimitConfig
+from app.core.config import get_models_config, iter_rate_limit_buckets
 from app.core.logging_config import get_logger
 
 logger = get_logger("rate_limit_endpoints")
@@ -23,15 +17,15 @@ logger = get_logger("rate_limit_endpoints")
 router = APIRouter(prefix="/rate-limits", tags=["rate-limiting"])
 
 # Global rate limiter instance
-_rate_limiter: Optional[GeminiRateLimiter] = None
+_rate_limiter: Optional[BucketRateLimiter] = None
 
 
-def get_rate_limiter() -> GeminiRateLimiter:
+def get_rate_limiter() -> BucketRateLimiter:
     """Get or create rate limiter instance."""
     global _rate_limiter
     if _rate_limiter is None:
         config = RateLimitConfig.from_environment()
-        _rate_limiter = GeminiRateLimiter(config)
+        _rate_limiter = BucketRateLimiter(config)
     return _rate_limiter
 
 
@@ -45,7 +39,7 @@ class RateLimitStatus(BaseModel):
 
 class ResetRequest(BaseModel):
     """Request model for resetting rate limits."""
-    model: Optional[str] = None
+    bucket: Optional[str] = None
     confirm: bool = False
 
 
@@ -74,24 +68,23 @@ async def get_rate_limit_status():
             status = "degraded"
             message = "Rate limiting system experiencing issues"
         
-        # Check if approaching limits
-        flash_rpm_usage = stats.flash_stats.rpm_used / max(1, stats.flash_stats.rpm_limit)
-        flash_rpd_usage = stats.flash_stats.rpd_used / max(1, stats.flash_stats.rpd_limit)
-        flash_lite_rpm_usage = stats.flash_lite_stats.rpm_used / max(1, stats.flash_lite_stats.rpm_limit)
-        flash_lite_rpd_usage = stats.flash_lite_stats.rpd_used / max(1, stats.flash_lite_stats.rpd_limit)
-        pro_rpm_usage = stats.pro_stats.rpm_used / max(1, stats.pro_stats.rpm_limit)
-        pro_rpd_usage = stats.pro_stats.rpd_used / max(1, stats.pro_stats.rpd_limit)
-        
+        utilization: Dict[str, Dict[str, Optional[float]]] = {}
+        for bucket, metadata in stats.buckets.items():
+            utilization[bucket] = {
+                "rpm": metadata.rpm_used / max(1, metadata.rpm_limit),
+                "rpd": metadata.rpd_used / max(1, metadata.rpd_limit),
+                "tpm": (
+                    metadata.tpm_used / max(1, metadata.tpm_limit)
+                    if metadata.tpm_limit
+                    else None
+                ),
+            }
+
         if any(
-            usage > 0.8
-            for usage in [
-                flash_rpm_usage,
-                flash_rpd_usage,
-                flash_lite_rpm_usage,
-                flash_lite_rpd_usage,
-                pro_rpm_usage,
-                pro_rpd_usage,
-            ]
+            value > 0.8
+            for metrics in utilization.values()
+            for value in metrics.values()
+            if value is not None
         ):
             status = "warning"
             message = "Approaching rate limits"
@@ -103,14 +96,7 @@ async def get_rate_limit_status():
             details={
                 "usage_stats": stats.dict(),
                 "health": health,
-                "utilization": {
-                    "flash_rpm": flash_rpm_usage,
-                    "flash_rpd": flash_rpd_usage,
-                    "flash_lite_rpm": flash_lite_rpm_usage,
-                    "flash_lite_rpd": flash_lite_rpd_usage,
-                    "pro_rpm": pro_rpm_usage,
-                    "pro_rpd": pro_rpd_usage
-                }
+                "utilization": utilization,
             }
         )
         
@@ -180,33 +166,23 @@ async def health_check():
         )
 
 
-@router.post("/check/{model}")
-async def check_rate_limit(model: str):
+@router.post("/check/{bucket}")
+async def check_rate_limit(bucket: str):
     """
-    Check if a request would be allowed for the specified model.
+    Check if a request would be allowed for the specified bucket.
     
     This is a dry-run check that doesn't consume tokens.
     Useful for preemptive checking before making API calls.
     """
     try:
-        RateLimitConfig.normalize_model_name(model)
-    except ValueError:
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                "Unsupported model: {model}. Must be a Gemini 2.5 Flash or Pro variant."
-            ).format(model=model)
-        )
-    
-    try:
         rate_limiter = get_rate_limiter()
         
         # Note: This would ideally be a check without consumption
         # For now, we'll check and immediately refund if needed
-        result = await rate_limiter.check_and_consume(model)
+        result = await rate_limiter.check_and_consume(bucket)
         
         return {
-            "model": model,
+            "bucket": bucket,
             "allowed": result.allowed,
             "metadata": result.metadata.dict(),
             "retry_after": result.retry_after,
@@ -214,17 +190,17 @@ async def check_rate_limit(model: str):
         }
         
     except Exception as e:
-        logger.error(f"Rate limit check failed for {model}: {e}")
+        logger.error(f"Rate limit check failed for {bucket}: {e}")
         raise HTTPException(
             status_code=500,
-            detail=f"Failed to check rate limit for {model}: {str(e)}"
+            detail=f"Failed to check rate limit for {bucket}: {str(e)}"
         )
 
 
 @router.post("/reset")
 async def reset_rate_limits(request: ResetRequest):
     """
-    Reset rate limits for specified model or all models.
+    Reset rate limits for specified bucket or all buckets.
     
     WARNING: This should only be used in development or emergency situations.
     In production, rate limits should reset naturally.
@@ -238,9 +214,9 @@ async def reset_rate_limits(request: ResetRequest):
     try:
         rate_limiter = get_rate_limiter()
         
-        await rate_limiter.reset_limits(request.model)
+        await rate_limiter.reset_limits(request.bucket)
         
-        message = f"Reset rate limits for {request.model}" if request.model else "Reset all rate limits"
+        message = f"Reset rate limits for {request.bucket}" if request.bucket else "Reset all rate limits"
         logger.warning(f"Rate limits reset via API: {message}")
         
         return {
@@ -270,31 +246,30 @@ async def get_rate_limit_config():
     try:
         rate_limiter = get_rate_limiter()
         config = rate_limiter.config
-        
+        models_config = get_models_config()
+
+        buckets: Dict[str, Any] = {}
+        for bucket, model_cfg in iter_rate_limit_buckets(models_config):
+            buckets[bucket] = {
+                "model_id": model_cfg.model_id,
+                "provider": model_cfg.provider or "google",
+                "rate_limits": model_cfg.rate_limits.model_dump(),
+            }
+
         return {
-            "flash_limits": {
-                "rpm": config.flash_rpm_limit,
-                "rpd": config.flash_rpd_limit
-            },
-            "flash_lite_limits": {
-                "rpm": config.flash_lite_rpm_limit,
-                "rpd": config.flash_lite_rpd_limit
-            },
-            "pro_limits": {
-                "rpm": config.pro_rpm_limit,
-                "rpd": config.pro_rpd_limit
-            },
-            "safety_margin": config.safety_margin,
+            "rate_limiting": models_config.rate_limiting.model_dump(),
+            "buckets": buckets,
             "circuit_breaker": {
                 "enabled": config.circuit_breaker_enabled,
                 "failure_threshold": config.circuit_breaker_failure_threshold,
-                "timeout_seconds": config.circuit_breaker_timeout_seconds
+                "timeout_seconds": config.circuit_breaker_timeout_seconds,
+                "success_threshold": config.circuit_breaker_success_threshold,
             },
             "redis": {
                 "key_prefix": config.redis_key_prefix,
-                "db": config.redis_db
+                "db": config.redis_db,
             },
-            "monitoring_enabled": config.monitoring_enabled
+            "monitoring_enabled": config.monitoring_enabled,
         }
         
     except Exception as e:
@@ -316,45 +291,29 @@ async def get_rate_limit_metrics():
         rate_limiter = get_rate_limiter()
         stats = await rate_limiter.get_usage_stats()
         
-        metrics = {
-            # Flash model metrics
-            "gemini_flash_rpm_used": stats.flash_stats.rpm_used,
-            "gemini_flash_rpm_limit": stats.flash_stats.rpm_limit,
-            "gemini_flash_rpd_used": stats.flash_stats.rpd_used,
-            "gemini_flash_rpd_limit": stats.flash_stats.rpd_limit,
-            # Flash Lite metrics
-            "gemini_flash_lite_rpm_used": stats.flash_lite_stats.rpm_used,
-            "gemini_flash_lite_rpm_limit": stats.flash_lite_stats.rpm_limit,
-            "gemini_flash_lite_rpd_used": stats.flash_lite_stats.rpd_used,
-            "gemini_flash_lite_rpd_limit": stats.flash_lite_stats.rpd_limit,
-            
-            # Pro model metrics
-            "gemini_pro_rpm_used": stats.pro_stats.rpm_used,
-            "gemini_pro_rpm_limit": stats.pro_stats.rpm_limit,
-            "gemini_pro_rpd_used": stats.pro_stats.rpd_used,
-            "gemini_pro_rpd_limit": stats.pro_stats.rpd_limit,
-            
-            # Circuit breaker metrics
-            "circuit_breaker_flash_state": 1 if stats.flash_circuit.state == "open" else 0,
-            "circuit_breaker_flash_lite_state": 1 if stats.flash_lite_circuit.state == "open" else 0,
-            "circuit_breaker_pro_state": 1 if stats.pro_circuit.state == "open" else 0,
-            "circuit_breaker_flash_failures": stats.flash_circuit.failure_count,
-            "circuit_breaker_flash_lite_failures": stats.flash_lite_circuit.failure_count,
-            "circuit_breaker_pro_failures": stats.pro_circuit.failure_count,
-            
-            # Overall metrics
-            "total_requests_today": stats.total_requests_today,
-            "total_requests_this_minute": stats.total_requests_this_minute,
-            "uptime_percentage": stats.uptime_percentage,
-            
-            # Utilization metrics (0.0 to 1.0)
-            "flash_rpm_utilization": stats.flash_stats.rpm_used / max(1, stats.flash_stats.rpm_limit),
-            "flash_rpd_utilization": stats.flash_stats.rpd_used / max(1, stats.flash_stats.rpd_limit),
-            "flash_lite_rpm_utilization": stats.flash_lite_stats.rpm_used / max(1, stats.flash_lite_stats.rpm_limit),
-            "flash_lite_rpd_utilization": stats.flash_lite_stats.rpd_used / max(1, stats.flash_lite_stats.rpd_limit),
-            "pro_rpm_utilization": stats.pro_stats.rpm_used / max(1, stats.pro_stats.rpm_limit),
-            "pro_rpd_utilization": stats.pro_stats.rpd_used / max(1, stats.pro_stats.rpd_limit),
-        }
+        metrics: Dict[str, Any] = {}
+        for bucket, metadata in stats.buckets.items():
+            sanitized = bucket.replace(".", "_").replace("-", "_").replace("/", "_")
+            metrics[f"{sanitized}_rpm_used"] = metadata.rpm_used
+            metrics[f"{sanitized}_rpm_limit"] = metadata.rpm_limit
+            metrics[f"{sanitized}_rpd_used"] = metadata.rpd_used
+            metrics[f"{sanitized}_rpd_limit"] = metadata.rpd_limit
+            if metadata.tpm_limit is not None:
+                metrics[f"{sanitized}_tpm_used"] = metadata.tpm_used
+                metrics[f"{sanitized}_tpm_limit"] = metadata.tpm_limit
+
+        for bucket, circuit in stats.circuits.items():
+            sanitized = bucket.replace(".", "_").replace("-", "_").replace("/", "_")
+            metrics[f"{sanitized}_circuit_open"] = 1 if circuit.state == "open" else 0
+            metrics[f"{sanitized}_circuit_failures"] = circuit.failure_count
+
+        metrics.update(
+            {
+                "total_requests_today": stats.total_requests_today,
+                "total_requests_this_minute": stats.total_requests_this_minute,
+                "uptime_percentage": stats.uptime_percentage,
+            }
+        )
         
         return metrics
         

@@ -40,15 +40,20 @@ class RedisRateLimiter:
     
     async def check_rate_limit(
         self,
-        identifier: str,
+        bucket: str,
         rpm_limit: int,
         rpd_limit: int,
-        model: str = "gemini",
-        safety_margin: float = 0.0,
         *,
+        model: str,
+        provider: str,
+        safety_margin: float = 0.0,
         token_identifier: Optional[str] = None,
     ) -> RateLimitResult:
-        self.logger.info(f"Redis rate limit check for {model} (identifier: {identifier})")
+        self.logger.info(
+            "Redis rate limit check for %s (bucket: %s)",
+            model,
+            bucket,
+        )
         """
         Check if request is within rate limits.
         
@@ -75,11 +80,11 @@ class RedisRateLimiter:
         token_id = token_identifier or f"{now:.6f}"
 
         rpm_result = await self._check_sliding_window(
-            identifier, "rpm", effective_rpm, 60, now, token_id
+            bucket, "rpm", effective_rpm, 60, now, token_id
         )
 
         rpd_result = await self._check_sliding_window(
-            identifier, "rpd", effective_rpd, 86400, now, token_id  # 24 hours
+            bucket, "rpd", effective_rpd, 86400, now, token_id  # 24 hours
         )
         
         # Determine if request is allowed
@@ -101,6 +106,9 @@ class RedisRateLimiter:
         
         # Build metadata
         metadata = RateLimitMetadata(
+            bucket=bucket,
+            model=model,
+            provider=provider,
             rpm_limit=effective_rpm,
             rpm_used=rpm_result["used"],
             rpm_remaining=max(0, effective_rpm - rpm_result["used"]),
@@ -111,7 +119,6 @@ class RedisRateLimiter:
             reset_time_rpd=datetime.utcnow().replace(
                 hour=0, minute=0, second=0, microsecond=0
             ) + timedelta(days=1),
-            model=model,
             safety_margin=safety_margin
         )
         
@@ -304,9 +311,14 @@ class RedisRateLimiter:
                     if len(parts) >= 3:
                         identifier = parts[1]
                         window_type = parts[2]
-                        
-                        count = await self.redis.zcard(key)
-                        
+                        if window_type not in {"rpm", "rpd"}:
+                            continue
+
+                        try:
+                            count = await self.redis.zcard(key)
+                        except Exception:
+                            continue
+
                         if identifier not in stats:
                             stats[identifier] = {}
                         stats[identifier][window_type] = count

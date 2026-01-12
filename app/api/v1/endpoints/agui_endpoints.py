@@ -54,6 +54,7 @@ from app.agents.orchestration.orchestration.graph import app as compiled_graph
 
 # Import for context merge and attachment validation
 from app.agents.orchestration.orchestration.state import Attachment
+from app.core.config import find_model_config, get_models_config, resolve_coordinator_config
 from app.core.settings import get_settings
 
 router = APIRouter()
@@ -143,6 +144,16 @@ class SparrowLangGraphAgent(LangGraphAgent):
         thread_id = input.thread_id
 
         state_input["messages"] = agent_state.values.get("messages", [])
+        # Preserve server-side checkpointed thread state ("compressed truth") across runs.
+        # Clients do not send this field; it should be maintained by the graph/checkpointer.
+        if "thread_state" not in state_input and agent_state.values.get("thread_state") is not None:
+            state_input["thread_state"] = agent_state.values.get("thread_state")
+        # Phase 3: Preserve checkpointed internal log notes across runs.
+        if (
+            "log_analysis_notes" not in state_input
+            and agent_state.values.get("log_analysis_notes") is not None
+        ):
+            state_input["log_analysis_notes"] = agent_state.values.get("log_analysis_notes")
         self.active_run["current_graph_state"] = agent_state.values.copy()
         langchain_messages = agui_messages_to_langchain(messages)
         state = self.langgraph_default_merge_state(state_input, langchain_messages, input)
@@ -592,16 +603,32 @@ def _merge_agui_context(
     formatting_mode = _get_first("formatting", "formatting_mode")
     use_server_memory = _get_first("use_server_memory")
 
+    models_config = get_models_config()
+    allowed_providers = {"google", "xai", "openrouter"}
+
+    # Validate model override (must exist in models.yaml)
+    if model:
+        model_cfg = find_model_config(models_config, str(model))
+        if model_cfg is None:
+            logging.warning("agui_unknown_model_override", model=model)
+            model = None
+        else:
+            provider = model_cfg.provider
+
+    # Normalize provider override
+    provider = (provider or "google").lower()
+    if provider not in allowed_providers:
+        logging.warning("agui_unknown_provider_override", provider=provider)
+        provider = "google"
+
     # Apply defaults if provider/model not specified
-    if not provider or not model:
-        provider = (provider or getattr(settings, "primary_agent_provider", "google")).lower()
-        if not model:
-            if provider == "xai":
-                model = getattr(settings, "xai_default_model", None) or "grok-4-1-fast-reasoning"
-            elif provider == "openrouter":
-                model = getattr(settings, "openrouter_default_model", None) or "x-ai/grok-4.1-fast"
-            else:
-                model = getattr(settings, "primary_agent_model", "gemini-2.5-flash")
+    if not model:
+        if provider == "xai":
+            model = resolve_coordinator_config(models_config, "xai").model_id
+        elif provider == "openrouter":
+            model = resolve_coordinator_config(models_config, "openrouter").model_id
+        else:
+            model = resolve_coordinator_config(models_config, "google").model_id
 
     # Backend default for memory toggle when client is silent
     if use_server_memory is None:
@@ -871,6 +898,10 @@ async def agui_stream(
         metadata = dict(configurable.get("metadata") or {})
         if user_id:
             metadata["user_id"] = str(user_id)
+        # Ensure LangSmith-fetch can locate runs by thread/run id without relying
+        # on custom metadata fields.
+        metadata.setdefault("thread_id", str(thread_id))
+        metadata.setdefault("run_id", str(run_id))
         configurable["metadata"] = metadata
 
         state_dict["user_id"] = str(user_id)
@@ -949,16 +980,19 @@ async def agui_stream(
                     # Stream events from AG-UI LangGraphAgent
                     # The agent.run() method returns properly formatted AG-UI protocol events
                     async for event in agent.run(enriched_input):
+                        # The frontend does not consume RAW/debug events and parsing them can
+                        # overwhelm the browser for long-running or large-output runs (e.g., 10k reports).
+                        # Skip them entirely to keep the SSE stream lightweight and reliable.
+                        if getattr(event, "type", None) == EventType.RAW:
+                            continue
+
                         update: dict[str, Any] = {}
 
                         # Avoid sending large debug payloads (reasoning details, data URLs) to the browser.
                         try:
+                            # Drop raw event payloads entirely (they are not used by the UI and can be huge).
                             if hasattr(event, "raw_event") and getattr(event, "raw_event") is not None:
-                                update["raw_event"] = _strip_reasoning_details(
-                                    getattr(event, "raw_event")
-                                )
-                            if getattr(event, "type", None) == EventType.RAW and hasattr(event, "event"):
-                                update["event"] = _strip_reasoning_details(getattr(event, "event"))
+                                update["raw_event"] = None
                             if update:
                                 event = event.model_copy(update=update)
                         except Exception:

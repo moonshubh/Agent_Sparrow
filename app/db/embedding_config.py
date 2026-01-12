@@ -9,20 +9,18 @@ from __future__ import annotations
 from typing import List
 import logging
 
-from app.core.config import get_registry
+from app.core.config import get_models_config
 
 logger = logging.getLogger(__name__)
 
 # Model and dimension constants - sourced from registry
-_registry = get_registry()
-if not hasattr(_registry, "embedding") or not getattr(_registry, "embedding", None):
-    raise ValueError("Registry missing 'embedding' configuration")
-
-MODEL_NAME = getattr(_registry.embedding, "id", None)
+_config = get_models_config()
+embedding_cfg = _config.internal["embedding"]
+MODEL_NAME = embedding_cfg.model_id
 if not MODEL_NAME:
-    raise ValueError("Registry embedding.id is empty")
+    raise ValueError("Embedding model_id is empty")
 
-_dims = getattr(_registry.embedding, "embedding_dims", None)
+_dims = embedding_cfg.embedding_dims
 if not _dims:
     logger.warning("Registry embedding_dims missing; defaulting to 3072")
 EXPECTED_DIM = _dims or 3072

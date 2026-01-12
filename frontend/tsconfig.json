@@ -13,7 +13,8 @@
     "esModuleInterop": true,
     "types": [
       "node",
-      "vitest/globals"
+      "vitest/globals",
+      "@react-three/fiber"
     ],
     "module": "esnext",
     "moduleResolution": "bundler",

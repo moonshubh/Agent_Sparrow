@@ -3,7 +3,8 @@
 import React, { useState, useCallback, useEffect, useRef } from 'react';
 import Link from 'next/link';
 import { useAgent } from '@/features/librechat/AgentContext';
-import { PanelLeftClose, PanelLeft, ChevronDown, Settings, Check, Layers } from 'lucide-react';
+import { PanelLeftClose, PanelLeft, ChevronDown, Settings, Check, Layers, Brain, FileText } from 'lucide-react';
+import * as DropdownMenu from '@radix-ui/react-dropdown-menu';
 import { SettingsDialogV2 } from '@/features/settings/components/SettingsDialogV2';
 import { useArtifactActions, useArtifactSelector } from '@/features/librechat/artifacts';
 import { modelsAPI, PROVIDER_LABELS, type ModelTier, type Provider as ProviderId } from '@/services/api/endpoints/models';
@@ -35,29 +36,18 @@ interface ProviderInfo {
 const FALLBACK_PROVIDERS: ProviderInfo[] = [
   {
     id: 'google',
-    name: 'Gemini',
+    name: 'Google',
     icon: '/icons/google.svg',
     models: [
       { id: 'gemini-3-flash-preview', name: 'Gemini 3.0 Flash' },
-      { id: 'gemini-2.5-pro', name: 'Gemini 2.5 Pro' },
-      { id: 'gemini-3-pro-preview', name: 'Gemini 3.0 Pro' },
     ],
   },
   {
     id: 'xai',
-    name: 'Grok',
+    name: 'xAI',
     icon: '/icons/xai.svg',
     models: [
       { id: 'grok-4-1-fast-reasoning', name: 'Grok 4.1 Fast' },
-    ],
-  },
-  {
-    id: 'openrouter',
-    name: 'OpenRouter',
-    icon: '/icons/openrouter.svg',
-    models: [
-      { id: 'x-ai/grok-4.1-fast', name: 'Grok 4.1 Fast' },
-      { id: 'minimax/minimax-m2.1', name: 'MiniMax M2.1' },
     ],
   },
 ];
@@ -109,13 +99,19 @@ export function Header({ onToggleSidebar, sidebarOpen }: HeaderProps) {
     void (async () => {
       try {
         const config = await modelsAPI.getConfig();
-        const providerOrder: ProviderId[] = ['google', 'xai', 'openrouter'];
+        const providerOrder: ProviderId[] = ['google', 'xai'];
+        const allowedModelsByProvider: Record<ProviderId, ReadonlySet<string>> = {
+          google: new Set(['gemini-3-flash-preview']),
+          xai: new Set(['grok-4-1-fast-reasoning']),
+          openrouter: new Set(),
+        };
 
         const nextProviders: ProviderInfo[] = providerOrder
           .filter((id) => Boolean(config.available_providers[id]))
           .map((id) => {
             const models = Object.entries(config.models)
               .filter(([, info]) => info.provider === id)
+              .filter(([modelId]) => allowedModelsByProvider[id].has(modelId))
               .sort((a, b) => {
                 const tierA = TIER_ORDER[a[1].tier];
                 const tierB = TIER_ORDER[b[1].tier];
@@ -486,20 +482,50 @@ export function Header({ onToggleSidebar, sidebarOpen }: HeaderProps) {
             <span className="lc-artifact-count">{orderedIds.length}</span>
           </button>
         )}
-        {/* FeedMe link */}
-        <Link
-          href="/feedme"
-          className="lc-toggle-sidebar-btn"
-          aria-label="Open FeedMe"
-          title="FeedMe - Document Processing"
-        >
-          <img
-            src="/feedme_icon.png"
-            alt=""
-            className="lc-feedme-icon"
-            aria-hidden="true"
-          />
-        </Link>
+        {/* Tools Dropdown Menu (FeedMe & Memory) */}
+        <DropdownMenu.Root>
+          <DropdownMenu.Trigger asChild>
+            <button
+              className="lc-toggle-sidebar-btn lc-tools-dropdown-trigger"
+              aria-label="Open tools menu"
+              title="Tools"
+            >
+              <img
+                src="/feedme_icon.png"
+                alt=""
+                className="lc-feedme-icon"
+                aria-hidden="true"
+              />
+              <ChevronDown size={12} className="lc-dropdown-chevron" />
+            </button>
+          </DropdownMenu.Trigger>
+
+          <DropdownMenu.Portal>
+            <DropdownMenu.Content
+              className="lc-tools-dropdown-content"
+              sideOffset={5}
+              align="end"
+            >
+              <DropdownMenu.Item asChild>
+                <Link href="/feedme" className="lc-tools-dropdown-item">
+                  <FileText size={16} />
+                  <span>FeedMe</span>
+                  <span className="lc-tools-dropdown-desc">Document Processing</span>
+                </Link>
+              </DropdownMenu.Item>
+
+              <DropdownMenu.Separator className="lc-tools-dropdown-separator" />
+
+              <DropdownMenu.Item asChild>
+                <Link href="/memory" className="lc-tools-dropdown-item">
+                  <Brain size={16} />
+                  <span>Memory</span>
+                  <span className="lc-tools-dropdown-desc">Knowledge Graph</span>
+                </Link>
+              </DropdownMenu.Item>
+            </DropdownMenu.Content>
+          </DropdownMenu.Portal>
+        </DropdownMenu.Root>
 
         {/* Settings button */}
         <button

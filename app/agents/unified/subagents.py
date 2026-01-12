@@ -7,15 +7,28 @@ with proper middleware composition for each subagent type.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, cast
 
 from langchain_core.language_models import BaseChatModel
 from loguru import logger
 
+from app.core.config import (
+    coordinator_bucket_name,
+    get_models_config,
+    resolve_coordinator_config,
+    resolve_subagent_config,
+)
 from app.core.settings import settings
-from app.core.config import get_registry
+from app.core.rate_limiting.agent_wrapper import RateLimitedAgent, wrap_gemini_agent
+from .model_router import model_router
 
-from .prompts import LOG_ANALYSIS_PROMPT, RESEARCH_PROMPT, DATABASE_RETRIEVAL_PROMPT
+from .prompts import (
+    DATABASE_RETRIEVAL_PROMPT,
+    EXPLORER_PROMPT,
+    LOG_ANALYSIS_PROMPT,
+    RESEARCH_PROMPT,
+    get_current_utc_date,
+)
 from .tools import (
     grounding_search_tool,
     kb_search_tool,
@@ -23,7 +36,6 @@ from .tools import (
     web_search_tool,
     tavily_extract_tool,
     feedme_search_tool,
-    supabase_query_tool,
     get_db_retrieval_tools,
     # Firecrawl tools for enhanced web scraping (MCP-backed)
     firecrawl_fetch_tool,
@@ -34,13 +46,15 @@ from .tools import (
     firecrawl_agent_tool,       # NEW: Autonomous data gathering
     firecrawl_agent_status_tool,  # NEW: Check agent job status
 )
-from .model_router import model_router
 
 # Import middleware classes for per-subagent configuration
 try:
     # LangChain provides TodoList and Summarization middleware
     from langchain.agents.middleware import TodoListMiddleware
-    from langchain.agents.middleware.summarization import SummarizationMiddleware
+    from langchain.agents.middleware.summarization import (
+        SummarizationMiddleware,
+        count_tokens_approximately,
+    )
 
     # DeepAgents provides PatchToolCalls middleware
     from deepagents.middleware.patch_tool_calls import PatchToolCallsMiddleware
@@ -72,8 +86,13 @@ RESEARCH_MW_CONFIG = MiddlewareConfig(max_tokens_before_summary=100000, messages
 LOG_ANALYSIS_MW_CONFIG = MiddlewareConfig(max_tokens_before_summary=150000, messages_to_keep=6)
 DB_RETRIEVAL_MW_CONFIG = MiddlewareConfig(max_tokens_before_summary=80000, messages_to_keep=3)
 
-
-def _get_chat_model(model_name: str, provider: str = "google", role: str = "default") -> BaseChatModel:
+def _get_chat_model(
+    model_name: str,
+    *,
+    provider: str = "google",
+    role: str = "default",
+    temperature: float | None = None,
+) -> BaseChatModel:
     """Create a pre-initialized chat model instance using the provider factory.
 
     Uses role-based temperature selection from provider_factory.TEMPERATURE_CONFIG.
@@ -92,8 +111,20 @@ def _get_chat_model(model_name: str, provider: str = "google", role: str = "defa
     return build_chat_model(
         provider=provider,
         model=model_name,
+        temperature=temperature,
         role=role,  # Role-based temperature selection
     )
+
+
+def _summarization_token_counter(model: BaseChatModel) -> Any:
+    """Return a token counter safe for models without LangChain metadata."""
+    if hasattr(model, "_llm_type"):
+        return count_tokens_approximately
+
+    def _counter(messages: Any) -> int:
+        return count_tokens_approximately(messages)
+
+    return _counter
 
 
 def _build_research_middleware(model: BaseChatModel) -> List[Any]:
@@ -113,8 +144,9 @@ def _build_research_middleware(model: BaseChatModel) -> List[Any]:
     middleware.append(
         SummarizationMiddleware(
             model=model,
-            max_tokens_before_summary=RESEARCH_MW_CONFIG.max_tokens_before_summary,
-            messages_to_keep=RESEARCH_MW_CONFIG.messages_to_keep,
+            trigger=("tokens", RESEARCH_MW_CONFIG.max_tokens_before_summary),
+            keep=("messages", RESEARCH_MW_CONFIG.messages_to_keep),
+            token_counter=_summarization_token_counter(model),
         )
     )
 
@@ -147,8 +179,9 @@ def _build_log_analysis_middleware(model: BaseChatModel) -> List[Any]:
     middleware.append(
         SummarizationMiddleware(
             model=model,
-            max_tokens_before_summary=LOG_ANALYSIS_MW_CONFIG.max_tokens_before_summary,
-            messages_to_keep=LOG_ANALYSIS_MW_CONFIG.messages_to_keep,
+            trigger=("tokens", LOG_ANALYSIS_MW_CONFIG.max_tokens_before_summary),
+            keep=("messages", LOG_ANALYSIS_MW_CONFIG.messages_to_keep),
+            token_counter=_summarization_token_counter(model),
         )
     )
 
@@ -176,69 +209,107 @@ def _build_db_retrieval_middleware(model: BaseChatModel) -> List[Any]:
     middleware.append(
         SummarizationMiddleware(
             model=model,
-            max_tokens_before_summary=DB_RETRIEVAL_MW_CONFIG.max_tokens_before_summary,
-            messages_to_keep=DB_RETRIEVAL_MW_CONFIG.messages_to_keep,
+            trigger=("tokens", DB_RETRIEVAL_MW_CONFIG.max_tokens_before_summary),
+            keep=("messages", DB_RETRIEVAL_MW_CONFIG.messages_to_keep),
+            token_counter=_summarization_token_counter(model),
         )
     )
 
     return middleware
 
 
-def _get_subagent_model_for_provider(
-    task_type: str,
-    provider: str,
-    role: str = "default",
-) -> tuple[str, BaseChatModel]:
-    """Get the appropriate model for a subagent based on provider.
-
-    For Google provider, uses the model router to select the best model.
-    For XAI/Grok provider, uses appropriate Grok models from registry.
-    For OpenRouter, uses the OpenRouter defaults from registry/settings.
-
-    Args:
-        task_type: The task type for model selection (e.g., "lightweight", "log_analysis").
-        provider: The provider name ("google", "xai", or "openrouter").
-        role: The agent role for temperature selection (e.g., "research", "log_analysis").
-
-    Returns:
-        Tuple of (model_name, model_instance).
-    """
-    provider = provider.lower().strip()
-    registry = get_registry()
-
-    if provider == "xai":
-        # Map task types to appropriate Grok models from registry
-        xai_default = registry.coordinator_xai.id
-        xai_model_map = {
-            "lightweight": xai_default,
-            "db_retrieval": xai_default,
-            "log_analysis": xai_default,  # Use default XAI model for analysis
-            "coordinator": xai_default,
-        }
-        model_name = xai_model_map.get(task_type, xai_default)
-        model = _get_chat_model(model_name, provider="xai", role=role)
-        return model_name, model
-
-    if provider == "openrouter":
-        or_default = registry.coordinator_openrouter.id
-        or_model_map = {
-            "lightweight": or_default,
-            "db_retrieval": or_default,
-            "log_analysis": or_default,
-            "coordinator": or_default,
-            "coordinator_heavy": or_default,
-        }
-        model_name = or_model_map.get(task_type, or_default)
-        model = _get_chat_model(model_name, provider="openrouter", role=role)
-        return model_name, model
-
-    # Default to Google provider
-    model_name = model_router.select_model(task_type)
-    model = _get_chat_model(model_name, provider="google", role=role)
-    return model_name, model
+def _provider_api_key_available(provider: str) -> bool:
+    provider_key = (provider or "google").strip().lower()
+    if provider_key == "google":
+        return bool(settings.gemini_api_key)
+    if provider_key == "xai":
+        return bool(settings.xai_api_key)
+    if provider_key == "openrouter":
+        return bool(getattr(settings, "openrouter_api_key", None))
+    return False
 
 
-def _research_subagent(provider: str = "google") -> Dict[str, Any]:
+def _fallback_to_coordinator(
+    *,
+    config,
+    role: str,
+    zendesk: bool,
+) -> tuple[str, str, BaseChatModel, str]:
+    fallback_provider = config.fallback.coordinator_provider
+    coordinator_cfg = resolve_coordinator_config(
+        config,
+        fallback_provider,
+        with_subagents=True,
+        zendesk=zendesk,
+    )
+    bucket_name = coordinator_bucket_name(
+        fallback_provider,
+        with_subagents=True,
+        zendesk=zendesk,
+    )
+    model = _get_chat_model(
+        coordinator_cfg.model_id,
+        provider=fallback_provider,
+        role=role,
+        temperature=coordinator_cfg.temperature,
+    )
+    return coordinator_cfg.model_id, fallback_provider, model, bucket_name
+
+
+def _get_subagent_model(
+    subagent_name: str,
+    role: str,
+    *,
+    zendesk: bool = False,
+) -> tuple[str, str, BaseChatModel]:
+    """Return the subagent model from YAML config with _default fallback."""
+    config = get_models_config()
+    subagent_config = resolve_subagent_config(config, subagent_name, zendesk=zendesk)
+    model_name = subagent_config.model_id
+    provider = subagent_config.provider or "google"
+    bucket_name = (
+        f"zendesk.subagents.{subagent_name}" if zendesk else f"subagents.{subagent_name}"
+    )
+
+    if not _provider_api_key_available(provider):
+        logger.warning(
+            "subagent_provider_unavailable",
+            subagent=subagent_name,
+            provider=provider,
+        )
+        model_name, provider, model, bucket_name = _fallback_to_coordinator(
+            config=config,
+            role=role,
+            zendesk=zendesk,
+        )
+    elif not model_router.is_available(model_name):
+        logger.warning(
+            "subagent_model_unavailable",
+            subagent=subagent_name,
+            model=model_name,
+            provider=provider,
+        )
+        model_name, provider, model, bucket_name = _fallback_to_coordinator(
+            config=config,
+            role=role,
+            zendesk=zendesk,
+        )
+    else:
+        model = _get_chat_model(
+            model_name,
+            provider=provider,
+            role=role,
+            temperature=subagent_config.temperature,
+        )
+
+    if model.__class__.__name__ == "ChatGoogleGenerativeAI":
+        model = cast(BaseChatModel, wrap_gemini_agent(model, bucket_name, model_name))
+    else:
+        model = cast(BaseChatModel, RateLimitedAgent(model, bucket_name))
+    return model_name, provider, model
+
+
+def _research_subagent(*, zendesk: bool = False) -> Dict[str, Any]:
     """Create research subagent specification.
 
     Standard tier agent with streamlined 4-step workflow (Search → Evaluate → Synthesize → Cite).
@@ -252,10 +323,13 @@ def _research_subagent(provider: str = "google") -> Dict[str, Any]:
     - Tavily web search (web_search)
     - Firecrawl tools (fetch, map, crawl, extract, search)
 
-    Args:
-        provider: The provider name ("google" or "xai"). Defaults to "google".
     """
-    model_name, model = _get_subagent_model_for_provider("lightweight", provider, role="research")
+    model_name, provider, model = _get_subagent_model(
+        "research-agent",
+        role="research",
+        zendesk=zendesk,
+    )
+    current_date = get_current_utc_date()
 
     subagent_spec: Dict[str, Any] = {
         "name": "research-agent",
@@ -265,11 +339,10 @@ def _research_subagent(provider: str = "google") -> Dict[str, Any]:
             "extracting structured data, autonomous web research, and finding relevant "
             "information from any website. Can autonomously gather data without knowing URLs."
         ),
-        "system_prompt": RESEARCH_PROMPT,
+        "system_prompt": f"{RESEARCH_PROMPT}\n\nCurrent date: {current_date}",
         "tools": [
             kb_search_tool,
             feedme_search_tool,
-            supabase_query_tool,
             # Prefer Firecrawl first for web scraping (MCP-backed with full feature support)
             firecrawl_fetch_tool,      # Single-page scrape with screenshots/actions/mobile/geo
             firecrawl_map_tool,        # Discover all URLs on a website
@@ -301,28 +374,23 @@ def _research_subagent(provider: str = "google") -> Dict[str, Any]:
     return subagent_spec
 
 
-def _log_diagnoser_subagent(provider: str = "google") -> Dict[str, Any]:
+def _log_diagnoser_subagent(*, zendesk: bool = False) -> Dict[str, Any]:
     """Create log diagnoser subagent specification.
 
     Heavy tier agent with full 9-step reasoning framework for complex log analysis.
     Uses high-precision temperature (0.1) for accurate error diagnosis.
 
     The log diagnoser specializes in:
-    - Analyzing attached log files (log_diagnoser)
-    - Cross-referencing with KB (kb_search)
-    - Finding related documentation (feedme_search)
-    - Querying historical issues (supabase_query)
-    - Researching error messages online (Firecrawl tools)
+    - Analyzing attached log files (directly in prompt context)
+    - Producing customer-ready + internal diagnostic notes in the Phase 3 JSON contract
 
-    Args:
-        provider: The provider name ("google" or "xai"). Defaults to "google".
     """
-    # Temporarily force Gemini 3.0 Pro (preview) for log diagnosis unless explicitly overridden
-    if provider == "google":
-        model_name = getattr(settings, "zendesk_log_model_override", None) or "gemini-3-pro-preview"
-        model = _get_chat_model(model_name, provider="google", role="log_analysis")
-    else:
-        model_name, model = _get_subagent_model_for_provider("log_analysis", provider, role="log_analysis")
+    model_name, provider, model = _get_subagent_model(
+        "log-diagnoser",
+        role="log_analysis",
+        zendesk=zendesk,
+    )
+    current_date = get_current_utc_date()
 
     subagent_spec: Dict[str, Any] = {
         "name": "log-diagnoser",
@@ -331,17 +399,10 @@ def _log_diagnoser_subagent(provider: str = "google") -> Dict[str, Any]:
             "provides log files or asks about errors, troubleshooting, or system issues. "
             "Can research error messages and solutions online using Firecrawl."
         ),
-        "system_prompt": LOG_ANALYSIS_PROMPT,
-        "tools": [
-            log_diagnoser_tool,
-            kb_search_tool,
-            feedme_search_tool,
-            supabase_query_tool,
-            # Firecrawl tools for researching errors and solutions online
-            firecrawl_fetch_tool,      # Fetch documentation/solutions from URLs
-            firecrawl_search_tool,     # Search for error messages and fixes
-            firecrawl_extract_tool,    # Extract structured error/solution data
-        ],
+        "system_prompt": f"{LOG_ANALYSIS_PROMPT}\n\nCurrent date: {current_date}",
+        # Keep the log diagnoser deterministic and fast: analyze the provided log
+        # text directly and return the strict JSON output contract.
+        "tools": [],
         "model": model,
         "model_name": model_name,
         "model_provider": provider,
@@ -359,7 +420,7 @@ def _log_diagnoser_subagent(provider: str = "google") -> Dict[str, Any]:
     return subagent_spec
 
 
-def _db_retrieval_subagent(provider: str = "google") -> Dict[str, Any]:
+def _db_retrieval_subagent(*, zendesk: bool = False) -> Dict[str, Any]:
     """Create database retrieval subagent specification.
 
     Lite tier agent with minimal task-focused prompts for cost-efficient data retrieval.
@@ -377,10 +438,13 @@ def _db_retrieval_subagent(provider: str = "google") -> Dict[str, Any]:
     Returns FULL content for KB/macros, polished summaries for long FeedMe.
     Does NOT synthesize - only retrieves and formats data.
 
-    Args:
-        provider: The provider name ("google" or "xai"). Defaults to "google".
     """
-    model_name, model = _get_subagent_model_for_provider("db_retrieval", provider, role="db_retrieval")
+    model_name, provider, model = _get_subagent_model(
+        "db-retrieval",
+        role="db_retrieval",
+        zendesk=zendesk,
+    )
+    current_date = get_current_utc_date()
 
     subagent_spec: Dict[str, Any] = {
         "name": "db-retrieval",
@@ -390,7 +454,7 @@ def _db_retrieval_subagent(provider: str = "google") -> Dict[str, Any]:
             "scores. Does NOT synthesize - only retrieves and formats data. "
             "Use for finding specific information before synthesis."
         ),
-        "system_prompt": DATABASE_RETRIEVAL_PROMPT,
+        "system_prompt": f"{DATABASE_RETRIEVAL_PROMPT}\n\nCurrent date: {current_date}",
         "tools": get_db_retrieval_tools(),
         "preferred_tool_priority": [
             "db_unified_search",  # semantic/hybrid first
@@ -414,13 +478,66 @@ def _db_retrieval_subagent(provider: str = "google") -> Dict[str, Any]:
     return subagent_spec
 
 
-def get_subagent_specs(provider: str = "google") -> List[Dict[str, Any]]:
+def _explorer_subagent(*, zendesk: bool = False) -> Dict[str, Any]:
+    """Create explorer subagent specification (suggestions-only).
+
+    Phase 2 requirement:
+    - Read/search/list capabilities only.
+    - Suggestions-only output contract (no final answers, no actions).
+    """
+    model_name, provider, model = _get_subagent_model(
+        "explorer",
+        role="research",
+        zendesk=zendesk,
+    )
+    current_date = get_current_utc_date()
+
+    subagent_spec: Dict[str, Any] = {
+        "name": "explorer",
+        "description": (
+            "Exploration agent for quickly scanning sources and proposing next steps. "
+            "Use for broad discovery, hypothesis generation, and suggesting which tools/queries "
+            "the coordinator should run next."
+        ),
+        "system_prompt": f"{EXPLORER_PROMPT}\n\nCurrent date: {current_date}",
+        "tools": [
+            kb_search_tool,
+            feedme_search_tool,
+            firecrawl_search_tool,
+            firecrawl_fetch_tool,
+            firecrawl_map_tool,
+            firecrawl_extract_tool,
+            web_search_tool,
+            tavily_extract_tool,
+            grounding_search_tool,
+        ],
+        "model": model,
+        "model_name": model_name,
+        "model_provider": provider,
+        "middleware": _build_research_middleware(model),
+    }
+
+    logger.debug(
+        "explorer_subagent_created",
+        model=model_name,
+        provider=provider,
+        tools=[t.name for t in subagent_spec["tools"]],
+        middleware_count=len(subagent_spec["middleware"]),
+    )
+
+    return subagent_spec
+
+
+def get_subagent_specs(
+    provider: str = "google",
+    *,
+    zendesk: bool = False,
+) -> List[Dict[str, Any]]:
     """Return subagent specifications consumed by DeepAgents.
 
     Args:
-        provider: The provider name ("google" or "xai"). Defaults to "google".
-            When the coordinator uses Grok, pass "xai" to create subagents
-            with Grok models. Otherwise, subagents use Gemini models.
+        provider: Deprecated; subagents are derived from models.yaml.
+        zendesk: When True, use zendesk-specific subagent configs.
 
     Returns:
         List of subagent specification dicts with:
@@ -431,28 +548,38 @@ def get_subagent_specs(provider: str = "google") -> List[Dict[str, Any]]:
         - model: ChatModel instance (matching the provider)
         - middleware: List of middleware instances
     """
+    config = get_models_config()
+    default_subagent = resolve_subagent_config(config, "_default", zendesk=zendesk)
     logger.info(
         "creating_subagent_specs",
-        provider=provider,
+        provider=default_subagent.provider,
+        model=default_subagent.model_id,
     )
     return [
-        _research_subagent(provider=provider),
-        _log_diagnoser_subagent(provider=provider),
-        _db_retrieval_subagent(provider=provider),
+        _explorer_subagent(zendesk=zendesk),
+        _research_subagent(zendesk=zendesk),
+        _log_diagnoser_subagent(zendesk=zendesk),
+        _db_retrieval_subagent(zendesk=zendesk),
     ]
 
 
-def get_subagent_by_name(name: str, provider: str = "google") -> Optional[Dict[str, Any]]:
+def get_subagent_by_name(
+    name: str,
+    provider: str = "google",
+    *,
+    zendesk: bool = False,
+) -> Optional[Dict[str, Any]]:
     """Get a specific subagent specification by name.
 
     Args:
         name: Subagent name (e.g., "research-agent", "log-diagnoser", "db-retrieval").
-        provider: The provider name ("google" or "xai"). Defaults to "google".
+        provider: Deprecated; subagents are derived from models.yaml.
+        zendesk: When True, use zendesk-specific subagent configs.
 
     Returns:
         Subagent spec dict or None if not found.
     """
-    for spec in get_subagent_specs(provider=provider):
+    for spec in get_subagent_specs(provider=provider, zendesk=zendesk):
         if spec["name"] == name:
             return spec
     return None

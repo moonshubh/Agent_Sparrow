@@ -9,7 +9,7 @@ from typing import Optional, List, Dict
 
 from dotenv import load_dotenv
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 
 # Load environment variables from project root .env if present
 # Calculate the path safely with depth validation
@@ -32,8 +32,6 @@ load_dotenv(ENV_LOCAL_PATH, override=True)  # .env.local overrides .env
 
 logger = logging.getLogger(__name__)
 
-_RETRIEVAL_PRIMARY_ALLOWED = {"rpc", "store"}
-
 class Settings(BaseSettings):
     """Application configuration loaded from environment variables."""
 
@@ -45,29 +43,25 @@ class Settings(BaseSettings):
     )
 
     gemini_api_key: Optional[str] = Field(default=None, alias="GEMINI_API_KEY")
+    google_api_key: Optional[str] = Field(default=None, alias="GOOGLE_API_KEY")
+
+    @model_validator(mode="after")
+    def hydrate_gemini_api_key(self) -> "Settings":
+        # Backwards/ops compatibility: some environments still use GOOGLE_API_KEY
+        # for Gemini. Prefer GEMINI_API_KEY when present.
+        if not self.gemini_api_key and self.google_api_key:
+            self.gemini_api_key = self.google_api_key
+        return self
 
     # XAI/Grok Configuration
     xai_api_key: Optional[str] = Field(default=None, alias="XAI_API_KEY")
-    xai_default_model: str = Field(default="grok-4-1-fast-reasoning", alias="XAI_DEFAULT_MODEL")
     xai_reasoning_enabled: bool = Field(default=True, alias="XAI_REASONING_ENABLED")
 
     # OpenRouter Configuration
     openrouter_api_key: Optional[str] = Field(default=None, alias="OPENROUTER_API_KEY")
     openrouter_base_url: str = Field(default="https://openrouter.ai/api/v1", alias="OPENROUTER_BASE_URL")
-    openrouter_default_model: str = Field(
-        default="x-ai/grok-4.1-fast", alias="OPENROUTER_DEFAULT_MODEL"
-    )
     openrouter_app_name: str = Field(default="Agent Sparrow", alias="OPENROUTER_APP_NAME")
     openrouter_referer: Optional[str] = Field(default=None, alias="OPENROUTER_REFERER")
-
-    @field_validator("openrouter_default_model")
-    @classmethod
-    def normalize_openrouter_default_model(cls, value: str) -> str:
-        # Legacy OpenRouter model IDs used a ":free" suffix; OpenRouter now exposes
-        # this model as `x-ai/grok-4.1-fast`.
-        if value == "x-ai/grok-4.1-fast:free":
-            return "x-ai/grok-4.1-fast"
-        return value
 
     # LangSmith tracing configuration
     langsmith_tracing_enabled: bool = Field(default=False, alias="LANGSMITH_TRACING_ENABLED")
@@ -87,7 +81,6 @@ class Settings(BaseSettings):
 
     # Gemini Search Grounding configuration
     enable_grounding_search: bool = Field(default=False, alias="ENABLE_GROUNDING_SEARCH")
-    grounding_model: str = Field(default="gemini-2.5-flash-preview-09-2025", alias="GROUNDING_MODEL")
     grounding_max_results: int = Field(default=5, alias="GROUNDING_MAX_RESULTS")
     grounding_timeout_sec: float = Field(default=10.0, alias="GROUNDING_TIMEOUT_SEC")
     grounding_snippet_chars: int = Field(default=480, alias="GROUNDING_SNIPPET_CHARS")
@@ -111,13 +104,8 @@ class Settings(BaseSettings):
     tavily_default_max_results: int = Field(default=10, alias="TAVILY_DEFAULT_MAX_RESULTS")
     tavily_include_images: bool = Field(default=True, alias="TAVILY_INCLUDE_IMAGES")
 
-    router_model: str = Field(default="gemini-2.5-flash-lite-preview-09-2025", alias="ROUTER_MODEL")
     node_timeout_sec: float = Field(default=30.0, alias="NODE_TIMEOUT_SEC")
     use_enhanced_log_analysis: bool = Field(default=True, alias="USE_ENHANCED_LOG_ANALYSIS")
-    enhanced_log_model: str = Field(default="gemini-2.5-pro", alias="ENHANCED_LOG_MODEL")
-    # Provider/model selection for primary agent
-    primary_agent_provider: str = Field(default="google", alias="PRIMARY_AGENT_PROVIDER")
-    primary_agent_model: str = Field(default="gemini-3-flash-preview", alias="PRIMARY_AGENT_MODEL")
     primary_agent_temperature: float = Field(default=0.2, alias="PRIMARY_AGENT_TEMPERATURE")
     primary_agent_thinking_budget: Optional[int] = Field(default=None, alias="THINKING_BUDGET")
     primary_agent_formatting: str = Field(default="natural", alias="PRIMARY_AGENT_FORMATTING")
@@ -133,10 +121,6 @@ class Settings(BaseSettings):
         normalized = (value or "narrated").lower().strip()
         return normalized if normalized in allowed else "narrated"
 
-    # Optional override specifically for Zendesk auto-responses (e.g., OpenRouter Grok)
-    zendesk_agent_provider: Optional[str] = Field(default=None, alias="ZENDESK_AGENT_PROVIDER")
-    zendesk_agent_model: Optional[str] = Field(default=None, alias="ZENDESK_AGENT_MODEL")
-    gemma_helper_model: str = Field(default="gemma-3-27b-it", alias="GEMMA_HELPER_MODEL")
     enable_websearch: bool = Field(default=True, alias="ENABLE_WEBSEARCH")
     enable_grounded_responses: bool = Field(default=True, alias="ENABLE_GROUNDED_RESPONSES")
     primary_agent_min_kb_relevance: float = Field(default=0.65, alias="PRIMARY_AGENT_MIN_KB_RELEVANCE")
@@ -165,7 +149,6 @@ class Settings(BaseSettings):
     feedme_pdf_concurrent_limit: int = Field(default=5, alias="FEEDME_PDF_CONCURRENT_LIMIT")
     
     # Enhanced PDF Processing Configuration
-    feedme_max_tokens_per_minute: int = Field(default=250000, alias="FEEDME_MAX_TOKENS_PER_MINUTE")
     feedme_max_tokens_per_chunk: int = Field(default=8000, alias="FEEDME_MAX_TOKENS_PER_CHUNK")
     feedme_chunk_overlap_tokens: int = Field(default=500, alias="FEEDME_CHUNK_OVERLAP_TOKENS")
     
@@ -181,8 +164,6 @@ class Settings(BaseSettings):
     feedme_celery_broker: str = Field(default="redis://localhost:6379/1", alias="FEEDME_CELERY_BROKER")
     feedme_result_backend: str = Field(default="redis://localhost:6379/2", alias="FEEDME_RESULT_BACKEND")
     feedme_security_enabled: bool = Field(default=True, alias="FEEDME_SECURITY_ENABLED")
-    feedme_rate_limit_per_minute: int = Field(default=15, alias="FEEDME_RATE_LIMIT_PER_MINUTE")
-    feedme_requests_per_day_limit: int = Field(default=1000, alias="FEEDME_REQUESTS_PER_DAY_LIMIT")
     feedme_version_control: bool = Field(default=True, alias="FEEDME_VERSION_CONTROL")
     feedme_quality_threshold: float = Field(default=0.7, alias="FEEDME_QUALITY_THRESHOLD")
     
@@ -253,9 +234,7 @@ class Settings(BaseSettings):
     memory_top_k: int = Field(default=5, alias="MEMORY_TOP_K")
     memory_char_budget: int = Field(default=2000, alias="MEMORY_CHAR_BUDGET")
     memory_ttl_sec: int = Field(default=180, alias="MEMORY_TTL_SEC")
-    memory_embed_provider: str = Field(default="gemini", alias="MEMORY_EMBED_PROVIDER")
-    memory_embed_model: str = Field(default="models/gemini-embedding-001", alias="MEMORY_EMBED_MODEL")
-    memory_embed_dims: int = Field(default=3072, alias="MEMORY_EMBED_DIMS")
+    memory_llm_inference: bool = Field(default=True, alias="MEMORY_LLM_INFERENCE")
 
     # Memory UI (Phase 3+) - capture and retrieval toggles
     enable_memory_ui_capture: bool = Field(default=False, alias="ENABLE_MEMORY_UI_CAPTURE")
@@ -264,53 +243,13 @@ class Settings(BaseSettings):
     memory_ui_tenant_id: str = Field(default="mailbot", alias="MEMORY_UI_TENANT_ID")
 
     # FeedMe AI Configuration
-    feedme_model_name: str = Field(default="gemini-2.5-flash-lite-preview-09-2025", alias="FEEDME_MODEL_NAME")
     feedme_ai_pdf_enabled: bool = Field(default=True, alias="FEEDME_AI_PDF_ENABLED")
     feedme_ai_max_pages: int = Field(default=10, alias="FEEDME_AI_MAX_PAGES")
     feedme_ai_pages_per_call: int = Field(default=3, alias="FEEDME_AI_PAGES_PER_CALL")
 
-    # Global Knowledge / Store integration (Phase 0)
-    enable_global_knowledge_injection: bool = Field(
-        default=False, alias="ENABLE_GLOBAL_KNOWLEDGE_INJECTION"
-    )
-    enable_store_adapter: bool = Field(default=False, alias="ENABLE_STORE_ADAPTER")
-    enable_store_writes: bool = Field(default=False, alias="ENABLE_STORE_WRITES")
-    retrieval_primary: str = Field(default="rpc", alias="RETRIEVAL_PRIMARY")
-    global_store_db_uri: Optional[str] = Field(default=None, alias="GLOBAL_STORE_DB_URI")
-    global_knowledge_top_k: int = Field(default=6, alias="GLOBAL_KNOWLEDGE_TOP_K")
-    global_knowledge_max_chars: int = Field(default=1600, alias="GLOBAL_KNOWLEDGE_MAX_CHARS")
-    global_knowledge_min_relevance: float = Field(default=0.2, alias="GLOBAL_KNOWLEDGE_MIN_RELEVANCE")
-    global_knowledge_adapter_min_similarity: float = Field(default=0.15, alias="GLOBAL_KNOWLEDGE_ADAPTER_MIN_SIMILARITY")
-    global_knowledge_adapter_min_query_length: int = Field(default=12, alias="GLOBAL_KNOWLEDGE_ADAPTER_MIN_QUERY_LENGTH")
-    global_knowledge_adapter_max_results: int = Field(default=6, alias="GLOBAL_KNOWLEDGE_ADAPTER_MAX_RESULTS")
-    global_knowledge_enable_adapter_fallback: bool = Field(default=True, alias="GLOBAL_KNOWLEDGE_ENABLE_ADAPTER_FALLBACK")
-    
-    # Rate Limiting Configuration (free tier defaults; override via env)
-    gemini_flash_rpm_limit: int = Field(default=10, alias="GEMINI_FLASH_RPM_LIMIT")
-    gemini_flash_rpd_limit: int = Field(default=250, alias="GEMINI_FLASH_RPD_LIMIT")
-    gemini_pro_rpm_limit: int = Field(default=100, alias="GEMINI_PRO_RPM_LIMIT")
-    gemini_pro_rpd_limit: int = Field(default=1000, alias="GEMINI_PRO_RPD_LIMIT")
-
     # Application-level usage budgets
     primary_agent_daily_budget: int = Field(default=500, alias="PRIMARY_AGENT_DAILY_BUDGET")
     router_daily_budget: int = Field(default=300, alias="ROUTER_DAILY_BUDGET")
-    
-    # Gemini Embeddings Configuration
-    gemini_embed_model: str = Field(default="models/gemini-embedding-001", alias="GEMINI_EMBED_MODEL")
-    gemini_embed_rpm_limit: int = Field(default=100, alias="GEMINI_EMBED_RPM_LIMIT")
-    gemini_embed_tpm_limit: int = Field(default=30000, alias="GEMINI_EMBED_TPM_LIMIT")
-    gemini_embed_rpd_limit: int = Field(default=1000, alias="GEMINI_EMBED_RPD_LIMIT")
-    # Simplified rate limiting - uses in-memory tracking instead of Redis
-    rate_limit_use_memory: bool = Field(default=True, alias="RATE_LIMIT_USE_MEMORY")
-    rate_limit_redis_url: str = Field(default="redis://localhost:6379", alias="RATE_LIMIT_REDIS_URL")
-    rate_limit_redis_prefix: str = Field(default="mb_sparrow_rl", alias="RATE_LIMIT_REDIS_PREFIX")
-    rate_limit_redis_db: int = Field(default=3, alias="RATE_LIMIT_REDIS_DB")
-    circuit_breaker_enabled: bool = Field(default=True, alias="CIRCUIT_BREAKER_ENABLED")
-    circuit_breaker_failure_threshold: int = Field(default=5, alias="CIRCUIT_BREAKER_FAILURE_THRESHOLD")
-    circuit_breaker_timeout: int = Field(default=60, alias="CIRCUIT_BREAKER_TIMEOUT")
-    rate_limit_safety_margin: float = Field(default=0.2, alias="RATE_LIMIT_SAFETY_MARGIN")
-    rate_limit_monitoring_enabled: bool = Field(default=True, alias="RATE_LIMIT_MONITORING_ENABLED")
-    circuit_breaker_success_threshold: int = Field(default=3, alias="CIRCUIT_BREAKER_SUCCESS_THRESHOLD")
     
     # JWT Configuration  
     # Do not ship default secrets; require explicit configuration via environment
@@ -590,36 +529,6 @@ class Settings(BaseSettings):
             raise ValueError("primary_agent_formatting must be one of: natural, strict, lean")
         return normalized
 
-    @field_validator("retrieval_primary", mode="before")
-    @classmethod
-    def validate_retrieval_primary(cls, value: str | None) -> str:
-        """Normalize retrieval primary selector and fallback to rpc when invalid."""
-        if value is None:
-            return "rpc"
-        normalized = str(value).strip().lower()
-        if normalized not in _RETRIEVAL_PRIMARY_ALLOWED:
-            logger.warning(
-                "Invalid retrieval_primary '%s' provided; expected one of %s. Falling back to 'rpc'.",
-                value,
-                sorted(_RETRIEVAL_PRIMARY_ALLOWED),
-            )
-            return "rpc"
-        return normalized
-
-    @field_validator("global_knowledge_top_k")
-    @classmethod
-    def validate_global_knowledge_top_k(cls, value: int) -> int:
-        if value <= 0:
-            raise ValueError("global_knowledge_top_k must be greater than zero")
-        return value
-
-    @field_validator("global_knowledge_max_chars")
-    @classmethod
-    def validate_global_knowledge_max_chars(cls, value: int) -> int:
-        if value <= 0:
-            raise ValueError("global_knowledge_max_chars must be greater than zero")
-        return value
-
     @field_validator("memory_top_k")
     @classmethod
     def validate_memory_top_k(cls, value: int) -> int:
@@ -639,13 +548,6 @@ class Settings(BaseSettings):
     def validate_memory_ttl_sec(cls, value: int) -> int:
         if value <= 0:
             raise ValueError("memory_ttl_sec must be greater than zero")
-        return value
-
-    @field_validator("memory_embed_dims")
-    @classmethod
-    def validate_memory_embed_dims(cls, value: int) -> int:
-        if value <= 0:
-            raise ValueError("memory_embed_dims must be greater than zero")
         return value
 
     @field_validator('zendesk_poll_interval_sec')
@@ -927,38 +829,6 @@ class Settings(BaseSettings):
         if self.is_production_mode():
             return False
         return self.reasoning_enable_thinking_trace
-
-    def should_enable_global_knowledge(self) -> bool:
-        """Return True when global knowledge injection is enabled."""
-        return bool(self.enable_global_knowledge_injection)
-
-    def should_use_store_adapter(self) -> bool:
-        """Determine if the store adapter should be leveraged for retrieval operations."""
-        return bool(self.enable_store_adapter) and self.retrieval_primary == "store"
-
-    def should_enable_store_writes(self) -> bool:
-        """Determine if writing to the global store is permitted."""
-        return bool(self.enable_store_writes)
-
-    def get_retrieval_primary(self) -> str:
-        """Return the normalized retrieval primary selector."""
-        return self.retrieval_primary
-
-    def has_global_store_configuration(self) -> bool:
-        """Return True when a global store connection string is configured."""
-        return bool(self.global_store_db_uri)
-
-    def should_use_adapter_fallback(self, *, top_k: int, store_hits: int, query_len: int) -> bool:
-        """Determine whether the adapter fallback should run for global knowledge."""
-        if not self.global_knowledge_enable_adapter_fallback:
-            return False
-        if store_hits >= max(1, top_k):
-            return False
-        if query_len < max(0, self.global_knowledge_adapter_min_query_length):
-            return False
-        if not (self.enable_store_adapter or self.get_retrieval_primary() == "rpc"):
-            return False
-        return True
 
     def memory_backend_is_supabase(self) -> bool:
         """Return True when the memory backend is Supabase."""

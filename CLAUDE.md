@@ -120,83 +120,57 @@ React/Next.js application with native AG-UI protocol integration:
 
 ## Model Configuration
 
-### Centralized Model Registry (Nov 2025)
+### Single Source of Truth: models.yaml
 
-All model configurations are managed through a **centralized Model Registry** at `/app/core/config/model_registry.py`. This eliminates hardcoded model names across 15+ files and enables **single-line model updates** that propagate throughout the entire system.
+All model configuration lives in `app/core/config/models.yaml` (coordinators, internal models,
+subagents, Zendesk variants, and per-bucket rate limits). The YAML is validated at startup;
+missing or invalid config is a fatal error. `model_registry.py` derives from this YAML for
+UI-friendly metadata.
 
-**Full documentation**: See `docs/Model-Registry.md`
+### Editing Models
 
-### Quick Model Update
+- Update model IDs, temperatures, context windows, and rate limits in `app/core/config/models.yaml`.
+- Optional override path: `MODELS_CONFIG_PATH`.
+- Optional dev reload: `MODELS_CONFIG_RELOAD=true`.
 
-To change a model for any role, edit one line in `model_registry.py`:
+### Runtime Overrides
 
-```python
-@dataclass
-class ModelRegistry:
-    log_analysis: ModelSpec = field(default=GEMINI_3_PRO)  # Change this line
-```
+Runtime overrides (e.g., `GraphState.model` / `GraphState.provider`) are allowed only for models
+defined in `models.yaml`. Unknown overrides are dropped and fallback rules apply.
 
-### Available Models
+### Startup Health Checks
 
-| Model ID | Display Name | Tier | Use Case |
-|----------|--------------|------|----------|
-| `gemini-3-pro-preview` | Gemini 3.0 Pro | PRO | Complex reasoning, log analysis |
-| `gemini-2.5-pro` | Gemini 2.5 Pro | PRO | Heavy tasks |
-| `gemini-2.5-flash` | Gemini 2.5 Flash | STANDARD | General coordinator |
-| `gemini-2.5-flash-lite` | Gemini 2.5 Flash Lite | LITE | Cost-efficient tasks, FeedMe |
-| `grok-4-1-fast-reasoning` | Grok 4.1 Fast | STANDARD | XAI provider default |
-| `grok-4` | Grok 4 | PRO | XAI heavy tasks |
+On startup, the backend performs **real API calls** to all configured models (coordinators, internal
+models, subagents, and Zendesk variants). Failures mark the model unavailable and trigger fallback;
+startup continues. A missing OpenRouter key logs a warning and forces subagent fallback to the
+coordinator.
 
-### Default Role Assignments
+### Rate Limiting
 
-- **Coordinator (Google)**: `gemini-2.5-flash` - General purpose queries
-- **Coordinator (Heavy)**: `gemini-3-pro-preview` - Complex reasoning tasks
-- **Log Analysis**: `gemini-3-pro-preview` - Detailed log diagnostics
-- **Research**: `gemini-2.5-flash` - Web research subagent
-- **FeedMe**: `gemini-2.5-flash-lite` - Document processing
-- **Embeddings**: `gemini-embedding-001` - Vector embeddings
+Rate limits are bucket-based and driven by `models.yaml` (coordinator, coordinator-with-subagents,
+each subagent, internal models, Zendesk variants). A safety margin is applied automatically.
 
 ### Usage in Code
 
 ```python
-from app.core.config import get_registry, GEMINI_3_PRO
+from app.core.config import get_models_config, resolve_coordinator_config, get_registry
 
-# Get registry (with env var overrides applied)
+config = get_models_config()
+coordinator = resolve_coordinator_config(config, "google")
+model_id = coordinator.model_id
+
 registry = get_registry()
-
-# Access model for a role
-model_id = registry.log_analysis.id  # "gemini-3-pro-preview"
-
-# Get display names for UI
 names = registry.get_display_names()
-
-# Get fallback chain
-fallbacks = registry.get_fallback_chain("google")
 ```
 
-### Frontend API Endpoint
-
-The registry is exposed via REST API for frontend consumption:
+### Frontend API Endpoints
 
 ```http
+GET /api/v1/models
 GET /api/v1/models/config
 ```
 
-Returns models, defaults, fallback chains, and provider availability.
-
-### Environment Variable Overrides
-
-Legacy env vars still work as overrides (backward compatible):
-- `PRIMARY_AGENT_MODEL` → `coordinator_google`
-- `ENHANCED_LOG_MODEL` → `log_analysis`, `coordinator_heavy`
-- `FEEDME_MODEL_NAME` → `feedme`
-- `XAI_DEFAULT_MODEL` → `coordinator_xai`
-
-### Provider System
-
-- Provider factory (`app/agents/unified/provider_factory.py`) builds Google (ChatGoogleGenerativeAI) and xAI (ChatXAI) with `reasoning_enabled` support.
-- Settings: `PRIMARY_AGENT_PROVIDER`, `XAI_API_KEY`, `XAI_REASONING_ENABLED`.
-- Coordinator prompt (`app/agents/unified/prompts.py`) auto-injects model display names from registry.
+These endpoints expose YAML-derived registry metadata and provider availability.
 
 ## Prompt Architecture (Nov 2025)
 

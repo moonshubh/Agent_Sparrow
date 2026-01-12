@@ -7,6 +7,7 @@ for all pre-agent message transformations.
 from __future__ import annotations
 
 import asyncio
+import json
 import re
 import time
 from typing import Any, Dict, List, Optional, Tuple, TYPE_CHECKING
@@ -18,9 +19,10 @@ from .attachment_processor import AttachmentProcessor, get_attachment_processor
 from .multimodal_processor import MultimodalProcessor, get_multimodal_processor, ProcessedAttachments
 from app.agents.unified.model_context import get_model_context_window
 from app.agents.unified.provider_factory import build_chat_model
-from app.core.config import get_registry
+from app.core.config import get_models_config, resolve_coordinator_config
 from app.core.config.model_registry import get_model_by_id
 from app.core.settings import settings
+from app.security.pii_redactor import redact_sensitive_from_dict
 
 if TYPE_CHECKING:
     from app.agents.helpers.gemma_helper import GemmaHelper
@@ -97,6 +99,7 @@ class MessagePreparer:
         stats: Dict[str, Any] = {
             "original_message_count": len(state.messages),
             "memory_prepended": False,
+            "thread_state_prepended": False,
             "query_rewritten": False,
             "history_summarized": False,
             "attachments_inlined": 0,
@@ -242,6 +245,37 @@ class MessagePreparer:
             messages = await self._compact_context(messages)
             stats["context_compacted"] = True
 
+        # 6. Append thread_state as a recent system message after compaction,
+        # ensuring it's included in the final message list for the agent.
+        thread_state = getattr(state, "thread_state", None)
+        if thread_state is not None:
+            try:
+                if hasattr(thread_state, "model_dump"):
+                    raw_state = thread_state.model_dump()  # type: ignore[union-attr]
+                    sanitized_state = redact_sensitive_from_dict(raw_state)
+                    if sanitized_state != raw_state:
+                        stats["thread_state_redacted"] = True
+                    rendered = json.dumps(
+                        sanitized_state,
+                        ensure_ascii=False,
+                        indent=2,
+                    )
+                else:
+                    rendered = str(thread_state)
+            except Exception:
+                rendered = str(thread_state)
+
+            if len(rendered) > 12000:
+                rendered = rendered[:12000] + "\n\n[...thread_state truncated...]"
+
+            messages.append(
+                SystemMessage(
+                    content=f"[Thread State (compressed truth)]\n{rendered}",
+                    name="thread_state",
+                )
+            )
+            stats["thread_state_prepended"] = True
+
         stats["final_message_count"] = len(messages)
         stats["estimated_tokens"] = self._estimate_tokens(messages)
 
@@ -273,13 +307,20 @@ class MessagePreparer:
         if not processed.multimodal_blocks:
             return None
 
+        config = get_models_config()
         vision_candidates: list[tuple[str, str]] = []
         if settings.gemini_api_key:
-            vision_candidates.append(("google", get_registry().coordinator_google.id))
+            vision_candidates.append(
+                ("google", resolve_coordinator_config(config, "google").model_id)
+            )
         if settings.xai_api_key:
-            vision_candidates.append(("xai", get_registry().coordinator_xai.id))
+            vision_candidates.append(
+                ("xai", resolve_coordinator_config(config, "xai").model_id)
+            )
         if getattr(settings, "openrouter_api_key", None):
-            vision_candidates.append(("openrouter", get_registry().coordinator_openrouter.id))
+            vision_candidates.append(
+                ("openrouter", resolve_coordinator_config(config, "openrouter").model_id)
+            )
 
         if not vision_candidates:
             return None
