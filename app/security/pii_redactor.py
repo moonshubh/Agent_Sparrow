@@ -28,6 +28,14 @@ def contains_pii(text: str) -> bool:
     return any(pattern.search(text) for pattern in _patterns())
 
 
+def contains_sensitive(text: str) -> bool:
+    """Return True if the string contains PII or secret-like tokens."""
+
+    if not text:
+        return False
+    return any(pattern.search(text) for pattern in _patterns())
+
+
 def redact_pii(text: str) -> str:
     """Redact email, phone, IP, and card-like sequences in the text."""
 
