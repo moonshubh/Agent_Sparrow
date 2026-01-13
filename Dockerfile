@@ -25,6 +25,7 @@ RUN pip install --upgrade pip wheel && \
 
 # Copy application code
 COPY app ./app
+COPY .sparrow ./.sparrow
 COPY MailbirdSettings.yml ./MailbirdSettings.yml
 # Ensure Railway worker services can prepend celery when start commands omit it.
 COPY scripts/railway-entrypoint.sh /usr/local/bin/railway-entrypoint.sh

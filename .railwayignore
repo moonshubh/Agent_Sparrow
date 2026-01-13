@@ -54,6 +54,9 @@ logs/
 *.md
 !CLAUDE.md
 !railway-env-template.md
+# Include runtime skill definitions
+!.sparrow/skills/**/SKILL.md
+!.sparrow/skills/**/reference/*.md
 
 # Git
 .git/

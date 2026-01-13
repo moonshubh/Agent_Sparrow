@@ -542,7 +542,12 @@ class StreamEventEmitter:
             metadata={"toolCallId": tool_call_id, "error": str(error)},
         )
 
-        logger.error("Tool error", tool_name=tool_name, tool_call_id=tool_call_id, error=error)
+        logger.error(
+            "Tool error tool_name={} tool_call_id={} error={}",
+            tool_name,
+            tool_call_id,
+            error,
+        )
 
     def start_thought(
         self,

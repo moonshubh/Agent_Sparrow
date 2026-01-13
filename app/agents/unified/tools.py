@@ -308,20 +308,23 @@ async def _tavily_search_fallback_for_firecrawl(
     return payload
 
 
-def _firecrawl_agent_usage_key() -> str:
-    api_key = settings.firecrawl_api_key or ""
+def _resolve_firecrawl_api_key() -> str:
+    return settings.firecrawl_api_key or os.getenv("FIRECRAWL_API_KEY", "")
+
+
+def _firecrawl_agent_usage_key(api_key: str) -> str:
     api_key_hash = hashlib.sha256(api_key.encode("utf-8")).hexdigest()[:16]
     return f"firecrawl_agent_usage:{api_key_hash}"
 
 
-def _check_and_record_firecrawl_agent_use() -> tuple[bool, int, int]:
+def _firecrawl_agent_usage_check(api_key: str, *, record: bool) -> tuple[bool, int, int]:
     limit = _FIRECRAWL_AGENT_MAX_USES_PER_WINDOW
-    if limit <= 0:
-        return True, 0, 0
+    if not api_key or limit <= 0:
+        return bool(api_key), 0, 0
 
     now = int(datetime.utcnow().timestamp())
     window_start = now - _FIRECRAWL_AGENT_USAGE_WINDOW_SECONDS
-    key = _firecrawl_agent_usage_key()
+    key = _firecrawl_agent_usage_key(api_key)
 
     if _REDIS_CACHE is not None:
         try:  # pragma: no cover - best effort
@@ -340,12 +343,15 @@ def _check_and_record_firecrawl_agent_use() -> tuple[bool, int, int]:
                 )
                 return False, count_int, retry_after
 
-            member = str(uuid.uuid4())
-            pipe = _REDIS_CACHE.pipeline()
-            pipe.zadd(key, {member: now})
-            pipe.expire(key, _FIRECRAWL_AGENT_USAGE_WINDOW_SECONDS * 2)
-            pipe.execute()
-            return True, count_int + 1, 0
+            if record:
+                member = str(uuid.uuid4())
+                pipe = _REDIS_CACHE.pipeline()
+                pipe.zadd(key, {member: now})
+                pipe.expire(key, _FIRECRAWL_AGENT_USAGE_WINDOW_SECONDS * 2)
+                pipe.execute()
+                return True, count_int + 1, 0
+
+            return True, count_int, 0
         except Exception:
             pass
 
@@ -357,9 +363,28 @@ def _check_and_record_firecrawl_agent_use() -> tuple[bool, int, int]:
         _FIRECRAWL_AGENT_USAGE_FALLBACK[key] = events
         return False, len(events), retry_after
 
-    events.append(now)
+    if record:
+        events.append(now)
+        _FIRECRAWL_AGENT_USAGE_FALLBACK[key] = events
+        return True, len(events), 0
+
     _FIRECRAWL_AGENT_USAGE_FALLBACK[key] = events
     return True, len(events), 0
+
+
+def is_firecrawl_agent_enabled() -> bool:
+    api_key = _resolve_firecrawl_api_key()
+    if not api_key:
+        return False
+    allowed, used, retry_after = _firecrawl_agent_usage_check(api_key, record=False)
+    if not allowed:
+        logger.info(
+            "firecrawl_agent_disabled",
+            used=used,
+            limit=_FIRECRAWL_AGENT_MAX_USES_PER_WINDOW,
+            retry_after_seconds=retry_after,
+        )
+    return allowed
 
 
 def _build_kb_filters(context: Optional[Dict[str, Any]]) -> Dict[str, Any]:
@@ -2044,8 +2069,9 @@ async def firecrawl_agent_tool(
     if not input.prompt:
         return {"error": "prompt is required for firecrawl_agent"}
 
-    if settings.firecrawl_api_key:
-        allowed, used, retry_after = _check_and_record_firecrawl_agent_use()
+    api_key = _resolve_firecrawl_api_key()
+    if api_key:
+        allowed, used, retry_after = _firecrawl_agent_usage_check(api_key, record=True)
         if not allowed:
             return {
                 "error": "firecrawl_agent_daily_limit_exceeded",
@@ -2210,22 +2236,27 @@ def get_registered_tools() -> List[BaseTool]:
         firecrawl_crawl_status_tool,  # Async crawl status
         firecrawl_extract_tool,  # AI structured extraction with web search
         firecrawl_search_tool,  # Multi-source search (web, images, news)
-        firecrawl_agent_tool,  # NEW: Autonomous data gathering agent
-        firecrawl_agent_status_tool,  # NEW: Agent job status
-        # Web search tools (secondary)
-        web_search_tool,  # Tavily - general web search
-        tavily_extract_tool,  # Tavily - full-content extraction
-        grounding_search_tool,  # Gemini grounding - quick facts
-        # Other tools
-        feedme_search_tool,
-        supabase_query_tool,
-        log_diagnoser_tool,
-        generate_image_tool,  # Gemini Nano Banana Pro image generation
-        write_article_tool,  # Rich article/report artifact creation
-        read_skill_tool,  # Progressive skill disclosure - load full skill on demand
-        get_weather,
-        generate_task_steps_generative_ui,
     ]
+    if is_firecrawl_agent_enabled():
+        tools.append(firecrawl_agent_tool)  # Autonomous data gathering agent (rate-limited)
+    tools.append(firecrawl_agent_status_tool)
+    tools.extend(
+        [
+            # Web search tools (secondary)
+            web_search_tool,  # Tavily - general web search
+            tavily_extract_tool,  # Tavily - full-content extraction
+            grounding_search_tool,  # Gemini grounding - quick facts
+            # Other tools
+            feedme_search_tool,
+            supabase_query_tool,
+            log_diagnoser_tool,
+            generate_image_tool,  # Gemini Nano Banana Pro image generation
+            write_article_tool,  # Rich article/report artifact creation
+            read_skill_tool,  # Progressive skill disclosure - load full skill on demand
+            get_weather,
+            generate_task_steps_generative_ui,
+        ]
+    )
     if settings.trace_mode in {"narrated", "hybrid"}:
         tools.append(trace_update)
 

@@ -37,6 +37,7 @@ from .tools import (
     tavily_extract_tool,
     feedme_search_tool,
     get_db_retrieval_tools,
+    is_firecrawl_agent_enabled,
     # Firecrawl tools for enhanced web scraping (MCP-backed)
     firecrawl_fetch_tool,
     firecrawl_map_tool,
@@ -349,8 +350,12 @@ def _research_subagent(*, zendesk: bool = False) -> Dict[str, Any]:
             firecrawl_crawl_tool,      # Multi-page extraction
             firecrawl_extract_tool,    # AI-powered structured data extraction
             firecrawl_search_tool,     # Enhanced web search (web/images/news)
-            firecrawl_agent_tool,      # NEW: Autonomous data gathering without knowing URLs
-            firecrawl_agent_status_tool,  # NEW: Check agent job status for async operations
+            *(
+                [firecrawl_agent_tool]
+                if is_firecrawl_agent_enabled()
+                else []
+            ),
+            firecrawl_agent_status_tool,  # Check agent job status for async operations
             # Tavily as secondary for quick web search
             web_search_tool,
             tavily_extract_tool,
