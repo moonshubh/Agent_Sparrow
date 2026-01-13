@@ -56,6 +56,12 @@ npm run test:security
 npm run test:security:full  # With rate limiting tests
 ```
 
+## Railway Deployment
+
+- Backend deploys via Railpacks: `railway.toml` must keep `builder = "RAILPACK"`.
+- Frontend deploys via `frontend/railway.toml` with `builder = "RAILPACK"`.
+- Avoid Dockerfile/Nixpacks on Railway unless explicitly approved.
+
 ## Architecture & Key Components
 
 ### Backend Structure

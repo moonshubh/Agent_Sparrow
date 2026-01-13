@@ -95,6 +95,12 @@ celery -A app.feedme.celery_app worker --loglevel=info
 ./scripts/start_on_macos/stop_system.sh    # Stop all services
 ```
 
+## Deployment (Railway)
+
+- **Railpack builder required**: keep `railway.toml` set to `builder = "RAILPACK"` for the backend.
+- **Frontend** uses its own `frontend/railway.toml` with `builder = "RAILPACK"`.
+- Do not switch Railway builds to Dockerfile or Nixpacks unless explicitly requested.
+
 ## Coding Style & Conventions
 
 ### TypeScript (Frontend)
