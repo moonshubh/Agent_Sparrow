@@ -1,0 +1,25 @@
+{
+  "$schema": "https://railway.com/railway.schema.json",
+  "build": {
+    "builder": "RAILPACK",
+    "dockerfilePath": null
+  },
+  "env": {
+    "FORCE_PRODUCTION_SECURITY": "true",
+    "ENABLE_AUTH_ENDPOINTS": "true",
+    "ENABLE_API_KEY_ENDPOINTS": "true",
+    "SKIP_AUTH": "false",
+    "ENABLE_LOCAL_AUTH_BYPASS": "false",
+    "ALLOWED_OAUTH_EMAIL_DOMAINS": "getmailbird.com",
+    "ZENDESK_RPM_LIMIT": "240",
+    "ZENDESK_MONTHLY_API_BUDGET": "1500"
+  },
+  "deploy": {
+    "startCommand": "sh scripts/railway-entrypoint.sh",
+    "healthcheckPath": "/health",
+    "healthcheckTimeout": 300,
+    "restartPolicyType": "ON_FAILURE",
+    "restartPolicyMaxRetries": 5
+  }
+}
+
