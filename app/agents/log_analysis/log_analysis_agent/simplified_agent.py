@@ -241,20 +241,19 @@ class SimplifiedLogAnalysisAgent:
         # Question-driven extraction
         llm = await self._get_llm()
         sections_schema: Dict[str, Any] = {
-            "type": "array",
+            "type": "ARRAY",
             "minItems": 1,
             "maxItems": self.config.max_sections,
             "items": {
-                "type": "object",
-                "additionalProperties": False,
+                "type": "OBJECT",
                 "properties": {
                     "line_range": {
-                        "type": "string",
+                        "type": "STRING",
                         "pattern": "^[0-9]+-[0-9]+$",
                         "description": "Approximate line range like '141-189'. Do not use timestamps.",
                     },
-                    "relevance": {"type": "string"},
-                    "key_info": {"type": "string"},
+                    "relevance": {"type": "STRING"},
+                    "key_info": {"type": "STRING"},
                 },
                 "required": ["line_range", "relevance", "key_info"],
             },
@@ -290,7 +289,7 @@ Return as JSON array with format:
                     llm.ainvoke(
                         attempt_prompt,
                         response_mime_type="application/json",
-                        response_schema=sections_schema,
+                        response_json_schema=sections_schema,
                         **kwargs,
                     ),
                     timeout=min(self.config.request_timeout, 45)
@@ -366,42 +365,39 @@ Format your response as JSON:
   "actions": [{{"title": "Action", "steps": ["step 1", "step 2"]}}]
 }}"""
             response_schema: Dict[str, Any] = {
-                "type": "object",
-                "additionalProperties": False,
+                "type": "OBJECT",
                 "properties": {
-                    "answer": {"type": "string"},
+                    "answer": {"type": "STRING"},
                     "evidence": {
-                        "type": "array",
-                        "items": {"type": "string"},
+                        "type": "ARRAY",
+                        "items": {"type": "STRING"},
                         "minItems": 1,
                         "maxItems": 8,
                     },
                     "issues": {
-                        "type": "array",
+                        "type": "ARRAY",
                         "maxItems": self.config.max_issues,
                         "items": {
-                            "type": "object",
-                            "additionalProperties": False,
+                            "type": "OBJECT",
                             "properties": {
-                                "title": {"type": "string"},
-                                "severity": {"type": "string"},
-                                "details": {"type": "string"},
+                                "title": {"type": "STRING"},
+                                "severity": {"type": "STRING"},
+                                "details": {"type": "STRING"},
                             },
                             "required": ["title", "severity", "details"],
                         },
                     },
                     "actions": {
-                        "type": "array",
+                        "type": "ARRAY",
                         "minItems": 1,
                         "maxItems": self.config.max_solutions,
                         "items": {
-                            "type": "object",
-                            "additionalProperties": False,
+                            "type": "OBJECT",
                             "properties": {
-                                "title": {"type": "string"},
+                                "title": {"type": "STRING"},
                                 "steps": {
-                                    "type": "array",
-                                    "items": {"type": "string"},
+                                    "type": "ARRAY",
+                                    "items": {"type": "STRING"},
                                     "maxItems": 10,
                                 },
                             },
@@ -430,36 +426,33 @@ Format your response as JSON:
   "solutions": [{{"title": "Solution", "steps": ["step 1", "step 2"]}}]
 }}"""
             response_schema = {
-                "type": "object",
-                "additionalProperties": False,
+                "type": "OBJECT",
                 "properties": {
-                    "summary": {"type": "string"},
+                    "summary": {"type": "STRING"},
                     "issues": {
-                        "type": "array",
+                        "type": "ARRAY",
                         "maxItems": self.config.max_issues,
                         "items": {
-                            "type": "object",
-                            "additionalProperties": False,
+                            "type": "OBJECT",
                             "properties": {
-                                "title": {"type": "string"},
-                                "severity": {"type": "string"},
-                                "details": {"type": "string"},
+                                "title": {"type": "STRING"},
+                                "severity": {"type": "STRING"},
+                                "details": {"type": "STRING"},
                             },
                             "required": ["title", "severity", "details"],
                         },
                     },
                     "solutions": {
-                        "type": "array",
+                        "type": "ARRAY",
                         "minItems": 1,
                         "maxItems": self.config.max_solutions,
                         "items": {
-                            "type": "object",
-                            "additionalProperties": False,
+                            "type": "OBJECT",
                             "properties": {
-                                "title": {"type": "string"},
+                                "title": {"type": "STRING"},
                                 "steps": {
-                                    "type": "array",
-                                    "items": {"type": "string"},
+                                    "type": "ARRAY",
+                                    "items": {"type": "STRING"},
                                     "maxItems": 10,
                                 },
                             },
@@ -485,7 +478,7 @@ Format your response as JSON:
                     llm.ainvoke(
                         attempt_prompt,
                         response_mime_type="application/json",
-                        response_schema=response_schema,
+                        response_json_schema=response_schema,
                         **kwargs,
                     ),
                     timeout=min(self.config.request_timeout, 60)
