@@ -25,14 +25,19 @@ try:
     TESSERACT_AVAILABLE = True
 except ImportError:
     TESSERACT_AVAILABLE = False
-    logger.warning("OCR dependencies not available (pytesseract, PIL). OCR fallback disabled.")
+    logger.warning(
+        "OCR dependencies not available (pytesseract, PIL). OCR fallback disabled "
+        "(Gemini PDF extraction does not use OCR)."
+    )
 
 try:
     import fitz  # PyMuPDF for image extraction
     PYMUPDF_AVAILABLE = True
 except ImportError:
     PYMUPDF_AVAILABLE = False
-    logger.warning("PyMuPDF not available. OCR fallback disabled.")
+    logger.warning(
+        "PyMuPDF not available. OCR fallback disabled (Gemini PDF extraction does not use OCR)."
+    )
 
 OCR_ENABLED = TESSERACT_AVAILABLE and PYMUPDF_AVAILABLE
 

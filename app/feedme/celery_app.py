@@ -41,6 +41,27 @@ celery_app = Celery(
 
 # Celery configuration
 celery_app.conf.update(
+    # Broker resilience (Railway Redis can reset idle connections)
+    broker_connection_retry=True,
+    broker_connection_retry_on_startup=True,
+    # None = retry forever
+    broker_connection_max_retries=None,
+    broker_transport_options={
+        # With acks_late enabled, tasks must remain invisible while executing.
+        # Keep comfortably above our task_time_limit (10 minutes).
+        "visibility_timeout": int(os.getenv("FEEDME_CELERY_VISIBILITY_TIMEOUT", "3600")),
+        # Keep connections alive and proactively detect dead sockets.
+        "health_check_interval": int(
+            os.getenv("FEEDME_CELERY_HEALTH_CHECK_INTERVAL", "30")
+        ),
+        "retry_on_timeout": True,
+        "socket_timeout": int(os.getenv("FEEDME_CELERY_SOCKET_TIMEOUT", "30")),
+        "socket_connect_timeout": int(
+            os.getenv("FEEDME_CELERY_SOCKET_CONNECT_TIMEOUT", "30")
+        ),
+        "socket_keepalive": True,
+    },
+
     # Task routing
     task_routes={
         'app.feedme.tasks.process_transcript': {'queue': 'feedme_processing'},

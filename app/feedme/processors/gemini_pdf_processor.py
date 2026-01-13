@@ -201,6 +201,13 @@ def process_pdf_to_markdown(
         api_key = settings.gemini_api_key
 
     model_name = _ensure_model(api_key)
+    logger.info(
+        "FeedMe PDF extraction using Gemini model %s (sdk=%s, max_pages=%s, pages_per_call=%s)",
+        model_name,
+        GENAI_SDK,
+        max_pages,
+        pages_per_call,
+    )
     limiter = get_rate_limiter()
 
     # Get page count without loading all images into memory

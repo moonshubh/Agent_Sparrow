@@ -311,12 +311,28 @@ async def feedme_health_check():
     try:
         client = get_feedme_supabase_client()
         db_status = "connected" if client else "unavailable"
+        celery_status: Dict[str, Any] = {"status": "unknown"}
+        try:
+            # Lightweight Celery worker presence check (do not expose broker URL/credentials)
+            from app.feedme.celery_app import celery_app
+
+            inspect = celery_app.control.inspect(
+                timeout=min(2.0, float(settings.node_timeout_sec))
+            )
+            stats = inspect.stats() or {}
+            celery_status = {
+                "status": "healthy" if stats else "unhealthy",
+                "workers": len(stats) if stats else 0,
+            }
+        except Exception as e:
+            celery_status = {"status": "unhealthy", "error": type(e).__name__}
 
         return {
             "status": "healthy" if client else "degraded",
             "feedme_enabled": True,
             "database": db_status,
             "pdf_processing": settings.feedme_pdf_enabled,
+            "celery": celery_status,
             "timestamp": datetime.now(timezone.utc).isoformat()
         }
 

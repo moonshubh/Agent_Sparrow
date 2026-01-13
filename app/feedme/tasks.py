@@ -19,8 +19,6 @@ import logging
 import json
 import re
 
-from celery.exceptions import Retry
-
 from app.feedme.celery_app import celery_app, BaseTaskWithRetry
 from app.db.supabase.client import get_supabase_client
 from app.feedme.transcript_parser import TranscriptParser
@@ -45,18 +43,14 @@ def current_settings():
     return get_cached_settings()
 
 from app.core.user_context_sync import get_user_gemini_api_key_sync
-from app.feedme.ai_extraction_engine import GeminiExtractionEngine
 import base64
 from pypdf import PdfReader
 import io
-from app.feedme.parsers.zendesk_pdf_normalizer import normalize_zendesk_print_text
 try:  # Prefer modern google-genai package when available
     from google import genai  # type: ignore
-    from google.genai import types as genai_types  # type: ignore
     GENAI_SDK = "google.genai"
 except ImportError:  # pragma: no cover
     import google.generativeai as genai  # type: ignore
-    genai_types = None
     GENAI_SDK = "google.generativeai"
 
 # Module-level client for google.genai SDK
