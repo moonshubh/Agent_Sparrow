@@ -65,6 +65,12 @@ npm run test:security:full  # With rate limiting tests
 - Keep `docker/containerfile.dev` for local builds only; no root `Dockerfile` in the repo.
 - Avoid Dockerfile/Nixpacks on Railway unless explicitly approved.
 
+### Troubleshooting Notes
+
+- If Railway starts doing Docker builds, first check for a root `Dockerfile`/`Containerfile` and remove it (Railway auto-detection prefers Docker).
+- Confirm the active deployment is using Railpack: `railway deployment list --json | jq '.[0].meta.serviceManifest.build'`.
+- If the service crashes with `uvicorn: not found` or `celery: not found`, it means the Railpack venv (`/app/.venv`) is not on `PATH`; `scripts/railway-entrypoint.sh` is the supported start command because it bootstraps the venv and runs `python -m uvicorn` / `python -m celery`.
+
 ## Architecture & Key Components
 
 ### Backend Structure

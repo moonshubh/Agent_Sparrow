@@ -104,6 +104,22 @@ celery -A app.feedme.celery_app worker --loglevel=info
 - Keep `docker/containerfile.dev` for local builds only; do not place a `Dockerfile` at repo root.
 - Do not switch Railway builds to Dockerfile or Nixpacks unless explicitly requested.
 
+### Railway Troubleshooting
+
+- **Railway is “building an image” / using Docker unexpectedly**
+  - Railway auto-detects a root `Dockerfile` and will prefer Docker builds; keep this repo root free of `Dockerfile`/`Containerfile`.
+  - Ensure the service is configured to use `railway.json`/`railway.worker.json` and that the manifest shows `build.builder = RAILPACK` and `build.dockerfilePath = null`.
+  - Check for sticky Railway UI overrides (Dockerfile path/build command) that can override config-as-code.
+  - Useful checks: `railway status`, `railway deployment list --json | jq '.[0].meta.serviceManifest.build'`, `railway logs --build <deployment_id>`.
+
+- **Runtime error: `uvicorn: not found` / `celery: not found`**
+  - Under Railpack, dependencies install into `/app/.venv`; start commands must either activate the venv or run via `python -m …`.
+  - `scripts/railway-entrypoint.sh` prepends `.venv/bin` to `PATH` and runs `python -m uvicorn` / `python -m celery` so binaries are always resolvable.
+
+- **Worker health checks failing**
+  - Worker services don’t expose HTTP by default; `scripts/railway-entrypoint.sh` starts a tiny `/health` server so Railway checks pass.
+  - Keep `healthcheckPath = "/health"` in `railway.worker.json`.
+
 ## Coding Style & Conventions
 
 ### TypeScript (Frontend)

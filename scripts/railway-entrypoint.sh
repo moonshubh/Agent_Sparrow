@@ -7,10 +7,23 @@ log() {
   printf '[railway-entrypoint] %s\n' "$*"
 }
 
+script_dir="$(CDPATH= cd "$(dirname "$0")" && pwd -P)"
+app_root="$(CDPATH= cd "${script_dir}/.." && pwd -P)"
+venv_bin="${app_root}/.venv/bin"
+python_bin="python"
+
+if [ -x "${venv_bin}/python" ]; then
+  python_bin="${venv_bin}/python"
+  export PATH="${venv_bin}:${PATH}"
+  log "using virtualenv at ${venv_bin}"
+else
+  log "virtualenv not found at ${venv_bin}; using system python"
+fi
+
 start_health_server() {
   # Lightweight health endpoint for worker services so Railway HTTP checks pass.
   log "starting worker health server on port ${PORT:-8000}"
-  python - <<'PY' &
+  "$python_bin" - <<'PY' &
 import os
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
@@ -37,7 +50,7 @@ PY
 # the start command as the entrypoint, so handle both argv[0] and argv[1].
 if [ "$entry_name" = "-A" ] || [ "$entry_name" = "-a" ]; then
   start_health_server
-  exec celery -A "$@"
+  exec "$python_bin" -m celery -A "$@"
 fi
 
 if [ "${1:-}" = "-A" ] || [ "${1:-}" = "-a" ]; then
@@ -46,12 +59,13 @@ if [ "${1:-}" = "-A" ] || [ "${1:-}" = "-a" ]; then
     set -- "-A" "$@"
   fi
   start_health_server
-  exec celery "$@"
+  exec "$python_bin" -m celery "$@"
 fi
 
 if [ "${1:-}" = "celery" ]; then
   start_health_server
-  exec "$@"
+  shift
+  exec "$python_bin" -m celery "$@"
 fi
 
 if [ "${1:-}" = "sh" ] || [ "${1:-}" = "bash" ]; then
@@ -67,7 +81,7 @@ if [ "${1:-}" = "sh" ] || [ "${1:-}" = "bash" ]; then
 fi
 
 if [ "$#" -eq 0 ]; then
-  exec sh -lc "uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}"
+  exec "$python_bin" -m uvicorn app.main:app --host 0.0.0.0 --port "${PORT:-8000}"
 fi
 
 exec "$@"
