@@ -60,7 +60,7 @@ npm run test:security:full  # With rate limiting tests
 
 - Backend deploys via Railpacks: `railway.json` sets `"builder": "RAILPACK"` and `"dockerfilePath": null`.
 - Frontend deploys via `frontend/railway.toml` with `builder = "RAILPACK"`.
-- feedme-worker uses the same repo + `railway.json` with a service-level Celery `startCommand` override.
+- feedme-worker uses `railway.worker.json` (Railpack builder + Celery start command).
 - Railpack settings (APT packages/runtime pins) live in `railpack.json`.
 - Keep `docker/containerfile.dev` for local builds only; no root `Dockerfile` in the repo.
 - Avoid Dockerfile/Nixpacks on Railway unless explicitly approved.
