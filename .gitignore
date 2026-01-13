@@ -14,6 +14,8 @@
 !railway-env-template.md
 !environment-railway-template.md
 !CHANGELOG.md
+!.sparrow/skills/**/SKILL.md
+!.sparrow/skills/**/reference/*.md
 
 # Ignore test files
 **/test_*.py
@@ -716,10 +718,12 @@ dev-debug.log
 !frontend/lib/api.ts
 !frontend/lib/types/logAnalysis.ts
 frontend/tsconfig.tsbuildinfo
-# Markdown files - ignore all except CLAUDE.md and AGENTS.md
+# Markdown files - ignore all except CLAUDE.md, AGENTS.md, and skills
 *.md
 !CLAUDE.md
 !AGENTS.md
+!.sparrow/skills/**/SKILL.md
+!.sparrow/skills/**/reference/*.md
 *.xml
 *.bak
 
