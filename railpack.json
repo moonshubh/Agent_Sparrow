@@ -1,0 +1,15 @@
+{
+  "$schema": "https://schema.railpack.com",
+  "buildAptPackages": [
+    "build-essential",
+    "gcc",
+    "libgl1",
+    "libglib2.0-0",
+    "curl",
+    "tesseract-ocr",
+    "poppler-utils"
+  ],
+  "packages": {
+    "python": "3.11"
+  }
+}

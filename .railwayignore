@@ -77,6 +77,7 @@ cypress/
 
 # Other unnecessary files
 .railwayignore
+docker/
 docker-compose*.yml
 stage_changes.sh
 railway_ssh_debug.sh

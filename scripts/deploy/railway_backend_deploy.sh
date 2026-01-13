@@ -64,10 +64,9 @@ set_var GEMINI_API_KEY "$GEMINI"
 [ -n "$OPENAI" ] && set_var OPENAI_API_KEY "$OPENAI"
 [ -n "$ENC_SECRET" ] && set_var API_KEY_ENCRYPTION_SECRET "$ENC_SECRET"
 
-echo "Deploying API from local source (Dockerfile)"
+echo "Deploying API from local source (Railpack)"
 railway up
 
 echo "Backend deploy triggered. Once complete, copy the public domain and set it on the frontend as NEXT_PUBLIC_API_URL."
 echo "Optionally, set CORS_ALLOW_ORIGINS to your frontend domain and redeploy:"
 echo "  railway variables set CORS_ALLOW_ORIGINS=https://<frontend-domain> && railway up"
-
