@@ -99,9 +99,9 @@ celery -A app.feedme.celery_app worker --loglevel=info
 
 - **Railpack builder required**: keep `railway.toml` set to `builder = "RAILPACK"` for the backend.
 - **Frontend** uses its own `frontend/railway.toml` with `builder = "RAILPACK"`.
-- **feedme-worker** uses `railway.worker.toml` with the Celery start command.
+- **feedme-worker** uses the root `railway.toml` and a service-level `startCommand` override for Celery.
 - Railpack build configuration lives in `railpack.json` (APT packages + runtime pins).
-- Keep `docker/Dockerfile.dev` for local builds only; do not place a `Dockerfile` at repo root.
+- Keep `docker/containerfile.dev` for local builds only; do not place a `Dockerfile` at repo root.
 - Do not switch Railway builds to Dockerfile or Nixpacks unless explicitly requested.
 
 ## Coding Style & Conventions

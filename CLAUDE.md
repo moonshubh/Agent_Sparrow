@@ -60,9 +60,9 @@ npm run test:security:full  # With rate limiting tests
 
 - Backend deploys via Railpacks: `railway.toml` must keep `builder = "RAILPACK"`.
 - Frontend deploys via `frontend/railway.toml` with `builder = "RAILPACK"`.
-- feedme-worker deploys via `railway.worker.toml` with a Celery start command.
+- feedme-worker uses the root `railway.toml` with a service-level Celery `startCommand` override.
 - Railpack settings (APT packages/runtime pins) live in `railpack.json`.
-- Keep `docker/Dockerfile.dev` for local builds only; no root `Dockerfile` in the repo.
+- Keep `docker/containerfile.dev` for local builds only; no root `Dockerfile` in the repo.
 - Avoid Dockerfile/Nixpacks on Railway unless explicitly approved.
 
 ## Architecture & Key Components
