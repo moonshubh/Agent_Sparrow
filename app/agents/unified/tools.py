@@ -918,6 +918,10 @@ async def kb_search_tool(
 
 
 class LogDiagnoserInput(BaseModel):
+    file_name: Optional[str] = Field(
+        default=None,
+        description="Optional filename label for the log content (used for per-file analysis).",
+    )
     log_content: str = Field(..., description="Raw log text to analyze.")
     question: Optional[str] = Field(
         default=None,
@@ -1127,6 +1131,7 @@ class FirecrawlAgentStatusInput(BaseModel):
 @tool("log_diagnoser", args_schema=LogDiagnoserInput)
 async def log_diagnoser_tool(
     input: Optional[LogDiagnoserInput] = None,
+    file_name: Optional[str] = None,
     log_content: Optional[str] = None,
     question: Optional[str] = None,
     trace_id: Optional[str] = None,
@@ -1145,11 +1150,10 @@ async def log_diagnoser_tool(
 
     # Normalize inputs regardless of how the tool is invoked
     effective_trace_id = trace_id or getattr(state, "trace_id", None)
-    if runtime and getattr(runtime, "stream_writer", None):
-        runtime.stream_writer.write("Analyzing logs…")
 
     if input is None:
         input = LogDiagnoserInput(
+            file_name=file_name,
             log_content=log_content or "",
             question=question,
             trace_id=effective_trace_id,
@@ -1159,6 +1163,12 @@ async def log_diagnoser_tool(
     elif effective_trace_id and not input.trace_id:
         # Propagate trace_id from injected state when caller did not supply one
         input.trace_id = effective_trace_id
+    if file_name and not input.file_name:
+        input.file_name = file_name
+
+    if runtime and getattr(runtime, "stream_writer", None):
+        label = (input.file_name or "").strip()
+        runtime.stream_writer.write(f"Analyzing {label}…" if label else "Analyzing logs…")
     # Normalize offset/limit from either args_schema or fallback kwargs
     if log_content is not None and input.log_content == (log_content or ""):
         input.offset = input.offset or 0
@@ -1172,14 +1182,133 @@ async def log_diagnoser_tool(
     sliced = "\n".join(lines[start:end]) if lines else input.log_content
 
     try:
+        # Avoid slow/expensive question-driven section extraction for generic prompts.
+        # When the user's intent is simply "analyze these logs", the simplified agent
+        # can produce a good overview without a question, saving a full extra model call.
+        question_text = input.question
+        if isinstance(question_text, str):
+            normalized = question_text.strip().lower()
+            generic = False
+            if normalized:
+                generic_phrases = (
+                    "analyze",
+                    "analyse",
+                    "summarize",
+                    "summarise",
+                    "review",
+                    "check",
+                    "look at",
+                    "diagnose",
+                    "debug",
+                    "troubleshoot",
+                )
+                contains_signal = any(ch.isdigit() for ch in normalized) or any(
+                    token in normalized
+                    for token in (
+                        "exception",
+                        "traceback",
+                        "stack",
+                        "timeout",
+                        "oauth",
+                        "imap",
+                        "smtp",
+                        "sync",
+                        "rate limit",
+                        "429",
+                        "500",
+                        "503",
+                        "504",
+                        "crash",
+                    )
+                )
+                if any(normalized.startswith(prefix) for prefix in generic_phrases) and not contains_signal:
+                    generic = True
+                if ("log" in normalized or "logs" in normalized) and len(normalized) < 40 and not contains_signal:
+                    generic = True
+            if generic:
+                question_text = None
+
         state = SimplifiedAgentState(
             raw_log_content=sliced,
-            question=input.question,
+            question=question_text,
             trace_id=input.trace_id or effective_trace_id,
         )
         async with SimplifiedLogAnalysisAgent() as agent:
             result: SimplifiedLogAnalysisOutput = await agent.analyze(state)
-        return result.model_dump()
+        payload: Dict[str, Any] = result.model_dump()
+        if input.file_name:
+            payload["file_name"] = input.file_name
+
+        # Add Phase 3 log-diagnoser contract fields so attached-log autorouting can
+        # render consistent customer/internal notes without relying on a subagent.
+        priority = payload.get("priority_concerns") or []
+        evidence = [str(item) for item in priority if item]
+
+        recommended_actions: list[str] = []
+        for solution in payload.get("proposed_solutions") or []:
+            if not isinstance(solution, dict):
+                continue
+            steps = solution.get("steps") or []
+            if isinstance(steps, list):
+                for step in steps:
+                    if isinstance(step, str) and step.strip():
+                        recommended_actions.append(step.strip())
+
+        overall_summary = str(payload.get("overall_summary") or "").strip()
+        customer_ready_parts: list[str] = []
+        if input.file_name:
+            customer_ready_parts.append(f"Log file: {input.file_name}")
+        if overall_summary:
+            customer_ready_parts.append(overall_summary)
+        if recommended_actions:
+            customer_ready_parts.append(
+                "Recommended next steps:\n- " + "\n- ".join(recommended_actions[:6])
+            )
+
+        customer_ready = "\n\n".join(customer_ready_parts).strip()
+
+        issues = payload.get("identified_issues") or []
+        internal_lines: list[str] = []
+        if input.file_name:
+            internal_lines.append(f"File: {input.file_name}")
+        if payload.get("health_status"):
+            internal_lines.append(f"Health: {payload.get('health_status')}")
+        if overall_summary:
+            internal_lines.append(f"Summary: {overall_summary}")
+        if evidence:
+            internal_lines.append("Top concerns: " + "; ".join(evidence[:8]))
+        if isinstance(issues, list) and issues:
+            internal_lines.append("Issues:")
+            for issue in issues[:8]:
+                if not isinstance(issue, dict):
+                    continue
+                title = str(issue.get("title") or "").strip()
+                severity = str(issue.get("severity") or "").strip()
+                details = str(issue.get("details") or "").strip()
+                line = title
+                if severity:
+                    line = f"[{severity}] {line}" if line else f"[{severity}]"
+                if details:
+                    line = f"{line}: {details}" if line else details
+                if line:
+                    internal_lines.append(f"- {line}")
+        if recommended_actions:
+            internal_lines.append("Recommended actions:")
+            internal_lines.extend(f"- {step}" for step in recommended_actions[:10])
+
+        payload.update(
+            {
+                "customer_ready": customer_ready,
+                "internal_notes": "\n".join(internal_lines).strip(),
+                "confidence": float(payload.get("confidence_level") or 0.0),
+                "evidence": evidence[:12],
+                "recommended_actions": recommended_actions[:12],
+                "open_questions": [],
+            }
+        )
+
+        # Defense-in-depth: redact sensitive tokens from all string leaves.
+        return redact_sensitive_from_dict(payload)
     except Exception as e:
         # Return error information for graceful degradation
         return {

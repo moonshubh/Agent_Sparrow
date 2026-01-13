@@ -30,10 +30,14 @@ class AgentConfig:
     def __init__(self):
         """Load configuration from environment with sensible defaults.
 
-        Defaults come from models.yaml (coordinator heavy).
+        Defaults come from models.yaml (internal helper for fast log analysis).
         """
         models_config = get_models_config()
-        default_cfg = models_config.coordinators.get("heavy") or models_config.coordinators["google"]
+        default_cfg = (
+            models_config.internal.get("helper")
+            or models_config.coordinators.get("google_with_subagents")
+            or models_config.coordinators["google"]
+        )
         override_model = os.getenv("SIMPLIFIED_LOG_MODEL")
         if override_model:
             match = find_model_config(models_config, override_model)
@@ -43,15 +47,13 @@ class AgentConfig:
 
         temp_override = os.getenv("LOG_AGENT_TEMPERATURE")
         self.temperature = float(temp_override) if temp_override else default_cfg.temperature
+        self.request_timeout = int(os.getenv("SIMPLIFIED_LOG_TIMEOUT_SECONDS", "120"))
         self.max_log_size = int(os.getenv("MAX_LOG_SIZE", "500000"))
         self.context_window = int(os.getenv("LOG_CONTEXT_WINDOW", "50"))
         self.max_sections = int(os.getenv("MAX_LOG_SECTIONS", "3"))
         self.max_issues = int(os.getenv("MAX_ISSUES", "5"))
         self.max_solutions = int(os.getenv("MAX_SOLUTIONS", "5"))
-        self.bucket_name = (
-            find_bucket_for_model(models_config, self.model_name, prefix="coordinators.")
-            or "coordinators.heavy"
-        )
+        self.bucket_name = find_bucket_for_model(models_config, self.model_name) or "internal.helper"
         
     def __repr__(self) -> str:
         """String representation for debugging."""
@@ -134,6 +136,7 @@ class SimplifiedLogAnalysisAgent:
             model=self.config.model_name,
             temperature=self.config.temperature,
             google_api_key=api_key,
+            timeout=self.config.request_timeout,
         )
         return wrap_gemini_agent(llm_base, self.config.bucket_name, self.config.model_name)
     

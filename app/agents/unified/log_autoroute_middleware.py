@@ -1,14 +1,14 @@
 """Middleware to enforce log-analysis subagent routing for attachments.
 
 Phase 3 requirement:
-- If the user attached log file(s), spawn ONE DeepAgents `task` per file in a
+- If the user attached log file(s), spawn ONE `log_diagnoser` tool call per file in a
   single tool batch (parallelizable), before the coordinator writes the final
   answer.
 
 Rationale:
 - Relying on the coordinator model to follow a prompt instruction is not
   deterministic. This middleware short-circuits the first model call and returns
-  a synthetic `AIMessage` containing multiple `task` tool calls.
+  a synthetic `AIMessage` containing multiple `log_diagnoser` tool calls.
 """
 
 from __future__ import annotations
@@ -35,6 +35,7 @@ except Exception:  # pragma: no cover - optional dependency
 _AUTOROUTE_MESSAGE_NAME = "log_autoroute_instruction"
 _ATTACHMENT_HEADER = "Attachment:"
 _AUTOROUTE_SIGNATURE_KEY = "log_autoroute_signature"
+_LOG_TOOL_NAME = "log_diagnoser"
 
 
 def _coerce_message_text(message: BaseMessage) -> str:
@@ -104,6 +105,17 @@ def _parse_attachment_blocks_from_text(text: str) -> list[tuple[str, str]]:
     return blocks
 
 
+def _strip_attachment_header(block: str) -> str:
+    if not block:
+        return ""
+    lines = block.splitlines()
+    if not lines:
+        return ""
+    if lines[0].startswith(f"{_ATTACHMENT_HEADER} "):
+        return "\n".join(lines[1:]).lstrip()
+    return block.strip()
+
+
 def _extract_attachment_blocks(messages: list[BaseMessage]) -> dict[str, str]:
     """Return a map of attachment filename (lowercased) -> full attachment block."""
     blocks_by_name: dict[str, str] = {}
@@ -144,7 +156,7 @@ def _find_prev_signature(messages: list[BaseMessage]) -> Optional[str]:
 
 
 class LogAutorouteMiddleware(AgentMiddleware if MIDDLEWARE_AVAILABLE else object):
-    """Force per-file log analysis `task` tool calls when log attachments are present."""
+    """Force per-file log analysis tool calls when log attachments are present."""
 
     @property
     def name(self) -> str:  # pragma: no cover - trivial
@@ -193,22 +205,18 @@ class LogAutorouteMiddleware(AgentMiddleware if MIDDLEWARE_AVAILABLE else object
         user_objective = _extract_last_user_objective(list(request.messages or []))
         tool_calls: list[dict[str, Any]] = []
         for file_name, block in selected:
-            description_parts = []
-            if user_objective:
-                description_parts.append(f"User objective:\n{user_objective}")
-            description_parts.append(block)
-            description = "\n\n".join(description_parts).strip()
-
+            log_content = _strip_attachment_header(block)
             tool_calls.append({
-                "id": f"log_task_{uuid4().hex}",
-                "name": "task",
+                "id": f"log_diagnoser_{uuid4().hex}",
+                "name": _LOG_TOOL_NAME,
                 "args": {
-                    "description": description,
-                    "subagent_type": "log-diagnoser",
+                    "file_name": file_name.strip(),
+                    "log_content": log_content,
+                    "question": user_objective or None,
                 },
             })
 
-        # Return a single tool-call batch (parallelizable): one `task` per file.
+        # Return a single tool-call batch (parallelizable): one log analysis call per file.
         return AIMessage(
             content="",
             tool_calls=tool_calls,

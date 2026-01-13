@@ -302,7 +302,12 @@ def _determine_task_type(state: GraphState) -> str:
     user_message = _extract_last_user_message(state)
     fast_task = _fast_classify_task(user_message)
 
-    if fast_task == "log_analysis":
+    # If attachments are present, prefer attachment-based routing for log analysis.
+    # Attached logs are handled via deterministic tool calls, so we don't need to
+    # escalate to the heavy coordinator model just because the user used log-ish keywords.
+    attachments = getattr(state, "attachments", []) or []
+
+    if fast_task == "log_analysis" and not attachments:
         logger.info("task_type_fast_path", task_type="log_analysis", trigger="keyword_match")
         forwarded_props["agent_type"] = "log_analysis"
         forwarded_props["task_detection_method"] = "keyword"
@@ -316,7 +321,6 @@ def _determine_task_type(state: GraphState) -> str:
 
     # 3. Slow path: attachment-based detection (only if no keyword match, ~200ms)
     # Skip if no attachments to avoid unnecessary processing
-    attachments = getattr(state, "attachments", []) or []
     if attachments:
         detection = _attachments_indicate_logs(state)
         if detection.get("has_log"):
@@ -326,7 +330,8 @@ def _determine_task_type(state: GraphState) -> str:
             forwarded_props["task_detection_method"] = "attachment"
             state.forwarded_props = forwarded_props
             state.agent_type = "log_analysis"
-            return "log_analysis"
+            # Use the standard coordinator model; per-file log analysis runs via tools.
+            return "coordinator"
 
     # 4. Default: light coordinator
     return "coordinator"
@@ -494,11 +499,11 @@ def _build_task_system_prompt(state: GraphState) -> Optional[str]:
     if forwarded_props.get("agent_type") == "log_analysis":
         rule = (
             "Auto-routing rule: The user provided log file attachments.\n"
-            "- Spawn ONE `task` per file with subagent_type=\"log-diagnoser\".\n"
-            "- IMPORTANT: parallelize by emitting all task tool calls in a SINGLE tool batch (one assistant turn).\n"
-            "- Each task description must include ONLY that file's name + log content (copy the matching Attachment block), plus the user's question/objective.\n"
-            "- Do NOT combine multiple files into one task.\n"
-            "- The log-diagnoser subagent returns JSON with customer_ready + internal_notes; synthesize the customer-ready sections for the final response."
+            "- Spawn ONE `log_diagnoser` tool call per file.\n"
+            "- IMPORTANT: parallelize by emitting all tool calls in a SINGLE tool batch (one assistant turn).\n"
+            "- Each call must include ONLY that file's name + log content (copy the matching Attachment block), plus the user's question/objective.\n"
+            "- Do NOT combine multiple files into one tool call.\n"
+            "- The `log_diagnoser` tool returns JSON with customer_ready + internal_notes; synthesize the customer-ready sections for the final response."
         )
         return f"{base}\n\nCurrent date: {current_date}\n\n{rule}"
 
@@ -868,11 +873,11 @@ async def _maybe_autoroute_log_analysis(state: GraphState, helper: GemmaHelper) 
         content=(
             "Log attachments detected. Do the following before writing the final answer:\n"
             f"{files_block}\n\n"
-            "1) Spawn ONE `task` per file with subagent_type=\"log-diagnoser\".\n"
-            "2) IMPORTANT: parallelize by emitting all task tool calls in a SINGLE tool batch.\n"
-            "3) Each task description must include ONLY that file's name + log content (copy the matching Attachment block), plus the user's question/objective.\n"
-            "4) Do NOT combine multiple files into one task.\n"
-            "5) After tasks return, produce (per file): customer-ready response + internal diagnostic notes.\n"
+            "1) Spawn ONE `log_diagnoser` tool call per file.\n"
+            "2) IMPORTANT: parallelize by emitting all tool calls in a SINGLE tool batch.\n"
+            "3) Each call must include ONLY that file's name + log content, plus the user's question/objective.\n"
+            "4) Do NOT combine multiple files into one call.\n"
+            "5) After tools return, produce (per file): customer-ready response + internal diagnostic notes.\n"
         ),
         name="log_autoroute_instruction",
     )
@@ -1398,7 +1403,7 @@ def _utc_now_iso() -> str:
 def _extract_log_analysis_notes(
     messages: list[BaseMessage],
 ) -> dict[str, LogAnalysisNote]:
-    """Extract persisted log notes from DeepAgents `task` tool results."""
+    """Extract per-file log notes from log-analysis tool results."""
     import json
 
     from app.agents.orchestration.orchestration.state import LogAnalysisNote
@@ -1468,7 +1473,8 @@ def _extract_log_analysis_notes(
         call = tool_calls_by_id.get(tool_call_id)
         if not call:
             continue
-        if (call.get("name") or "").strip() != "task":
+        tool_name = str(call.get("name") or "").strip()
+        if tool_name not in {"task", "log_diagnoser"}:
             continue
 
         args = call.get("args") or call.get("arguments") or {}
@@ -1481,9 +1487,10 @@ def _extract_log_analysis_notes(
         if not isinstance(args, dict):
             args = {}
 
-        subagent_type = args.get("subagent_type") or args.get("subagentType")
-        if subagent_type != "log-diagnoser":
-            continue
+        if tool_name == "task":
+            subagent_type = args.get("subagent_type") or args.get("subagentType")
+            if subagent_type != "log-diagnoser":
+                continue
 
         content = _coerce_message_text(msg).strip()
         blob = _extract_json_object(content)
@@ -1497,8 +1504,17 @@ def _extract_log_analysis_notes(
             continue
 
         file_name = str(payload.get("file_name") or payload.get("fileName") or "").strip()
+        if not file_name and tool_name == "log_diagnoser":
+            file_name = str(args.get("file_name") or args.get("fileName") or "").strip()
         customer_ready = str(payload.get("customer_ready") or payload.get("customerReady") or "").strip()
         internal_notes = str(payload.get("internal_notes") or payload.get("internalNotes") or "").strip()
+
+        if tool_name == "log_diagnoser" and not customer_ready and payload.get("error"):
+            customer_ready = (
+                "Log analysis failed due to a processing error. "
+                "Please try again or upload a smaller excerpt around the failure."
+            )
+            internal_notes = str(payload.get("message") or payload.get("suggestion") or "").strip()
 
         confidence_raw = payload.get("confidence", 0.0)
         try:

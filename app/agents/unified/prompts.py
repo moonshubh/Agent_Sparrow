@@ -433,7 +433,7 @@ When processing Zendesk support tickets:
    - The db-retrieval subagent has access to: db_unified_search, db_grep_search, db_context_search
 2. SECOND: kb_search or feedme_search for additional context
 3. THIRD: grounding_search or web_search for external documentation
-4. FOURTH: Use the `task` tool with subagent_type="log-diagnoser" for attached logs
+4. FOURTH: Use the `log_diagnoser` tool for attached logs
 
 **Macro & KB Integration:**
 - ALWAYS delegate to db-retrieval subagent FIRST for macro/KB lookups
