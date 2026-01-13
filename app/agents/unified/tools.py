@@ -1182,62 +1182,251 @@ async def log_diagnoser_tool(
     sliced = "\n".join(lines[start:end]) if lines else input.log_content
 
     try:
-        # Avoid slow/expensive question-driven section extraction for generic prompts.
-        # When the user's intent is simply "analyze these logs", the simplified agent
-        # can produce a good overview without a question, saving a full extra model call.
         question_text = input.question
-        if isinstance(question_text, str):
-            normalized = question_text.strip().lower()
-            generic = False
-            if normalized:
-                generic_phrases = (
-                    "analyze",
-                    "analyse",
-                    "summarize",
-                    "summarise",
-                    "review",
-                    "check",
-                    "look at",
-                    "diagnose",
-                    "debug",
-                    "troubleshoot",
-                )
-                contains_signal = any(ch.isdigit() for ch in normalized) or any(
-                    token in normalized
-                    for token in (
-                        "exception",
-                        "traceback",
-                        "stack",
-                        "timeout",
-                        "oauth",
-                        "imap",
-                        "smtp",
-                        "sync",
-                        "rate limit",
-                        "429",
-                        "500",
-                        "503",
-                        "504",
-                        "crash",
-                    )
-                )
-                if any(normalized.startswith(prefix) for prefix in generic_phrases) and not contains_signal:
-                    generic = True
-                if ("log" in normalized or "logs" in normalized) and len(normalized) < 40 and not contains_signal:
-                    generic = True
-            if generic:
-                question_text = None
-
-        state = SimplifiedAgentState(
+        analysis_state = SimplifiedAgentState(
             raw_log_content=sliced,
             question=question_text,
             trace_id=input.trace_id or effective_trace_id,
         )
         async with SimplifiedLogAnalysisAgent() as agent:
-            result: SimplifiedLogAnalysisOutput = await agent.analyze(state)
+            result: SimplifiedLogAnalysisOutput = await agent.analyze(analysis_state)
         payload: Dict[str, Any] = result.model_dump()
         if input.file_name:
             payload["file_name"] = input.file_name
+
+        # Keep tool output compact to avoid downstream eviction (large log sections can exceed thresholds).
+        raw_sections = payload.get("relevant_log_sections")
+        if isinstance(raw_sections, list) and raw_sections:
+            trimmed_sections: list[dict[str, Any]] = []
+            for section in raw_sections[:3]:
+                if not isinstance(section, dict):
+                    continue
+                trimmed_sections.append(
+                    {
+                        "line_numbers": str(section.get("line_numbers") or "").strip(),
+                        "content": _trim_content(str(section.get("content") or ""), max_chars=1200),
+                        "relevance_score": section.get("relevance_score", 0.0),
+                    }
+                )
+            payload["relevant_log_sections"] = trimmed_sections or None
+
+        # ------------------------------------------------------------------
+        # Enrichment: search internal sources (KB / macros / FeedMe) in parallel.
+        # Web search is only attempted when confidence is low AND internal sources
+        # aren't sufficient.
+        # ------------------------------------------------------------------
+        internal_sources: Dict[str, Any] = {}
+        internal_error: Optional[str] = None
+        external_sources: list[dict[str, Any]] = []
+
+        supabase_available = False
+        try:
+            supabase_available = not bool(getattr(_supabase_client_cached(), "mock_mode", False))
+        except Exception:
+            supabase_available = False
+
+        def _clean(text: str) -> str:
+            return re.sub(r"\\s+", " ", (text or "").strip())
+
+        issues_for_query = payload.get("identified_issues") or []
+        issue_titles: list[str] = []
+        if isinstance(issues_for_query, list):
+            for issue in issues_for_query[:4]:
+                if not isinstance(issue, dict):
+                    continue
+                title = _clean(str(issue.get("title") or ""))
+                if title:
+                    issue_titles.append(title)
+
+        priority_for_query = payload.get("priority_concerns") or []
+        priority_lines: list[str] = []
+        if isinstance(priority_for_query, list):
+            for item in priority_for_query[:4]:
+                if isinstance(item, str) and item.strip():
+                    priority_lines.append(_clean(item)[:200])
+
+        query_parts: list[str] = []
+        query_parts.extend(issue_titles[:2])
+        query_parts.extend(priority_lines[:1])
+        if isinstance(question_text, str) and question_text.strip():
+            query_parts.append(_clean(question_text)[:180])
+        internal_query = _clean(" ".join(query_parts))[:300]
+
+        grep_patterns: list[str] = []
+        for title in issue_titles[:2]:
+            if title and title not in grep_patterns:
+                grep_patterns.append(title[:120])
+        if sliced:
+            for line in sliced.splitlines():
+                lower = line.lower()
+                if any(tok in lower for tok in ("error", "exception", "traceback", "failed", "fatal")):
+                    candidate = _clean(line)
+                    if candidate:
+                        grep_patterns.append(candidate[:160])
+                        break
+
+        seen_patterns: set[str] = set()
+        grep_patterns = [
+            pattern
+            for pattern in grep_patterns
+            if pattern and not (pattern.lower() in seen_patterns or seen_patterns.add(pattern.lower()))
+        ][:2]
+
+        if supabase_available and internal_query:
+            if runtime and getattr(runtime, "stream_writer", None):
+                runtime.stream_writer.write("Searching internal KB / FeedMe…")
+
+            async def _safe(label: str, awaitable: Any) -> Any:
+                try:
+                    return await asyncio.wait_for(awaitable, timeout=40)
+                except asyncio.TimeoutError:  # pragma: no cover - best effort only
+                    logger.debug(
+                        "log_diagnoser_internal_tool_timeout",
+                        tool=label,
+                        timeout_seconds=40,
+                    )
+                    return {"error": "timeout", "tool": label, "timeout_seconds": 40}
+                except Exception as exc:  # pragma: no cover - best effort only
+                    logger.debug(
+                        "log_diagnoser_internal_tool_failed",
+                        tool=label,
+                        error=str(exc),
+                    )
+                    return {"error": str(exc), "tool": label}
+
+            kb_task = asyncio.create_task(
+                _safe(
+                    "kb_search",
+                    kb_search_tool.coroutine(
+                        query=internal_query,
+                        context=None,
+                        max_results=5,
+                        search_sources=["knowledge_base"],
+                        min_confidence=None,
+                        state=state,
+                        runtime=runtime,
+                    ),
+                )
+            )
+            db_task = asyncio.create_task(
+                _safe(
+                    "db_unified_search",
+                    db_unified_search_tool.coroutine(
+                        query=internal_query,
+                        sources=["kb", "macros", "feedme"],
+                        max_results_per_source=3,
+                        min_relevance=0.3,
+                    ),
+                )
+            )
+            feedme_task = asyncio.create_task(
+                _safe(
+                    "feedme_search",
+                    feedme_search_tool.coroutine(
+                        query=internal_query,
+                        max_results=3,
+                        folder_id=None,
+                        start_date=None,
+                        end_date=None,
+                    ),
+                )
+            )
+            grep_tasks = [
+                asyncio.create_task(
+                    _safe(
+                        f"db_grep_search:{pattern[:40]}",
+                        db_grep_search_tool.coroutine(
+                            pattern=pattern,
+                            sources=["kb", "macros", "feedme"],
+                            case_sensitive=False,
+                            max_results=6,
+                        ),
+                    )
+                )
+                for pattern in grep_patterns
+            ]
+
+            kb_raw, db_raw, feedme_raw, *grep_raw = await asyncio.gather(
+                kb_task,
+                db_task,
+                feedme_task,
+                *grep_tasks,
+            )
+
+            kb_compact: list[dict[str, Any]] = []
+            if isinstance(kb_raw, str):
+                try:
+                    kb_payload = json.loads(kb_raw)
+                except Exception:
+                    kb_payload = None
+                if isinstance(kb_payload, dict):
+                    for row in (kb_payload.get("results") or [])[:3]:
+                        if not isinstance(row, dict):
+                            continue
+                        kb_compact.append(
+                            {
+                                "title": _clean(str(row.get("title") or ""))[:120],
+                                "url": str(row.get("url") or "").strip(),
+                                "score": row.get("score"),
+                                "snippet": _trim_content(str(row.get("snippet") or ""), max_chars=260),
+                            }
+                        )
+
+            db_compact: list[dict[str, Any]] = []
+            if isinstance(db_raw, dict) and isinstance(db_raw.get("results"), list):
+                for row in (db_raw.get("results") or [])[:4]:
+                    if not isinstance(row, dict):
+                        continue
+                    metadata = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
+                    db_compact.append(
+                        {
+                            "source": row.get("source"),
+                            "title": _clean(str(row.get("title") or ""))[:140],
+                            "snippet": _trim_content(str(row.get("snippet") or ""), max_chars=260),
+                            "url": metadata.get("url") or metadata.get("link"),
+                            "score": row.get("score") or row.get("relevance_score"),
+                        }
+                    )
+
+            feedme_compact: list[dict[str, Any]] = []
+            if isinstance(feedme_raw, list):
+                for row in feedme_raw[:3]:
+                    if not isinstance(row, dict):
+                        continue
+                    feedme_compact.append(
+                        {
+                            "conversation_id": row.get("conversation_id"),
+                            "title": _clean(str(row.get("title") or ""))[:140],
+                            "confidence": row.get("confidence"),
+                            "snippet": _trim_content(str(row.get("snippet") or ""), max_chars=260),
+                        }
+                    )
+
+            grep_compact: list[dict[str, Any]] = []
+            for raw in grep_raw[:3]:
+                if not isinstance(raw, dict):
+                    continue
+                for row in (raw.get("results") or [])[:2]:
+                    if not isinstance(row, dict):
+                        continue
+                    grep_compact.append(
+                        {
+                            "match_pattern": _trim_content(str(row.get("match_pattern") or ""), max_chars=160),
+                            "source": row.get("source"),
+                            "title": _clean(str(row.get("title") or ""))[:140],
+                            "snippet": _trim_content(str(row.get("snippet") or ""), max_chars=260),
+                        }
+                    )
+
+            internal_sources = {
+                "query": internal_query,
+                "kb": kb_compact,
+                "db_semantic": db_compact,
+                "feedme": feedme_compact,
+                "db_grep": grep_compact,
+            }
+        elif not supabase_available:
+            internal_error = "supabase_not_configured"
 
         # Add Phase 3 log-diagnoser contract fields so attached-log autorouting can
         # render consistent customer/internal notes without relying on a subagent.
@@ -1255,11 +1444,96 @@ async def log_diagnoser_tool(
                         recommended_actions.append(step.strip())
 
         overall_summary = str(payload.get("overall_summary") or "").strip()
+
+        issues = payload.get("identified_issues") or []
+        has_internal_sources = bool(
+            internal_sources.get("kb")
+            or internal_sources.get("feedme")
+            or internal_sources.get("db_semantic")
+            or internal_sources.get("db_grep")
+        )
+
+        confidence = 0.0
+        try:
+            confidence = float(payload.get("confidence_level") or 0.0)
+        except Exception:
+            confidence = 0.0
+        if has_internal_sources:
+            confidence = min(0.95, confidence + 0.05)
+        if not (isinstance(issues, list) and issues) and not has_internal_sources:
+            confidence = min(confidence, 0.6)
+
+        # Only after internal sources + analysis: optionally fall back to web search
+        # when confidence is low and a search API key is configured.
+        if confidence < 0.6 and internal_query and getattr(settings, "tavily_api_key", None):
+            if runtime and getattr(runtime, "stream_writer", None):
+                runtime.stream_writer.write("Searching the web…")
+            safe_query = redact_pii(internal_query)
+            safe_query = str(redact_sensitive_from_dict({"q": safe_query}).get("q") or safe_query)
+            if "mailbird" not in safe_query.lower():
+                safe_query = f"Mailbird {safe_query}".strip()
+            try:
+                web_raw = await asyncio.wait_for(
+                    web_search_tool.coroutine(
+                        query=safe_query,
+                        max_results=5,
+                        include_images=False,
+                        search_depth="basic",
+                        include_domains=None,
+                        exclude_domains=None,
+                        days=None,
+                        topic=None,
+                    ),
+                    timeout=25,
+                )
+                if isinstance(web_raw, dict) and isinstance(web_raw.get("results"), list):
+                    for row in web_raw.get("results", [])[:3]:
+                        if not isinstance(row, dict):
+                            continue
+                        external_sources.append(
+                            {
+                                "title": _clean(str(row.get("title") or ""))[:160],
+                                "url": str(row.get("url") or "").strip(),
+                                "snippet": _trim_content(
+                                    str(row.get("content") or row.get("snippet") or ""),
+                                    max_chars=280,
+                                ),
+                            }
+                        )
+            except asyncio.TimeoutError:  # pragma: no cover - best effort only
+                logger.debug("web_search_timeout", timeout_seconds=25)
+            except Exception as exc:  # pragma: no cover - best effort only
+                logger.debug("web_search_failed", error=str(exc))
+
         customer_ready_parts: list[str] = []
         if input.file_name:
             customer_ready_parts.append(f"Log file: {input.file_name}")
         if overall_summary:
             customer_ready_parts.append(overall_summary)
+        if internal_sources.get("kb"):
+            kb_lines = [
+                f"- {item.get('title')}: {item.get('url')}"
+                for item in internal_sources.get("kb", [])[:3]
+                if isinstance(item, dict) and item.get("title") and item.get("url")
+            ]
+            if kb_lines:
+                customer_ready_parts.append("Relevant KB articles:\n" + "\n".join(kb_lines))
+        if internal_sources.get("feedme"):
+            feedme_lines = [
+                f"- Conversation {item.get('conversation_id')}: {item.get('title')}"
+                for item in internal_sources.get("feedme", [])[:3]
+                if isinstance(item, dict) and item.get("conversation_id")
+            ]
+            if feedme_lines:
+                customer_ready_parts.append("Similar FeedMe conversations:\n" + "\n".join(feedme_lines))
+        if external_sources:
+            web_lines = [
+                f"- {item.get('title')}: {item.get('url')}"
+                for item in external_sources[:3]
+                if item.get("title") and item.get("url")
+            ]
+            if web_lines:
+                customer_ready_parts.append("External references:\n" + "\n".join(web_lines))
         if recommended_actions:
             customer_ready_parts.append(
                 "Recommended next steps:\n- " + "\n- ".join(recommended_actions[:6])
@@ -1267,7 +1541,6 @@ async def log_diagnoser_tool(
 
         customer_ready = "\n\n".join(customer_ready_parts).strip()
 
-        issues = payload.get("identified_issues") or []
         internal_lines: list[str] = []
         if input.file_name:
             internal_lines.append(f"File: {input.file_name}")
@@ -1295,15 +1568,28 @@ async def log_diagnoser_tool(
         if recommended_actions:
             internal_lines.append("Recommended actions:")
             internal_lines.extend(f"- {step}" for step in recommended_actions[:10])
+        if internal_error:
+            internal_lines.append(f"Internal retrieval: {internal_error}")
+        if internal_sources:
+            internal_lines.append("Internal sources used:")
+            internal_lines.append(f"- Query: {internal_sources.get('query') or ''}".strip())
+            internal_lines.append(f"- KB hits: {len(internal_sources.get('kb') or [])}")
+            internal_lines.append(f"- FeedMe hits: {len(internal_sources.get('feedme') or [])}")
+            internal_lines.append(f"- DB semantic hits: {len(internal_sources.get('db_semantic') or [])}")
+            internal_lines.append(f"- DB grep hits: {len(internal_sources.get('db_grep') or [])}")
+        if external_sources:
+            internal_lines.append(f"Web search used: {len(external_sources)} results")
 
         payload.update(
             {
                 "customer_ready": customer_ready,
                 "internal_notes": "\n".join(internal_lines).strip(),
-                "confidence": float(payload.get("confidence_level") or 0.0),
+                "confidence": confidence,
                 "evidence": evidence[:12],
                 "recommended_actions": recommended_actions[:12],
                 "open_questions": [],
+                "internal_sources": internal_sources,
+                "external_sources": external_sources,
             }
         )
 
@@ -1422,8 +1708,24 @@ async def web_search_tool(
             _store_tool_result(cache_key, _serialize_tool_output(result))
             return result
         except Exception as e:
-            if attempt == max_retries - 1:
-                logger.warning("web_search_tool_failed", error=str(e))
+            error_message = str(e)
+            lowered_error = error_message.lower()
+            tavily_quota = any(
+                token in lowered_error
+                for token in (
+                    "usage limit",
+                    "quota",
+                    "rate limit",
+                    "insufficient credits",
+                )
+            )
+            if tavily_quota or attempt == max_retries - 1:
+                logger.warning(
+                    "web_search_tool_failed",
+                    error=error_message,
+                    quota_exceeded=tavily_quota,
+                    attempt=attempt + 1,
+                )
                 try:
                     query_hash = hashlib.sha256(str(input.query).encode("utf-8")).hexdigest()[:16]
                     fallback_sources = (
@@ -1433,11 +1735,9 @@ async def web_search_tool(
                     )
                     fallback = await firecrawl_search_tool.ainvoke(
                         {
-                            "input": FirecrawlSearchInput(
-                                query=input.query,
-                                limit=input.max_results,
-                                sources=fallback_sources,
-                            )
+                            "query": input.query,
+                            "limit": input.max_results,
+                            "sources": fallback_sources,
                         }
                     )
                     if isinstance(fallback, dict) and not fallback.get("error"):
@@ -1450,7 +1750,7 @@ async def web_search_tool(
                     )
                 return {
                     "error": "web_search_failed",
-                    "message": str(e),
+                    "message": error_message,
                 }
             await asyncio.sleep(1 * (attempt + 1))  # Exponential backoff
 

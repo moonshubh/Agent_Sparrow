@@ -80,7 +80,7 @@ async def analyze_logs(request: LogAnalysisRequest, user_id: str = Depends(get_c
                 question=request.question,
                 trace_id=request.trace_id or session_id,
             )
-            result = await log_diagnoser_tool.ainvoke(log_input)
+            result = await log_diagnoser_tool.ainvoke(log_input.model_dump())
 
         # Handle unified agent tool response format
         if isinstance(result, dict) and "error" in result:
@@ -168,7 +168,7 @@ async def log_analysis_stream_generator(
                 trace_id=trace_id,
             )
             yield format_sse_data({'type': 'step', 'data': {'type': 'Parsing', 'description': 'Parsing log entries...', 'status': 'in-progress'}})
-            result = await log_diagnoser_tool.ainvoke(log_input)
+            result = await log_diagnoser_tool.ainvoke(log_input.model_dump())
             yield format_sse_data({'type': 'step', 'data': {'type': 'Analyzing', 'description': 'Analyzing patterns and issues...', 'status': 'complete'}})
 
             # Handle unified agent tool response format

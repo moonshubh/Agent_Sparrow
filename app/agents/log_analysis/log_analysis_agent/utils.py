@@ -20,7 +20,7 @@ T = TypeVar("T")
 
 
 def extract_json_payload(
-    text: str,
+    text: Any,
     *,
     pattern: str = r"\{.*?\}|\[.*?\]",
     fallback: Optional[T] = None,
@@ -28,10 +28,111 @@ def extract_json_payload(
 ) -> Optional[T]:
     """Extract and parse JSON from text, returning a fallback on failure."""
     logger = logger_instance or get_logger("log_analysis_utils")
+
+    expected_type: Optional[type] = None
+    if "\\[" in pattern and "\\{" not in pattern:
+        expected_type = list
+    elif "\\{" in pattern and "\\[" not in pattern:
+        expected_type = dict
+
+    # Handle already-parsed content (e.g. some chat model content blocks).
+    if expected_type and isinstance(text, expected_type):
+        return text
+    if expected_type is None and isinstance(text, (dict, list)):
+        return text  # type: ignore[return-value]
+
+    def _strip_code_fences(raw: str) -> str:
+        stripped = (raw or "").strip()
+        if stripped.startswith("```"):
+            stripped = re.sub(r"^```(?:json)?\s*", "", stripped, flags=re.IGNORECASE)
+            stripped = re.sub(r"\s*```\s*$", "", stripped)
+        return stripped.strip()
+
+    def _extract_balanced(block: str, start_idx: int, opener: str, closer: str) -> Optional[str]:
+        depth = 0
+        in_string = False
+        escape = False
+        for idx in range(start_idx, len(block)):
+            ch = block[idx]
+            if in_string:
+                if escape:
+                    escape = False
+                elif ch == "\\\\":
+                    escape = True
+                elif ch == '"':
+                    in_string = False
+                continue
+            if ch == '"':
+                in_string = True
+                continue
+            if ch == opener:
+                depth += 1
+            elif ch == closer:
+                depth -= 1
+                if depth == 0:
+                    return block[start_idx : idx + 1]
+        return None
+
+    raw_text: str
+    if text is None:
+        return fallback
+    if isinstance(text, str):
+        raw_text = text
+    elif isinstance(text, (bytes, bytearray)):
+        raw_text = bytes(text).decode("utf-8", errors="ignore")
+    elif isinstance(text, list):
+        parts: list[str] = []
+        for item in text:
+            if isinstance(item, str) and item.strip():
+                parts.append(item)
+                continue
+            if isinstance(item, dict):
+                maybe_text = item.get("text") or item.get("content")
+                if isinstance(maybe_text, str) and maybe_text.strip():
+                    parts.append(maybe_text)
+        raw_text = "\n".join(parts) if parts else str(text)
+    else:
+        raw_text = str(text)
+
+    cleaned = _strip_code_fences(raw_text)
+
+    # Fast path: response is already valid JSON (common when using JSON mime type).
     try:
-        json_match = re.search(pattern, text, re.DOTALL)
+        parsed_full = json.loads(cleaned)
+        if expected_type is None or isinstance(parsed_full, expected_type):
+            return parsed_full
+    except json.JSONDecodeError:
+        pass
+
+    # Prefer balanced-bracket extraction over regex to handle nested JSON.
+    bracket_order = [("{", "}", dict), ("[", "]", list)]
+    if expected_type is list:
+        bracket_order = [("[", "]", list), ("{", "}", dict)]
+    elif expected_type is dict:
+        bracket_order = [("{", "}", dict), ("[", "]", list)]
+
+    for opener, closer, kind in bracket_order:
+        start = cleaned.find(opener)
+        attempts = 0
+        while start >= 0 and attempts < 6:
+            attempts += 1
+            blob = _extract_balanced(cleaned, start, opener, closer)
+            if blob:
+                try:
+                    parsed = json.loads(blob)
+                    if expected_type is None or isinstance(parsed, expected_type):
+                        return parsed
+                except json.JSONDecodeError as exc:
+                    logger.debug(f"JSON extraction failed: {exc}")
+            start = cleaned.find(opener, start + 1)
+
+    # Fallback to regex-based extraction (legacy behavior)
+    try:
+        json_match = re.search(pattern, cleaned, re.DOTALL)
         if json_match:
-            return json.loads(json_match.group())
+            parsed = json.loads(json_match.group())
+            if expected_type is None or isinstance(parsed, expected_type):
+                return parsed
     except (json.JSONDecodeError, AttributeError) as exc:
         logger.debug(f"JSON extraction failed: {exc}")
     return fallback

@@ -878,6 +878,7 @@ async def _maybe_autoroute_log_analysis(state: GraphState, helper: GemmaHelper) 
             "3) Each call must include ONLY that file's name + log content, plus the user's question/objective.\n"
             "4) Do NOT combine multiple files into one call.\n"
             "5) After tools return, produce (per file): customer-ready response + internal diagnostic notes.\n"
+            "6) Only use `web_search` if confidence is low and internal sources are insufficient.\n"
         ),
         name="log_autoroute_instruction",
     )

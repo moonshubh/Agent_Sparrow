@@ -7,6 +7,7 @@ import os
 from typing import Dict, Any, List, Optional
 from uuid import uuid4
 
+import asyncio
 from langchain_google_genai import ChatGoogleGenerativeAI
 from app.core.settings import settings
 from app.core.config import find_bucket_for_model, find_model_config, get_models_config
@@ -154,7 +155,17 @@ class SimplifiedLogAnalysisAgent:
             return ""
         
         # Truncate early to avoid processing unnecessarily large content
-        truncated = log_content[:self.config.max_log_size] if len(log_content) > self.config.max_log_size else log_content
+        truncated = (
+            log_content[:self.config.max_log_size]
+            if len(log_content) > self.config.max_log_size
+            else log_content
+        )
+
+        # Some uploaded logs are UTF-16/UTF-8 mis-decoded and contain many NUL bytes.
+        # Dropping NULs restores readable text and prevents the model from stalling.
+        if "\x00" in truncated:
+            truncated = truncated.replace("\x00", "")
+        truncated = truncated.lstrip("\ufeff")
         
         # Use generator expression with filter for memory efficiency
         # This is more Pythonic than building a list with append
@@ -165,7 +176,42 @@ class SimplifiedLogAnalysisAgent:
         )
         
         return '\n'.join(cleaned_lines)
-    
+
+    def _estimate_confidence(
+        self,
+        analysis: Dict[str, Any],
+        *,
+        question: Optional[str],
+        issues: List[SimplifiedIssue],
+        solutions: List[SimplifiedSolution],
+        priority_concerns: List[str],
+    ) -> float:
+        """Estimate confidence based on output completeness and signal strength."""
+        base = 0.7 if question else 0.75
+        summary_text = str(
+            analysis.get("answer")
+            or analysis.get("summary")
+            or analysis.get("overall_summary")
+            or ""
+        ).strip()
+
+        if issues:
+            base += 0.1
+        if solutions:
+            base += 0.1
+        if priority_concerns:
+            base += 0.05
+        if summary_text and len(summary_text) > 40:
+            base += 0.05
+
+        lowered = summary_text.lower()
+        if "unable to analyze" in lowered or "processing error" in lowered:
+            base -= 0.35
+        if not issues and not solutions and len(priority_concerns) == 0:
+            base -= 0.2
+
+        return max(0.1, min(float(base), 0.95))
+
     async def _extract_relevant_sections(self, log_content: str, question: str) -> List[LogSection]:
         """Extract log sections most relevant to the user's question."""
         if not question:
@@ -194,6 +240,25 @@ class SimplifiedLogAnalysisAgent:
         
         # Question-driven extraction
         llm = await self._get_llm()
+        sections_schema: Dict[str, Any] = {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": self.config.max_sections,
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "line_range": {
+                        "type": "string",
+                        "pattern": "^[0-9]+-[0-9]+$",
+                        "description": "Approximate line range like '141-189'. Do not use timestamps.",
+                    },
+                    "relevance": {"type": "string"},
+                    "key_info": {"type": "string"},
+                },
+                "required": ["line_range", "relevance", "key_info"],
+            },
+        }
         prompt = f"""Analyze this log file to find sections relevant to the user's question.
 
 USER QUESTION: {question}
@@ -210,29 +275,56 @@ Return as JSON array with format:
 [{{"line_range": "100-150", "relevance": "Contains error about X", "key_info": "Shows Y happening"}}]
 """
         
-        try:
-            response = await llm.ainvoke(prompt)
-            
-            # Use shared JSON extraction and section builder utilities
-            sections_data = extract_json_payload(
-                response.content,
-                pattern=r'\[.*?\]',
-                fallback=[],
-                logger_instance=self.logger
-            )
-            
-            if sections_data:
-                sections = build_log_sections_from_ranges(
-                    sections_data,
-                    log_content,
-                    max_sections=self.config.max_sections,
-                    logger_instance=self.logger
+        for attempt in range(2):
+            try:
+                attempt_prompt = (
+                    prompt
+                    if attempt == 0
+                    else (
+                        prompt
+                        + "\n\nIMPORTANT: Return ONLY the JSON array (no prose, no markdown)."
+                    )
                 )
-                if sections:
-                    return sections
-                    
-        except Exception as e:
-            self.logger.warning(f"Failed to extract sections: {e}")
+                kwargs = {"temperature": 0} if attempt == 1 else {}
+                response = await asyncio.wait_for(
+                    llm.ainvoke(
+                        attempt_prompt,
+                        response_mime_type="application/json",
+                        response_schema=sections_schema,
+                        **kwargs,
+                    ),
+                    timeout=min(self.config.request_timeout, 45)
+                    if attempt == 1
+                    else self.config.request_timeout,
+                )
+
+                # Use shared JSON extraction and section builder utilities
+                sections_data = extract_json_payload(
+                    response.content,
+                    pattern=r'\[.*?\]',
+                    fallback=[],
+                    logger_instance=self.logger,
+                )
+
+                if sections_data:
+                    sections = build_log_sections_from_ranges(
+                        sections_data,
+                        log_content,
+                        max_sections=self.config.max_sections,
+                        logger_instance=self.logger,
+                    )
+                    if sections:
+                        return sections
+
+            except asyncio.TimeoutError:
+                self.logger.warning(
+                    "extract_relevant_sections_timeout",
+                    timeout_seconds=min(self.config.request_timeout, 45)
+                    if attempt == 1
+                    else self.config.request_timeout,
+                )
+            except Exception as e:
+                self.logger.warning(f"Failed to extract sections: {e}")
             
         # Fallback to simple extraction
         lines = log_content.split('\n')
@@ -273,6 +365,52 @@ Format your response as JSON:
   "issues": [{{"title": "Issue", "severity": "High", "details": "..."}}],
   "actions": [{{"title": "Action", "steps": ["step 1", "step 2"]}}]
 }}"""
+            response_schema: Dict[str, Any] = {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "answer": {"type": "string"},
+                    "evidence": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "minItems": 1,
+                        "maxItems": 8,
+                    },
+                    "issues": {
+                        "type": "array",
+                        "maxItems": self.config.max_issues,
+                        "items": {
+                            "type": "object",
+                            "additionalProperties": False,
+                            "properties": {
+                                "title": {"type": "string"},
+                                "severity": {"type": "string"},
+                                "details": {"type": "string"},
+                            },
+                            "required": ["title", "severity", "details"],
+                        },
+                    },
+                    "actions": {
+                        "type": "array",
+                        "minItems": 1,
+                        "maxItems": self.config.max_solutions,
+                        "items": {
+                            "type": "object",
+                            "additionalProperties": False,
+                            "properties": {
+                                "title": {"type": "string"},
+                                "steps": {
+                                    "type": "array",
+                                    "items": {"type": "string"},
+                                    "maxItems": 10,
+                                },
+                            },
+                            "required": ["title", "steps"],
+                        },
+                    },
+                },
+                "required": ["answer", "evidence", "issues", "actions"],
+            }
         else:
             # No specific question - provide general analysis
             prompt = f"""Analyze these log sections to identify key issues and provide solutions.
@@ -291,23 +429,90 @@ Format your response as JSON:
   "issues": [{{"title": "Issue", "severity": "High", "details": "..."}}],
   "solutions": [{{"title": "Solution", "steps": ["step 1", "step 2"]}}]
 }}"""
+            response_schema = {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "summary": {"type": "string"},
+                    "issues": {
+                        "type": "array",
+                        "maxItems": self.config.max_issues,
+                        "items": {
+                            "type": "object",
+                            "additionalProperties": False,
+                            "properties": {
+                                "title": {"type": "string"},
+                                "severity": {"type": "string"},
+                                "details": {"type": "string"},
+                            },
+                            "required": ["title", "severity", "details"],
+                        },
+                    },
+                    "solutions": {
+                        "type": "array",
+                        "minItems": 1,
+                        "maxItems": self.config.max_solutions,
+                        "items": {
+                            "type": "object",
+                            "additionalProperties": False,
+                            "properties": {
+                                "title": {"type": "string"},
+                                "steps": {
+                                    "type": "array",
+                                    "items": {"type": "string"},
+                                    "maxItems": 10,
+                                },
+                            },
+                            "required": ["title", "steps"],
+                        },
+                    },
+                },
+                "required": ["summary", "issues", "solutions"],
+            }
         
-        try:
-            response = await llm.ainvoke(prompt)
-            
-            # Use robust JSON extraction with appropriate fallback
-            analysis = extract_json_payload(
-                response.content,
-                pattern=r'\{.*?\}',
-                fallback=None,
-                logger_instance=self.logger
-            )
-            
-            if analysis:
-                return analysis
-                
-        except Exception as e:
-            self.logger.error(f"Analysis failed: {e}")
+        for attempt in range(2):
+            try:
+                attempt_prompt = (
+                    prompt
+                    if attempt == 0
+                    else (
+                        prompt
+                        + "\n\nIMPORTANT: Return ONLY valid JSON (no prose, no markdown)."
+                    )
+                )
+                kwargs = {"temperature": 0} if attempt == 1 else {}
+                response = await asyncio.wait_for(
+                    llm.ainvoke(
+                        attempt_prompt,
+                        response_mime_type="application/json",
+                        response_schema=response_schema,
+                        **kwargs,
+                    ),
+                    timeout=min(self.config.request_timeout, 60)
+                    if attempt == 1
+                    else self.config.request_timeout,
+                )
+
+                # Use robust JSON extraction with appropriate fallback
+                analysis = extract_json_payload(
+                    response.content,
+                    pattern=r'\{.*?\}',
+                    fallback=None,
+                    logger_instance=self.logger,
+                )
+
+                if analysis:
+                    return analysis
+
+            except asyncio.TimeoutError:
+                self.logger.warning(
+                    "analyze_with_question_timeout",
+                    timeout_seconds=min(self.config.request_timeout, 60)
+                    if attempt == 1
+                    else self.config.request_timeout,
+                )
+            except Exception as e:
+                self.logger.error(f"Analysis failed: {e}")
         
         # Structured fallback response maintaining API contract
         return {
@@ -397,7 +602,6 @@ Format your response as JSON:
         if question:
             overall_summary = analysis.get('answer', 'Analysis complete')
             priority_concerns = analysis.get('evidence', [])[:3]
-            confidence_level = 0.85
         else:
             overall_summary = analysis.get('summary', 'Log analysis complete')
             priority_concerns = [
@@ -405,7 +609,6 @@ Format your response as JSON:
                 for issue in analysis.get('issues', [])[:3]
                 if issue.get('title')
             ]
-            confidence_level = 0.9
         
         # Transform issues using list comprehension
         identified_issues = [
@@ -427,6 +630,14 @@ Format your response as JSON:
             )
             for solution in solutions_data[:self.config.max_solutions]
         ]
+
+        confidence_level = self._estimate_confidence(
+            analysis,
+            question=question,
+            issues=identified_issues,
+            solutions=proposed_solutions,
+            priority_concerns=[str(item) for item in priority_concerns if item],
+        )
         
         # Determine health status using severity mapping
         health_status = self._compute_health_status(identified_issues)
