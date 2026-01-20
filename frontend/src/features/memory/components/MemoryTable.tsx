@@ -10,7 +10,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/shar
 import { ConfidenceBadge } from './ConfidenceBadge';
 import { SourceBadge } from './SourceBadge';
 import { MemoryForm } from './MemoryForm';
-import { isMemoryEdited } from '../lib/memoryFlags';
+import { getMemoryEditorDisplayName, isMemoryEdited } from '../lib/memoryFlags';
 import type { Memory, MemoryFilters, FeedbackType } from '../types';
 
 interface MemoryTableProps {
@@ -78,29 +78,6 @@ function buildPaginationItems(totalPages: number, currentPage: number): Paginati
   });
 
   return items;
-}
-
-function getEditedByName(memory: Memory): string | null {
-  const metadata = memory.metadata ?? {};
-  const candidates = [
-    (metadata as Record<string, unknown>).edited_by,
-    (metadata as Record<string, unknown>).edited_by_name,
-    (metadata as Record<string, unknown>).updated_by,
-    (metadata as Record<string, unknown>).updated_by_name,
-  ];
-
-  for (const candidate of candidates) {
-    if (typeof candidate === 'string' && candidate.trim()) {
-      return candidate.trim();
-    }
-  }
-
-  const reviewedBy = (memory as Memory & { reviewed_by?: string | null }).reviewed_by;
-  if (typeof reviewedBy === 'string' && reviewedBy.trim()) {
-    return reviewedBy.trim();
-  }
-
-  return null;
 }
 
 export default function MemoryTable({
@@ -326,8 +303,8 @@ export default function MemoryTable({
             <AnimatePresence>
               {sortedMemories.map((memory, index) => {
                 const isEdited = isMemoryEdited(memory);
-                const editedBy = getEditedByName(memory);
-                const editedLabel = `Edited by ${editedBy ?? 'admin'}`;
+                const editedBy = getMemoryEditorDisplayName(memory);
+                const editedLabel = editedBy ? `Edited by ${editedBy}` : 'Edited by admin';
 
                 return (
                   <motion.tr

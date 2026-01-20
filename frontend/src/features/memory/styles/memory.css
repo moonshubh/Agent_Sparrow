@@ -3619,16 +3619,27 @@
 }
 
 .node-related-item {
-  padding: 12px;
+  padding: 12px 12px 12px 24px;
   background: rgba(255, 255, 255, 0.03);
   border: 1px solid rgba(255, 255, 255, 0.06);
   border-radius: var(--memory-radius-sm);
 }
 
 .node-related-item.is-edited {
-  border-color: rgba(245, 158, 11, 0.22);
-  background: rgba(245, 158, 11, 0.06);
-  box-shadow: inset 3px 0 0 rgba(245, 158, 11, 0.55);
+  position: relative;
+  border-color: rgba(16, 185, 129, 0.4);
+}
+
+.node-related-item.is-edited::before {
+  content: '';
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--memory-success);
+  box-shadow: 0 0 0 6px rgba(16, 185, 129, 0.12);
 }
 
 .node-related-item-top {
@@ -3862,12 +3873,11 @@
 }
 
 .memory-row.is-edited {
-  background: rgba(16, 185, 129, 0.08);
-  box-shadow: inset 3px 0 0 rgba(16, 185, 129, 0.6);
+  /* keep row neutral; badge conveys edit state */
 }
 
 .memory-row.is-edited:hover {
-  background: rgba(16, 185, 129, 0.12);
+  background: var(--memory-surface-hover);
 }
 
 .memory-row.is-focused {
@@ -3948,10 +3958,6 @@
   -webkit-box-orient: vertical;
   overflow: hidden;
   word-break: break-word;
-}
-
-.memory-row.is-edited .memory-content-text {
-  color: var(--memory-success);
 }
 
 .memory-row.is-edited .memory-content-tooltip-target {
