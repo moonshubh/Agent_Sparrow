@@ -40,6 +40,7 @@ import type {
   ImportZendeskTaggedResponse,
   ApproveMemoryResponse,
   ListMemoriesRequest,
+  ListMemoriesResponse,
   EntityType,
   ReviewStatus,
   UpdateRelationshipRequest,
@@ -433,7 +434,7 @@ export async function getMemoryStats(): Promise<MemoryStats> {
  */
 export async function listMemories(
   params: ListMemoriesRequest = {}
-): Promise<Memory[]> {
+): Promise<ListMemoriesResponse> {
   const {
     limit = API_LIMITS.DEFAULT_MEMORIES,
     offset = 0,
@@ -456,14 +457,27 @@ export async function listMemories(
       review_status: review_status || undefined,
       sort_order,
     });
-    return apiClient.get<Memory[]>(`${MEMORY_API_BASE}/list${qs}`);
+    const response = await apiClient.get<ListMemoriesResponse>(
+      `${MEMORY_API_BASE}/list${qs}`
+    );
+
+    if (!Array.isArray(response.items) || typeof response.total !== 'number') {
+      throw new Error('Unexpected memory list response shape');
+    }
+
+    return {
+      items: response.items,
+      total: response.total,
+      limit: typeof response.limit === 'number' ? response.limit : limit,
+      offset: typeof response.offset === 'number' ? response.offset : offset,
+    };
   }
 
   const ascending = sort_order === 'asc';
 
   let query = supabase
     .from('memories')
-    .select(MEMORY_SELECT_COLUMNS)
+    .select(MEMORY_SELECT_COLUMNS, { count: 'exact' })
     .order('created_at', { ascending })
     .range(offset, offset + limit - 1);
 
@@ -480,14 +494,19 @@ export async function listMemories(
     query = query.eq('review_status', review_status);
   }
 
-  const { data, error } = await query;
+  const { data, error, count } = await query;
 
   if (error) {
     console.error('Error listing memories:', error);
     throw new Error(error.message);
   }
 
-  return (data || []) as Memory[];
+  return {
+    items: (data || []) as Memory[],
+    total: typeof count === 'number' ? count : (data || []).length,
+    limit,
+    offset,
+  };
 }
 
 /**

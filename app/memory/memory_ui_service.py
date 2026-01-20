@@ -606,6 +606,63 @@ class MemoryUIService:
             logger.error("Failed to list memories: %s", exc)
             raise
 
+    async def list_memories_with_total(
+        self,
+        agent_id: Optional[str] = None,
+        tenant_id: Optional[str] = None,
+        source_type: Optional[str] = None,
+        limit: int = 50,
+        offset: int = 0,
+        sort_order: str = "desc",
+    ) -> tuple[List[Dict[str, Any]], int]:
+        """
+        List memories with optional filters and an exact total count.
+
+        Returns:
+            Tuple of (memory records, total count).
+        """
+        supabase = self._get_supabase()
+
+        sort_order_norm = (sort_order or "desc").lower()
+        if sort_order_norm not in ("asc", "desc"):
+            sort_order_norm = "desc"
+
+        def apply_filters(query):
+            if agent_id:
+                query = query.eq("agent_id", agent_id)
+            if tenant_id:
+                query = query.eq("tenant_id", tenant_id)
+            if source_type:
+                query = query.eq("source_type", source_type)
+            return query
+
+        try:
+            data_query = apply_filters(
+                supabase.client.table("memories").select(self.MEMORY_SELECT_COLUMNS)
+            ).order("created_at", desc=sort_order_norm == "desc").range(
+                offset, offset + limit - 1
+            )
+
+            count_query = apply_filters(
+                supabase.client.table("memories").select("id", count="exact", head=True)
+            )
+
+            data_response = await supabase._exec(lambda: data_query.execute())
+            count_response = await supabase._exec(lambda: count_query.execute())
+
+            memories = data_response.data if data_response.data else []
+            total = int(count_response.count or 0)
+
+            logger.debug(
+                "Listed %d memories (total=%d)",
+                len(memories),
+                total,
+            )
+            return memories, total
+        except Exception as exc:
+            logger.error("Failed to list memories with total: %s", exc)
+            raise
+
     async def search_memories(
         self,
         query: str,

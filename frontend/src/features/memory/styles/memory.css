@@ -3862,12 +3862,12 @@
 }
 
 .memory-row.is-edited {
-  background: rgba(245, 158, 11, 0.04);
-  box-shadow: inset 3px 0 0 rgba(245, 158, 11, 0.55);
+  background: rgba(16, 185, 129, 0.08);
+  box-shadow: inset 3px 0 0 rgba(16, 185, 129, 0.6);
 }
 
 .memory-row.is-edited:hover {
-  background: rgba(245, 158, 11, 0.06);
+  background: rgba(16, 185, 129, 0.12);
 }
 
 .memory-row.is-focused {
@@ -3894,8 +3894,48 @@
   vertical-align: middle;
 }
 
+.memory-th-index {
+  width: 56px;
+  text-align: center;
+  cursor: default;
+}
+
+.memory-td-index {
+  text-align: center;
+  color: var(--memory-text-muted);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.memory-index-number {
+  display: inline-flex;
+  min-width: 24px;
+  justify-content: center;
+}
+
 .memory-td-content {
   max-width: 400px;
+}
+
+.memory-content-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.memory-edited-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  background: rgba(16, 185, 129, 0.18);
+  border: 1px solid rgba(16, 185, 129, 0.45);
+  color: var(--memory-success);
 }
 
 .memory-content-text {
@@ -3911,7 +3951,11 @@
 }
 
 .memory-row.is-edited .memory-content-text {
-  color: rgba(245, 158, 11, 0.95);
+  color: var(--memory-success);
+}
+
+.memory-row.is-edited .memory-content-tooltip-target {
+  cursor: help;
 }
 
 .memory-retrieval-count {
@@ -3981,6 +4025,7 @@
   justify-content: center;
   gap: 12px;
   padding: 20px;
+  flex-wrap: wrap;
 }
 
 .memory-pagination-btn {
@@ -4002,6 +4047,42 @@
 .memory-pagination-btn:disabled {
   opacity: 0.4;
   cursor: not-allowed;
+}
+
+.memory-pagination-pages {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.memory-pagination-page {
+  min-width: 32px;
+  height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--memory-border);
+  border-radius: var(--memory-radius-sm);
+  background: var(--memory-surface);
+  color: var(--memory-text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+  transition: var(--memory-transition-fast);
+}
+
+.memory-pagination-page:hover {
+  border-color: var(--memory-primary);
+  color: var(--memory-primary);
+}
+
+.memory-pagination-page.is-active {
+  border-color: var(--memory-primary);
+  color: var(--memory-primary);
+  background: var(--memory-primary-muted);
+}
+
+.memory-pagination-ellipsis {
+  color: var(--memory-text-muted);
+  font-size: 12px;
+  padding: 0 4px;
 }
 
 .memory-pagination-info {

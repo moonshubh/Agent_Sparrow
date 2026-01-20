@@ -23,6 +23,7 @@ import type {
   SubmitFeedbackRequest,
   FeedbackType,
   ListMemoriesRequest,
+  ListMemoriesResponse,
   ImportMemorySourcesRequest,
   UpdateRelationshipRequest,
   MergeRelationshipsRequest,
@@ -117,11 +118,19 @@ export function useMemoryGraph(options?: {
 /**
  * Hook to fetch list of memories
  */
-export function useMemories(params?: ListMemoriesRequest) {
-  return useQuery({
+export function useMemories(
+  params?: ListMemoriesRequest,
+  options?: {
+    enabled?: boolean;
+    onSuccess?: (data: ListMemoriesResponse) => void;
+  }
+) {
+  return useQuery<ListMemoriesResponse>({
     queryKey: memoryKeys.list(params || {}),
     queryFn: () => memoryAPI.listMemories(params),
     staleTime: 30 * 1000,
+    enabled: options?.enabled ?? true,
+    onSuccess: options?.onSuccess,
   });
 }
 

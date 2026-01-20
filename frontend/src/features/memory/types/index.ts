@@ -333,6 +333,13 @@ export interface SplitRelationshipCommitRequest {
 // API Response Types
 // =============================================================================
 
+export interface ListMemoriesResponse {
+  items: Memory[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
 export interface AddMemoryResponse {
   id: string;
   content: string;
