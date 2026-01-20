@@ -48,6 +48,9 @@ export interface Memory {
   content: string;
   metadata: Record<string, unknown>;
   source_type: SourceType;
+  review_status?: string | null;
+  reviewed_by?: string | null;
+  reviewed_at?: string | null;
   confidence_score: number;
   retrieval_count: number;
   last_retrieved_at: string | null;

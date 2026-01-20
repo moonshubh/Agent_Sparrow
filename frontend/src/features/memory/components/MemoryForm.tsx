@@ -24,6 +24,7 @@ import { useAddMemory, useUpdateMemory } from '../hooks';
 import type { Memory, SourceType } from '../types';
 import { SourceBadge } from './SourceBadge';
 import { useAuth } from '@/shared/contexts/AuthContext';
+import { ADMIN_EDITOR_EMAILS } from '../lib/memoryFlags';
 
 interface MemoryFormProps {
   onClose: () => void;
@@ -79,6 +80,7 @@ export function MemoryForm({ onClose, onSuccess, memory }: MemoryFormProps) {
   const updateMemory = useUpdateMemory();
   const isSaving = isEditMode ? updateMemory.isPending : addMemory.isPending;
   const editorName = useMemo(() => getUserDisplayName(user), [user]);
+  const editorEmail = useMemo(() => (user?.email ? user.email.toLowerCase() : null), [user]);
 
   // Insert formatting at cursor
   const insertFormat = useCallback((prefix: string, suffix: string = '') => {
@@ -169,9 +171,18 @@ export function MemoryForm({ onClose, onSuccess, memory }: MemoryFormProps) {
           }
         }
 
+        const metadataBase = isPlainMetadata(parsedMetadata) ? parsedMetadata : {};
+        const isAllowedEditor = editorEmail ? ADMIN_EDITOR_EMAILS.has(editorEmail) : false;
         const metadataWithEditor =
-          isEditMode && editorName
-            ? { ...(isPlainMetadata(parsedMetadata) ? parsedMetadata : {}), edited_by: editorName }
+          isEditMode && isAllowedEditor
+            ? {
+                ...metadataBase,
+                edited_by: editorName || editorEmail,
+                edited_by_email: editorEmail,
+                edited_by_name: editorName || editorEmail,
+                updated_by_email: editorEmail,
+                updated_by: editorName || editorEmail,
+              }
             : parsedMetadata;
 
         if (isEditMode && memory) {
@@ -197,7 +208,19 @@ export function MemoryForm({ onClose, onSuccess, memory }: MemoryFormProps) {
         setError(err instanceof Error ? err.message : defaultMessage);
       }
     },
-    [content, sourceType, metadata, addMemory, updateMemory, isEditMode, memory, editorName, onSuccess, onClose]
+    [
+      content,
+      sourceType,
+      metadata,
+      addMemory,
+      updateMemory,
+      isEditMode,
+      memory,
+      editorName,
+      editorEmail,
+      onSuccess,
+      onClose,
+    ]
   );
 
   const metadataKeyCount = useMemo(() => {

@@ -3199,6 +3199,7 @@ async def update_memory(
             memory_id=memory_id,
             content=content,
             metadata=metadata,
+            reviewer_id=UUID(admin_user.sub) if admin_user.sub else None,
         )
 
         updated_at = result.get("updated_at")

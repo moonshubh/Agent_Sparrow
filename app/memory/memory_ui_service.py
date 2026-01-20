@@ -36,9 +36,9 @@ class MemoryUIService:
 
     # Avoid selecting the 3072-dim `embedding` column unless explicitly needed.
     MEMORY_SELECT_COLUMNS = (
-        "id,content,metadata,source_type,confidence_score,retrieval_count,last_retrieved_at,"
-        "feedback_positive,feedback_negative,resolution_success_count,resolution_failure_count,"
-        "agent_id,tenant_id,created_at,updated_at"
+        "id,content,metadata,source_type,review_status,reviewed_by,reviewed_at,confidence_score,"
+        "retrieval_count,last_retrieved_at,feedback_positive,feedback_negative,"
+        "resolution_success_count,resolution_failure_count,agent_id,tenant_id,created_at,updated_at"
     )
 
     def __init__(self) -> None:
@@ -202,6 +202,7 @@ class MemoryUIService:
         memory_id: UUID,
         content: str,
         metadata: Dict[str, Any],
+        reviewer_id: Optional[UUID] = None,
     ) -> Dict[str, Any]:
         """
         Update an existing memory, regenerating embedding if content changed.
@@ -253,6 +254,10 @@ class MemoryUIService:
             "metadata": metadata or {},
             "updated_at": datetime.now(timezone.utc).isoformat(),
         }
+
+        if reviewer_id:
+            update_payload["reviewed_by"] = str(reviewer_id)
+            update_payload["reviewed_at"] = datetime.now(timezone.utc).isoformat()
 
         # Regenerate embedding if content changed
         if content != existing_content:
