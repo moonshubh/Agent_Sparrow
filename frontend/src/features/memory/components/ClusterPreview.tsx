@@ -73,11 +73,6 @@ export function ClusterPreview({
     requestIdRef.current += 1;
     const requestId = requestIdRef.current;
 
-    if (requestIdRef.current !== requestId) return;
-    setError(null);
-    setPreview(null);
-    setClusters([]);
-
     previewMutation.mutate(
       {
         relationshipId,
@@ -89,6 +84,12 @@ export function ClusterPreview({
         },
       },
       {
+        onMutate: () => {
+          if (requestIdRef.current !== requestId) return;
+          setError(null);
+          setPreview(null);
+          setClusters([]);
+        },
         onSuccess: (data) => {
           if (requestIdRef.current !== requestId) return;
           setError(null);
@@ -112,7 +113,7 @@ export function ClusterPreview({
         },
       }
     );
-  }, [open, previewMutation.mutate, relationshipId]);
+  }, [open, previewMutation, relationshipId]);
 
   const existingRelationshipCount = preview?.existing_relationship_ids?.length ?? 0;
 

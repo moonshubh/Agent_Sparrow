@@ -46,6 +46,63 @@ function toFiltersSortBy(field: keyof Memory): MemoryFilters['sortBy'] | null {
   }
 }
 
+type PaginationItem = number | 'ellipsis';
+const EMPTY_MEMORIES: Memory[] = [];
+
+function buildPaginationItems(totalPages: number, currentPage: number): PaginationItem[] {
+  const pages = new Set<number>();
+  const current = currentPage + 1;
+  const lastPage = Math.max(1, totalPages);
+
+  for (let pageNumber = 1; pageNumber <= Math.min(3, lastPage); pageNumber += 1) {
+    pages.add(pageNumber);
+  }
+
+  pages.add(lastPage);
+  pages.add(current);
+  pages.add(Math.max(1, current - 1));
+  pages.add(Math.min(lastPage, current + 1));
+
+  const sorted = Array.from(pages)
+    .filter((pageNumber) => pageNumber >= 1 && pageNumber <= lastPage)
+    .sort((a, b) => a - b);
+  const items: PaginationItem[] = [];
+  let previous = 0;
+
+  sorted.forEach((pageNumber) => {
+    if (previous && pageNumber - previous > 1) {
+      items.push('ellipsis');
+    }
+    items.push(pageNumber);
+    previous = pageNumber;
+  });
+
+  return items;
+}
+
+function getEditedByName(memory: Memory): string | null {
+  const metadata = memory.metadata ?? {};
+  const candidates = [
+    (metadata as Record<string, unknown>).edited_by,
+    (metadata as Record<string, unknown>).edited_by_name,
+    (metadata as Record<string, unknown>).updated_by,
+    (metadata as Record<string, unknown>).updated_by_name,
+  ];
+
+  for (const candidate of candidates) {
+    if (typeof candidate === 'string' && candidate.trim()) {
+      return candidate.trim();
+    }
+  }
+
+  const reviewedBy = (memory as Memory & { reviewed_by?: string | null }).reviewed_by;
+  if (typeof reviewedBy === 'string' && reviewedBy.trim()) {
+    return reviewedBy.trim();
+  }
+
+  return null;
+}
+
 export default function MemoryTable({
   searchQuery,
   filters,
@@ -58,7 +115,7 @@ export default function MemoryTable({
   const [localSortOrder, setLocalSortOrder] = useState<'asc' | 'desc'>('desc');
   const [selectedMemory, setSelectedMemory] = useState<Memory | null>(null);
   const [editingMemory, setEditingMemory] = useState<Memory | null>(null);
-  const [page, setPage] = useState(0);
+  const [listPage, setListPage] = useState(0);
   const pageSize = 20;
 
   const isControlledSort = Boolean(filters && onSortChange);
@@ -73,18 +130,35 @@ export default function MemoryTable({
     { enabled: Boolean(searchQuery && searchQuery.length >= 2) }
   );
 
-  const { data: listResults, isLoading: listLoading, error: listError } = useMemories({
-    limit: pageSize,
-    offset: page * pageSize,
-    source_type: filters?.sourceType || undefined,
-    sort_order: sortField === 'created_at' ? sortOrder : 'desc',
-  });
+  const isUsingSearch = Boolean(searchQuery && searchQuery.length >= 2);
+
+  const { data: listResults, isLoading: listLoading, error: listError } = useMemories(
+    {
+      limit: pageSize,
+      offset: listPage * pageSize,
+      source_type: filters?.sourceType || undefined,
+      sort_order: sortField === 'created_at' ? sortOrder : 'desc',
+    },
+    {
+      enabled: !isUsingSearch,
+      onSuccess: (data) => {
+        const nextTotalPages = Math.max(1, Math.ceil(data.total / pageSize));
+        setListPage((current) => Math.min(current, nextTotalPages - 1));
+      },
+    }
+  );
 
   // Use search when query is at least 2 characters, otherwise use list
-  const isUsingSearch = Boolean(searchQuery && searchQuery.length >= 2);
-  const memories = isUsingSearch ? searchResults : listResults;
+  const page = isUsingSearch ? 0 : listPage;
+  const listMemories = listResults?.items ?? EMPTY_MEMORIES;
+  const searchMemories = searchResults ?? EMPTY_MEMORIES;
+  const memories = useMemo(
+    () => (isUsingSearch ? searchMemories : listMemories),
+    [isUsingSearch, listMemories, searchMemories]
+  );
   const isLoading = isUsingSearch ? searchLoading : listLoading;
   const loadError = isUsingSearch ? searchError : listError;
+  const pageOffset = isUsingSearch ? 0 : page * pageSize;
 
   const focusedMemoryQuery = useMemory(focusMemoryId ?? '', {
     enabled: Boolean(focusMemoryId),
@@ -126,10 +200,18 @@ export default function MemoryTable({
     });
   }, [focusMemoryId, memoriesWithFocus, sortField, sortOrder]);
 
+  const listTotal = listResults?.total ?? listMemories.length;
+  const totalCount = isUsingSearch ? searchMemories.length : listTotal;
+  const totalPages = Math.max(1, Math.ceil(totalCount / pageSize));
+  const paginationItems = useMemo(
+    () => buildPaginationItems(totalPages, page),
+    [page, totalPages]
+  );
+
   // Toggle sort
   const handleSort = useCallback(
     (field: keyof Memory) => {
-      setPage(0);
+      setListPage(0);
 
       if (isControlledSort && filters && onSortChange) {
         const sortBy = toFiltersSortBy(field);
@@ -221,6 +303,7 @@ export default function MemoryTable({
         <table className="memory-table">
           <thead>
             <tr>
+              <th className="memory-th-index">#</th>
               <th className="memory-th-content">Content</th>
               <th className="memory-th-confidence" onClick={() => handleSort('confidence_score')}>
                 Confidence {renderSortIcon('confidence_score')}
@@ -241,111 +324,163 @@ export default function MemoryTable({
           </thead>
           <tbody>
             <AnimatePresence>
-              {sortedMemories.map((memory, index) => (
-                <motion.tr
-                  key={memory.id}
-                  initial={{ opacity: 0, y: 10 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0, x: -20 }}
-                  transition={{ delay: index * 0.03 }}
-                  className={`memory-row ${isMemoryEdited(memory) ? 'is-edited' : ''} ${focusMemoryId === memory.id ? 'is-focused' : ''}`}
-                >
-                  <td className="memory-td-content">
-                    <p className="memory-content-text">{memory.content}</p>
-                  </td>
-                  <td className="memory-td-confidence">
-                    <ConfidenceBadge score={memory.confidence_score} />
-                  </td>
-                  <td className="memory-td-source">
-                    <SourceBadge sourceType={memory.source_type} />
-                  </td>
-                  <td className="memory-td-retrievals">
-                    <span className="memory-retrieval-count">{memory.retrieval_count}</span>
-                  </td>
-                  <td className="memory-td-date">
-                    <span className="memory-date">{formatDate(memory.created_at)}</span>
-                  </td>
-                  <td className="memory-td-actions">
-                    <div className="memory-actions">
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <button
-                            className="memory-action-icon memory-action-success"
-                            onClick={() => handleFeedback(memory.id, 'thumbs_up')}
-                            aria-label="Mark as helpful"
-                            disabled={submitFeedback.isPending}
-                          >
-                            <ThumbsUp size={14} />
-                          </button>
-                        </TooltipTrigger>
-                        <TooltipContent className="memory-tooltip-content" side="top">
-                          👍 {memory.feedback_positive} · 👎 {memory.feedback_negative}
-                        </TooltipContent>
-                      </Tooltip>
+              {sortedMemories.map((memory, index) => {
+                const isEdited = isMemoryEdited(memory);
+                const editedBy = getEditedByName(memory);
+                const editedLabel = `Edited by ${editedBy ?? 'admin'}`;
 
-                      <Tooltip>
-                        <TooltipTrigger asChild>
+                return (
+                  <motion.tr
+                    key={memory.id}
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, x: -20 }}
+                    transition={{ delay: index * 0.03 }}
+                    className={`memory-row ${isEdited ? 'is-edited' : ''} ${focusMemoryId === memory.id ? 'is-focused' : ''}`}
+                  >
+                    <td className="memory-td-index">
+                      <span className="memory-index-number">{pageOffset + index + 1}</span>
+                    </td>
+                    <td className="memory-td-content">
+                      {isEdited ? (
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <div className="memory-content-tooltip-target">
+                              <div className="memory-content-header">
+                                <span className="memory-edited-badge">Edited</span>
+                              </div>
+                              <p className="memory-content-text">{memory.content}</p>
+                            </div>
+                          </TooltipTrigger>
+                          <TooltipContent className="memory-tooltip-content" side="top">
+                            {editedLabel}
+                          </TooltipContent>
+                        </Tooltip>
+                      ) : (
+                        <p className="memory-content-text">{memory.content}</p>
+                      )}
+                    </td>
+                    <td className="memory-td-confidence">
+                      <ConfidenceBadge score={memory.confidence_score} />
+                    </td>
+                    <td className="memory-td-source">
+                      <SourceBadge sourceType={memory.source_type} />
+                    </td>
+                    <td className="memory-td-retrievals">
+                      <span className="memory-retrieval-count">{memory.retrieval_count}</span>
+                    </td>
+                    <td className="memory-td-date">
+                      <span className="memory-date">{formatDate(memory.created_at)}</span>
+                    </td>
+                    <td className="memory-td-actions">
+                      <div className="memory-actions">
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <button
+                              className="memory-action-icon memory-action-success"
+                              onClick={() => handleFeedback(memory.id, 'thumbs_up')}
+                              aria-label="Mark as helpful"
+                              disabled={submitFeedback.isPending}
+                            >
+                              <ThumbsUp size={14} />
+                            </button>
+                          </TooltipTrigger>
+                          <TooltipContent className="memory-tooltip-content" side="top">
+                            👍 {memory.feedback_positive} · 👎 {memory.feedback_negative}
+                          </TooltipContent>
+                        </Tooltip>
+
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <button
+                              className="memory-action-icon memory-action-danger"
+                              onClick={() => handleFeedback(memory.id, 'thumbs_down')}
+                              aria-label="Mark as not helpful"
+                              disabled={submitFeedback.isPending}
+                            >
+                              <ThumbsDown size={14} />
+                            </button>
+                          </TooltipTrigger>
+                          <TooltipContent className="memory-tooltip-content" side="top">
+                            👍 {memory.feedback_positive} · 👎 {memory.feedback_negative}
+                          </TooltipContent>
+                        </Tooltip>
+
+                        <button
+                          className="memory-action-icon"
+                          onClick={() => {
+                            onClearFocus?.();
+                            setSelectedMemory(memory);
+                          }}
+                          title="View details"
+                        >
+                          <Eye size={14} />
+                        </button>
+                        {canEdit && (
                           <button
                             className="memory-action-icon memory-action-danger"
-                            onClick={() => handleFeedback(memory.id, 'thumbs_down')}
-                            aria-label="Mark as not helpful"
-                            disabled={submitFeedback.isPending}
+                            onClick={() => handleDelete(memory.id)}
+                            title="Delete memory"
+                            disabled={deleteMemory.isPending}
                           >
-                            <ThumbsDown size={14} />
+                            <Trash2 size={14} />
                           </button>
-                        </TooltipTrigger>
-                        <TooltipContent className="memory-tooltip-content" side="top">
-                          👍 {memory.feedback_positive} · 👎 {memory.feedback_negative}
-                        </TooltipContent>
-                      </Tooltip>
-
-                      <button
-                        className="memory-action-icon"
-                        onClick={() => {
-                          onClearFocus?.();
-                          setSelectedMemory(memory);
-                        }}
-                        title="View details"
-                      >
-                        <Eye size={14} />
-                      </button>
-                      {canEdit && (
-                        <button
-                          className="memory-action-icon memory-action-danger"
-                          onClick={() => handleDelete(memory.id)}
-                          title="Delete memory"
-                          disabled={deleteMemory.isPending}
-                        >
-                          <Trash2 size={14} />
-                        </button>
-                      )}
-                    </div>
-                  </td>
-                </motion.tr>
-              ))}
+                        )}
+                      </div>
+                    </td>
+                  </motion.tr>
+                );
+              })}
             </AnimatePresence>
           </tbody>
         </table>
       </TooltipProvider>
 
       {/* Pagination */}
-      {!searchQuery && (
+      {!isUsingSearch && (
         <div className="memory-pagination">
           <button
-            onClick={() => setPage((p) => Math.max(0, p - 1))}
+            onClick={() => setListPage((p) => Math.max(0, p - 1))}
             disabled={page === 0}
             className="memory-pagination-btn"
+            aria-label="Previous page"
           >
             Previous
           </button>
-          <span className="memory-pagination-info">Page {page + 1}</span>
+          <div className="memory-pagination-pages">
+            {paginationItems.map((item, idx) => {
+              if (item === 'ellipsis') {
+                return (
+                  <span key={`ellipsis-${idx}`} className="memory-pagination-ellipsis">
+                    ...
+                  </span>
+                );
+              }
+
+              const isActive = item === page + 1;
+              return (
+                <button
+                  key={`page-${item}`}
+                  onClick={() => setListPage(item - 1)}
+                  className={`memory-pagination-page ${isActive ? 'is-active' : ''}`}
+                  aria-current={isActive ? 'page' : undefined}
+                >
+                  {item}
+                </button>
+              );
+            })}
+          </div>
           <button
-            onClick={() => setPage((p) => p + 1)}
-            disabled={!memories || memories.length < pageSize}
+            onClick={() => setListPage((p) => p + 1)}
+            disabled={page >= totalPages - 1}
             className="memory-pagination-btn"
+            aria-label="Next page"
           >
             Next
           </button>
+          <span className="memory-pagination-info">
+            Page {page + 1} of {totalPages}
+          </span>
         </div>
       )}
 

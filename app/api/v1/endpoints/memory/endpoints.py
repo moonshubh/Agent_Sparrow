@@ -54,6 +54,7 @@ from .schemas import (
     DismissDuplicateResponse,
     MemoryStatsResponse,
     MemoryRecord,
+    MemoryListResponse,
     MemoryEntityRecord,
     MemoryRelationshipRecord,
     DuplicateCandidateRecord,
@@ -152,7 +153,7 @@ def _escape_like_pattern(value: str) -> str:
 
 @router.get(
     "/list",
-    response_model=List[MemoryRecord],
+    response_model=MemoryListResponse,
     summary="List memories",
     description="List memory records (read-only) for the Memory UI. Requires authentication.",
     responses={
@@ -170,9 +171,9 @@ async def list_memories(
     tenant_id: str | None = Query(default=None),
     source_type: str | None = Query(default=None),
     sort_order: Literal["asc", "desc"] = Query(default="desc"),
-) -> List[MemoryRecord]:
+) -> MemoryListResponse:
     try:
-        memories = await service.list_memories(
+        memories, total = await service.list_memories_with_total(
             agent_id=agent_id,
             tenant_id=tenant_id,
             source_type=source_type,
@@ -180,7 +181,12 @@ async def list_memories(
             offset=int(offset),
             sort_order=sort_order,
         )
-        return memories  # type: ignore[return-value]
+        return MemoryListResponse(
+            items=memories,
+            total=total,
+            limit=int(limit),
+            offset=int(offset),
+        )
     except Exception as exc:
         logger.exception("Error listing memories: %s", exc)
         raise HTTPException(
