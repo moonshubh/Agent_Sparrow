@@ -210,28 +210,57 @@ const safeJsonStringify = (value: unknown): string => {
   }
 };
 
-const normalizeUnknownError = (value: unknown): Error => {
-  if (value instanceof Error) return value;
-  if (typeof value === 'string' && value.trim()) return new Error(value.trim());
+const MAX_ERROR_LENGTH = 500;
 
-  if (isRecord(value)) {
-    const message =
+const TOKEN_LIMIT_PATTERNS = [
+  'token count exceeds',
+  'invalid string length',
+  'exceeds the maximum number of tokens',
+  'context length exceeded',
+];
+
+const isTokenLimitError = (message: string): boolean =>
+  TOKEN_LIMIT_PATTERNS.some((pattern) => message.toLowerCase().includes(pattern));
+
+const normalizeUnknownError = (value: unknown): Error => {
+  let message: string | undefined;
+
+  if (value instanceof Error) {
+    message = value.message;
+  } else if (typeof value === 'string' && value.trim()) {
+    message = value.trim();
+  } else if (isRecord(value)) {
+    const recordMessage =
       (typeof value.message === 'string' && value.message.trim()) ||
       (typeof value.error === 'string' && value.error.trim()) ||
       (typeof value.detail === 'string' && value.detail.trim()) ||
       undefined;
 
     const code = typeof value.code === 'string' && value.code.trim() ? value.code.trim() : undefined;
-    if (message) return new Error(code ? `${message} (${code})` : message);
-
-    const serialized = safeJsonStringify(value);
-    if (serialized && serialized !== '{}') return new Error(serialized);
+    if (recordMessage) {
+      message = code ? `${recordMessage} (${code})` : recordMessage;
+    } else {
+      const serialized = safeJsonStringify(value);
+      if (serialized && serialized !== '{}') message = serialized;
+    }
   }
 
-  const serialized = safeJsonStringify(value);
-  if (serialized && serialized !== '{}') return new Error(serialized);
+  if (!message) {
+    const serialized = safeJsonStringify(value);
+    if (serialized && serialized !== '{}') message = serialized;
+  }
 
-  return new Error('Agent run failed');
+  const resolved = message && message.trim() ? message.trim() : 'Agent run failed';
+
+  if (isTokenLimitError(resolved)) {
+    return new Error('The attached files are too large to process. Please try with smaller files.');
+  }
+
+  if (resolved.length > MAX_ERROR_LENGTH) {
+    return new Error(`${resolved.slice(0, MAX_ERROR_LENGTH)}...`);
+  }
+
+  return new Error(resolved);
 };
 
 const getStringFromRecord = (record: Record<string, unknown>, key: string): string | undefined => {
