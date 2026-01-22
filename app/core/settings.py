@@ -73,6 +73,15 @@ class Settings(BaseSettings):
     session_store_max_sessions: int = Field(default=100, alias="SESSION_STORE_MAX_SESSIONS")
     session_store_default_ttl: int = Field(default=3600, alias="SESSION_STORE_DEFAULT_TTL")
     session_store_cleanup_interval: int = Field(default=300, alias="SESSION_STORE_CLEANUP_INTERVAL")
+
+    # Workspace retention (Phase 1: keep N sessions per user)
+    workspace_max_sessions_per_user: int = Field(default=10, alias="WORKSPACE_MAX_SESSIONS_PER_USER")
+    workspace_prune_sessions_enabled: bool = Field(default=True, alias="WORKSPACE_PRUNE_SESSIONS_ENABLED")
+
+    # Subagent workspace bridge (Phase 1)
+    subagent_workspace_bridge_enabled: bool = Field(default=True, alias="SUBAGENT_WORKSPACE_BRIDGE_ENABLED")
+    subagent_report_read_limit_chars: int = Field(default=20000, alias="SUBAGENT_REPORT_READ_LIMIT_CHARS")
+    subagent_context_capsule_max_chars: int = Field(default=12000, alias="SUBAGENT_CONTEXT_CAPSULE_MAX_CHARS")
     
     # Legacy Redis configuration (kept for compatibility, not used in simplified deployment)
     redis_url: str = Field(default="redis://localhost:6379", alias="REDIS_URL")

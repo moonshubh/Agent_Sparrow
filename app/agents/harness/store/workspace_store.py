@@ -45,6 +45,7 @@ from loguru import logger
 class PersistenceScope(Enum):
     """Persistence scope for workspace files."""
     GLOBAL = "global"       # /playbooks/ - shared across all sessions
+    USER = "user"           # /user/ - per-user internal metadata (not exposed to agents)
     CUSTOMER = "customer"   # /customer/{id}/ - per-customer, cross-ticket
     SESSION = "session"     # /scratch/, /knowledge/ - per-ticket ephemeral
 
@@ -52,6 +53,7 @@ class PersistenceScope(Enum):
 # Path-to-scope routing rules
 SCOPE_ROUTING: Dict[str, PersistenceScope] = {
     "playbooks": PersistenceScope.GLOBAL,
+    "user": PersistenceScope.USER,
     "customer": PersistenceScope.CUSTOMER,
     "scratch": PersistenceScope.SESSION,
     "knowledge": PersistenceScope.SESSION,
@@ -151,6 +153,7 @@ class SparrowWorkspaceStore(BaseStore if _LANGGRAPH_STORE_AVAILABLE else object)
     def __init__(
         self,
         session_id: str,
+        user_id: Optional[str] = None,
         customer_id: Optional[str] = None,
         supabase_client: Optional["SupabaseClient"] = None,
     ) -> None:
@@ -158,12 +161,16 @@ class SparrowWorkspaceStore(BaseStore if _LANGGRAPH_STORE_AVAILABLE else object)
 
         Args:
             session_id: The session ID for scoping workspace files (required).
+            user_id: Optional authenticated user id for user-scoped metadata (e.g.
+                     /user/* session registries). Session-scoped workspace prefixes
+                     remain keyed by session_id for backward compatibility.
             customer_id: Optional customer ID for customer-scoped paths.
                          Required if accessing /customer/ paths.
             supabase_client: Optional Supabase client. If not provided,
                              will be lazy-loaded from app.db.supabase.
         """
         self.session_id = session_id
+        self.user_id = user_id
         self.customer_id = customer_id
         self._client = supabase_client
         # Local cache for faster reads within same request
@@ -277,6 +284,7 @@ class SparrowWorkspaceStore(BaseStore if _LANGGRAPH_STORE_AVAILABLE else object)
 
         Example:
             ("playbooks",) -> "workspace:global:playbooks"
+            ("user", "sessions") -> "workspace:user:{user_id}:sessions"
             ("customer", "abc", "history") -> "workspace:customer:abc:history"
             ("progress",) -> "workspace:session:{session_id}:progress"
         """
@@ -288,6 +296,14 @@ class SparrowWorkspaceStore(BaseStore if _LANGGRAPH_STORE_AVAILABLE else object)
 
         if scope == PersistenceScope.GLOBAL:
             return f"workspace:global:{path}"
+        elif scope == PersistenceScope.USER:
+            if not self.user_id:
+                raise ValueError("user_id is required for user-scoped paths (/user/*)")
+            rest = namespace[1:] if len(namespace) > 1 and namespace[0] == "user" else namespace
+            rest_path = "/".join(rest)
+            if not rest_path:
+                raise ValueError("user-scoped namespace must include a sub-namespace (e.g. ('user','sessions'))")
+            return f"workspace:user:{self.user_id}:{rest_path}"
         elif scope == PersistenceScope.CUSTOMER:
             # For customer scope, extract customer_id from namespace or use stored one
             # Namespace format: ("customer", "{customer_id}", ...)
@@ -316,8 +332,10 @@ class SparrowWorkspaceStore(BaseStore if _LANGGRAPH_STORE_AVAILABLE else object)
 
         Handles all scope formats:
         - "workspace:global:playbooks" -> (("playbooks",), key)
+        - "workspace:user:{user_id}:sessions" -> (("user","sessions"), key)
         - "workspace:customer:abc:history" -> (("customer", "abc", "history"), key)
-        - "workspace:session:sess123:progress" -> (("progress",), key)
+        - "workspace:session:{user_id}:sess123:progress" -> (("progress",), key)
+        - "workspace:session:sess123:progress" -> (("progress",), key)  (legacy)
 
         Example:
             "workspace:session:sess123:progress", "notes.md" -> (("progress",), "notes.md")
@@ -332,6 +350,11 @@ class SparrowWorkspaceStore(BaseStore if _LANGGRAPH_STORE_AVAILABLE else object)
             # Format: workspace:global:{path}
             path = ":".join(parts[2:])
             namespace = tuple(path.split("/"))
+        elif scope == "user":
+            # Format: workspace:user:{user_id}:{path}
+            path = ":".join(parts[3:]) if len(parts) >= 4 else ""
+            path_parts = path.split("/") if path else []
+            namespace = ("user", *path_parts) if path_parts else ()
         elif scope == "customer":
             # Format: workspace:customer:{customer_id}:{path}
             customer_id = parts[2] if len(parts) >= 3 else ""
@@ -339,8 +362,13 @@ class SparrowWorkspaceStore(BaseStore if _LANGGRAPH_STORE_AVAILABLE else object)
             path_parts = path.split("/") if path else []
             namespace = ("customer", customer_id, *path_parts) if customer_id else ()
         else:  # session
-            # Format: workspace:session:{session_id}:{path}
-            if len(parts) >= 4:
+            # Formats:
+            # - workspace:session:{user_id}:{session_id}:{path}
+            # - workspace:session:{session_id}:{path} (legacy)
+            if len(parts) >= 5:
+                path = ":".join(parts[4:])
+                namespace = tuple(path.split("/"))
+            elif len(parts) >= 4:
                 path = ":".join(parts[3:])
                 namespace = tuple(path.split("/"))
             else:
@@ -568,24 +596,9 @@ class SparrowWorkspaceStore(BaseStore if _LANGGRAPH_STORE_AVAILABLE else object)
 
         # Search Supabase (store table: prefix, key, value, content_text)
         if self.client:
-            prefix_pattern = self._namespace_to_prefix(namespace_prefix)
+            prefix_pattern = None if not namespace_prefix else self._namespace_to_prefix(namespace_prefix)
             try:
-                # Build query with optional content search
-                db_query = (
-                    self.client.table(WORKSPACE_TABLE)
-                    .select("prefix, key, value, created_at, updated_at")
-                    .like("prefix", f"{prefix_pattern}%")
-                )
-
-                # Add content search if query provided (uses GIN index via ILIKE)
-                if query:
-                    # Note: ilike uses the GIN index on content_text column
-                    db_query = db_query.ilike("content_text", f"%{query}%")
-
-                # Apply pagination at DB level (not client-side)
-                response = db_query.limit(limit).offset(offset).execute()
-
-                for row in response.data or []:
+                def _append_row(row: Dict[str, Any]) -> None:
                     namespace, key = self._prefix_key_to_namespace(row["prefix"], row["key"])
                     value = row.get("value", {})
                     if isinstance(value, str):
@@ -596,12 +609,9 @@ class SparrowWorkspaceStore(BaseStore if _LANGGRAPH_STORE_AVAILABLE else object)
 
                     # Apply filter if provided
                     if filter_dict:
-                        match = all(
-                            value.get(k) == v
-                            for k, v in filter_dict.items()
-                        )
+                        match = all(value.get(k) == v for k, v in filter_dict.items())
                         if not match:
-                            continue
+                            return
 
                     created_at = row.get("created_at")
                     updated_at = row.get("updated_at")
@@ -611,11 +621,71 @@ class SparrowWorkspaceStore(BaseStore if _LANGGRAPH_STORE_AVAILABLE else object)
                             value=value,
                             key=key,
                             namespace=namespace,
-                            created_at=datetime.fromisoformat(created_at.replace("Z", "+00:00")) if created_at else datetime.now(timezone.utc),
-                            updated_at=datetime.fromisoformat(updated_at.replace("Z", "+00:00")) if updated_at else datetime.now(timezone.utc),
+                            created_at=datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+                            if created_at
+                            else datetime.now(timezone.utc),
+                            updated_at=datetime.fromisoformat(updated_at.replace("Z", "+00:00"))
+                            if updated_at
+                            else datetime.now(timezone.utc),
                             score=1.0,  # No semantic search, exact match
                         )
                     )
+
+                # Root search: query all accessible scopes (session/global/customer/user)
+                if prefix_pattern is None:
+                    prefix_patterns: list[str] = [
+                        f"workspace:session:{self.session_id}:",
+                        "workspace:global:",
+                    ]
+                    if self.user_id:
+                        prefix_patterns.append(f"workspace:user:{self.user_id}:")
+                        # Forward-compat: tolerate session prefixes that include user_id.
+                        prefix_patterns.append(f"workspace:session:{self.user_id}:{self.session_id}:")
+                    if self.customer_id:
+                        prefix_patterns.append(f"workspace:customer:{self.customer_id}:")
+
+                    fetched_rows: list[Dict[str, Any]] = []
+                    per_prefix_limit = min(200, max(limit + max(offset, 0), limit))
+
+                    for base in prefix_patterns:
+                        # Build query with optional content search
+                        db_query = (
+                            self.client.table(WORKSPACE_TABLE)
+                            .select("prefix, key, value, created_at, updated_at")
+                            .like("prefix", f"{base}%")
+                        )
+                        if query:
+                            db_query = db_query.ilike("content_text", f"%{query}%")
+
+                        response = db_query.limit(per_prefix_limit).execute()
+                        fetched_rows.extend(list(response.data or []))
+
+                    # Deterministic order across scopes (best-effort).
+                    fetched_rows.sort(
+                        key=lambda row: (row.get("updated_at") or row.get("created_at") or ""),
+                        reverse=True,
+                    )
+
+                    for row in fetched_rows:
+                        _append_row(row)
+                else:
+                    # Build query with optional content search
+                    db_query = (
+                        self.client.table(WORKSPACE_TABLE)
+                        .select("prefix, key, value, created_at, updated_at")
+                        .like("prefix", f"{prefix_pattern}%")
+                    )
+
+                    # Add content search if query provided (uses GIN index via ILIKE)
+                    if query:
+                        # Note: ilike uses the GIN index on content_text column
+                        db_query = db_query.ilike("content_text", f"%{query}%")
+
+                    # Apply pagination at DB level (not client-side)
+                    response = db_query.limit(limit).offset(offset).execute()
+
+                    for row in response.data or []:
+                        _append_row(row)
 
             except Exception as exc:
                 logger.warning("workspace_store_search_error", prefix=prefix_pattern, error=str(exc))
@@ -653,9 +723,14 @@ class SparrowWorkspaceStore(BaseStore if _LANGGRAPH_STORE_AVAILABLE else object)
                                 )
                             )
 
-        # Pagination already applied at DB level; only limit total results
-        # (cache items are extras, so we may have slightly more than limit)
-        final_results = results[:limit]
+        # Pagination already applied at DB level for scoped searches; only limit total results
+        # (cache items are extras, so we may have slightly more than limit). Root searches
+        # span multiple scopes, so apply the offset after merging.
+        safe_offset = max(offset, 0)
+        if namespace_prefix:
+            final_results = results[:limit]
+        else:
+            final_results = results[safe_offset : safe_offset + limit]
 
         # Observability: log workspace searches with scope and result count
         path = "/".join(namespace_prefix)
@@ -697,13 +772,14 @@ class SparrowWorkspaceStore(BaseStore if _LANGGRAPH_STORE_AVAILABLE else object)
             prefix_patterns = [
                 f"workspace:session:{self.session_id}%",  # Session scope
                 "workspace:global:%",  # Global scope (always accessible)
+                f"workspace:user:{self.user_id}:%" if self.user_id else None,  # User scope
             ]
 
             # Add customer scope if customer_id is set
             if self.customer_id:
                 prefix_patterns.append(f"workspace:customer:{self.customer_id}%")
 
-            for pattern in prefix_patterns:
+            for pattern in [p for p in prefix_patterns if p]:
                 try:
                     response = (
                         self.client.table(WORKSPACE_TABLE)
@@ -1022,7 +1098,10 @@ class SparrowWorkspaceStore(BaseStore if _LANGGRAPH_STORE_AVAILABLE else object)
         if normalized:
             namespace_prefix = tuple(normalized.split("/"))
         else:
-            namespace_prefix = ()
+            # Root listing: show a shallow view of all accessible scopes.
+            # Implemented as a multi-scope query because empty namespace prefixes
+            # cannot be routed via _namespace_to_prefix().
+            return await self._list_root_files(depth=depth)
 
         # Search with depth limit
         items = await self.asearch(namespace_prefix, limit=100)
@@ -1043,6 +1122,168 @@ class SparrowWorkspaceStore(BaseStore if _LANGGRAPH_STORE_AVAILABLE else object)
 
         return results
 
+    async def _list_root_files(self, depth: int = 2) -> List[Dict[str, Any]]:
+        """List files from the workspace root across all accessible scopes."""
+        results: List[Dict[str, Any]] = []
+
+        # Prefer Supabase for authoritative listing.
+        if self.client:
+            prefix_patterns: list[str] = []
+            prefix_patterns.append(f"workspace:session:{self.session_id}:")
+            if self.user_id:
+                prefix_patterns.append(f"workspace:user:{self.user_id}:")
+            prefix_patterns.append("workspace:global:")
+            if self.customer_id:
+                prefix_patterns.append(f"workspace:customer:{self.customer_id}:")
+
+            for base in prefix_patterns:
+                try:
+                    response = (
+                        self.client.table(WORKSPACE_TABLE)
+                        .select("prefix, key, value, created_at, updated_at")
+                        .like("prefix", f"{base}%")
+                        .limit(200)
+                        .execute()
+                    )
+                except Exception as exc:
+                    logger.warning("workspace_store_root_list_error", base=base, error=str(exc))
+                    continue
+
+                for row in response.data or []:
+                    namespace, key = self._prefix_key_to_namespace(row["prefix"], row["key"])
+                    created_at = row.get("created_at")
+                    updated_at = row.get("updated_at")
+
+                    # Filter by depth relative to root.
+                    if depth is not None and len(namespace) > depth:
+                        continue
+
+                    file_path = "/" + "/".join(namespace) + "/" + key if namespace else "/" + key
+                    results.append({
+                        "path": file_path,
+                        "key": key,
+                        "namespace": namespace,
+                        "updated_at": updated_at,
+                        "created_at": created_at,
+                    })
+
+        # Include cache entries not yet persisted.
+        for ns, items in self._cache.items():
+            if depth is not None and len(ns) > depth:
+                continue
+            for key, item in items.items():
+                file_path = "/" + "/".join(ns) + "/" + key if ns else "/" + key
+                if any(r["path"] == file_path for r in results):
+                    continue
+                results.append({
+                    "path": file_path,
+                    "key": key,
+                    "namespace": item.namespace,
+                    "updated_at": item.updated_at.isoformat() if item.updated_at else None,
+                    "created_at": item.created_at.isoformat() if item.created_at else None,
+                })
+
+        results.sort(key=lambda r: (r.get("path") or ""))
+        return results
+
+    # -------------------------------------------------------------------------
+    # Phase 1: Per-user session registry + pruning (keep N sessions per user)
+    # -------------------------------------------------------------------------
+
+    async def register_session(self) -> None:
+        """Register/update this session in the per-user session index."""
+        if not self.user_id:
+            return
+        now = datetime.now(timezone.utc).isoformat()
+        path = f"/user/sessions/{self.session_id}.json"
+        try:
+            existing = await self.read_file(path)
+            created_at = None
+            if existing:
+                try:
+                    parsed = json.loads(existing)
+                    if isinstance(parsed, dict):
+                        created_at = parsed.get("created_at")
+                except Exception:
+                    created_at = None
+            payload: Dict[str, Any] = {
+                "session_id": self.session_id,
+                "user_id": self.user_id,
+                "last_used_at": now,
+                "created_at": created_at or now,
+            }
+            await self.write_file(path, json.dumps(payload, ensure_ascii=False, indent=2))
+        except Exception as exc:
+            logger.warning("workspace_register_session_failed", session_id=self.session_id, error=str(exc))
+
+    async def prune_user_sessions(self, *, keep: int = 10) -> None:
+        """Prune session-scoped workspace data to keep only the newest N sessions per user."""
+        if not self.user_id:
+            return
+        keep = max(1, int(keep))
+        if not self.client:
+            return
+
+        entries: list[Any] = []
+        try:
+            page_size = 200
+            offset = 0
+            while True:
+                batch = await self.asearch(("user", "sessions"), limit=page_size, offset=offset)
+                if not batch:
+                    break
+                entries.extend(batch)
+                if len(batch) < page_size:
+                    break
+                offset += len(batch)
+        except Exception as exc:
+            logger.warning("workspace_list_user_sessions_failed", error=str(exc))
+            return
+
+        parsed: list[tuple[str, str]] = []
+        for item in entries or []:
+            session_key = item.key
+            session_id = session_key[:-5] if session_key.endswith(".json") else session_key
+            last_used_at = None
+            try:
+                value = item.value or {}
+                if isinstance(value, dict):
+                    last_used_at = value.get("last_used_at")
+            except Exception:
+                last_used_at = None
+            if not isinstance(last_used_at, str) or not last_used_at:
+                last_used_at = item.updated_at.isoformat() if getattr(item, "updated_at", None) else ""
+            parsed.append((session_id, last_used_at))
+
+        parsed.sort(key=lambda pair: pair[1], reverse=True)
+        to_delete = parsed[keep:]
+        if not to_delete:
+            return
+
+        for session_id, _ in to_delete:
+            await self._delete_session_workspace(session_id=session_id)
+            try:
+                await self.delete_file(f"/user/sessions/{session_id}.json")
+            except Exception:
+                pass
+
+    async def _delete_session_workspace(self, *, session_id: str) -> None:
+        """Delete all session-scoped workspace rows for a specific session_id."""
+        if not self.client:
+            return
+
+        patterns: list[str] = []
+        if self.user_id:
+            patterns.append(f"workspace:session:{self.user_id}:{session_id}:")
+        # Legacy pattern (pre user_id scoping)
+        patterns.append(f"workspace:session:{session_id}:")
+
+        for base in patterns:
+            try:
+                self.client.table(WORKSPACE_TABLE).delete().like("prefix", f"{base}%").execute()
+            except Exception as exc:
+                logger.warning("workspace_delete_session_failed", base=base, error=str(exc))
+
     # -------------------------------------------------------------------------
     # Session cleanup methods
     # -------------------------------------------------------------------------
@@ -1062,14 +1303,23 @@ class SparrowWorkspaceStore(BaseStore if _LANGGRAPH_STORE_AVAILABLE else object)
             self._cache.clear()
             return count
 
-        prefix_pattern = f"workspace:session:{self.session_id}%"
+        prefix_patterns = [f"workspace:session:{self.session_id}%"]
+        # Forward-compat: tolerate session prefixes that include user_id.
+        if self.user_id:
+            prefix_patterns.append(f"workspace:session:{self.user_id}:{self.session_id}%")
 
         try:
-            response = self.client.table(WORKSPACE_TABLE).delete().like(
-                "prefix", prefix_pattern
-            ).execute()
+            deleted_rows = []
+            for prefix_pattern in prefix_patterns:
+                response = (
+                    self.client.table(WORKSPACE_TABLE)
+                    .delete()
+                    .like("prefix", prefix_pattern)
+                    .execute()
+                )
+                deleted_rows.extend(list(response.data or []))
 
-            count = len(response.data) if response.data else 0
+            count = len(deleted_rows)
 
             # Also clear local cache
             self._cache.clear()

@@ -19,7 +19,14 @@ Usage:
 
 from __future__ import annotations
 
-from .sparrow_harness import create_sparrow_agent, SparrowAgentConfig
+try:  # pragma: no cover - import-time guard for optional deps
+    from .sparrow_harness import create_sparrow_agent, SparrowAgentConfig
+except Exception:  # pragma: no cover
+    import logging
+
+    logging.error("Failed to import sparrow_harness", exc_info=True)
+    create_sparrow_agent = None  # type: ignore[assignment]
+    SparrowAgentConfig = None  # type: ignore[assignment]
 
 __all__ = [
     "create_sparrow_agent",

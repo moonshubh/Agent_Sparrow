@@ -66,6 +66,7 @@ ATTACHMENT_MAX_SIZE_BYTES = 50_000  # 50KB per attachment summary
 # Rate limits per scope/identifier (per 60 second window)
 RATE_LIMITS = {
     "global": {"reads": 10, "writes": 0, "window_seconds": 60},    # Read-only
+    "user": {"reads": 10, "writes": 0, "window_seconds": 60},      # Internal metadata (read-only)
     "customer": {"reads": 20, "writes": 5, "window_seconds": 60},
     "session": {"reads": 100, "writes": 50, "window_seconds": 60},
 }
@@ -149,6 +150,8 @@ def _get_rate_limit_identifier(
     scope_value = getattr(scope, "value", str(scope))
     if scope_value == "session":
         return getattr(store, "session_id", "") or "unknown-session"
+    if scope_value == "user":
+        return getattr(store, "user_id", "") or "unknown-user"
     if scope_value == "customer":
         parts = path.strip("/").split("/")
         if len(parts) >= 2 and parts[1]:
@@ -297,6 +300,10 @@ def create_read_workspace_file(store: "SparrowWorkspaceStore"):
             if not _rate_limiter.check_and_record(scope.value, "reads", identifier):
                 return f"Rate limit exceeded for {scope.value} scope. Try again in 60 seconds."
 
+            # Internal user-scoped metadata is not exposed to agents.
+            if scope.value == "user":
+                return "Error: /user/ is internal and cannot be read via tools."
+
             # Enforce max limit
             limit = min(limit, MAX_READ_LIMIT_CHARS)
 
@@ -357,8 +364,8 @@ def create_write_workspace_file(store: "SparrowWorkspaceStore"):
             identifier = _get_rate_limit_identifier(scope, path, store)
 
             # Check if this is a read-only scope
-            if scope.value == "global":
-                return "Error: /playbooks/ is read-only. Cannot write to global scope."
+            if scope.value in {"global", "user"}:
+                return "Error: This workspace scope is read-only and cannot be written via tools."
 
             # Check rate limit
             if not _rate_limiter.check_and_record(scope.value, "writes", identifier):
@@ -418,11 +425,16 @@ def create_list_workspace_files(store: "SparrowWorkspaceStore"):
             if not _rate_limiter.check_and_record(scope.value, "reads", identifier):
                 return f"Rate limit exceeded for {scope.value} scope. Try again in 60 seconds."
 
+            if scope.value == "user":
+                return "Error: /user/ is internal and cannot be listed via tools."
+
             # Enforce max depth
             depth = min(depth, MAX_LIST_DEPTH)
 
             # List files
             files = await store.list_files(path, depth)
+            # /user/* is internal storage; never expose via tools (even via root listing).
+            files = [f for f in files if not str(f.get("path") or "").startswith("/user/")]
 
             if not files:
                 return f"No files found in {path}"
@@ -474,6 +486,9 @@ def create_search_workspace(store: "SparrowWorkspaceStore"):
             if not _rate_limiter.check_and_record(scope.value, "reads", identifier):
                 return f"Rate limit exceeded for {scope.value} scope. Try again in 60 seconds."
 
+            if scope.value == "user":
+                return "Error: /user/ is internal and cannot be searched via tools."
+
             # Enforce max limit
             limit = min(limit, MAX_SEARCH_LIMIT)
 
@@ -486,6 +501,8 @@ def create_search_workspace(store: "SparrowWorkspaceStore"):
 
             # Search with content query
             items = await store.asearch(namespace_prefix, query=query, limit=limit)
+            # /user/* is internal storage; never expose via tools (even via root search).
+            items = [item for item in items if not (getattr(item, "namespace", ())[:1] == ("user",))]
 
             if not items:
                 return f"No results found for '{query}' in {path}"
@@ -544,8 +561,8 @@ def create_append_workspace_file(store: "SparrowWorkspaceStore"):
             identifier = _get_rate_limit_identifier(scope, path, store)
 
             # Check if this is a read-only scope
-            if scope.value == "global":
-                return "Error: /playbooks/ is read-only. Cannot append to global scope."
+            if scope.value in {"global", "user"}:
+                return "Error: This workspace scope is read-only and cannot be written via tools."
 
             # Check rate limit
             if not _rate_limiter.check_and_record(scope.value, "writes", identifier):

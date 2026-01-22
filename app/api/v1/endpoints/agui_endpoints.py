@@ -938,6 +938,28 @@ async def agui_stream(
         graph_state.setdefault("use_server_memory", configurable.get("use_server_memory", False))
         # user_id already set in state_dict at line 514, no need for setdefault
 
+        # Phase 1: Register this session for the authenticated user and prune
+        # older session workspaces to keep storage bounded (default: 10 sessions/user).
+        try:  # pragma: no cover - best effort only
+            settings = get_settings()
+            if settings.workspace_prune_sessions_enabled:
+                from app.agents.harness.store import SparrowWorkspaceStore
+
+                forwarded_props = graph_state.get("forwarded_props") or {}
+                customer_id = None
+                if isinstance(forwarded_props, dict):
+                    customer_id = forwarded_props.get("customer_id") or forwarded_props.get("customerId")
+
+                workspace_store = SparrowWorkspaceStore(
+                    session_id=str(graph_state.get("session_id") or thread_id),
+                    user_id=str(user_id) if user_id else None,
+                    customer_id=customer_id,
+                )
+                await workspace_store.register_session()
+                await workspace_store.prune_user_sessions(keep=settings.workspace_max_sessions_per_user)
+        except Exception as exc:
+            logging.warning("workspace_session_prune_skipped", exc_info=True, extra={"error": str(exc)})
+
         logging.info(
             "agui_stream_normalized",
             extra={

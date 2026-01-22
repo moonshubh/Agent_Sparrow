@@ -595,6 +595,9 @@ def _build_deep_agent(state: GraphState, runtime: AgentRuntimeConfig):
 
     # Inject workspace tools so agents can read persisted context (e.g. playbooks,
     # similar scenarios, evicted tool results) without keeping large blobs in memory.
+    workspace_tools: list[Any] = []
+    workspace_store: Any | None = None
+    subagent_workspace_bridge: Any | None = None
     try:
         from app.agents.harness.store import SparrowWorkspaceStore
         from app.agents.unified.workspace_tools import (
@@ -606,12 +609,18 @@ def _build_deep_agent(state: GraphState, runtime: AgentRuntimeConfig):
         )
 
         session_id = getattr(state, "session_id", None) or getattr(state, "trace_id", None)
+        user_id = getattr(state, "user_id", None)
         forwarded = state.forwarded_props or {}
         customer_id = None
         if isinstance(forwarded, dict):
             customer_id = forwarded.get("customer_id") or forwarded.get("customerId")
 
-        store = SparrowWorkspaceStore(session_id=str(session_id), customer_id=customer_id)
+        store = SparrowWorkspaceStore(
+            session_id=str(session_id),
+            user_id=str(user_id) if user_id else None,
+            customer_id=customer_id,
+        )
+        workspace_store = store
         workspace_tools = [
             create_read_workspace_file(store),
             create_list_workspace_files(store),
@@ -629,8 +638,35 @@ def _build_deep_agent(state: GraphState, runtime: AgentRuntimeConfig):
         )
     except Exception as exc:
         logger.debug("workspace_tools_not_injected", error=str(exc)[:180])
+
+    # Phase 1: Claude Code–style subagent report persistence + deterministic ingestion.
+    if (
+        settings.subagent_workspace_bridge_enabled
+        and workspace_store is not None
+        and workspace_tools
+    ):
+        try:
+            from app.agents.unified.subagent_report_tools import (
+                create_mark_subagent_reports_read_tool,
+            )
+            from app.agents.unified.subagent_workspace_bridge_middleware import (
+                SubagentWorkspaceBridgeMiddleware,
+            )
+
+            tools.append(create_mark_subagent_reports_read_tool())
+            subagent_workspace_bridge = SubagentWorkspaceBridgeMiddleware(
+                workspace_store=workspace_store,
+                report_read_limit_chars=settings.subagent_report_read_limit_chars,
+                capsule_max_chars=settings.subagent_context_capsule_max_chars,
+            )
+        except Exception as exc:  # pragma: no cover - best effort only
+            logger.debug("subagent_workspace_bridge_unavailable", error=str(exc)[:180])
     logger.debug("tool_registry_selected", mode="support" if is_zendesk else "standard")
-    subagents = get_subagent_specs(provider=runtime.provider, zendesk=is_zendesk)
+    subagents = get_subagent_specs(
+        provider=runtime.provider,
+        zendesk=is_zendesk,
+        workspace_tools=workspace_tools,
+    )
 
     todo_prompt = TODO_PROMPT if "TODO_PROMPT" in globals() else ""
     # Build coordinator prompt with dynamic model identification
@@ -727,6 +763,8 @@ def _build_deep_agent(state: GraphState, runtime: AgentRuntimeConfig):
 
         # Phase 3: deterministically autoroute log attachments into per-file `task` calls.
         middleware_stack.append(LogAutorouteMiddleware())
+        if subagent_workspace_bridge is not None:
+            middleware_stack.append(subagent_workspace_bridge)
 
         coordinator_middleware = SubAgentMiddleware(
             default_model=chat_model,
@@ -1688,12 +1726,17 @@ async def run_unified_agent(state: GraphState, config: Optional[RunnableConfig] 
             if session_key:
                 from app.agents.harness.store import SparrowWorkspaceStore
 
+                user_id = getattr(state, "user_id", None)
                 forwarded = getattr(state, "forwarded_props", {}) or {}
                 customer_id = None
                 if isinstance(forwarded, dict):
                     customer_id = forwarded.get("customer_id") or forwarded.get("customerId")
 
-                workspace_store = SparrowWorkspaceStore(session_id=session_key, customer_id=customer_id)
+                workspace_store = SparrowWorkspaceStore(
+                    session_id=session_key,
+                    user_id=str(user_id) if user_id else None,
+                    customer_id=customer_id,
+                )
                 migrated = await maybe_ingest_legacy_handoff(state=state, workspace_store=workspace_store)
                 if migrated:
                     emitter.add_trace_step(

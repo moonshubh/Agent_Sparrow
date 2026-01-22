@@ -2152,13 +2152,18 @@ class StreamEventHandler:
                 or getattr(self.state, "trace_id", None)
                 or "unknown"
             )
+            user_id = getattr(self.state, "user_id", None)
             forwarded = getattr(self.state, "forwarded_props", {}) or {}
             customer_id = None
             if isinstance(forwarded, dict):
                 customer_id = forwarded.get("customer_id") or forwarded.get("customerId")
 
             stored_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-            store = SparrowWorkspaceStore(session_id=str(session_id), customer_id=customer_id)
+            store = SparrowWorkspaceStore(
+                session_id=str(session_id),
+                user_id=str(user_id) if user_id else None,
+                customer_id=customer_id,
+            )
 
             async def _write() -> None:
                 try:
