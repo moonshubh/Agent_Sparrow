@@ -1264,8 +1264,12 @@ class SparrowWorkspaceStore(BaseStore if _LANGGRAPH_STORE_AVAILABLE else object)
             await self._delete_session_workspace(session_id=session_id)
             try:
                 await self.delete_file(f"/user/sessions/{session_id}.json")
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning(
+                    "workspace_session_index_delete_failed",
+                    session_id=session_id,
+                    error=str(exc),
+                )
 
     async def _delete_session_workspace(self, *, session_id: str) -> None:
         """Delete all session-scoped workspace rows for a specific session_id."""

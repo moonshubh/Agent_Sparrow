@@ -37,6 +37,15 @@ def _to_serializable(value: Any) -> Any:
     return value
 
 
+def _require_agent_graph() -> Any:
+    if agent_graph is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Agent graph unavailable; install optional dependencies.",
+        )
+    return agent_graph
+
+
 class HumanDecisionPayload(BaseModel):
     """Payload describing a supervisor decision for resuming an interrupt."""
 
@@ -120,12 +129,13 @@ async def _run_graph_step(
 ) -> tuple[Dict[str, Any] | None, List[Dict[str, Any]] | None]:
     """Execute the graph until completion or interrupt."""
     interrupts: List[Dict[str, Any]] | None = None
-    async for event in agent_graph.astream(run_input, config=config, stream_mode="values"):
+    graph = _require_agent_graph()
+    async for event in graph.astream(run_input, config=config, stream_mode="values"):
         if "__interrupt__" in event:
             raw_interrupts = event["__interrupt__"]
             interrupts = _to_serializable(raw_interrupts) or []
             break
-    snapshot = await agent_graph.aget_state(config)
+    snapshot = await graph.aget_state(config)
     state_view = _to_serializable(snapshot.values) if snapshot else None
     return state_view, interrupts
 
@@ -181,7 +191,8 @@ class GraphStateResponse(BaseModel):
 async def get_graph_state(thread_id: str) -> GraphStateResponse:
     """Return the latest checkpointed state for a thread."""
     config = {"configurable": {"thread_id": thread_id}}
-    snapshot = await agent_graph.aget_state(config)
+    graph = _require_agent_graph()
+    snapshot = await graph.aget_state(config)
     if not snapshot:
         raise HTTPException(status_code=404, detail="Thread not found.")
     interrupts = _to_serializable(snapshot.interrupts) if snapshot.interrupts else None

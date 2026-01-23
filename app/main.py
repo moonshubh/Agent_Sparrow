@@ -590,6 +590,11 @@ async def agent_invoke_endpoint(request: AgentQueryRequest):
         # Note: stream() or astream() would be used for streaming responses.
         # For a single response after full execution, invoke() or ainvoke() is used.
         # Wrap the agent graph invocation in a span
+        if agent_graph is None:
+            raise HTTPException(
+                status_code=503,
+                detail="Agent graph unavailable; install optional dependencies.",
+            )
         with tracer.start_as_current_span("agent_graph_invocation") as span:
             try:
                 qh = hashlib.sha256(request.query.encode("utf-8")).hexdigest()

@@ -25,13 +25,18 @@ link_or_copy() {
     return 0
   fi
 
+  # Avoid ln/cp errors when src and dest are identical
+  if [[ -e "$dest" && "$src" -ef "$dest" ]]; then
+    return 0
+  fi
+
   mkdir -p "$(dirname "$dest")"
 
-  if [[ "$SYNC_MODE" == "copy" ]]; then
-    cp -f "$src" "$dest"
-  else
-    ln -sf "$src" "$dest"
-  fi
+  case "$SYNC_MODE" in
+    copy) cp -f "$src" "$dest" ;;
+    symlink) ln -sf "$src" "$dest" ;;
+    *) echo "Unknown ENV_SYNC_MODE=$SYNC_MODE (expected copy|symlink)" >&2; return 1 ;;
+  esac
 }
 
 ENV_FILE="$SOURCE_ROOT/.env"

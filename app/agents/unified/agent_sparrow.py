@@ -615,9 +615,12 @@ def _build_deep_agent(state: GraphState, runtime: AgentRuntimeConfig):
         if isinstance(forwarded, dict):
             customer_id = forwarded.get("customer_id") or forwarded.get("customerId")
 
+        if session_id is None:
+            raise ValueError("workspace_session_id_missing")
+
         store = SparrowWorkspaceStore(
             session_id=str(session_id),
-            user_id=str(user_id) if user_id else None,
+            user_id=str(user_id) if user_id is not None else None,
             customer_id=customer_id,
         )
         workspace_store = store
@@ -1734,7 +1737,7 @@ async def run_unified_agent(state: GraphState, config: Optional[RunnableConfig] 
 
                 workspace_store = SparrowWorkspaceStore(
                     session_id=session_key,
-                    user_id=str(user_id) if user_id else None,
+                    user_id=str(user_id) if user_id is not None else None,
                     customer_id=customer_id,
                 )
                 migrated = await maybe_ingest_legacy_handoff(state=state, workspace_store=workspace_store)

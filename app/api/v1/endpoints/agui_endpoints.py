@@ -952,7 +952,7 @@ async def agui_stream(
 
                 workspace_store = SparrowWorkspaceStore(
                     session_id=str(graph_state.get("session_id") or thread_id),
-                    user_id=str(user_id) if user_id else None,
+                    user_id=str(user_id) if user_id is not None else None,
                     customer_id=customer_id,
                 )
                 await workspace_store.register_session()

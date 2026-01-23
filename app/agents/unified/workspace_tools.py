@@ -151,7 +151,8 @@ def _get_rate_limit_identifier(
     if scope_value == "session":
         return getattr(store, "session_id", "") or "unknown-session"
     if scope_value == "user":
-        return getattr(store, "user_id", "") or "unknown-user"
+        user_id = getattr(store, "user_id", None)
+        return "unknown-user" if user_id is None else str(user_id)
     if scope_value == "customer":
         parts = path.strip("/").split("/")
         if len(parts) >= 2 and parts[1]:
@@ -637,8 +638,12 @@ def create_grep_workspace_files(store: "SparrowWorkspaceStore"):
             if not _rate_limiter.check_and_record(scope.value, "reads", identifier):
                 return f"Rate limit exceeded for {scope.value} scope. Try again in 60 seconds."
 
+            if scope.value == "user":
+                return "Error: /user/ is internal and cannot be searched via tools."
+
             # List all files in path
             files = await store.list_files(path, depth=MAX_LIST_DEPTH)
+            files = [f for f in files if not str(f.get("path") or "").startswith("/user/")]
 
             matches = []
             for f in files:

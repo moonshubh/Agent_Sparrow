@@ -166,8 +166,9 @@ def _build_context_capsule(state: Any) -> dict[str, Any]:
     # Redact and bound size for safety + token efficiency.
     try:
         capsule = redact_sensitive_from_dict(capsule)
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("context_capsule_redaction_failed", error=str(exc))
+        capsule = {"redaction_failed": True}
     capsule = _sanitize_json_value(
         capsule,
         max_depth=5,

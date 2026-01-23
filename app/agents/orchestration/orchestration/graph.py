@@ -125,7 +125,7 @@ def _build_tool_node():
             try:
                 store = SparrowWorkspaceStore(
                     session_id=session_id,
-                    user_id=str(user_id) if user_id else None,
+                    user_id=str(user_id) if user_id is not None else None,
                     customer_id=customer_id,
                 )
                 return {tool.name: tool for tool in get_workspace_tools(store)}

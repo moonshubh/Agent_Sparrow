@@ -2161,7 +2161,7 @@ class StreamEventHandler:
             stored_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
             store = SparrowWorkspaceStore(
                 session_id=str(session_id),
-                user_id=str(user_id) if user_id else None,
+                user_id=str(user_id) if user_id is not None else None,
                 customer_id=customer_id,
             )
 

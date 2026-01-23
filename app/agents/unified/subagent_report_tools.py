@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List
 
 from langchain_core.messages import ToolMessage
-from langchain_core.tools import tool
+from langchain_core.tools import BaseTool, tool
 from langgraph.types import Command
 from pydantic import BaseModel, Field
 
@@ -31,7 +31,7 @@ class MarkSubagentReportsReadInput(BaseModel):
     )
 
 
-def create_mark_subagent_reports_read_tool():
+def create_mark_subagent_reports_read_tool() -> BaseTool:
     """Create a tool that marks subagent reports as read in scratchpad."""
 
     @tool(args_schema=MarkSubagentReportsReadInput)
@@ -45,20 +45,24 @@ def create_mark_subagent_reports_read_tool():
         prevent repeated forced ingestion of the same reports.
         """
         now = datetime.now(timezone.utc).isoformat()
+        valid_ids = [
+            tool_call_id
+            for tool_call_id in report_tool_call_ids
+            if isinstance(tool_call_id, str) and tool_call_id
+        ]
         updates: Dict[str, Any] = {
             "scratchpad": {
                 "_system": {
                     "subagent_reports": {
                         tool_call_id: {"read": True, "read_at": now}
-                        for tool_call_id in report_tool_call_ids
-                        if isinstance(tool_call_id, str) and tool_call_id
+                        for tool_call_id in valid_ids
                     }
                 }
             }
         }
 
         message = ToolMessage(
-            content=f"Marked {len(report_tool_call_ids)} subagent report(s) as read.",
+            content=f"Marked {len(valid_ids)} subagent report(s) as read.",
             tool_call_id=str(runtime.tool_call_id),
         )
         return Command(update={**updates, "messages": [message]})
