@@ -54,6 +54,7 @@ from app.agents.unified.mcp_client import invoke_firecrawl_mcp_tool
 import redis
 
 from app.agents.unified.image_store import store_image_bytes, rewrite_base64_images
+from app.agents.unified.minimax_tools import get_minimax_tools, is_minimax_available
 
 
 TOOL_RATE_LIMIT_BUCKET = "internal.helper"
@@ -2647,6 +2648,10 @@ def get_registered_tools() -> List[BaseTool]:
     3. GEMINI GROUNDING (for quick facts):
        - grounding_search_tool: Fast factual lookups
 
+    4. MINIMAX (AI-powered search and vision):
+       - minimax_web_search: Web search via Minimax API
+       - minimax_understand_image: Image analysis via Minimax vision
+
     Caching:
     - Firecrawl fetch honors max_age for Firecrawl-native caching.
     - In-process cache (256 entries) for other tools; disable via DISABLE_TOOL_CACHE.
@@ -2675,6 +2680,13 @@ def get_registered_tools() -> List[BaseTool]:
             web_search_tool,  # Tavily - general web search
             tavily_extract_tool,  # Tavily - full-content extraction
             grounding_search_tool,  # Gemini grounding - quick facts
+        ]
+    )
+    # Minimax tools (AI-powered search and vision) - if API key configured
+    if is_minimax_available():
+        tools.extend(get_minimax_tools())
+    tools.extend(
+        [
             # Other tools
             feedme_search_tool,
             supabase_query_tool,

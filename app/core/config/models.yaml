@@ -77,6 +77,27 @@ coordinators:
       rpm: 45
       rpd: 750
 
+  # Default coordinator for Minimax provider (uses direct Minimax API)
+  # Requires MINIMAX_API_KEY to be set. Routes through OpenRouter code path.
+  # Minimax M2.1 uses Interleaved Thinking - reasoning_details preserved automatically.
+  minimax:
+    model_id: "minimax/MiniMax-M2.1"
+    provider: "openrouter"        # Uses OpenRouter code path, auto-routed to Minimax API
+    temperature: 1.0              # Minimax recommended: 1.0
+    context_window: 204800        # 200K token context window
+    rate_limits:
+      rpm: 100
+      rpd: 5000
+
+  minimax_with_subagents:
+    model_id: "minimax/MiniMax-M2.1"
+    provider: "openrouter"
+    temperature: 1.0
+    context_window: 204800        # 200K token context window
+    rate_limits:
+      rpm: 80
+      rpd: 4000
+
   # Heavy reasoning coordinator (complex tasks, log analysis)
   heavy:
     model_id: "gemini-3-pro-preview"
@@ -146,29 +167,35 @@ internal:
 # Each subagent can have its own model, or fallback to default
 # -----------------------------------------------------------------------------
 subagents:
-  # Default model for all subagents (if not specified individually)
+  # Default model for all subagents - Minimax M2.1
+  # Uses direct Minimax API (not OpenRouter) when MINIMAX_API_KEY is set.
+  # Minimax M2.1 features:
+  # - 200K context window
+  # - Interleaved Thinking (reasoning preserved across turns)
+  # - Optimized for coding and agentic workflows
   _default:
-    model_id: "gemini-3-flash-preview"
-    provider: "google"
-    temperature: 1.0
-    context_window: 1048576
+    model_id: "minimax/MiniMax-M2.1"
+    provider: "openrouter"            # Routes to Minimax API when MINIMAX_API_KEY set
+    temperature: 1.0                  # Minimax recommended
+    context_window: 204800            # 200K tokens
     rate_limits:
       rpm: 60
       rpd: 1000
 
   # IMPORTANT: Keys are the runtime subagent names (match `subagents.py`).
+  # All subagents now use Minimax M2.1 via _default
   research-agent:
-    # Uses _default (Gemini 3 Flash Preview)
+    # Uses _default (Minimax M2.1)
 
   log-diagnoser:
-    # Uses _default
+    # Uses _default (Minimax M2.1)
 
   db-retrieval:
-    # Uses _default
+    # Uses _default (Minimax M2.1)
 
   # Explorer subagent - broad discovery
   explorer:
-    # Uses _default
+    # Uses _default (Minimax M2.1)
 
 # -----------------------------------------------------------------------------
 # ZENDESK MODELS - Separate coordinator/subagent config and quotas

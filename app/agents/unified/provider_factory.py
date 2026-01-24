@@ -312,12 +312,68 @@ def _build_xai_model(
     )
 
 
+def _is_minimax_model(model: str) -> bool:
+    """Check if a model is a Minimax model.
+
+    Args:
+        model: The model identifier.
+
+    Returns:
+        True if the model is a Minimax model (e.g., minimax/MiniMax-M2.1).
+    """
+    model_lower = model.lower()
+    return "minimax" in model_lower
+
+
 def _build_openrouter_model(
     model: str, temperature: float, *, role: str | None = None
 ) -> BaseChatModel:
-    """Build an OpenRouter chat model."""
+    """Build an OpenRouter chat model.
+
+    Also handles Minimax models by routing them to the Minimax API directly
+    when MINIMAX_API_KEY is configured. This allows using the same OpenRouter
+    code path with Minimax's native API.
+    """
     from .openrouter_chat_openai import OpenRouterChatOpenAI
 
+    # Check if this is a Minimax model and we have a direct API key
+    is_minimax = _is_minimax_model(model)
+    minimax_api_key = getattr(settings, "minimax_api_key", None)
+
+    if is_minimax and minimax_api_key:
+        # Route Minimax models to Minimax API directly
+        base_url = getattr(settings, "minimax_base_url", None) or "https://api.minimax.io/v1"
+        api_key = minimax_api_key
+
+        # Extract the actual model name (e.g., "minimax/MiniMax-M2.1" -> "MiniMax-M2.1")
+        actual_model = model.split("/")[-1] if "/" in model else model
+
+        logger.info(
+            "routing_to_minimax_api",
+            original_model=model,
+            actual_model=actual_model,
+            base_url=base_url,
+        )
+
+        # Minimax M2.1 Interleaved Thinking requirements:
+        # - reasoning_split=True: Separates thinking into `reasoning_details` field
+        # - Our OpenRouterChatOpenAI wrapper preserves reasoning_details across turns
+        # - This enables M2.1's chain-of-thought to remain uninterrupted
+        # See: https://platform.minimax.io/docs/guides/text-m2-function-call
+        extra_body = {"reasoning_split": True}
+
+        # Minimax recommended parameters: temperature=1.0, top_p=0.95
+        # But we respect the role-based temperature from our config
+        return OpenRouterChatOpenAI(
+            model=actual_model,
+            temperature=temperature,
+            api_key=api_key,
+            base_url=base_url,
+            extra_body=extra_body,
+            timeout=REQUEST_TIMEOUT_SECONDS,
+        )
+
+    # Standard OpenRouter path
     api_key = getattr(settings, "openrouter_api_key", None)
     if not api_key:
         config = get_models_config()
@@ -378,12 +434,13 @@ def get_available_providers() -> dict[str, bool]:
 
     Example:
         >>> get_available_providers()
-        {'google': True, 'xai': False, 'openrouter': False}
+        {'google': True, 'xai': False, 'openrouter': False, 'minimax': True}
     """
     return {
         "google": bool(settings.gemini_api_key),
         "xai": bool(settings.xai_api_key),
         "openrouter": bool(getattr(settings, "openrouter_api_key", None)),
+        "minimax": bool(getattr(settings, "minimax_api_key", None)),
     }
 
 

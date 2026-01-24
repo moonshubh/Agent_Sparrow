@@ -63,6 +63,10 @@ class Settings(BaseSettings):
     openrouter_app_name: str = Field(default="Agent Sparrow", alias="OPENROUTER_APP_NAME")
     openrouter_referer: Optional[str] = Field(default=None, alias="OPENROUTER_REFERER")
 
+    # Minimax Configuration (uses OpenRouter code path with Minimax API)
+    minimax_api_key: Optional[str] = Field(default=None, alias="MINIMAX_API_KEY")
+    minimax_base_url: str = Field(default="https://api.minimax.io/v1", alias="MINIMAX_BASE_URL")
+
     # LangSmith tracing configuration
     langsmith_tracing_enabled: bool = Field(default=False, alias="LANGSMITH_TRACING_ENABLED")
     langsmith_api_key: Optional[str] = Field(default=None, alias="LANGSMITH_API_KEY")
