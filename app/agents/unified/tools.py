@@ -3281,7 +3281,7 @@ async def supabase_query_tool(
         return [{"error": "Table name is required for supabase_query"}]
 
     is_subagent = _is_subagent_call(state, runtime)
-    if not is_subagent and table not in ALLOWED_SUPABASE_TABLES:
+    if table not in ALLOWED_SUPABASE_TABLES:
         logger.warning(
             "supabase_query_blocked_table",
             table=table,

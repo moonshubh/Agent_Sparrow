@@ -8,6 +8,7 @@ This mirrors Claude Code SDK's deterministic tool gating (PreToolUse-like).
 
 from __future__ import annotations
 
+import posixpath
 from typing import Any, Awaitable, Callable
 
 from langchain_core.messages import ToolMessage
@@ -30,7 +31,10 @@ def _normalize_path(path: str) -> str:
     normalized = (path or "").replace("\\", "/").strip()
     if not normalized.startswith("/"):
         normalized = f"/{normalized}"
-    return normalized.rstrip("/")
+    normalized = posixpath.normpath(normalized)
+    if normalized in {"", "."}:
+        return "/"
+    return normalized.rstrip("/") or "/"
 
 
 def _get_run_dir(state: Any) -> str | None:
@@ -136,4 +140,3 @@ class WorkspaceWriteSandboxMiddleware(AgentMiddleware if MIDDLEWARE_AVAILABLE el
             ),
             tool_call_id=tool_call.get("id"),
         )
-

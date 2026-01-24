@@ -75,3 +75,33 @@ def test_workspace_write_sandbox_blocks_outside_run_dir() -> None:
     import asyncio
 
     asyncio.run(_run())
+
+
+def test_workspace_write_sandbox_blocks_path_traversal() -> None:
+    async def _run() -> None:
+        middleware = WorkspaceWriteSandboxMiddleware()
+        run_dir = "/scratch/subagents/research/call_123"
+        state = SimpleNamespace(subagent_context={"run_dir": run_dir})
+
+        request = _FakeRequest(
+            tool_call={
+                "id": "tool_3",
+                "name": "write_workspace_file",
+                "args": {
+                    "path": f"{run_dir}/../call_123/../../notes.md",
+                    "content": "nope",
+                },
+            },
+            state=state,
+        )
+
+        async def handler(_req: _FakeRequest) -> str:
+            return "should-not-run"
+
+        result = await middleware.awrap_tool_call(request, handler)  # type: ignore[arg-type]
+        assert isinstance(result, ToolMessage)
+        assert "blocked" in result.content.lower()
+
+    import asyncio
+
+    asyncio.run(_run())

@@ -91,10 +91,10 @@ RESEARCH_MW_CONFIG = MiddlewareConfig(max_tokens_before_summary=100000, messages
 LOG_ANALYSIS_MW_CONFIG = MiddlewareConfig(max_tokens_before_summary=150000, messages_to_keep=6)
 DB_RETRIEVAL_MW_CONFIG = MiddlewareConfig(max_tokens_before_summary=80000, messages_to_keep=3)
 
+
 def _subagent_read_tools() -> List[BaseTool]:
     """Shared read/search tools available to all subagents."""
     return [
-        supabase_query_tool,
         memory_search_tool,
         memory_list_tool,
         web_search_tool,
@@ -103,6 +103,7 @@ def _subagent_read_tools() -> List[BaseTool]:
         firecrawl_search_tool,
         firecrawl_fetch_tool,
     ]
+
 
 def _merge_tools(
     tools: List[BaseTool],
@@ -322,19 +323,33 @@ def _get_subagent_model(
             zendesk=zendesk,
         )
     elif not model_router.is_available(model_name):
-        logger.warning(
-            "subagent_model_allowlist_blocked",
-            subagent=subagent_name,
-            model=model_name,
-            provider=provider,
-            action="allow_unverified",
-        )
-        model = _get_chat_model(
-            model_name,
-            provider=provider,
-            role=role,
-            temperature=subagent_config.temperature,
-        )
+        if getattr(settings, "subagent_allow_unverified_models", False):
+            logger.warning(
+                "subagent_model_allowlist_blocked",
+                subagent=subagent_name,
+                model=model_name,
+                provider=provider,
+                action="allow_unverified",
+            )
+            model = _get_chat_model(
+                model_name,
+                provider=provider,
+                role=role,
+                temperature=subagent_config.temperature,
+            )
+        else:
+            logger.warning(
+                "subagent_model_allowlist_blocked",
+                subagent=subagent_name,
+                model=model_name,
+                provider=provider,
+                action="fallback_to_coordinator",
+            )
+            model_name, provider, model, bucket_name = _fallback_to_coordinator(
+                config=config,
+                role=role,
+                zendesk=zendesk,
+            )
     else:
         model = _get_chat_model(
             model_name,
@@ -388,6 +403,7 @@ def _research_subagent(
         "tools": _merge_tools([
             kb_search_tool,
             feedme_search_tool,
+            supabase_query_tool,
             # Prefer Firecrawl first for web scraping (MCP-backed with full feature support)
             firecrawl_fetch_tool,      # Single-page scrape with screenshots/actions/mobile/geo
             firecrawl_map_tool,        # Discover all URLs on a website

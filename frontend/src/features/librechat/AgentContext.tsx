@@ -125,6 +125,7 @@ interface AgentProviderProps {
 
 const MARKDOWN_DATA_URI_PATTERN = /!\[[^\]]*\]\(data:image\/[^)]+\)/gi;
 const MAX_SUBAGENT_THINKING_CHARS = 6000;
+const SUBAGENT_THINKING_TRUNCATION_PREFIX = '[truncated] ';
 
 const stripMarkdownDataUriImages = (text: string): string => {
   const replaced = text.replace(MARKDOWN_DATA_URI_PATTERN, '');
@@ -1330,7 +1331,9 @@ export function AgentProvider({
                       };
                       const combined = `${base.thinking ?? ''}${delta}`;
                       const clipped = combined.length > MAX_SUBAGENT_THINKING_CHARS
-                        ? combined.slice(-MAX_SUBAGENT_THINKING_CHARS)
+                        ? `${SUBAGENT_THINKING_TRUNCATION_PREFIX}${combined.slice(
+                          -(MAX_SUBAGENT_THINKING_CHARS - SUBAGENT_THINKING_TRUNCATION_PREFIX.length),
+                        )}`
                         : combined;
                       next.set(toolCallId, {
                         ...base,
