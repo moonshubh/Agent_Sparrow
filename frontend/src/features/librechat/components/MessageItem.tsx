@@ -337,7 +337,15 @@ export const MessageItem = memo(function MessageItem({
   onEditMessage,
   onRegenerate,
 }: MessageItemProps) {
-  const { thinkingTrace, activeTraceStepId, activeTools, messageAttachments, todos, toolEvidence } = useAgent();
+  const {
+    thinkingTrace,
+    activeTraceStepId,
+    activeTools,
+    messageAttachments,
+    todos,
+    toolEvidence,
+    subagentActivity,
+  } = useAgent();
   const [isEditing, setIsEditing] = useState(false);
   const [editContent, setEditContent] = useState('');
   const [isUserExpanded, setIsUserExpanded] = useState(false);
@@ -357,7 +365,9 @@ export const MessageItem = memo(function MessageItem({
   const isToolMessage = message.role === 'tool';
   const showStreaming = isLast && isStreaming && !isUserMessage && !mainContent;
   const shouldRegisterArtifacts = !(isLast && isStreaming);
-  const showThinking = !isUserMessage && (thinking || (isLast && thinkingTrace.length > 0));
+  const showThinking = !isUserMessage && (
+    thinking || (isLast && (thinkingTrace.length > 0 || subagentActivity.size > 0))
+  );
   const showToolIndicator = isLast && !isUserMessage && activeTools.length > 0;
   const roleName = isUserMessage ? 'You' : 'Agent Sparrow';
 
@@ -467,6 +477,7 @@ export const MessageItem = memo(function MessageItem({
               todos={isLast ? todos : undefined}
               toolEvidence={isLast ? toolEvidence : undefined}
               activeStepId={isLast ? activeTraceStepId : undefined}
+              subagentActivity={isLast ? subagentActivity : undefined}
               isStreaming={isLast && isStreaming}
             />
           </div>

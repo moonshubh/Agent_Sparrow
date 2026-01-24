@@ -82,6 +82,10 @@ class Settings(BaseSettings):
     subagent_workspace_bridge_enabled: bool = Field(default=True, alias="SUBAGENT_WORKSPACE_BRIDGE_ENABLED")
     subagent_report_read_limit_chars: int = Field(default=20000, alias="SUBAGENT_REPORT_READ_LIMIT_CHARS")
     subagent_context_capsule_max_chars: int = Field(default=12000, alias="SUBAGENT_CONTEXT_CAPSULE_MAX_CHARS")
+    subagent_allow_unverified_models: bool = Field(
+        default=False,
+        alias="SUBAGENT_ALLOW_UNVERIFIED_MODELS",
+    )
     
     # Legacy Redis configuration (kept for compatibility, not used in simplified deployment)
     redis_url: str = Field(default="redis://localhost:6379", alias="REDIS_URL")

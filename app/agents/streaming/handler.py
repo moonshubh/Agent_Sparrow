@@ -346,6 +346,7 @@ class StreamEventHandler:
         # Track tool runs so nested model calls (e.g., DeepAgents subagents) don't stream
         # user-visible text into the main chat transcript.
         self._tool_run_ids: set[str] = set()
+        self._tool_run_metadata: dict[str, dict[str, str]] = {}
         # Track model runs that appear to be streaming structured tool payloads (JSON contracts).
         self._json_payload_prefix: dict[str, str] = {}
         self._json_payload_runs: set[str] = set()
@@ -608,8 +609,10 @@ class StreamEventHandler:
     async def _on_tool_start(self, event: dict[str, Any]) -> None:
         """Handle tool start event."""
         run_id = event.get("run_id")
+        run_id_str: str | None = None
         if run_id is not None:
-            self._tool_run_ids.add(str(run_id))
+            run_id_str = str(run_id)
+            self._tool_run_ids.add(run_id_str)
 
         tool_data = event.get("data", {})
         tool_call_id = str(tool_data.get("tool_call_id", "unknown"))
@@ -617,6 +620,20 @@ class StreamEventHandler:
         event["name"] = tool_name
 
         tool_input = tool_data.get("input") or tool_data.get("tool_input")
+        subagent_type: str | None = None
+        if isinstance(tool_input, dict):
+            raw_subagent_type = tool_input.get("subagent_type") or tool_input.get("subagentType")
+            if isinstance(raw_subagent_type, str) and raw_subagent_type.strip():
+                subagent_type = raw_subagent_type.strip()
+
+        if run_id_str:
+            meta: dict[str, str] = {
+                "tool_name": tool_name,
+                "tool_call_id": tool_call_id,
+            }
+            if subagent_type:
+                meta["subagent_type"] = subagent_type
+            self._tool_run_metadata[run_id_str] = meta
 
         if tool_name == "trace_update":
             # Narration-only tool: emit a thought step from the tool INPUT (not output),
@@ -704,13 +721,20 @@ class StreamEventHandler:
     async def _on_tool_end(self, event: dict[str, Any]) -> None:
         """Handle tool end event."""
         run_id = event.get("run_id")
+        run_id_str: str | None = None
         if run_id is not None:
-            self._tool_run_ids.discard(str(run_id))
+            run_id_str = str(run_id)
+            self._tool_run_ids.discard(run_id_str)
         tool_data = event.get("data", {})
         output = tool_data.get("output")
         tool_call_id = str(tool_data.get("tool_call_id", "unknown"))
         tool_name = self._extract_tool_name(event.get("name"), tool_call_id)
         event["name"] = tool_name
+
+        if run_id_str:
+            tool_meta = self._tool_run_metadata.pop(run_id_str, None)
+            if tool_meta and tool_meta.get("tool_name") == "task":
+                self.emitter.flush_subagent_thinking(tool_meta.get("tool_call_id", tool_call_id))
         if tool_name == "trace_update":
             return
 
@@ -782,8 +806,10 @@ class StreamEventHandler:
     async def _on_tool_error(self, event: dict[str, Any]) -> None:
         """Handle tool error event."""
         run_id = event.get("run_id")
+        run_id_str: str | None = None
         if run_id is not None:
-            self._tool_run_ids.discard(str(run_id))
+            run_id_str = str(run_id)
+            self._tool_run_ids.discard(run_id_str)
         tool_data = event.get("data", {}) or {}
         tool_call_id = str(tool_data.get("tool_call_id", "unknown"))
         raw_error = (
@@ -792,6 +818,11 @@ class StreamEventHandler:
             or event.get("error")
         )
         tool_name = event.get("name") or tool_call_id or "tool"
+
+        if run_id_str:
+            tool_meta = self._tool_run_metadata.pop(run_id_str, None)
+            if tool_meta and tool_meta.get("tool_name") == "task":
+                self.emitter.flush_subagent_thinking(tool_meta.get("tool_call_id", tool_call_id))
 
         self.emitter.error_tool(tool_call_id, tool_name, raw_error)
 
@@ -945,9 +976,16 @@ class StreamEventHandler:
         run_id_str = str(run_id)
 
         parent_run_id = event.get("parent_run_id")
-        if parent_run_id is not None and str(parent_run_id) in self._tool_run_ids:
-            # Tool/subagent model output must never stream into the main chat transcript.
-            return
+        parent_run_id_str = str(parent_run_id) if parent_run_id is not None else None
+        is_subagent_stream = False
+        subagent_meta: dict[str, str] | None = None
+        if parent_run_id_str and parent_run_id_str in self._tool_run_ids:
+            subagent_meta = self._tool_run_metadata.get(parent_run_id_str)
+            if subagent_meta and subagent_meta.get("tool_name") == "task":
+                is_subagent_stream = True
+            else:
+                # Tool model output must never stream into the main chat transcript.
+                return
 
         stream_data = event.get("data", {})
         chunk = stream_data.get("chunk") or stream_data.get("output")
@@ -965,7 +1003,11 @@ class StreamEventHandler:
         thinking_text, visible_text = self._extract_thinking_and_text(raw_content)
 
         # Route thinking content to trace (not to main display)
-        if thinking_text and settings.trace_mode in {"hybrid", "provider_reasoning"}:
+        if (
+            thinking_text
+            and not is_subagent_stream
+            and settings.trace_mode in {"hybrid", "provider_reasoning"}
+        ):
             self.emitter.stream_thought_chunk(run_id, thinking_text)
 
         # Capture provider-specific streamed reasoning (xAI/OpenRouter/etc.)
@@ -980,8 +1022,39 @@ class StreamEventHandler:
         ):
             has_tool_calls = True
         kwargs_reasoning = self._extract_reasoning_from_kwargs(additional_kwargs)
-        if kwargs_reasoning and settings.trace_mode in {"hybrid", "provider_reasoning"}:
+        if (
+            kwargs_reasoning
+            and not is_subagent_stream
+            and settings.trace_mode in {"hybrid", "provider_reasoning"}
+        ):
             self.emitter.stream_thought_chunk(run_id, kwargs_reasoning)
+
+        if is_subagent_stream and subagent_meta:
+            if settings.trace_mode != "off":
+                segments: list[str] = []
+                if thinking_text:
+                    segments.append(thinking_text)
+                if kwargs_reasoning:
+                    segments.append(kwargs_reasoning)
+                if visible_text and not has_tool_calls:
+                    if not hasattr(self, "_thinking_trackers"):
+                        self._thinking_trackers: dict[str, ThinkingBlockTracker] = {}
+                    if run_id_str not in self._thinking_trackers:
+                        self._thinking_trackers[run_id_str] = ThinkingBlockTracker()
+                    tracker = self._thinking_trackers[run_id_str]
+                    visible_content, _ = tracker.process_chunk(visible_text)
+                    if visible_content and visible_content.strip():
+                        segments.append(visible_content)
+
+                for segment in segments:
+                    if not segment or not segment.strip():
+                        continue
+                    self.emitter.stream_subagent_thinking_delta(
+                        tool_call_id=subagent_meta.get("tool_call_id", "unknown"),
+                        delta=segment,
+                        subagent_type=subagent_meta.get("subagent_type"),
+                    )
+            return
 
         chunk_text = visible_text
 

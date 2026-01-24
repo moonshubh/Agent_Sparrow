@@ -26,7 +26,10 @@ try:
     from langchain.agents.middleware.summarization import SummarizationMiddleware
     from deepagents.middleware.subagents import SubAgentMiddleware, TASK_SYSTEM_PROMPT
     from deepagents.middleware.patch_tool_calls import PatchToolCallsMiddleware
-    from app.agents.harness.middleware import ToolResultEvictionMiddleware
+    from app.agents.harness.middleware import (
+        ToolResultEvictionMiddleware,
+        WorkspaceWriteSandboxMiddleware,
+    )
 
     # Import new context management middleware
     from app.agents.unified.context_middleware import (
@@ -751,6 +754,9 @@ def _build_deep_agent(state: GraphState, runtime: AgentRuntimeConfig):
         # The handler's _compact_image_output only modifies local variables,
         # not the actual state, so this middleware is REQUIRED.
         default_middleware.append(ToolResultEvictionMiddleware(char_threshold=50000))
+
+        # Restrict subagent writes to their run directory (Claude-style isolation).
+        default_middleware.append(WorkspaceWriteSandboxMiddleware())
 
         # Tool call normalization (must be last)
         default_middleware.append(PatchToolCallsMiddleware())

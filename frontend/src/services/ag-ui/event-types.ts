@@ -196,6 +196,34 @@ export interface ImageArtifactEvent {
 }
 
 // -----------------------------------------------------------------------------
+// Subagent Types
+// -----------------------------------------------------------------------------
+
+export interface SubagentSpawnEvent {
+  subagentType: string;
+  toolCallId: string;
+  parentAgentId?: string;
+  task: string;
+  timestamp: string;
+}
+
+export interface SubagentEndEvent {
+  subagentType: string;
+  toolCallId: string;
+  status: 'success' | 'error';
+  reportPath: string;
+  excerpt: string;
+  timestamp: string;
+}
+
+export interface SubagentThinkingDeltaEvent {
+  toolCallId: string;
+  delta: string;
+  timestamp: string;
+  subagentType?: string;
+}
+
+// -----------------------------------------------------------------------------
 // Union Type for All Custom Events
 // -----------------------------------------------------------------------------
 
@@ -209,7 +237,10 @@ export type AgentCustomEvent =
   | { name: 'tool_evidence_update'; value: ToolEvidenceUpdateEvent }
   | { name: 'agent_todos_update'; value: AgentTodosUpdateEvent }
   | { name: 'genui_state_update'; value: GenuiStateUpdateEvent }
-  | { name: 'image_artifact'; value: ImageArtifactEvent };
+  | { name: 'image_artifact'; value: ImageArtifactEvent }
+  | { name: 'subagent_spawn'; value: SubagentSpawnEvent }
+  | { name: 'subagent_end'; value: SubagentEndEvent }
+  | { name: 'subagent_thinking_delta'; value: SubagentThinkingDeltaEvent };
 
 /**
  * Known AG-UI custom event names as const tuple for compile-time type derivation.
@@ -221,6 +252,9 @@ export const KNOWN_EVENT_NAMES = [
   'agent_todos_update',
   'genui_state_update',
   'image_artifact',
+  'subagent_spawn',
+  'subagent_end',
+  'subagent_thinking_delta',
 ] as const;
 
 /**

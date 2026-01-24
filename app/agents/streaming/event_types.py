@@ -289,6 +289,73 @@ class AgentTodosUpdateEvent:
         return {"todos": [todo.to_dict() for todo in self.todos]}
 
 
+@dataclass
+class SubagentSpawnEvent:
+    """Event payload for subagent_spawn custom event."""
+
+    subagent_type: str
+    tool_call_id: str
+    task: str
+    timestamp: str
+    parent_agent_id: Optional[str] = None
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Serialize to JSON-safe dictionary with camelCase keys."""
+        result: Dict[str, Any] = {
+            "subagentType": self.subagent_type,
+            "toolCallId": self.tool_call_id,
+            "task": self.task,
+            "timestamp": self.timestamp,
+        }
+        if self.parent_agent_id is not None:
+            result["parentAgentId"] = self.parent_agent_id
+        return result
+
+
+@dataclass
+class SubagentEndEvent:
+    """Event payload for subagent_end custom event."""
+
+    subagent_type: str
+    tool_call_id: str
+    status: Literal["success", "error"]
+    report_path: str
+    excerpt: str
+    timestamp: str
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Serialize to JSON-safe dictionary with camelCase keys."""
+        return {
+            "subagentType": self.subagent_type,
+            "toolCallId": self.tool_call_id,
+            "status": self.status,
+            "reportPath": self.report_path,
+            "excerpt": self.excerpt,
+            "timestamp": self.timestamp,
+        }
+
+
+@dataclass
+class SubagentThinkingDeltaEvent:
+    """Event payload for subagent_thinking_delta custom event."""
+
+    tool_call_id: str
+    delta: str
+    timestamp: str
+    subagent_type: Optional[str] = None
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Serialize to JSON-safe dictionary with camelCase keys."""
+        result: Dict[str, Any] = {
+            "toolCallId": self.tool_call_id,
+            "delta": self.delta,
+            "timestamp": self.timestamp,
+        }
+        if self.subagent_type is not None:
+            result["subagentType"] = self.subagent_type
+        return result
+
+
 # Utility functions
 
 def _safe_metadata(metadata: Dict[str, Any]) -> Dict[str, Any]:

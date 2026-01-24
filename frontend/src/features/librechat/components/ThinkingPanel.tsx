@@ -15,8 +15,10 @@ import {
   ListChecks,
   Loader2,
   Search,
+  Users,
 } from 'lucide-react';
 import type { TraceStep, TodoItem, ToolEvidenceUpdateEvent } from '@/services/ag-ui/event-types';
+import type { SubagentRun } from '@/features/librechat/AgentContext';
 import { extractTodosFromPayload, parseToolOutput } from '@/features/librechat/utils';
 import { EnhancedMarkdown } from './EnhancedMarkdown';
 
@@ -26,6 +28,7 @@ interface ThinkingPanelProps {
   todos?: TodoItem[];
   toolEvidence?: Record<string, ToolEvidenceUpdateEvent>;
   activeStepId?: string;
+  subagentActivity?: Map<string, SubagentRun>;
   isStreaming?: boolean;
 }
 
@@ -67,6 +70,15 @@ const formatDuration = (duration?: number): string | null => {
   if (typeof duration !== 'number' || !Number.isFinite(duration)) return null;
   if (duration < 1) return '<1s';
   return `${Math.round(duration)}s`;
+};
+
+const formatDurationMs = (startTime?: string, endTime?: string): string | null => {
+  if (!startTime) return null;
+  const start = new Date(startTime).getTime();
+  const end = endTime ? new Date(endTime).getTime() : Date.now();
+  if (!Number.isFinite(start) || !Number.isFinite(end)) return null;
+  const seconds = Math.max(0, (end - start) / 1000);
+  return formatDuration(seconds);
 };
 
 const formatToolArgs = (args: unknown): string | null => {
@@ -257,6 +269,31 @@ const getToolLabel = (step: TraceStep): string => {
   const argPreview = formatToolArgs(rawArgs);
   const cleanedPreview = argPreview && /^[{\[]/.test(argPreview.trim()) ? null : argPreview;
   const lower = normalizeWhitespace(`${toolName ?? step.content}`).toLowerCase();
+  const parsedArgs = (() => {
+    if (!rawArgs) return null;
+    if (typeof rawArgs === 'object') return rawArgs as Record<string, unknown>;
+    if (typeof rawArgs === 'string') {
+      const trimmed = rawArgs.trim();
+      if (!trimmed) return null;
+      if ((trimmed.startsWith('{') && trimmed.endsWith('}')) || (trimmed.startsWith('[') && trimmed.endsWith(']'))) {
+        try {
+          const parsed = JSON.parse(trimmed);
+          return typeof parsed === 'object' && parsed ? (parsed as Record<string, unknown>) : null;
+        } catch {
+          return null;
+        }
+      }
+    }
+    return null;
+  })();
+  if (toolNameValue === 'task') {
+    const rawType = parsedArgs?.subagent_type ?? parsedArgs?.subagentType;
+    const rawTask = parsedArgs?.description ?? parsedArgs?.task ?? parsedArgs?.prompt;
+    const subagentType = typeof rawType === 'string' && rawType.trim() ? rawType.trim() : 'subagent';
+    const taskLabel = typeof rawTask === 'string' && rawTask.trim() ? truncateLine(rawTask.trim(), 120) : '';
+    const agentLabel = humanizeToolName(subagentType);
+    return taskLabel ? `Delegating to ${agentLabel}: ${taskLabel}` : `Delegating to ${agentLabel}`;
+  }
 
   if (toolNameValue.includes('todo') || lower.includes('todo') || todoBlock) {
     return 'Updating todos';
@@ -405,14 +442,16 @@ export function ThinkingPanel({
   todos = [],
   toolEvidence = {},
   activeStepId,
+  subagentActivity = new Map(),
   isStreaming = false,
 }: ThinkingPanelProps) {
   const [isExpanded, setIsExpanded] = useState(() => isStreaming);
   const [isTodoExpanded, setIsTodoExpanded] = useState(() => isStreaming);
   const [expandedItemIds, setExpandedItemIds] = useState<Set<string>>(new Set());
+  const [expandedSubagentIds, setExpandedSubagentIds] = useState<Set<string>>(new Set());
   const contentRef = useRef<HTMLDivElement | null>(null);
 
-  const hasContent = thinking || traceSteps.length > 0 || todos.length > 0;
+  const hasContent = thinking || traceSteps.length > 0 || todos.length > 0 || subagentActivity.size > 0;
 
   const mergedTraceSteps = useMemo(() => {
     if (!thinking) return traceSteps;
@@ -452,6 +491,19 @@ export function ThinkingPanel({
 
   const { done: todosDone, total: todosTotal } = useMemo(() => getTodoProgress(todos), [todos]);
   const todoPercent = todosTotal > 0 ? Math.round((todosDone / todosTotal) * 100) : 0;
+
+  const subagentEntries = useMemo(() => {
+    const items = Array.from(subagentActivity.values());
+    return items.sort((a, b) => {
+      const aTime = new Date(a.startTime || 0).getTime();
+      const bTime = new Date(b.startTime || 0).getTime();
+      return aTime - bTime;
+    });
+  }, [subagentActivity]);
+  const runningSubagents = useMemo(
+    () => subagentEntries.filter((entry) => entry.status === 'running').length,
+    [subagentEntries],
+  );
 
   const activeItemId = useMemo(() => {
     if (!activeStepId) return undefined;
@@ -544,6 +596,18 @@ export function ThinkingPanel({
     });
   }, []);
 
+  const toggleSubagent = useCallback((id: string) => {
+    setExpandedSubagentIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
+  }, []);
+
   if (!hasContent) return null;
 
   return (
@@ -558,6 +622,12 @@ export function ThinkingPanel({
           </div>
           <span className="font-semibold text-sm">Progress Updates</span>
           <span className="lc-thinking-count">{timelineItems.length} steps</span>
+          {subagentEntries.length > 0 && (
+            <span className={`lc-subagent-pill ${runningSubagents > 0 ? 'active' : ''}`}>
+              <Users size={12} />
+              {runningSubagents > 0 ? `${runningSubagents} running` : `${subagentEntries.length} total`}
+            </span>
+          )}
         </div>
         {isExpanded ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
       </div>
@@ -604,6 +674,76 @@ export function ThinkingPanel({
                   </div>
                 </div>
               )}
+            </div>
+          )}
+          {subagentEntries.length > 0 && (
+            <div className="lc-subagent-section">
+              <div className="lc-subagent-header">
+                <div className="lc-subagent-title">
+                  <Users size={14} />
+                  <span>Agents</span>
+                </div>
+                <span className="lc-thinking-count">{subagentEntries.length} tasks</span>
+              </div>
+              <div className="lc-progress-list">
+                {subagentEntries.map((subagent) => {
+                  const isOpen = expandedSubagentIds.has(subagent.toolCallId);
+                  const status = subagent.status;
+                  const statusLabel = status === 'error' ? 'Error' : status === 'success' ? 'Done' : 'Running';
+                  const statusClass = status === 'error' ? 'error' : status === 'success' ? 'success' : 'running';
+                  const statusIcon = status === 'error'
+                    ? <AlertCircle size={12} />
+                    : status === 'success'
+                      ? <CheckCircle2 size={12} />
+                      : <Loader2 size={12} className="lc-spin" />;
+                  const durationLabel = formatDurationMs(subagent.startTime, subagent.endTime);
+                  const metaLabel = durationLabel || (status === 'running' ? 'In progress' : 'Completed');
+                  const title = humanizeToolName(subagent.subagentType) || subagent.subagentType || 'Subagent';
+                  const taskLine = subagent.task ? truncateLine(subagent.task, 280) : '';
+                  const thinkingLine = subagent.thinking ? truncateLine(subagent.thinking, 1200) : '';
+                  const excerptLine = subagent.excerpt ? truncateLine(subagent.excerpt, 600) : '';
+                  return (
+                    <div key={subagent.toolCallId} className="lc-progress-item">
+                      <button
+                        type="button"
+                        className="lc-progress-row"
+                        onClick={() => toggleSubagent(subagent.toolCallId)}
+                      >
+                        <span className="lc-progress-row-left">
+                          {isOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                          <span className="lc-progress-icon"><Users size={14} /></span>
+                          <span className="lc-progress-label">{title}</span>
+                        </span>
+                        <span className="lc-progress-row-right">
+                          <span className="lc-progress-meta">{metaLabel}</span>
+                          <span className={`lc-progress-badge ${statusClass}`}>
+                            {statusIcon}
+                            {statusLabel}
+                          </span>
+                        </span>
+                      </button>
+                      {isOpen && (
+                        <div className="lc-trace-box">
+                          <div className="lc-trace-lines mono">
+                            {taskLine && (
+                              <div className="lc-trace-line">Task: {taskLine}</div>
+                            )}
+                            {thinkingLine && (
+                              <div className="lc-trace-line">Thinking: {thinkingLine}</div>
+                            )}
+                            {excerptLine && (
+                              <div className="lc-trace-line">Result: {excerptLine}</div>
+                            )}
+                            {subagent.reportPath && (
+                              <div className="lc-trace-line">Report: {subagent.reportPath}</div>
+                            )}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
             </div>
           )}
           <div className="lc-progress-list">

@@ -37,7 +37,7 @@ def create_mark_subagent_reports_read_tool() -> BaseTool:
     @tool(args_schema=MarkSubagentReportsReadInput)
     async def mark_subagent_reports_read(
         report_tool_call_ids: List[str],
-        runtime: ToolRuntime,
+        runtime: ToolRuntime | None = None,
     ) -> Command:
         """Mark one or more subagent reports as read.
 
@@ -61,9 +61,14 @@ def create_mark_subagent_reports_read_tool() -> BaseTool:
             }
         }
 
+        tool_call_id = (
+            str(getattr(runtime, "tool_call_id", "")).strip()
+            if runtime is not None
+            else ""
+        ) or "mark_subagent_reports_read"
         message = ToolMessage(
             content=f"Marked {len(valid_ids)} subagent report(s) as read.",
-            tool_call_id=str(runtime.tool_call_id),
+            tool_call_id=tool_call_id,
         )
         return Command(update={**updates, "messages": [message]})
 

@@ -38,6 +38,9 @@ from .tools import (
     tavily_extract_tool,
     feedme_search_tool,
     get_db_retrieval_tools,
+    memory_list_tool,
+    memory_search_tool,
+    supabase_query_tool,
     is_firecrawl_agent_enabled,
     # Firecrawl tools for enhanced web scraping (MCP-backed)
     firecrawl_fetch_tool,
@@ -87,6 +90,20 @@ class MiddlewareConfig:
 RESEARCH_MW_CONFIG = MiddlewareConfig(max_tokens_before_summary=100000, messages_to_keep=4)
 LOG_ANALYSIS_MW_CONFIG = MiddlewareConfig(max_tokens_before_summary=150000, messages_to_keep=6)
 DB_RETRIEVAL_MW_CONFIG = MiddlewareConfig(max_tokens_before_summary=80000, messages_to_keep=3)
+
+
+def _subagent_read_tools() -> List[BaseTool]:
+    """Shared read/search tools available to all subagents."""
+    return [
+        memory_search_tool,
+        memory_list_tool,
+        web_search_tool,
+        tavily_extract_tool,
+        grounding_search_tool,
+        firecrawl_search_tool,
+        firecrawl_fetch_tool,
+    ]
+
 
 def _merge_tools(
     tools: List[BaseTool],
@@ -306,17 +323,33 @@ def _get_subagent_model(
             zendesk=zendesk,
         )
     elif not model_router.is_available(model_name):
-        logger.warning(
-            "subagent_model_unavailable",
-            subagent=subagent_name,
-            model=model_name,
-            provider=provider,
-        )
-        model_name, provider, model, bucket_name = _fallback_to_coordinator(
-            config=config,
-            role=role,
-            zendesk=zendesk,
-        )
+        if getattr(settings, "subagent_allow_unverified_models", False):
+            logger.warning(
+                "subagent_model_allowlist_blocked",
+                subagent=subagent_name,
+                model=model_name,
+                provider=provider,
+                action="allow_unverified",
+            )
+            model = _get_chat_model(
+                model_name,
+                provider=provider,
+                role=role,
+                temperature=subagent_config.temperature,
+            )
+        else:
+            logger.warning(
+                "subagent_model_allowlist_blocked",
+                subagent=subagent_name,
+                model=model_name,
+                provider=provider,
+                action="fallback_to_coordinator",
+            )
+            model_name, provider, model, bucket_name = _fallback_to_coordinator(
+                config=config,
+                role=role,
+                zendesk=zendesk,
+            )
     else:
         model = _get_chat_model(
             model_name,
@@ -370,6 +403,7 @@ def _research_subagent(
         "tools": _merge_tools([
             kb_search_tool,
             feedme_search_tool,
+            supabase_query_tool,
             # Prefer Firecrawl first for web scraping (MCP-backed with full feature support)
             firecrawl_fetch_tool,      # Single-page scrape with screenshots/actions/mobile/geo
             firecrawl_map_tool,        # Discover all URLs on a website
@@ -387,6 +421,7 @@ def _research_subagent(
             tavily_extract_tool,
             # Grounding as last resort for quick factual lookups
             grounding_search_tool,
+            *_subagent_read_tools(),
         ], workspace_tools),
         "model": model,
         "model_name": model_name,
@@ -437,7 +472,7 @@ def _log_diagnoser_subagent(
         "system_prompt": f"{LOG_ANALYSIS_PROMPT}\n\nCurrent date: {current_date}",
         # Keep the log diagnoser deterministic and fast: analyze the provided log
         # text directly and return the strict JSON output contract.
-        "tools": _merge_tools([], workspace_tools),
+        "tools": _merge_tools(_subagent_read_tools(), workspace_tools),
         "model": model,
         "model_name": model_name,
         "model_provider": provider,
@@ -494,7 +529,7 @@ def _db_retrieval_subagent(
             "Use for finding specific information before synthesis."
         ),
         "system_prompt": f"{DATABASE_RETRIEVAL_PROMPT}\n\nCurrent date: {current_date}",
-        "tools": _merge_tools(get_db_retrieval_tools(), workspace_tools),
+        "tools": _merge_tools(get_db_retrieval_tools() + _subagent_read_tools(), workspace_tools),
         "preferred_tool_priority": [
             "db_unified_search",  # semantic/hybrid first
             "db_context_search",  # full doc/context retrieval
@@ -553,6 +588,7 @@ def _explorer_subagent(
             web_search_tool,
             tavily_extract_tool,
             grounding_search_tool,
+            *_subagent_read_tools(),
         ], workspace_tools),
         "model": model,
         "model_name": model_name,
