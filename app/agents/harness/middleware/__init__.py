@@ -32,6 +32,7 @@ from .session_init_middleware import (
     PROGRESS_SYSTEM_NAME,
 )
 from .handoff_capture_middleware import HandoffCaptureMiddleware
+from .workspace_write_sandbox_middleware import WorkspaceWriteSandboxMiddleware
 
 __all__ = [
     "SparrowMemoryMiddleware",
@@ -52,4 +53,5 @@ __all__ = [
     "StateTrackingMiddleware",
     "StateTrackingStats",
     "get_state_tracking_middleware",
+    "WorkspaceWriteSandboxMiddleware",
 ]

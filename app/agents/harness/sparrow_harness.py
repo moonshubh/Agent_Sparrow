@@ -286,6 +286,7 @@ def _build_middleware_stack(config: SparrowAgentConfig) -> List[Any]:
         ToolRetryMiddleware,
         ToolCircuitBreakerMiddleware,
         TraceSeedMiddleware,
+        WorkspaceWriteSandboxMiddleware,
     )
 
     middleware: List[Any] = []
@@ -314,6 +315,7 @@ def _build_middleware_stack(config: SparrowAgentConfig) -> List[Any]:
                 max_tokens_before_summary=config.max_tokens_before_summary,
                 messages_to_keep=config.messages_to_keep,
             ),
+            WorkspaceWriteSandboxMiddleware(),
             PatchToolCallsMiddleware(),
         ]
 

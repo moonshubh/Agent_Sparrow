@@ -41,6 +41,20 @@ export interface SerializedArtifact {
   resolution?: string;
 }
 
+export type SubagentStatus = 'running' | 'success' | 'error';
+
+export interface SubagentRun {
+  toolCallId: string;
+  subagentType: string;
+  status: SubagentStatus;
+  task: string;
+  startTime: string;
+  endTime?: string;
+  reportPath?: string;
+  excerpt?: string;
+  thinking?: string;
+}
+
 /**
  * Abstract agent interface for CopilotKit compatibility.
  * This replaces the @ag-ui/client AbstractAgent type.
@@ -86,6 +100,7 @@ interface AgentContextValue {
   todos: TodoItem[];
   thinkingTrace: TraceStep[];
   activeTraceStepId?: string;
+  subagentActivity: Map<string, SubagentRun>;
   setActiveTraceStep: (stepId?: string) => void;
   isTraceCollapsed: boolean;
   setTraceCollapsed: (collapsed: boolean) => void;
@@ -109,6 +124,7 @@ interface AgentProviderProps {
 // Utility functions moved to ./utils
 
 const MARKDOWN_DATA_URI_PATTERN = /!\[[^\]]*\]\(data:image\/[^)]+\)/gi;
+const MAX_SUBAGENT_THINKING_CHARS = 6000;
 
 const stripMarkdownDataUriImages = (text: string): string => {
   const replaced = text.replace(MARKDOWN_DATA_URI_PATTERN, '');
@@ -763,6 +779,7 @@ export function AgentProvider({
   const [toolEvidence, setToolEvidence] = useState<Record<string, ToolEvidenceUpdateEvent>>({});
   const [todos, setTodos] = useState<TodoItem[]>([]);
   const [thinkingTrace, setThinkingTrace] = useState<TraceStep[]>([]);
+  const [subagentActivity, setSubagentActivity] = useState<Map<string, SubagentRun>>(new Map());
   const [activeTraceStepId, setActiveTraceStepId] = useState<string | undefined>(undefined);
   const [isTraceCollapsed, setTraceCollapsed] = useState(true);
   const [resolvedModel, setResolvedModel] = useState<string | undefined>(undefined);
@@ -789,6 +806,7 @@ export function AgentProvider({
     setToolEvidence({});
     setTodos([]);
     setThinkingTrace([]);
+    setSubagentActivity(new Map());
     setActiveTraceStepId(undefined);
     toolNameByIdRef.current = {};
     assistantPersistedRef.current = false;
@@ -1246,11 +1264,82 @@ export function AgentProvider({
                   } else if (value.latestStep?.id) {
                     setActiveTraceStepId(String(value.latestStep.id));
                   }
-                } else if (maybeAgentEvent.name === 'agent_todos_update') {
-                  const nextTodos = normalizeTodoItems(maybeAgentEvent.value.todos);
-                  console.debug('[AG-UI] Todos update:', nextTodos.length, 'items');
-                  setTodos(nextTodos);
-                } else if (maybeAgentEvent.name === 'genui_state_update') {
+                  } else if (maybeAgentEvent.name === 'agent_todos_update') {
+                    const nextTodos = normalizeTodoItems(maybeAgentEvent.value.todos);
+                    console.debug('[AG-UI] Todos update:', nextTodos.length, 'items');
+                    setTodos(nextTodos);
+                  } else if (maybeAgentEvent.name === 'subagent_spawn') {
+                    const value = maybeAgentEvent.value;
+                    const toolCallId = value.toolCallId;
+                    const subagentType = value.subagentType || 'subagent';
+                    const task = value.task || '';
+                    const timestamp = toIsoTimestamp(value.timestamp);
+                    if (!toolCallId) return undefined;
+                    setSubagentActivity((prev) => {
+                      const next = new Map(prev);
+                      next.set(toolCallId, {
+                        toolCallId,
+                        subagentType,
+                        status: 'running',
+                        task,
+                        startTime: timestamp,
+                      });
+                      return next;
+                    });
+                  } else if (maybeAgentEvent.name === 'subagent_end') {
+                    const value = maybeAgentEvent.value;
+                    const toolCallId = value.toolCallId;
+                    const subagentType = value.subagentType || 'subagent';
+                    const status: SubagentStatus = value.status === 'error' ? 'error' : 'success';
+                    const reportPath = value.reportPath;
+                    const excerpt = value.excerpt;
+                    const timestamp = toIsoTimestamp(value.timestamp);
+                    if (!toolCallId) return undefined;
+                    setSubagentActivity((prev) => {
+                      const next = new Map(prev);
+                      const existing = next.get(toolCallId);
+                      next.set(toolCallId, {
+                        toolCallId,
+                        subagentType: existing?.subagentType ?? subagentType,
+                        status,
+                        task: existing?.task ?? '',
+                        startTime: existing?.startTime ?? timestamp,
+                        endTime: timestamp,
+                        reportPath: reportPath ?? existing?.reportPath,
+                        excerpt: excerpt ?? existing?.excerpt,
+                        thinking: existing?.thinking,
+                      });
+                      return next;
+                    });
+                  } else if (maybeAgentEvent.name === 'subagent_thinking_delta') {
+                    const value = maybeAgentEvent.value;
+                    const toolCallId = value.toolCallId;
+                    const delta = value.delta ?? '';
+                    const subagentType = value.subagentType || 'subagent';
+                    const timestamp = toIsoTimestamp(value.timestamp);
+                    if (!toolCallId || !delta.trim()) return undefined;
+                    setSubagentActivity((prev) => {
+                      const next = new Map(prev);
+                      const existing = next.get(toolCallId);
+                      const base = existing ?? {
+                        toolCallId,
+                        subagentType,
+                        status: 'running' as SubagentStatus,
+                        task: '',
+                        startTime: timestamp,
+                      };
+                      const combined = `${base.thinking ?? ''}${delta}`;
+                      const clipped = combined.length > MAX_SUBAGENT_THINKING_CHARS
+                        ? combined.slice(-MAX_SUBAGENT_THINKING_CHARS)
+                        : combined;
+                      next.set(toolCallId, {
+                        ...base,
+                        subagentType: base.subagentType || subagentType,
+                        thinking: clipped,
+                      });
+                      return next;
+                    });
+                  } else if (maybeAgentEvent.name === 'genui_state_update') {
                   const value = maybeAgentEvent.value;
                   const notes = isRecord(value) ? value.logAnalysisNotes : undefined;
                   if (isRecord(notes)) {
@@ -1729,6 +1818,7 @@ export function AgentProvider({
         todos,
         thinkingTrace,
         activeTraceStepId,
+        subagentActivity,
         setActiveTraceStep,
         isTraceCollapsed,
         setTraceCollapsed: setTraceCollapsedState,

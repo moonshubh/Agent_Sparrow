@@ -308,6 +308,7 @@ async def startup_event():
         results = await run_startup_health_checks()
         if results:
             allowed = {model_id for model_id, payload in results.items() if payload.get("ok")}
+            blocked = {model_id for model_id, payload in results.items() if not payload.get("ok")}
             if allowed:
                 model_router.allowed_models = allowed
                 logging.info(
@@ -315,6 +316,11 @@ async def startup_event():
                     len(allowed),
                     len(results),
                 )
+                if blocked:
+                    logging.warning(
+                        "Model health checks failed for: %s",
+                        ", ".join(sorted(blocked)),
+                    )
             else:
                 logging.warning(
                     "Model health checks completed but no models passed; router left unrestricted"

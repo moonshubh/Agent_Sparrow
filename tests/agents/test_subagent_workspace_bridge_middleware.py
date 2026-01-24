@@ -4,6 +4,29 @@ from typing import Any, Dict
 
 from langchain_core.messages import AIMessage, ToolMessage
 from langgraph.types import Command
+try:  # pragma: no cover - version compatibility
+    from langgraph.prebuilt import ToolRuntime
+except Exception:  # pragma: no cover
+    try:
+        from langgraph.prebuilt.tool_node import ToolRuntime
+    except Exception:  # pragma: no cover
+        class ToolRuntime:  # type: ignore[override]
+            def __init__(
+                self,
+                *,
+                state: Any,
+                tool_call_id: str | None = None,
+                config: dict | None = None,
+                context: dict | None = None,
+                store: Any = None,
+                stream_writer: Any = None,
+            ) -> None:
+                self.state = state
+                self.tool_call_id = tool_call_id
+                self.config = config or {}
+                self.context = context or {}
+                self.store = store
+                self.stream_writer = stream_writer
 
 from app.agents.harness.store.workspace_store import SparrowWorkspaceStore, _IMPORT_FAILED
 from app.agents.unified.subagent_workspace_bridge_middleware import (
@@ -20,8 +43,8 @@ class _FakeRequest:
     def override(self, **kwargs):
         return _FakeRequest(
             tool_call=kwargs.get("tool_call", self.tool_call),
-            state=getattr(self, "state", None),
-            runtime=getattr(self, "runtime", None),
+            state=kwargs.get("state", getattr(self, "state", None)),
+            runtime=kwargs.get("runtime", getattr(self, "runtime", None)),
         )
 
 
@@ -36,6 +59,10 @@ def test_awrap_tool_call_persists_report_and_replaces_tool_message() -> None:
 
         tool_call_id = "call_123"
         subagent_type = "research"
+        events: list[dict[str, Any]] = []
+
+        def _stream_writer(event: dict[str, Any]) -> None:
+            events.append(event)
 
         state = SimpleNamespace(
             session_id="sess-bridge",
@@ -49,6 +76,15 @@ def test_awrap_tool_call_persists_report_and_replaces_tool_message() -> None:
             scratchpad={"_system": {"existing": True}},
         )
 
+        runtime = ToolRuntime(
+            state=state,
+            tool_call_id=tool_call_id,
+            config={},
+            context={},
+            store=None,
+            stream_writer=_stream_writer,
+        )
+
         request = _FakeRequest(
             tool_call={
                 "name": "task",
@@ -56,6 +92,7 @@ def test_awrap_tool_call_persists_report_and_replaces_tool_message() -> None:
                 "args": {"description": "Do the thing", "subagent_type": subagent_type},
             },
             state=state,
+            runtime=runtime,
         )
 
         full_report = ("A" * 1500) + "TAIL_MARKER"
@@ -65,6 +102,10 @@ def test_awrap_tool_call_persists_report_and_replaces_tool_message() -> None:
             assert "<context_capsule>" in desc
             assert "<workspace_instructions>" in desc
             assert f"/scratch/subagents/{subagent_type}/{tool_call_id}" in desc
+            # Subagent runtime should be allowlisted (no attachments).
+            assert isinstance(req.runtime.state, dict)
+            assert "attachments" not in req.runtime.state
+            assert req.runtime.state.get("subagent_context", {}).get("run_dir")
             return Command(update={"messages": [ToolMessage(content=full_report, tool_call_id=tool_call_id)]})
 
         result = await middleware.awrap_tool_call(request, handler)  # type: ignore[arg-type]
@@ -84,6 +125,15 @@ def test_awrap_tool_call_persists_report_and_replaces_tool_message() -> None:
         scratchpad = (result.update or {}).get("scratchpad") or {}
         assert scratchpad["_system"]["subagent_reports"][tool_call_id]["read"] is False
         assert scratchpad["_system"]["subagent_reports"][tool_call_id]["path"] == report_path
+
+        spawn = next((e for e in events if e.get("name") == "subagent_spawn"), None)
+        end = next((e for e in events if e.get("name") == "subagent_end"), None)
+        assert spawn is not None
+        assert end is not None
+        assert spawn.get("data", {}).get("toolCallId") == tool_call_id
+        assert spawn.get("data", {}).get("subagentType") == subagent_type
+        assert end.get("data", {}).get("status") == "success"
+        assert end.get("data", {}).get("reportPath") == report_path
 
     asyncio.run(_run())
 
