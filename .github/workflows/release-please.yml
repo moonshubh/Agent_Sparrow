@@ -32,6 +32,31 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "View the release at: ${{ steps.release.outputs.html_url }}" >> $GITHUB_STEP_SUMMARY
 
+      # Prepare changelog for Slack (convert markdown links, truncate if needed)
+      - name: Prepare Changelog for Slack
+        if: ${{ steps.release.outputs.release_created }}
+        id: changelog
+        env:
+          RELEASE_BODY: ${{ steps.release.outputs.body }}
+        run: |
+          # Convert GitHub markdown links [text](url) to Slack format <url|text>
+          # Remove commit hashes in parentheses for cleaner output
+          # Truncate to 2800 chars (Slack limit is 3000, leave buffer)
+          SLACK_BODY=$(echo "$RELEASE_BODY" | \
+            sed -E 's/\[([^\]]+)\]\(([^)]+)\)/<\2|\1>/g' | \
+            sed -E 's/ \([a-f0-9]{7}\)//g' | \
+            head -c 2800)
+
+          # If truncated, add indicator
+          if [ ${#RELEASE_BODY} -gt 2800 ]; then
+            SLACK_BODY="${SLACK_BODY}...\n\n_See full release notes for more details._"
+          fi
+
+          # Output using heredoc for multiline support
+          echo "body<<EOF" >> $GITHUB_OUTPUT
+          echo "$SLACK_BODY" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
       # Notify Slack on successful release
       - name: Notify Slack
         if: ${{ steps.release.outputs.release_created }}
@@ -54,7 +79,13 @@ jobs:
                     text: "*Version:*\n${{ steps.release.outputs.version }}"
                   - type: "mrkdwn"
                     text: "*Tag:*\n${{ steps.release.outputs.tag_name }}"
+              - type: "divider"
               - type: "section"
                 text:
                   type: "mrkdwn"
-                  text: "<${{ steps.release.outputs.html_url }}|View Release Notes>"
+                  text: ${{ toJSON(steps.changelog.outputs.body) }}
+              - type: "divider"
+              - type: "section"
+                text:
+                  type: "mrkdwn"
+                  text: "📋 <${{ steps.release.outputs.html_url }}|View Full Release Notes on GitHub>"

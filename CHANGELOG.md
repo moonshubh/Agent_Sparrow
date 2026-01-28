@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.3.0](https://github.com/moonshubh/Agent_Sparrow/compare/v0.2.1...v0.3.0) (2026-01-12)
+## [0.2.2](https://github.com/moonshubh/Agent_Sparrow/compare/v0.2.1...v0.2.2) (2026-01-12)
 
 
 ### Features
