@@ -308,6 +308,7 @@ async def startup_event():
         results = await run_startup_health_checks()
         if results:
             allowed = {model_id for model_id, payload in results.items() if payload.get("ok")}
+            blocked = {model_id for model_id, payload in results.items() if not payload.get("ok")}
             if allowed:
                 model_router.allowed_models = allowed
                 logging.info(
@@ -315,6 +316,11 @@ async def startup_event():
                     len(allowed),
                     len(results),
                 )
+                if blocked:
+                    logging.warning(
+                        "Model health checks failed for: %s",
+                        ", ".join(sorted(blocked)),
+                    )
             else:
                 logging.warning(
                     "Model health checks completed but no models passed; router left unrestricted"
@@ -590,6 +596,11 @@ async def agent_invoke_endpoint(request: AgentQueryRequest):
         # Note: stream() or astream() would be used for streaming responses.
         # For a single response after full execution, invoke() or ainvoke() is used.
         # Wrap the agent graph invocation in a span
+        if agent_graph is None:
+            raise HTTPException(
+                status_code=503,
+                detail="Agent graph unavailable; install optional dependencies.",
+            )
         with tracer.start_as_current_span("agent_graph_invocation") as span:
             try:
                 qh = hashlib.sha256(request.query.encode("utf-8")).hexdigest()

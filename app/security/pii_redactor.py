@@ -28,6 +28,17 @@ def contains_pii(text: str) -> bool:
     return any(pattern.search(text) for pattern in _patterns())
 
 
+def contains_sensitive(text: str) -> bool:
+    """Return True if the string contains PII or secret-like tokens.
+
+    This is a convenience alias used by some modules. The underlying pattern set
+    includes both PII (emails, phones, IPs, card-like numbers) and commonly
+    sensitive tokens (UUIDs, license keys, long mixed alnum strings).
+    """
+
+    return contains_pii(text)
+
+
 def redact_pii(text: str) -> str:
     """Redact email, phone, IP, and card-like sequences in the text."""
 

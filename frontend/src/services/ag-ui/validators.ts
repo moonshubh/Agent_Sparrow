@@ -11,6 +11,9 @@ import type {
   AgentTimelineUpdateEvent,
   ToolEvidenceUpdateEvent,
   AgentTodosUpdateEvent,
+  SubagentSpawnEvent,
+  SubagentEndEvent,
+  SubagentThinkingDeltaEvent,
   TraceStep,
   TimelineOperation,
   TodoItem,
@@ -123,6 +126,34 @@ export const ArticleArtifactEventSchema = z.object({
   title: z.string(),
   content: z.string(),
   messageId: z.string(),
+});
+
+// -----------------------------------------------------------------------------
+// Subagent Event Schemas
+// -----------------------------------------------------------------------------
+
+export const SubagentSpawnEventSchema: z.ZodSchema<SubagentSpawnEvent> = z.object({
+  subagentType: z.string(),
+  toolCallId: z.string(),
+  parentAgentId: z.string().optional(),
+  task: z.string(),
+  timestamp: z.string(),
+});
+
+export const SubagentEndEventSchema: z.ZodSchema<SubagentEndEvent> = z.object({
+  subagentType: z.string(),
+  toolCallId: z.string(),
+  status: z.enum(['success', 'error']),
+  reportPath: z.string(),
+  excerpt: z.string(),
+  timestamp: z.string(),
+});
+
+export const SubagentThinkingDeltaEventSchema: z.ZodSchema<SubagentThinkingDeltaEvent> = z.object({
+  toolCallId: z.string(),
+  delta: z.string(),
+  timestamp: z.string(),
+  subagentType: z.string().optional(),
 });
 
 // -----------------------------------------------------------------------------
@@ -249,6 +280,24 @@ export function validateArticleArtifact(
   return validateOrNull(ArticleArtifactEventSchema, data, 'article_artifact');
 }
 
+export function validateSubagentSpawn(
+  data: unknown
+): SubagentSpawnEvent | null {
+  return validateOrNull(SubagentSpawnEventSchema, data, 'subagent_spawn');
+}
+
+export function validateSubagentEnd(
+  data: unknown
+): SubagentEndEvent | null {
+  return validateOrNull(SubagentEndEventSchema, data, 'subagent_end');
+}
+
+export function validateSubagentThinkingDelta(
+  data: unknown
+): SubagentThinkingDeltaEvent | null {
+  return validateOrNull(SubagentThinkingDeltaEventSchema, data, 'subagent_thinking_delta');
+}
+
 // -----------------------------------------------------------------------------
 // Event Router
 // -----------------------------------------------------------------------------
@@ -264,6 +313,9 @@ export const eventValidators = {
   genui_state_update: validateGenuiState,
   image_artifact: validateImageArtifact,
   article_artifact: validateArticleArtifact,
+  subagent_spawn: validateSubagentSpawn,
+  subagent_end: validateSubagentEnd,
+  subagent_thinking_delta: validateSubagentThinkingDelta,
 } as const;
 
 /**

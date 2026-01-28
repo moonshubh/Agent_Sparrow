@@ -54,6 +54,16 @@ DEDUP_EMISSION_WINDOW_MS = 100  # Deduplicate emissions within this window
 BACKPRESSURE_QUEUE_SIZE = 100  # Max pending events before blocking
 TEXT_BUFFER_FLUSH_INTERVAL_MS = 50  # Flush text buffer every N ms
 
+# Thinking stream buffering (Phase 2)
+THINKING_BUFFER_FLUSH_MS = 150  # Flush buffered thinking every 150ms
+THINKING_BUFFER_MIN_CHARS = 50  # Minimum chars before flushing
+THINKING_BUFFER_MAX_CHARS = 2000  # Hard cap to prevent runaway buffers
+
+# Subagent thinking buffering (Phase 2)
+SUBAGENT_THINKING_BUFFER_FLUSH_MS = 150
+SUBAGENT_THINKING_BUFFER_MIN_CHARS = 50
+SUBAGENT_THINKING_BUFFER_MAX_CHARS = 2000
+
 # Payload safety limits for SSE events
 MAX_STRING_SIZE = 2000
 MAX_PAYLOAD_DEPTH = 10
@@ -130,6 +140,15 @@ class StreamEventEmitter:
         # Used for batching and rate-limiting event emissions
         self._event_queue: Optional[BackpressureQueue] = None
         self._last_text_flush_time: float = 0.0
+
+        # Thinking buffers (hybrid buffering)
+        self._thinking_buffer: Dict[str, str] = {}
+        self._thinking_buffer_last_flush: Dict[str, float] = {}
+
+        # Subagent thinking buffers (keyed by tool_call_id)
+        self._subagent_thinking_buffer: Dict[str, str] = {}
+        self._subagent_thinking_last_flush: Dict[str, float] = {}
+        self._subagent_thinking_type: Dict[str, Optional[str]] = {}
 
     # -------------------------------------------------------------------------
     # Low-level emission
@@ -615,6 +634,13 @@ class StreamEventEmitter:
         content: Optional[str] = None,
     ) -> None:
         """Record a thought/reasoning operation completing."""
+        run_id_str = str(run_id)
+
+        # Flush any buffered thinking before finalizing.
+        self._flush_thinking_buffer(run_id_str)
+        self._thinking_buffer.pop(run_id_str, None)
+        self._thinking_buffer_last_flush.pop(run_id_str, None)
+
         thought_op = self.operations.get(run_id)
         duration_ms: Optional[int] = None
         status: Optional[str] = None
@@ -640,30 +666,119 @@ class StreamEventEmitter:
             finalize=True,
         )
 
-    def stream_thought_chunk(self, run_id: str, chunk_text: str) -> None:
-        """Append streaming content to a thought trace step.
+    def _flush_thinking_buffer(self, run_id: str) -> None:
+        buffer = self._thinking_buffer.get(run_id, "")
+        if not buffer:
+            return
 
-        With the windowed emission approach, we allow larger chunks since
-        summarization happens at emission time, preserving quality.
-        """
+        updated = self.update_trace_step(run_id, append_content=buffer)
+        if updated is None:
+            self.add_trace_step(
+                step_type="thought",
+                content=buffer,
+                alias=run_id,
+            )
+
+        self._thinking_buffer[run_id] = ""
+        self._thinking_buffer_last_flush[run_id] = time.time() * 1000
+
+    def stream_thought_chunk(self, run_id: str, chunk_text: str) -> None:
+        """Append streaming content to a thought trace step with buffering."""
         if not chunk_text:
             return
 
         # Allow reasonable chunk sizes - windowed emission handles summarization
         # Only cap extremely large chunks that might indicate malformed data
-        MAX_CHUNK_SIZE = 5000  # Increased from 2000 - let windowing handle rest
-        if len(chunk_text) > MAX_CHUNK_SIZE:
-            # For very large chunks, keep most recent content (more relevant)
-            chunk_text = f"[...{len(chunk_text) - MAX_CHUNK_SIZE} chars...]{chunk_text[-MAX_CHUNK_SIZE:]}"
-
-        updated = self.update_trace_step(str(run_id), append_content=chunk_text)
-        if updated is None:
-            # Create if missing
-            self.add_trace_step(
-                step_type="thought",
-                content=chunk_text,
-                alias=str(run_id),
+        max_chunk_size = 5000  # Increased from 2000 - let windowing handle rest
+        if len(chunk_text) > max_chunk_size:
+            chunk_text = (
+                f"[...{len(chunk_text) - max_chunk_size} chars...]"
+                f"{chunk_text[-max_chunk_size:]}"
             )
+
+        run_id_str = str(run_id)
+        now_ms = time.time() * 1000
+
+        if run_id_str not in self._thinking_buffer:
+            self._thinking_buffer[run_id_str] = ""
+            self._thinking_buffer_last_flush[run_id_str] = now_ms
+
+        self._thinking_buffer[run_id_str] += chunk_text
+        buffer = self._thinking_buffer[run_id_str]
+        last_flush = self._thinking_buffer_last_flush.get(run_id_str, now_ms)
+
+        should_flush = (
+            len(buffer) >= THINKING_BUFFER_MAX_CHARS
+            or (
+                (now_ms - last_flush) >= THINKING_BUFFER_FLUSH_MS
+                and len(buffer) >= THINKING_BUFFER_MIN_CHARS
+            )
+        )
+
+        if should_flush:
+            self._flush_thinking_buffer(run_id_str)
+
+    def _flush_subagent_thinking_buffer(self, tool_call_id: str) -> None:
+        buffer = self._subagent_thinking_buffer.get(tool_call_id, "")
+        if not buffer:
+            return
+
+        payload = {
+            "toolCallId": tool_call_id,
+            "delta": buffer,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+        subagent_type = self._subagent_thinking_type.get(tool_call_id)
+        if subagent_type:
+            payload["subagentType"] = subagent_type
+
+        self.emit_custom_event("subagent_thinking_delta", payload)
+
+        self._subagent_thinking_buffer[tool_call_id] = ""
+        self._subagent_thinking_last_flush[tool_call_id] = time.time() * 1000
+
+    def stream_subagent_thinking_delta(
+        self,
+        tool_call_id: str,
+        delta: str,
+        subagent_type: Optional[str] = None,
+    ) -> None:
+        """Buffer and emit subagent thinking deltas for the UI."""
+        if not delta:
+            return
+
+        key = str(tool_call_id)
+        now_ms = time.time() * 1000
+
+        if key not in self._subagent_thinking_buffer:
+            self._subagent_thinking_buffer[key] = ""
+            self._subagent_thinking_last_flush[key] = now_ms
+
+        if subagent_type:
+            self._subagent_thinking_type[key] = subagent_type
+
+        self._subagent_thinking_buffer[key] += delta
+        buffer = self._subagent_thinking_buffer[key]
+        last_flush = self._subagent_thinking_last_flush.get(key, now_ms)
+
+        should_flush = (
+            len(buffer) >= SUBAGENT_THINKING_BUFFER_MAX_CHARS
+            or (
+                (now_ms - last_flush) >= SUBAGENT_THINKING_BUFFER_FLUSH_MS
+                and len(buffer) >= SUBAGENT_THINKING_BUFFER_MIN_CHARS
+            )
+        )
+
+        if should_flush:
+            self._flush_subagent_thinking_buffer(key)
+
+    def flush_subagent_thinking(self, tool_call_id: str) -> None:
+        """Flush and clear any pending subagent thinking buffer."""
+        key = str(tool_call_id)
+        self._flush_subagent_thinking_buffer(key)
+        self._subagent_thinking_buffer.pop(key, None)
+        self._subagent_thinking_last_flush.pop(key, None)
+        self._subagent_thinking_type.pop(key, None)
 
     def complete_root(self) -> None:
         """Mark the root operation as completed."""
