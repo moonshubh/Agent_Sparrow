@@ -116,13 +116,18 @@ def _build_tool_node():
             if not session_id:
                 return {}
 
+            user_id = getattr(state, "user_id", None)
             forwarded = getattr(state, "forwarded_props", {}) or {}
             customer_id = None
             if isinstance(forwarded, dict):
                 customer_id = forwarded.get("customer_id") or forwarded.get("customerId")
 
             try:
-                store = SparrowWorkspaceStore(session_id=session_id, customer_id=customer_id)
+                store = SparrowWorkspaceStore(
+                    session_id=session_id,
+                    user_id=str(user_id) if user_id is not None else None,
+                    customer_id=customer_id,
+                )
                 return {tool.name: tool for tool in get_workspace_tools(store)}
             except Exception as exc:  # Defensive: never block tool execution
                 logger.warning(

@@ -23,6 +23,7 @@ import type {
   SubmitFeedbackRequest,
   FeedbackType,
   ListMemoriesRequest,
+  ListMemoriesResponse,
   ImportMemorySourcesRequest,
   UpdateRelationshipRequest,
   MergeRelationshipsRequest,
@@ -117,11 +118,19 @@ export function useMemoryGraph(options?: {
 /**
  * Hook to fetch list of memories
  */
-export function useMemories(params?: ListMemoriesRequest) {
-  return useQuery({
+export function useMemories(
+  params?: ListMemoriesRequest,
+  options?: {
+    enabled?: boolean;
+    onSuccess?: (data: ListMemoriesResponse) => void;
+  }
+) {
+  return useQuery<ListMemoriesResponse>({
     queryKey: memoryKeys.list(params || {}),
     queryFn: () => memoryAPI.listMemories(params),
     staleTime: 30 * 1000,
+    enabled: options?.enabled ?? true,
+    onSuccess: options?.onSuccess,
   });
 }
 
@@ -287,7 +296,41 @@ export function useSubmitFeedback() {
       memoryId: string;
       request: SubmitFeedbackRequest;
     }) => memoryAPI.submitFeedback(memoryId, request),
-    onSuccess: (_, { memoryId }) => {
+    onSuccess: (response, { memoryId, request }) => {
+      const applyFeedback = (memory: Memory): Memory => {
+        const next = { ...memory };
+        const type = request.feedback_type;
+        if (type === 'thumbs_up') next.feedback_positive += 1;
+        if (type === 'thumbs_down') next.feedback_negative += 1;
+        if (type === 'resolution_success') next.resolution_success_count += 1;
+        if (type === 'resolution_failure') next.resolution_failure_count += 1;
+        if (typeof response.new_confidence_score === 'number') {
+          next.confidence_score = response.new_confidence_score;
+        }
+        return next;
+      };
+
+      // Detail cache
+      queryClient.setQueryData(memoryKeys.detail(memoryId), (prev: Memory | undefined | null) =>
+        prev ? applyFeedback(prev) : prev
+      );
+
+      // Lists (paginated)
+      queryClient.setQueriesData(
+        { queryKey: memoryKeys.lists(), type: 'all' },
+        (prev: ListMemoriesResponse | undefined) => {
+          if (!prev) return prev;
+          const items = prev.items.map((m) => (m.id === memoryId ? applyFeedback(m) : m));
+          return { ...prev, items };
+        }
+      );
+
+      // Searches
+      queryClient.setQueriesData({ queryKey: memoryKeys.searches(), type: 'all' }, (prev: Memory[] | undefined) => {
+        if (!prev) return prev;
+        return prev.map((m) => (m.id === memoryId ? applyFeedback(m) : m));
+      });
+
       queryClient.invalidateQueries({ queryKey: memoryKeys.detail(memoryId) });
       queryClient.invalidateQueries({ queryKey: memoryKeys.lists() });
       queryClient.invalidateQueries({ queryKey: memoryKeys.searches() });

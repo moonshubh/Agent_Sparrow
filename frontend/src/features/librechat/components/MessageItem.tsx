@@ -345,6 +345,7 @@ export const MessageItem = memo(function MessageItem({
     messageAttachments,
     todos,
     toolEvidence,
+    subagentActivity,
     researchProgress,
     researchStatus,
     isResearching,
@@ -371,8 +372,11 @@ export const MessageItem = memo(function MessageItem({
   const { thinking, mainContent, hadThinking } = extractThinking(displayContent);
   const showStreaming = isLast && isStreaming && !isUserMessage && !mainContent;
   const shouldRegisterArtifacts = !(isLast && isStreaming);
-  const showThinking = !isUserMessage && (thinking || (isLast && thinkingTrace.length > 0));
-  const showResearchProgress = isLast && !isUserMessage && (isResearching || researchStatus !== 'idle');
+  const showThinking = !isUserMessage && (
+    thinking || (isLast && (thinkingTrace.length > 0 || subagentActivity.size > 0))
+  );
+  const showResearchProgress =
+    isLast && !isUserMessage && (isResearching || researchStatus !== 'idle');
   const showToolIndicator = isLast && !isUserMessage && activeTools.length > 0;
   const roleName = isUserMessage ? 'You' : 'Agent Sparrow';
 
@@ -482,6 +486,7 @@ export const MessageItem = memo(function MessageItem({
               todos={isLast ? todos : undefined}
               toolEvidence={isLast ? toolEvidence : undefined}
               activeStepId={isLast ? activeTraceStepId : undefined}
+              subagentActivity={isLast ? subagentActivity : undefined}
               isStreaming={isLast && isStreaming}
             />
             {showResearchProgress && (

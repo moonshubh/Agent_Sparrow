@@ -454,7 +454,7 @@ When processing Zendesk support tickets:
 
 **Macro & KB Integration:**
 - ALWAYS delegate to db-retrieval subagent FIRST for macro/KB lookups
-- Example: task(subagent_type="db-retrieval", prompt="Search for macros and KB articles about [issue topic]")
+- Example: task(subagent_type="db-retrieval", description="Search for macros and KB articles about [issue topic]")
 - If a relevant macro exists, use it as guidance for the Suggested Reply (do NOT paste it verbatim)
 - Combine macro guidance with KB articles for comprehensive responses; merge the findings (macro + KB + your reasoning) into a single concise set of steps before writing the Suggested Reply
 - When macros conflict with KB, prefer KB (more authoritative)

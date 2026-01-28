@@ -890,6 +890,15 @@ class MemoryRecord(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class MemoryListResponse(BaseModel):
+    """Paginated response for memory list endpoints."""
+
+    items: List[MemoryRecord] = Field(default_factory=list)
+    total: int
+    limit: int
+    offset: int
+
+
 class MemoryEntityRecord(BaseModel):
     """Read model for memory_entities rows."""
 

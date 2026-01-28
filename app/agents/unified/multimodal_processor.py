@@ -15,6 +15,7 @@ from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
 from loguru import logger
 from PIL import Image, ImageOps
+from pypdf import PdfReader
 from app.agents.unified.attachment_utils import is_text_mime, TEXT_EXTENSIONS, TEXT_MIME_TYPES
 
 if TYPE_CHECKING:
@@ -39,6 +40,10 @@ MAX_ATTACHMENTS = 10  # Increased for tickets with multiple attachments
 MAX_BASE64_CHARS = 5_000_000  # ~3.75MB raw data when base64 encoded
 MAX_TEXT_CHARS = 3_500_000  # ~3.5MB for log files - Gemini, Grok support large context
 MAX_IMAGE_PIXELS = 25_000_000  # Guardrail against decompression bombs / OOM during re-encode
+PDF_TEXT_EXTRACT_THRESHOLD_BYTES = 1_000_000  # Extract text instead of inline PDF for large files
+PDF_TEXT_EXTRACT_MAX_PAGES = 8
+PDF_TEXT_EXTRACT_PAGE_CHARS = 4000
+PDF_TEXT_EXTRACT_TOTAL_CHARS = 40_000
 
 # Base64 pattern for validation
 BASE64_PATTERN = re.compile(r"^[A-Za-z0-9+/]+={0,2}$")
@@ -56,6 +61,15 @@ class ProcessedAttachments:
 
     skipped: List[Dict[str, Any]] = field(default_factory=list)
     """Attachments that couldn't be processed with reasons."""
+
+    extracted_text_attachments: List[str] = field(default_factory=list)
+    """Attachments that were converted to extracted text (e.g., large PDFs)."""
+
+    vision_fallback_blocks: List[Dict[str, Any]] = field(default_factory=list)
+    """Multimodal blocks routed to vision extraction instead of main model."""
+
+    vision_fallback_attachments: List[str] = field(default_factory=list)
+    """Attachment names routed to vision extraction."""
 
     @property
     def has_multimodal(self) -> bool:
@@ -159,9 +173,30 @@ class MultimodalProcessor:
                     result.skipped.append({"name": name, "reason": "image_processing_failed"})
 
             elif self._is_pdf_mime(mime):
-                block = self._process_pdf(name, data_url, size)
+                base64_data = self._extract_base64(data_url)
+                if not base64_data:
+                    logger.warning("pdf_base64_extraction_failed", name=name)
+                    result.skipped.append({"name": name, "reason": "pdf_base64_extraction_failed"})
+                    continue
+
+                should_extract_text = self._should_extract_pdf_text(size, len(base64_data))
+                if should_extract_text:
+                    extracted_text = self._extract_pdf_text(name, base64_data)
+                    if extracted_text:
+                        text_parts.append(f"Attachment: {name}\n{extracted_text}")
+                        result.extracted_text_attachments.append(name)
+                        logger.info("pdf_text_extracted", name=name)
+                        continue
+                    logger.warning("pdf_text_extract_failed", name=name)
+
+                block = self._process_pdf(name, data_url, size, base64_data=base64_data)
                 if block:
-                    result.multimodal_blocks.append(block)
+                    if should_extract_text:
+                        result.vision_fallback_blocks.append(block)
+                        result.vision_fallback_attachments.append(name)
+                        logger.info("pdf_vision_fallback_queued", name=name)
+                    else:
+                        result.multimodal_blocks.append(block)
                 else:
                     result.skipped.append({"name": name, "reason": "pdf_processing_failed"})
 
@@ -258,6 +293,7 @@ class MultimodalProcessor:
         name: str,
         data_url: str,
         size: int,
+        base64_data: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
         """Process a PDF attachment into an image_url content block.
 
@@ -282,7 +318,7 @@ class MultimodalProcessor:
             return None
 
         # Extract base64 data
-        base64_data = self._extract_base64(data_url)
+        base64_data = base64_data or self._extract_base64(data_url)
         if not base64_data:
             logger.warning("pdf_base64_extraction_failed", name=name)
             return None
@@ -302,6 +338,96 @@ class MultimodalProcessor:
             "type": "image_url",
             "image_url": {"url": f"data:application/pdf;base64,{base64_data}"},
         }
+
+    def _should_extract_pdf_text(self, size: int, base64_len: int) -> bool:
+        """Decide whether to extract PDF text instead of inline multimodal."""
+        if size and size >= PDF_TEXT_EXTRACT_THRESHOLD_BYTES:
+            return True
+        estimated_bytes = int(base64_len * 0.75)
+        return estimated_bytes >= PDF_TEXT_EXTRACT_THRESHOLD_BYTES
+
+    def _extract_pdf_text(self, name: str, base64_data: str) -> Optional[str]:
+        """Extract text from sampled PDF pages for large attachments."""
+        raw = self._decode_base64(base64_data)
+        if not raw:
+            return None
+
+        try:
+            reader = PdfReader(BytesIO(raw))
+        except Exception as exc:
+            logger.warning("pdf_text_reader_failed", name=name, error=str(exc))
+            return None
+
+        total_pages = len(reader.pages)
+        if total_pages <= 0:
+            return None
+
+        page_indices = self._select_pdf_pages(total_pages)
+        extracted_pages: List[str] = []
+
+        for page_idx in page_indices:
+            try:
+                page = reader.pages[page_idx]
+                text = page.extract_text() or ""
+            except Exception as exc:
+                logger.warning(
+                    "pdf_text_page_extract_failed",
+                    name=name,
+                    page=page_idx + 1,
+                    error=str(exc),
+                )
+                continue
+
+            text = text.strip()
+            if not text:
+                continue
+            if len(text) > PDF_TEXT_EXTRACT_PAGE_CHARS:
+                text = text[: PDF_TEXT_EXTRACT_PAGE_CHARS - 3] + "..."
+            extracted_pages.append(
+                f"[Page {page_idx + 1}/{total_pages}]\n{text}"
+            )
+
+        if not extracted_pages:
+            return None
+
+        combined = "\n\n".join(extracted_pages)
+        if len(combined) > PDF_TEXT_EXTRACT_TOTAL_CHARS:
+            combined = combined[: PDF_TEXT_EXTRACT_TOTAL_CHARS - 3] + "..."
+        return combined
+
+    @staticmethod
+    def _select_pdf_pages(total_pages: int) -> List[int]:
+        """Sample pages across the PDF (head/middle/tail)."""
+        if total_pages <= 0:
+            return []
+
+        max_pages = max(1, PDF_TEXT_EXTRACT_MAX_PAGES)
+        if total_pages <= max_pages:
+            return list(range(total_pages))
+
+        indices: List[int] = []
+        head_count = min(2, total_pages)
+        indices.extend(range(head_count))
+
+        tail_count = min(2, total_pages - head_count)
+        if tail_count:
+            indices.extend(range(total_pages - tail_count, total_pages))
+
+        middle_slots = max_pages - len(indices)
+        if middle_slots > 0:
+            for i in range(middle_slots):
+                pos = int((i + 1) * (total_pages - 1) / (middle_slots + 1))
+                indices.append(pos)
+
+        # Deduplicate while preserving order
+        seen = set()
+        ordered = []
+        for idx in indices:
+            if idx in seen or idx < 0 or idx >= total_pages:
+                continue
+            seen.add(idx)
+            ordered.append(idx)
+        return ordered
 
     def _process_text(
         self,

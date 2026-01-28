@@ -40,6 +40,11 @@
 tests/*
 !tests/frontend/
 !tests/frontend/**
+!tests/api/
+!tests/api/**
+!tests/agents/
+!tests/agents/**
+!tests/conftest.py
 
 # Python byte-compiled / optimized / DLL files
 __pycache__/

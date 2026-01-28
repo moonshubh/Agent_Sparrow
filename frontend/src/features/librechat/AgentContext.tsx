@@ -43,6 +43,20 @@ export interface SerializedArtifact {
   resolution?: string;
 }
 
+export type SubagentStatus = 'running' | 'success' | 'error';
+
+export interface SubagentRun {
+  toolCallId: string;
+  subagentType: string;
+  status: SubagentStatus;
+  task: string;
+  startTime: string;
+  endTime?: string;
+  reportPath?: string;
+  excerpt?: string;
+  thinking?: string;
+}
+
 /**
  * Abstract agent interface for CopilotKit compatibility.
  * This replaces the @ag-ui/client AbstractAgent type.
@@ -88,6 +102,7 @@ interface AgentContextValue {
   todos: TodoItem[];
   thinkingTrace: TraceStep[];
   activeTraceStepId?: string;
+  subagentActivity: Map<string, SubagentRun>;
   setActiveTraceStep: (stepId?: string) => void;
   isTraceCollapsed: boolean;
   setTraceCollapsed: (collapsed: boolean) => void;
@@ -114,6 +129,8 @@ interface AgentProviderProps {
 // Utility functions moved to ./utils
 
 const MARKDOWN_DATA_URI_PATTERN = /!\[[^\]]*\]\(data:image\/[^)]+\)/gi;
+const MAX_SUBAGENT_THINKING_CHARS = 6000;
+const SUBAGENT_THINKING_TRUNCATION_PREFIX = '[truncated] ';
 
 const stripMarkdownDataUriImages = (text: string): string => {
   const replaced = text.replace(MARKDOWN_DATA_URI_PATTERN, '');
@@ -294,28 +311,57 @@ const safeJsonStringify = (value: unknown): string => {
   }
 };
 
-const normalizeUnknownError = (value: unknown): Error => {
-  if (value instanceof Error) return value;
-  if (typeof value === 'string' && value.trim()) return new Error(value.trim());
+const MAX_ERROR_LENGTH = 500;
 
-  if (isRecord(value)) {
-    const message =
+const TOKEN_LIMIT_PATTERNS = [
+  'token count exceeds',
+  'invalid string length',
+  'exceeds the maximum number of tokens',
+  'context length exceeded',
+];
+
+const isTokenLimitError = (message: string): boolean =>
+  TOKEN_LIMIT_PATTERNS.some((pattern) => message.toLowerCase().includes(pattern));
+
+const normalizeUnknownError = (value: unknown): Error => {
+  let message: string | undefined;
+
+  if (value instanceof Error) {
+    message = value.message;
+  } else if (typeof value === 'string' && value.trim()) {
+    message = value.trim();
+  } else if (isRecord(value)) {
+    const recordMessage =
       (typeof value.message === 'string' && value.message.trim()) ||
       (typeof value.error === 'string' && value.error.trim()) ||
       (typeof value.detail === 'string' && value.detail.trim()) ||
       undefined;
 
     const code = typeof value.code === 'string' && value.code.trim() ? value.code.trim() : undefined;
-    if (message) return new Error(code ? `${message} (${code})` : message);
-
-    const serialized = safeJsonStringify(value);
-    if (serialized && serialized !== '{}') return new Error(serialized);
+    if (recordMessage) {
+      message = code ? `${recordMessage} (${code})` : recordMessage;
+    } else {
+      const serialized = safeJsonStringify(value);
+      if (serialized && serialized !== '{}') message = serialized;
+    }
   }
 
-  const serialized = safeJsonStringify(value);
-  if (serialized && serialized !== '{}') return new Error(serialized);
+  if (!message) {
+    const serialized = safeJsonStringify(value);
+    if (serialized && serialized !== '{}') message = serialized;
+  }
 
-  return new Error('Agent run failed');
+  const resolved = message && message.trim() ? message.trim() : 'Agent run failed';
+
+  if (isTokenLimitError(resolved)) {
+    return new Error('The attached files are too large to process. Please try with smaller files.');
+  }
+
+  if (resolved.length > MAX_ERROR_LENGTH) {
+    return new Error(`${resolved.slice(0, MAX_ERROR_LENGTH)}...`);
+  }
+
+  return new Error(resolved);
 };
 
 const getStringFromRecord = (record: Record<string, unknown>, key: string): string | undefined => {
@@ -848,6 +894,7 @@ export function AgentProvider({
   const [toolEvidence, setToolEvidence] = useState<Record<string, ToolEvidenceUpdateEvent>>({});
   const [todos, setTodos] = useState<TodoItem[]>([]);
   const [thinkingTrace, setThinkingTrace] = useState<TraceStep[]>([]);
+  const [subagentActivity, setSubagentActivity] = useState<Map<string, SubagentRun>>(new Map());
   const [activeTraceStepId, setActiveTraceStepId] = useState<string | undefined>(undefined);
   const [isTraceCollapsed, setTraceCollapsed] = useState(true);
   const [resolvedModel, setResolvedModel] = useState<string | undefined>(undefined);
@@ -1100,6 +1147,7 @@ export function AgentProvider({
     setToolEvidence({});
     setTodos([]);
     setThinkingTrace([]);
+    setSubagentActivity(new Map());
     setActiveTraceStepId(undefined);
     toolNameByIdRef.current = {};
     assistantPersistedRef.current = false;
@@ -1642,11 +1690,84 @@ export function AgentProvider({
                   } else if (value.latestStep?.id) {
                     setActiveTraceStepId(String(value.latestStep.id));
                   }
-                } else if (maybeAgentEvent.name === 'agent_todos_update') {
-                  const nextTodos = normalizeTodoItems(maybeAgentEvent.value.todos);
-                  console.debug('[AG-UI] Todos update:', nextTodos.length, 'items');
-                  setTodos(nextTodos);
-                } else if (maybeAgentEvent.name === 'genui_state_update') {
+                  } else if (maybeAgentEvent.name === 'agent_todos_update') {
+                    const nextTodos = normalizeTodoItems(maybeAgentEvent.value.todos);
+                    console.debug('[AG-UI] Todos update:', nextTodos.length, 'items');
+                    setTodos(nextTodos);
+                  } else if (maybeAgentEvent.name === 'subagent_spawn') {
+                    const value = maybeAgentEvent.value;
+                    const toolCallId = value.toolCallId;
+                    const subagentType = value.subagentType || 'subagent';
+                    const task = value.task || '';
+                    const timestamp = toIsoTimestamp(value.timestamp);
+                    if (!toolCallId) return undefined;
+                    setSubagentActivity((prev) => {
+                      const next = new Map(prev);
+                      next.set(toolCallId, {
+                        toolCallId,
+                        subagentType,
+                        status: 'running',
+                        task,
+                        startTime: timestamp,
+                      });
+                      return next;
+                    });
+                  } else if (maybeAgentEvent.name === 'subagent_end') {
+                    const value = maybeAgentEvent.value;
+                    const toolCallId = value.toolCallId;
+                    const subagentType = value.subagentType || 'subagent';
+                    const status: SubagentStatus = value.status === 'error' ? 'error' : 'success';
+                    const reportPath = value.reportPath;
+                    const excerpt = value.excerpt;
+                    const timestamp = toIsoTimestamp(value.timestamp);
+                    if (!toolCallId) return undefined;
+                    setSubagentActivity((prev) => {
+                      const next = new Map(prev);
+                      const existing = next.get(toolCallId);
+                      next.set(toolCallId, {
+                        toolCallId,
+                        subagentType: existing?.subagentType ?? subagentType,
+                        status,
+                        task: existing?.task ?? '',
+                        startTime: existing?.startTime ?? timestamp,
+                        endTime: timestamp,
+                        reportPath: reportPath ?? existing?.reportPath,
+                        excerpt: excerpt ?? existing?.excerpt,
+                        thinking: existing?.thinking,
+                      });
+                      return next;
+                    });
+                  } else if (maybeAgentEvent.name === 'subagent_thinking_delta') {
+                    const value = maybeAgentEvent.value;
+                    const toolCallId = value.toolCallId;
+                    const delta = value.delta ?? '';
+                    const subagentType = value.subagentType || 'subagent';
+                    const timestamp = toIsoTimestamp(value.timestamp);
+                    if (!toolCallId || !delta.trim()) return undefined;
+                    setSubagentActivity((prev) => {
+                      const next = new Map(prev);
+                      const existing = next.get(toolCallId);
+                      const base = existing ?? {
+                        toolCallId,
+                        subagentType,
+                        status: 'running' as SubagentStatus,
+                        task: '',
+                        startTime: timestamp,
+                      };
+                      const combined = `${base.thinking ?? ''}${delta}`;
+                      const clipped = combined.length > MAX_SUBAGENT_THINKING_CHARS
+                        ? `${SUBAGENT_THINKING_TRUNCATION_PREFIX}${combined.slice(
+                          -(MAX_SUBAGENT_THINKING_CHARS - SUBAGENT_THINKING_TRUNCATION_PREFIX.length),
+                        )}`
+                        : combined;
+                      next.set(toolCallId, {
+                        ...base,
+                        subagentType: base.subagentType || subagentType,
+                        thinking: clipped,
+                      });
+                      return next;
+                    });
+                  } else if (maybeAgentEvent.name === 'genui_state_update') {
                   const value = maybeAgentEvent.value;
                   const notes = isRecord(value) ? value.logAnalysisNotes : undefined;
                   if (isRecord(notes)) {
@@ -2148,6 +2269,7 @@ export function AgentProvider({
         todos,
         thinkingTrace,
         activeTraceStepId,
+        subagentActivity,
         setActiveTraceStep,
         isTraceCollapsed,
         setTraceCollapsed: setTraceCollapsedState,

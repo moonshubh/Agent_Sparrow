@@ -59,6 +59,7 @@ from app.agents.unified.minimax_tools import get_minimax_tools, is_minimax_avail
 
 TOOL_RATE_LIMIT_BUCKET = "internal.helper"
 ALLOWED_SUPABASE_TABLES = {
+    "knowledge_base",
     "mailbird_knowledge",
     "feedme_conversations",
     "chat_sessions",
@@ -125,6 +126,70 @@ def _is_safe_url(url: str) -> tuple[bool, str]:
         return False, f"Could not resolve hostname: {hostname}"
 
     return True, ""
+
+
+def _state_value(state: Any, key: str, default: Any = None) -> Any:
+    if state is None:
+        return default
+    if isinstance(state, dict):
+        return state.get(key, default)
+    return getattr(state, key, default)
+
+
+def _get_subagent_context(state: Any) -> Optional[dict[str, Any]]:
+    ctx = _state_value(state, "subagent_context", None)
+    return ctx if isinstance(ctx, dict) else None
+
+
+def _is_subagent_call(state: Any, runtime: Optional[ToolRuntime]) -> bool:
+    if _get_subagent_context(state):
+        return True
+    runtime_state = getattr(runtime, "state", None) if runtime is not None else None
+    return bool(_get_subagent_context(runtime_state))
+
+
+def _resolve_memory_scope_from_state(state: Any) -> tuple[Optional[str], Optional[str]]:
+    forwarded = _state_value(state, "forwarded_props", {}) or {}
+    if isinstance(forwarded, dict):
+        customer_id = forwarded.get("customer_id") or forwarded.get("customerId")
+        if customer_id:
+            return "customer_id", str(customer_id)
+    user_id = _state_value(state, "user_id", None)
+    if user_id:
+        return "user_id", str(user_id)
+    session_id = _state_value(state, "session_id", None)
+    if session_id:
+        return "session_id", str(session_id)
+    return None, None
+
+
+def _matches_memory_scope(metadata: dict[str, Any], *, scope_key: str, scope_value: str) -> bool:
+    if not metadata:
+        return False
+    for key in (scope_key, scope_key.lower(), scope_key.upper()):
+        if str(metadata.get(key) or "") == str(scope_value):
+            return True
+    return False
+
+
+def _filter_memories_by_scope(
+    memories: list[dict[str, Any]],
+    *,
+    scope_key: Optional[str],
+    scope_value: Optional[str],
+) -> list[dict[str, Any]]:
+    if not scope_key or not scope_value:
+        return memories
+    filtered: list[dict[str, Any]] = []
+    for item in memories:
+        metadata = item.get("metadata") if isinstance(item, dict) else None
+        if isinstance(metadata, dict) and _matches_memory_scope(
+            metadata,
+            scope_key=scope_key,
+            scope_value=scope_value,
+        ):
+            filtered.append(item)
+    return filtered
 
 
 # Naming guidance for new tools:
@@ -3239,6 +3304,8 @@ async def supabase_query_tool(
     limit: int = 20,
     order_by: Optional[str] = None,
     ascending: bool = True,
+    state: Annotated[Optional[GraphState], InjectedState] = None,
+    runtime: Optional[ToolRuntime] = None,
 ) -> List[Dict[str, Any]]:
     """Run a whitelisted Supabase query with simple filter expressions.
 
@@ -3257,8 +3324,16 @@ async def supabase_query_tool(
         )
 
     table = input.table.strip()
+    if not table:
+        return [{"error": "Table name is required for supabase_query"}]
+
+    is_subagent = _is_subagent_call(state, runtime)
     if table not in ALLOWED_SUPABASE_TABLES:
-        logger.warning("supabase_query_blocked_table", table=table)
+        logger.warning(
+            "supabase_query_blocked_table",
+            table=table,
+            subagent=is_subagent,
+        )
         return [{"error": f"Table '{table}' is not permitted for supabase_query"}]
 
     client = _supabase_client_cached()
@@ -3283,6 +3358,200 @@ async def supabase_query_tool(
     rows = response.data or []
     redactor = redact_sensitive_from_dict if table == "orders" else redact_pii_from_dict
     return [redactor(row) for row in rows]
+
+
+# --- Memory Retrieval Tools (read-only) ---
+
+
+class MemorySearchInput(BaseModel):
+    query: str = Field(..., description="Natural language query to search memory.")
+    limit: int = Field(default=8, ge=1, le=50, description="Max number of results.")
+    similarity_threshold: float = Field(
+        default=0.5,
+        ge=0.0,
+        le=1.0,
+        description="Minimum similarity score for memory_ui search.",
+    )
+    include_mem0: bool = Field(default=True, description="Include mem0-backed memory store.")
+    include_memory_ui: bool = Field(
+        default=True, description="Include Memory UI (memories table) search."
+    )
+
+
+class MemoryListInput(BaseModel):
+    limit: int = Field(default=20, ge=1, le=100, description="Max number of results.")
+    offset: int = Field(default=0, ge=0, description="Offset for paging Memory UI results.")
+    source: Literal["mem0", "memory_ui", "all"] = Field(
+        default="all", description="Which memory backend to list from."
+    )
+
+
+def _normalize_memory_item(item: Dict[str, Any], *, source: str) -> Dict[str, Any]:
+    content = item.get("content") or item.get("memory") or ""
+    score = item.get("similarity") or item.get("score")
+    return {
+        "id": item.get("id"),
+        "content": content,
+        "score": score,
+        "metadata": item.get("metadata") or {},
+        "source": source,
+    }
+
+
+def _dedupe_memory_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    seen: set[str] = set()
+    deduped: list[dict[str, Any]] = []
+    for item in items:
+        key = str(item.get("id") or item.get("content") or "")
+        if not key:
+            continue
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(item)
+    return deduped
+
+
+@tool("memory_search", args_schema=MemorySearchInput)
+async def memory_search_tool(
+    input: MemorySearchInput,
+    state: Annotated[Optional[GraphState], InjectedState] = None,
+    runtime: Optional[ToolRuntime] = None,
+) -> Dict[str, Any]:
+    """Search memories across mem0 and Memory UI backends (read-only)."""
+    query = (input.query or "").strip()
+    if not query:
+        return {
+            "query": query,
+            "results": [],
+            "result_count": 0,
+            "reason": "empty_query",
+        }
+
+    limit = max(1, min(50, int(input.limit)))
+    scope_key, scope_value = _resolve_memory_scope_from_state(state)
+
+    results: list[dict[str, Any]] = []
+    sources: Dict[str, Any] = {}
+
+    if input.include_mem0:
+        try:
+            from app.memory import memory_service
+
+            mem0_results = await memory_service.retrieve(
+                agent_id="sparrow",
+                query=query,
+                top_k=limit,
+            )
+            for item in mem0_results or []:
+                if isinstance(item, dict):
+                    results.append(_normalize_memory_item(item, source="mem0"))
+            sources["mem0"] = True
+        except Exception as exc:
+            logger.warning("memory_search_mem0_failed", error=str(exc))
+            sources["mem0"] = False
+
+    if input.include_memory_ui:
+        try:
+            from app.memory.memory_ui_service import get_memory_ui_service
+
+            service = get_memory_ui_service()
+            ui_results = await service.search_memories(
+                query=query,
+                agent_id=getattr(settings, "memory_ui_agent_id", "sparrow") or "sparrow",
+                tenant_id=getattr(settings, "memory_ui_tenant_id", "mailbot") or "mailbot",
+                limit=limit,
+                similarity_threshold=float(input.similarity_threshold),
+            )
+            for item in ui_results or []:
+                if isinstance(item, dict):
+                    results.append(_normalize_memory_item(item, source="memory_ui"))
+            sources["memory_ui"] = True
+        except Exception as exc:
+            logger.warning("memory_search_ui_failed", error=str(exc))
+            sources["memory_ui"] = False
+
+    results = _filter_memories_by_scope(
+        results,
+        scope_key=scope_key,
+        scope_value=scope_value,
+    )
+    results = _dedupe_memory_items(results)
+    results = results[:limit]
+
+    return {
+        "query": query,
+        "result_count": len(results),
+        "scope": {"key": scope_key, "value": scope_value},
+        "sources": sources,
+        "results": results,
+    }
+
+
+@tool("memory_list", args_schema=MemoryListInput)
+async def memory_list_tool(
+    input: MemoryListInput,
+    state: Annotated[Optional[GraphState], InjectedState] = None,
+    runtime: Optional[ToolRuntime] = None,
+) -> Dict[str, Any]:
+    """List recent memories from mem0 and/or Memory UI backends (read-only)."""
+    limit = max(1, min(100, int(input.limit)))
+    scope_key, scope_value = _resolve_memory_scope_from_state(state)
+
+    results: list[dict[str, Any]] = []
+    sources: Dict[str, Any] = {}
+
+    if input.source in {"mem0", "all"}:
+        try:
+            from app.memory import memory_service
+
+            mem0_results = await memory_service.list_primary_memories(
+                agent_id="sparrow",
+                limit=limit,
+                filters={"tenant_id": "mailbot"},
+            )
+            for item in mem0_results or []:
+                if isinstance(item, dict):
+                    results.append(_normalize_memory_item(item, source="mem0"))
+            sources["mem0"] = True
+        except Exception as exc:
+            logger.warning("memory_list_mem0_failed", error=str(exc))
+            sources["mem0"] = False
+
+    if input.source in {"memory_ui", "all"}:
+        try:
+            from app.memory.memory_ui_service import get_memory_ui_service
+
+            service = get_memory_ui_service()
+            ui_results = await service.list_memories(
+                agent_id=getattr(settings, "memory_ui_agent_id", "sparrow") or "sparrow",
+                tenant_id=getattr(settings, "memory_ui_tenant_id", "mailbot") or "mailbot",
+                limit=limit,
+                offset=int(input.offset),
+                sort_order="desc",
+            )
+            for item in ui_results or []:
+                if isinstance(item, dict):
+                    results.append(_normalize_memory_item(item, source="memory_ui"))
+            sources["memory_ui"] = True
+        except Exception as exc:
+            logger.warning("memory_list_ui_failed", error=str(exc))
+            sources["memory_ui"] = False
+
+    results = _filter_memories_by_scope(
+        results,
+        scope_key=scope_key,
+        scope_value=scope_value,
+    )
+    results = _dedupe_memory_items(results)
+    results = results[:limit]
+
+    return {
+        "result_count": len(results),
+        "scope": {"key": scope_key, "value": scope_value},
+        "sources": sources,
+        "results": results,
+    }
 
 
 # --- Database Retrieval Subagent Tools ---

@@ -108,6 +108,12 @@ function ClusterPreviewContent({
         },
       },
       {
+        onMutate: () => {
+          if (requestIdRef.current !== requestId) return;
+          setError(null);
+          setPreview(null);
+          setClusters([]);
+        },
         onSuccess: (data) => {
           if (requestIdRef.current !== requestId) return;
           setError(null);

@@ -26,6 +26,16 @@ if [ -f "$ENV_FILE" ]; then
   set +a
 fi
 
+# Optional: sync local env files from a source repo (local-only; not committed).
+# Source can come from ENV_SOURCE_ROOT or .context/env_source_root.
+if [ -z "${ENV_SOURCE_ROOT:-}" ] && [ -f "$ROOT_DIR/.context/env_source_root" ]; then
+  ENV_SOURCE_ROOT=$(head -n 1 "$ROOT_DIR/.context/env_source_root" | tr -d '\r')
+fi
+if [ -n "${ENV_SOURCE_ROOT:-}" ] && [ -x "$ROOT_DIR/scripts/dev/sync_env.sh" ]; then
+  echo "Syncing env files from $ENV_SOURCE_ROOT"
+  "$ROOT_DIR/scripts/dev/sync_env.sh" "$ENV_SOURCE_ROOT"
+fi
+
 # --- Backend Setup ---
 echo "--- Starting Backend Server ---"
 cd "$ROOT_DIR"
@@ -232,7 +242,13 @@ pnpm install
 kill_process_on_port 3000
 
 echo "Starting Next.js development server in the background..."
-nohup pnpm run dev > "$FRONTEND_LOG_DIR/frontend.log" 2>&1 &
+# Some Next.js/Turbopack setups exit early when launched without a TTY.
+# Use `script` to allocate a pseudo-tty when available.
+if command -v script >/dev/null 2>&1; then
+    nohup script -q /dev/null pnpm run dev > "$FRONTEND_LOG_DIR/frontend.log" 2>&1 &
+else
+    nohup pnpm run dev > "$FRONTEND_LOG_DIR/frontend.log" 2>&1 &
+fi
 FRONTEND_PID=$!
 echo "Frontend server started with PID: $FRONTEND_PID"
 

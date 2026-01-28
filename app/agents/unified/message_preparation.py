@@ -35,6 +35,27 @@ LONG_HISTORY_THRESHOLD = 8  # Number of messages before summarization
 TOKEN_LIMIT_BEFORE_COMPACT = 9000  # Estimated tokens before compaction
 _BASE64_SAMPLE_RE = re.compile(r"^[A-Za-z0-9+/]+$")
 
+# Attachment summarization (chunked) to avoid oversized context payloads
+ATTACHMENT_SUMMARIZE_THRESHOLD_CHARS = 20_000
+ATTACHMENT_SECTION_LINE_COUNT = 200
+ATTACHMENT_MAX_SECTIONS = 4
+ATTACHMENT_IMPORTANT_LINES_MAX = 200
+ATTACHMENT_LINE_MAX_CHARS = 400
+ATTACHMENT_SECTION_MAX_CHARS = 12_000
+ATTACHMENT_CHUNK_BUDGET_TOKENS = 550
+ATTACHMENT_FINAL_BUDGET_TOKENS = 800
+ATTACHMENT_SUMMARY_MAX_CHARS = 12_000
+ATTACHMENT_COMBINED_MAX_CHARS = 18_000
+ATTACHMENT_COMBINED_BUDGET_TOKENS = 900
+
+# Important line patterns (log/text heuristics)
+_IMPORTANT_LINE_RE = re.compile(
+    r"(error|warn|warning|critical|fatal|exception|traceback|stack trace|"
+    r"caused by|panic|segfault|timeout|outofmemory|oom)",
+    re.IGNORECASE,
+)
+_HTTP_STATUS_RE = re.compile(r"\b[45]\d{2}\b")
+
 
 class MessagePreparer:
     """Handles all pre-agent message transformations.
@@ -235,6 +256,49 @@ class MessagePreparer:
                 self.multimodal_processor.process_attachments,
                 safe_attachments,
             )
+
+            if processed.text_content:
+                summarized_text, summary_stats = await self._summarize_attachment_text(
+                    processed.text_content,
+                )
+                if summarized_text:
+                    processed.text_content = summarized_text
+                    stats.update(summary_stats)
+            if processed.extracted_text_attachments:
+                stats["pdf_text_extracted"] = len(processed.extracted_text_attachments)
+
+            if processed.vision_fallback_blocks:
+                user_query_for_vision = last_user_query or "User provided attachments."
+                vision_processed = ProcessedAttachments(
+                    multimodal_blocks=processed.vision_fallback_blocks
+                )
+                extracted = await self._vision_fallback_extract(
+                    user_query=user_query_for_vision,
+                    processed=vision_processed,
+                )
+                if extracted:
+                    names = ", ".join(processed.vision_fallback_attachments) or "PDF attachments"
+                    messages.append(
+                        SystemMessage(
+                            content=(
+                                "Attached PDF context (vision-extracted from: "
+                                f"{names}):\n{extracted}"
+                            ),
+                            name="attachment_pdf_vision_summary",
+                        )
+                    )
+                    stats["pdf_vision_extracted"] = len(processed.vision_fallback_blocks)
+                    stats["attachments_inlined"] = stats.get("attachments_inlined", 0) + 1
+                else:
+                    messages.append(
+                        SystemMessage(
+                            content=(
+                                "User attached PDFs, but no vision extraction was available. "
+                                "Ask the user to upload a smaller PDF or provide a text export."
+                            ),
+                            name="attachment_pdf_vision_unavailable",
+                        )
+                    )
 
             if processed.has_multimodal:
                 supports_vision = self._model_supports_vision(state)
@@ -698,6 +762,243 @@ class MessagePreparer:
         if "lock" in lower and lower.endswith((".yaml", ".yml", ".json")):
             return True
         return False
+
+    async def _summarize_attachment_text(
+        self,
+        text: str,
+    ) -> Tuple[Optional[str], Dict[str, Any]]:
+        """Summarize or excerpt large attachment text to avoid context overflow."""
+        stats: Dict[str, Any] = {
+            "attachments_summarized": 0,
+            "attachment_summary_chunks": 0,
+            "attachment_important_lines": 0,
+        }
+
+        if not text or len(text) <= ATTACHMENT_SUMMARIZE_THRESHOLD_CHARS:
+            return None, stats
+
+        blocks = self._split_attachment_blocks(text)
+        if not blocks:
+            return None, stats
+
+        summarized_blocks: List[str] = []
+        for name, content in blocks:
+            content = content.strip()
+            if not content:
+                continue
+            if len(content) <= ATTACHMENT_SUMMARIZE_THRESHOLD_CHARS:
+                summarized_blocks.append(f"Attachment: {name}\n{content}")
+                continue
+
+            summary, block_stats = await self._summarize_attachment_block(
+                name,
+                content,
+            )
+            summarized_blocks.append(summary)
+            stats["attachments_summarized"] += 1
+            stats["attachment_summary_chunks"] += block_stats.get("chunks", 0)
+            stats["attachment_important_lines"] += block_stats.get("important", 0)
+
+        if not summarized_blocks:
+            return None, stats
+
+        combined = "\n\n".join(summarized_blocks)
+        if len(combined) > ATTACHMENT_COMBINED_MAX_CHARS:
+            if self.helper:
+                condensed = await self._with_timeout(
+                    self.helper.summarize(
+                        (
+                            "Condense these attachment summaries. Preserve per-attachment "
+                            "headings, error messages, stack traces, timestamps, IDs, "
+                            "file paths, config values, and user-visible symptoms."
+                        )
+                        + "\n\n"
+                        + combined,
+                        budget_tokens=ATTACHMENT_COMBINED_BUDGET_TOKENS,
+                    ),
+                    "attachment_summary_aggregate",
+                )
+                if condensed:
+                    combined = f"Attachment summaries (condensed):\n{condensed.strip()}"
+                else:
+                    combined = self._truncate_text(
+                        combined, ATTACHMENT_COMBINED_MAX_CHARS
+                    )
+            else:
+                combined = self._truncate_text(combined, ATTACHMENT_COMBINED_MAX_CHARS)
+        return combined, stats
+
+    async def _summarize_attachment_block(
+        self,
+        name: str,
+        content: str,
+    ) -> Tuple[str, Dict[str, int]]:
+        """Chunk-summarize a single attachment block."""
+        lines = content.splitlines()
+        sections = self._select_line_sections(lines)
+        important_lines = self._extract_important_lines(lines)
+
+        instructions = (
+            "Summarize this log/text chunk for troubleshooting. Preserve exact "
+            "error messages, stack traces, timestamps, IDs, file paths, config "
+            "values, and user-visible symptoms. If you see a root cause or "
+            "failing component, name it."
+        )
+
+        summaries: List[str] = []
+        for idx, section in enumerate(sections, start=1):
+            section_text = "\n".join(section).strip()
+            if not section_text:
+                continue
+            section_text = self._truncate_text(
+                section_text, ATTACHMENT_SECTION_MAX_CHARS
+            )
+
+            if self.helper:
+                chunk_input = (
+                    f"{instructions}\n\n"
+                    f"[Attachment: {name} | Chunk {idx}/{len(sections)}]\n"
+                    f"{section_text}"
+                )
+                summarized = await self._with_timeout(
+                    self.helper.summarize(
+                        chunk_input,
+                        budget_tokens=ATTACHMENT_CHUNK_BUDGET_TOKENS,
+                    ),
+                    "attachment_chunk_summarize",
+                )
+                if summarized:
+                    summaries.append(summarized.strip())
+                    continue
+
+            summaries.append(self._truncate_text(section_text, 1200))
+
+        summary_parts: List[str] = [
+            f"Attachment: {name} (summarized from {len(sections)} sections)"
+        ]
+
+        if important_lines:
+            summary_parts.append("Key lines (verbatim, capped):")
+            summary_parts.extend(important_lines)
+
+        if summaries:
+            summary_parts.append("Section summaries:")
+            for idx, chunk_summary in enumerate(summaries, start=1):
+                summary_parts.append(f"[{idx}/{len(summaries)}] {chunk_summary}")
+
+        combined = "\n".join(summary_parts)
+        combined = self._truncate_text(combined, ATTACHMENT_SUMMARY_MAX_CHARS)
+
+        if self.helper and len(combined) > ATTACHMENT_SUMMARY_MAX_CHARS * 0.9:
+            condensed = await self._with_timeout(
+                self.helper.summarize(
+                    combined,
+                    budget_tokens=ATTACHMENT_FINAL_BUDGET_TOKENS,
+                ),
+                "attachment_summary_compact",
+            )
+            if condensed:
+                combined = (
+                    f"Attachment: {name} (summarized)\n{condensed.strip()}"
+                )
+
+        stats = {"chunks": len(sections), "important": len(important_lines)}
+        return combined, stats
+
+    def _split_attachment_blocks(self, text: str) -> List[Tuple[str, str]]:
+        """Split combined attachment text into (name, content) blocks."""
+        lines = text.splitlines()
+        blocks: List[Tuple[str, str]] = []
+        current_name: Optional[str] = None
+        current_lines: List[str] = []
+
+        for line in lines:
+            if line.startswith("Attachment: "):
+                if current_name is not None:
+                    blocks.append(
+                        (current_name, "\n".join(current_lines).strip())
+                    )
+                current_name = line[len("Attachment: ") :].strip() or "attachment"
+                current_lines = []
+                continue
+            current_lines.append(line)
+
+        if current_name is None:
+            content = text.strip()
+            return [("attachment", content)] if content else []
+
+        blocks.append((current_name, "\n".join(current_lines).strip()))
+        return blocks
+
+    def _select_line_sections(self, lines: List[str]) -> List[List[str]]:
+        """Select line sections across the document (head/middle/tail)."""
+        if not lines:
+            return []
+
+        section_size = ATTACHMENT_SECTION_LINE_COUNT
+        max_sections = max(1, ATTACHMENT_MAX_SECTIONS)
+        total = len(lines)
+
+        if total <= section_size * max_sections:
+            return [
+                lines[i : i + section_size]
+                for i in range(0, total, section_size)
+            ]
+
+        head = lines[:section_size]
+        tail = lines[-section_size:]
+        middle_lines = lines[section_size:-section_size]
+        middle_sections = max(1, max_sections - 2)
+
+        sections = [head]
+        if middle_lines:
+            for idx in range(middle_sections):
+                center = int((idx + 0.5) * len(middle_lines) / middle_sections)
+                start = max(0, center - section_size // 2)
+                end = min(len(middle_lines), start + section_size)
+                if end - start < section_size:
+                    start = max(0, end - section_size)
+                sections.append(middle_lines[start:end])
+        sections.append(tail)
+        return sections
+
+    def _extract_important_lines(self, lines: List[str]) -> List[str]:
+        """Extract important lines (errors/warnings/tracebacks) with caps."""
+        if not lines:
+            return []
+
+        collected: List[str] = []
+        seen = set()
+        for line in lines:
+            if not line.strip():
+                continue
+            if not (
+                _IMPORTANT_LINE_RE.search(line)
+                or _HTTP_STATUS_RE.search(line)
+            ):
+                continue
+            trimmed = self._truncate_text(line.strip(), ATTACHMENT_LINE_MAX_CHARS)
+            if trimmed in seen:
+                continue
+            seen.add(trimmed)
+            collected.append(trimmed)
+
+        if len(collected) > ATTACHMENT_IMPORTANT_LINES_MAX:
+            head_count = ATTACHMENT_IMPORTANT_LINES_MAX // 2
+            tail_count = ATTACHMENT_IMPORTANT_LINES_MAX - head_count
+            collected = (
+                collected[:head_count]
+                + ["[...important lines truncated...]"]
+                + collected[-tail_count:]
+            )
+
+        return collected
+
+    @staticmethod
+    def _truncate_text(text: str, max_chars: int) -> str:
+        if len(text) <= max_chars:
+            return text
+        return text[: max_chars - 3] + "..."
 
     def _estimate_tokens(self, messages: List[BaseMessage]) -> int:
         """Rough token estimation (~4 chars per token, ~1000 tokens per image)."""

@@ -1252,6 +1252,47 @@
   font-weight: normal;
 }
 
+.lc-subagent-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: 8px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  border: 1px solid var(--lc-border-light);
+  color: var(--lc-text-tertiary);
+  background-color: var(--lc-surface-hover);
+}
+
+.lc-subagent-pill.active {
+  color: var(--lc-text-secondary);
+  border-color: rgba(59, 130, 246, 0.4);
+  background-color: rgba(59, 130, 246, 0.12);
+}
+
+.lc-subagent-section {
+  margin-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.lc-subagent-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.lc-subagent-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--lc-text-secondary);
+}
+
 .lc-progress-list {
   display: flex;
   flex-direction: column;

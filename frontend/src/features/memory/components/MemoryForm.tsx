@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useMemo, useState, useCallback, useRef } from 'react';
+import type { User } from '@supabase/supabase-js';
 import { motion, AnimatePresence } from 'framer-motion';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -22,6 +23,8 @@ import {
 import { useAddMemory, useUpdateMemory } from '../hooks';
 import type { Memory, SourceType } from '../types';
 import { SourceBadge } from './SourceBadge';
+import { useAuth } from '@/shared/contexts/AuthContext';
+import { ADMIN_EDITOR_EMAILS } from '../lib/memoryFlags';
 
 interface MemoryFormProps {
   onClose: () => void;
@@ -36,8 +39,28 @@ const springConfig = {
   damping: 30,
 };
 
+const isPlainMetadata = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null && !Array.isArray(value);
+
+const getUserDisplayName = (user: User | null): string | null => {
+  if (!user) return null;
+
+  const meta = (user.user_metadata ?? {}) as Record<string, unknown>;
+  const fullName = typeof meta.full_name === 'string' ? meta.full_name.trim() : '';
+  const name = typeof meta.name === 'string' ? meta.name.trim() : '';
+
+  if (fullName) return fullName;
+  if (name) return name;
+
+  const email = user.email?.trim();
+  if (email) return email.split('@')[0] || email;
+
+  return user.id || null;
+};
+
 export function MemoryForm({ onClose, onSuccess, memory }: MemoryFormProps) {
   const isEditMode = Boolean(memory);
+  const { user } = useAuth();
   const [content, setContent] = useState(memory?.content ?? '');
   const [sourceType, setSourceType] = useState<SourceType>(
     memory?.source_type ?? 'manual'
@@ -56,6 +79,8 @@ export function MemoryForm({ onClose, onSuccess, memory }: MemoryFormProps) {
   const addMemory = useAddMemory();
   const updateMemory = useUpdateMemory();
   const isSaving = isEditMode ? updateMemory.isPending : addMemory.isPending;
+  const editorName = useMemo(() => getUserDisplayName(user), [user]);
+  const editorEmail = useMemo(() => (user?.email ? user.email.toLowerCase() : null), [user]);
 
   // Insert formatting at cursor
   const insertFormat = useCallback((prefix: string, suffix: string = '') => {
@@ -131,13 +156,13 @@ export function MemoryForm({ onClose, onSuccess, memory }: MemoryFormProps) {
           try {
             const parsed: unknown = JSON.parse(metadata);
             // Validate that parsed result is an object
-            if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+            if (!isPlainMetadata(parsed)) {
               setMetadataExpanded(true);
               setMetadataError('Metadata must be a JSON object');
               setError('Metadata must be a JSON object');
               return;
             }
-            parsedMetadata = parsed as Record<string, unknown>;
+            parsedMetadata = parsed;
           } catch {
             setMetadataExpanded(true);
             setMetadataError('Invalid JSON');
@@ -146,12 +171,26 @@ export function MemoryForm({ onClose, onSuccess, memory }: MemoryFormProps) {
           }
         }
 
+        const metadataBase = isPlainMetadata(parsedMetadata) ? parsedMetadata : {};
+        const isAllowedEditor = editorEmail ? ADMIN_EDITOR_EMAILS.has(editorEmail) : false;
+        const metadataWithEditor =
+          isEditMode && isAllowedEditor
+            ? {
+                ...metadataBase,
+                edited_by: editorName || editorEmail,
+                edited_by_email: editorEmail,
+                edited_by_name: editorName || editorEmail,
+                updated_by_email: editorEmail,
+                updated_by: editorName || editorEmail,
+              }
+            : parsedMetadata;
+
         if (isEditMode && memory) {
           await updateMemory.mutateAsync({
             memoryId: memory.id,
             request: {
               content: content.trim(),
-              metadata: parsedMetadata,
+              metadata: metadataWithEditor,
             },
           });
         } else {
@@ -169,7 +208,19 @@ export function MemoryForm({ onClose, onSuccess, memory }: MemoryFormProps) {
         setError(err instanceof Error ? err.message : defaultMessage);
       }
     },
-    [content, sourceType, metadata, addMemory, updateMemory, isEditMode, memory, onSuccess, onClose]
+    [
+      content,
+      sourceType,
+      metadata,
+      addMemory,
+      updateMemory,
+      isEditMode,
+      memory,
+      editorName,
+      editorEmail,
+      onSuccess,
+      onClose,
+    ]
   );
 
   const metadataKeyCount = useMemo(() => {
@@ -177,7 +228,7 @@ export function MemoryForm({ onClose, onSuccess, memory }: MemoryFormProps) {
     if (!trimmed) return 0;
     try {
       const parsed: unknown = JSON.parse(trimmed);
-      if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+      if (!isPlainMetadata(parsed)) {
         return 0;
       }
       return Object.keys(parsed as Record<string, unknown>).length;
