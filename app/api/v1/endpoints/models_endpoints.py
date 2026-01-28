@@ -14,7 +14,7 @@ limiter = Limiter(key_func=get_remote_address)
 router = APIRouter()
 
 # Type aliases for documentation (not used in function signatures due to Pydantic issues)
-Provider = Literal["google", "xai"]
+Provider = Literal["google", "xai", "openrouter", "minimax"]
 AgentType = Literal["primary", "log_analysis"]
 
 
@@ -26,10 +26,14 @@ def _get_provider_models() -> dict[str, list[str]]:
 
 def get_available_providers() -> dict[str, bool]:
     """Check which providers are configured with API keys."""
+    minimax_key = getattr(settings, "minimax_coding_plan_api_key", None) or getattr(
+        settings, "minimax_api_key", None
+    )
     return {
         "google": bool(settings.gemini_api_key),
         "xai": bool(settings.xai_api_key),
         "openrouter": bool(getattr(settings, "openrouter_api_key", None)),
+        "minimax": bool(minimax_key),
     }
 
 
@@ -56,6 +60,16 @@ async def list_models(
         for provider, models in provider_models.items()
         if available.get(provider, False)
     }
+
+    # Expose Minimax models separately when configured (routes via OpenRouter path).
+    if available.get("minimax"):
+        minimax_models = [
+            model_id
+            for model_id in provider_models.get("openrouter", [])
+            if "minimax" in model_id.lower()
+        ]
+        if minimax_models:
+            providers["minimax"] = minimax_models
 
     # Always include Google as fallback if nothing else is configured
     if not providers and settings.gemini_api_key:

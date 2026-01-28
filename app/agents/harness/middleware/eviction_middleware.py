@@ -354,8 +354,13 @@ class ToolResultEvictionMiddleware(AgentMiddleware if AGENT_MIDDLEWARE_AVAILABLE
             return result
 
         # Extract tool metadata from request
-        tool_call_id = getattr(request, "tool_call_id", None) or "unknown"
-        tool_name = getattr(request, "name", None) or getattr(request, "tool_name", None) or "unknown"
+        tool_call_id, tool_name = self._resolve_request_metadata(request)
+        if not tool_call_id:
+            logger.warning(
+                "tool_result_eviction_skipped_missing_id",
+                tool=tool_name or "unknown",
+            )
+            return result
 
         return self._evict_and_pointer(result, tool_call_id, tool_name, content)
 
@@ -381,8 +386,13 @@ class ToolResultEvictionMiddleware(AgentMiddleware if AGENT_MIDDLEWARE_AVAILABLE
             return result
 
         # Extract tool metadata from request
-        tool_call_id = getattr(request, "tool_call_id", None) or "unknown"
-        tool_name = getattr(request, "name", None) or getattr(request, "tool_name", None) or "unknown"
+        tool_call_id, tool_name = self._resolve_request_metadata(request)
+        if not tool_call_id:
+            logger.warning(
+                "tool_result_eviction_skipped_missing_id",
+                tool=tool_name or "unknown",
+            )
+            return result
 
         return await self._evict_and_pointer_async(result, tool_call_id, tool_name, content)
 
@@ -657,6 +667,47 @@ class ToolResultEvictionMiddleware(AgentMiddleware if AGENT_MIDDLEWARE_AVAILABLE
                 "tool_name": tool_name,
             },
         )
+
+    def _resolve_request_metadata(self, request: Any) -> tuple[Optional[str], str]:
+        """Resolve tool_call_id and tool_name from a ToolCallRequest-like object."""
+        tool_call_id = None
+        tool_name = None
+
+        tool_call = getattr(request, "tool_call", None)
+        if isinstance(tool_call, dict):
+            tool_call_id = (
+                tool_call.get("id")
+                or tool_call.get("tool_call_id")
+                or tool_call.get("toolCallId")
+            )
+            tool_name = (
+                tool_call.get("name")
+                or tool_call.get("tool_name")
+                or tool_call.get("toolName")
+            )
+
+        runtime = getattr(request, "runtime", None)
+        if not tool_call_id and runtime is not None:
+            tool_call_id = getattr(runtime, "tool_call_id", None)
+        if not tool_name and runtime is not None:
+            tool_name = getattr(runtime, "tool_name", None)
+
+        if not tool_call_id:
+            tool_call_id = getattr(request, "tool_call_id", None) or getattr(request, "id", None)
+        if not tool_name:
+            tool_name = getattr(request, "name", None) or getattr(request, "tool_name", None)
+
+        if isinstance(tool_call_id, str):
+            tool_call_id = tool_call_id.strip() or None
+        else:
+            tool_call_id = None
+
+        if isinstance(tool_name, str):
+            tool_name = tool_name.strip() or "unknown"
+        else:
+            tool_name = "unknown"
+
+        return tool_call_id, tool_name
 
     def _extract_content(self, result: Any) -> str:
         """Extract string content from tool result.

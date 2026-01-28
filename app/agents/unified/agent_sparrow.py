@@ -88,7 +88,9 @@ from .tools import get_registered_support_tools, get_registered_tools
 from .attachment_processor import get_attachment_processor
 from .log_autoroute_middleware import LogAutorouteMiddleware
 from .name_sanitization_middleware import MessageNameSanitizationMiddleware
+from .tool_call_id_sanitization_middleware import ToolCallIdSanitizationMiddleware
 from .subagents import get_subagent_specs
+from .minimax_tools import is_minimax_available
 from .prompts import get_coordinator_prompt, get_current_utc_date, TODO_PROMPT
 from .thread_state import (
     compute_tool_burst_signature,
@@ -139,6 +141,19 @@ def _is_quota_exhausted(exc: Exception) -> bool:
             "429",
         )
     )
+
+
+def _select_non_google_fallback_provider() -> str | None:
+    """Pick a non-Google provider for coordinator fallback.
+
+    Prefer xAI when available; otherwise use OpenRouter if explicitly configured.
+    Avoids Minimax as a coordinator by default (subagents already use Minimax).
+    """
+    if settings.xai_api_key:
+        return "xai"
+    if getattr(settings, "openrouter_api_key", None):
+        return "openrouter"
+    return None
 
 # -----------------------------------------------------------------------------
 # Fast Task Classification (keyword-based, <5ms vs ~200ms for attachment scan)
@@ -596,6 +611,7 @@ def _build_deep_agent(state: GraphState, runtime: AgentRuntimeConfig):
         get_registered_support_tools() if is_zendesk else get_registered_tools()
     )
 
+    workspace_store = None
     # Inject workspace tools so agents can read persisted context (e.g. playbooks,
     # similar scenarios, evicted tool results) without keeping large blobs in memory.
     workspace_tools: list[Any] = []
@@ -679,6 +695,7 @@ def _build_deep_agent(state: GraphState, runtime: AgentRuntimeConfig):
     coordinator_prompt = get_coordinator_prompt(
         model=runtime.model,
         provider=state.provider,
+        zendesk=is_zendesk,
     )
 
     # Build skills context for auto-detected writing/empathy skills
@@ -753,7 +770,15 @@ def _build_deep_agent(state: GraphState, runtime: AgentRuntimeConfig):
         # LangGraph state. This prevents context overflow - image base64 is 1-3MB.
         # The handler's _compact_image_output only modifies local variables,
         # not the actual state, so this middleware is REQUIRED.
-        default_middleware.append(ToolResultEvictionMiddleware(char_threshold=50000))
+        default_middleware.append(
+            ToolResultEvictionMiddleware(
+                char_threshold=50000,
+                workspace_store=workspace_store,
+            )
+        )
+
+        # Tool call ID sanitization (OpenAI-compatible providers)
+        default_middleware.append(ToolCallIdSanitizationMiddleware())
 
         # Restrict subagent writes to their run directory (Claude-style isolation).
         default_middleware.append(WorkspaceWriteSandboxMiddleware())
@@ -789,6 +814,7 @@ def _build_deep_agent(state: GraphState, runtime: AgentRuntimeConfig):
         # Some providers (notably xAI) reject `name` on non-user messages. We
         # rely on message names internally for routing and context bookkeeping,
         # so sanitize names only immediately before model calls.
+        middleware_stack.append(ToolCallIdSanitizationMiddleware())
         middleware_stack.append(MessageNameSanitizationMiddleware())
         logger.debug(
             "Coordinator middleware stack initialized: {}",
@@ -1815,7 +1841,27 @@ async def run_unified_agent(state: GraphState, config: Optional[RunnableConfig] 
         # they've been inlined into `messages` (multimodal or summarized), so we can
         # drop the raw payload to reduce memory pressure and checkpoint bloat.
         try:
-            state.attachments = []
+            attachments = list(getattr(state, "attachments", []) or [])
+            has_log = False
+            forwarded_props = getattr(state, "forwarded_props", None)
+            if isinstance(forwarded_props, dict):
+                detection = forwarded_props.get("log_detection")
+                if isinstance(detection, dict) and detection.get("has_log"):
+                    has_log = True
+
+            if attachments and has_log:
+                processor = get_attachment_processor()
+                log_only: list[Any] = []
+                for att in attachments:
+                    try:
+                        is_log, _ = processor.is_log_attachment(att)
+                    except Exception:
+                        is_log = False
+                    if is_log:
+                        log_only.append(att)
+                state.attachments = log_only
+            else:
+                state.attachments = []
         except Exception:
             pass
 
@@ -1832,12 +1878,64 @@ async def run_unified_agent(state: GraphState, config: Optional[RunnableConfig] 
             metadata={"model": runtime.model, "provider": runtime.provider},
         )
 
+        fallback_agent_factory = None
+        if runtime.provider == "google":
+            def _build_fallback_agent() -> tuple[Any, RunnableConfig, AgentRuntimeConfig] | None:
+                models_config = get_models_config()
+                fallback_runtime = None
+
+                if is_minimax_available():
+                    coordinator_cfg = resolve_coordinator_config(
+                        models_config,
+                        "minimax",
+                        with_subagents=with_subagents,
+                        zendesk=is_zendesk,
+                    )
+                    fallback_runtime = AgentRuntimeConfig(
+                        provider="minimax",
+                        model=coordinator_cfg.model_id,
+                        task_type=runtime.task_type,
+                    )
+                else:
+                    fallback_provider = _select_non_google_fallback_provider()
+                    if fallback_provider:
+                        coordinator_cfg = resolve_coordinator_config(
+                            models_config,
+                            fallback_provider,
+                            with_subagents=with_subagents,
+                            zendesk=is_zendesk,
+                        )
+                        fallback_runtime = AgentRuntimeConfig(
+                            provider=fallback_provider,
+                            model=coordinator_cfg.model_id,
+                            task_type=runtime.task_type,
+                        )
+
+                if not fallback_runtime:
+                    return None
+
+                original_provider = getattr(state, "provider", None)
+                original_model = getattr(state, "model", None)
+                try:
+                    state.provider = fallback_runtime.provider
+                    state.model = fallback_runtime.model
+                    fallback_agent = _build_deep_agent(state, fallback_runtime)
+                    fallback_config = _build_runnable_config(state, config, fallback_runtime)
+                    return fallback_agent, fallback_config, fallback_runtime
+                except Exception:
+                    state.provider = original_provider
+                    state.model = original_model
+                    raise
+
+            fallback_agent_factory = _build_fallback_agent
+
         handler = StreamEventHandler(
             agent=agent,
             emitter=emitter,
             config=run_config,
             state=state,
             messages=messages,
+            fallback_agent_factory=fallback_agent_factory,
             helper=helper,
             session_cache=session_cache,
             last_user_query=last_user_query,
@@ -1857,6 +1955,8 @@ async def run_unified_agent(state: GraphState, config: Optional[RunnableConfig] 
                 )
             except Exception as exc:
                 if runtime.provider == "google" and _is_quota_exhausted(exc):
+                    fallback_error = exc
+                    fallback_handled = False
                     fallback_model = model_router.fallback_chain.get(runtime.model)
                     if fallback_model and fallback_model != runtime.model:
                         logger.warning(
@@ -1880,18 +1980,64 @@ async def run_unified_agent(state: GraphState, config: Optional[RunnableConfig] 
                             state.model = fallback_model
                             agent = _build_deep_agent(state, runtime)
                             run_config = _build_runnable_config(state, config, runtime)
-                            final_output = await agent.ainvoke(
-                                {
-                                    "messages": list(messages),
-                                    "attachments": state.attachments,
-                                    "scratchpad": state.scratchpad,
-                                },
-                                config=run_config,
+                            try:
+                                final_output = await agent.ainvoke(
+                                    {
+                                        "messages": list(messages),
+                                        "attachments": state.attachments,
+                                        "scratchpad": state.scratchpad,
+                                    },
+                                    config=run_config,
+                                )
+                                fallback_handled = True
+                            except Exception as fallback_exc:
+                                if not _is_quota_exhausted(fallback_exc):
+                                    raise
+                                fallback_error = fallback_exc
+
+                    if not fallback_handled:
+                        fallback_provider = _select_non_google_fallback_provider()
+                        if fallback_provider and fallback_provider != runtime.provider:
+                            logger.warning(
+                                "google_quota_provider_fallback",
+                                primary=runtime.model,
+                                fallback_provider=fallback_provider,
+                                error=str(fallback_error),
                             )
-                        else:
-                            raise GeminiQuotaExhaustedException(runtime.model) from exc
-                    else:
-                        raise GeminiQuotaExhaustedException(runtime.model) from exc
+                            models_config = get_models_config()
+                            coordinator_cfg = resolve_coordinator_config(
+                                models_config,
+                                fallback_provider,
+                                with_subagents=with_subagents,
+                                zendesk=is_zendesk,
+                            )
+                            fallback_bucket = coordinator_bucket_name(
+                                fallback_provider,
+                                with_subagents=with_subagents,
+                                zendesk=is_zendesk,
+                            )
+                            if fallback_bucket and await _reserve_bucket_slot(fallback_bucket):
+                                runtime = AgentRuntimeConfig(
+                                    provider=fallback_provider,
+                                    model=coordinator_cfg.model_id,
+                                    task_type=runtime.task_type,
+                                )
+                                state.provider = fallback_provider
+                                state.model = coordinator_cfg.model_id
+                                agent = _build_deep_agent(state, runtime)
+                                run_config = _build_runnable_config(state, config, runtime)
+                                final_output = await agent.ainvoke(
+                                    {
+                                        "messages": list(messages),
+                                        "attachments": state.attachments,
+                                        "scratchpad": state.scratchpad,
+                                    },
+                                    config=run_config,
+                                )
+                                fallback_handled = True
+
+                    if not fallback_handled:
+                        raise GeminiQuotaExhaustedException(runtime.model) from fallback_error
                 else:
                     raise
 

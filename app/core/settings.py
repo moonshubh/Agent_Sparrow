@@ -53,6 +53,16 @@ class Settings(BaseSettings):
             self.gemini_api_key = self.google_api_key
         return self
 
+    @model_validator(mode="after")
+    def hydrate_minimax_base_url(self) -> "Settings":
+        # Keep Minimax base URL aligned with API host when host is customized.
+        default_host = "https://api.minimax.io"
+        default_base = "https://api.minimax.io/v1"
+        if self.minimax_api_host.rstrip("/") != default_host:
+            if self.minimax_base_url == default_base:
+                self.minimax_base_url = f"{self.minimax_api_host.rstrip('/')}/v1"
+        return self
+
     # XAI/Grok Configuration
     xai_api_key: Optional[str] = Field(default=None, alias="XAI_API_KEY")
     xai_reasoning_enabled: bool = Field(default=True, alias="XAI_REASONING_ENABLED")
@@ -62,6 +72,19 @@ class Settings(BaseSettings):
     openrouter_base_url: str = Field(default="https://openrouter.ai/api/v1", alias="OPENROUTER_BASE_URL")
     openrouter_app_name: str = Field(default="Agent Sparrow", alias="OPENROUTER_APP_NAME")
     openrouter_referer: Optional[str] = Field(default=None, alias="OPENROUTER_REFERER")
+
+    # Minimax Configuration (uses OpenRouter code path with Minimax API)
+    minimax_api_key: Optional[str] = Field(default=None, alias="MINIMAX_API_KEY")
+    # Optional separate key for Minimax Coding Plan (MCP tools).
+    minimax_coding_plan_api_key: Optional[str] = Field(
+        default=None, alias="MINIMAX_CODING_PLAN_API_KEY"
+    )
+    minimax_base_url: str = Field(default="https://api.minimax.io/v1", alias="MINIMAX_BASE_URL")
+    minimax_api_host: str = Field(default="https://api.minimax.io", alias="MINIMAX_API_HOST")
+    minimax_mcp_command: str = Field(default="python", alias="MINIMAX_MCP_COMMAND")
+    minimax_mcp_args: str = Field(
+        default="-m minimax_mcp.server", alias="MINIMAX_MCP_ARGS"
+    )
 
     # LangSmith tracing configuration
     langsmith_tracing_enabled: bool = Field(default=False, alias="LANGSMITH_TRACING_ENABLED")

@@ -61,6 +61,7 @@ asyncpg==0.31.0
 # External Tools
 tavily-python==0.7.17
 firecrawl-py==4.12.0
+minimax-coding-plan-mcp==0.0.3
 
 # HTML Parsing (for Zendesk ticket support)
 beautifulsoup4==4.14.3

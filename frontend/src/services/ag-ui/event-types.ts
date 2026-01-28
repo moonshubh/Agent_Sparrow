@@ -195,6 +195,18 @@ export interface ImageArtifactEvent {
   pageUrl?: string;
 }
 
+/**
+ * Event payload for `article_artifact` custom events.
+ * Contains article markdown for frontend artifact display.
+ */
+export interface ArticleArtifactEvent {
+  id: string;
+  type: 'article';
+  title: string;
+  content: string;
+  messageId: string;
+}
+
 // -----------------------------------------------------------------------------
 // Subagent Types
 // -----------------------------------------------------------------------------
@@ -238,6 +250,7 @@ export type AgentCustomEvent =
   | { name: 'agent_todos_update'; value: AgentTodosUpdateEvent }
   | { name: 'genui_state_update'; value: GenuiStateUpdateEvent }
   | { name: 'image_artifact'; value: ImageArtifactEvent }
+  | { name: 'article_artifact'; value: ArticleArtifactEvent }
   | { name: 'subagent_spawn'; value: SubagentSpawnEvent }
   | { name: 'subagent_end'; value: SubagentEndEvent }
   | { name: 'subagent_thinking_delta'; value: SubagentThinkingDeltaEvent };
@@ -252,6 +265,7 @@ export const KNOWN_EVENT_NAMES = [
   'agent_todos_update',
   'genui_state_update',
   'image_artifact',
+  'article_artifact',
   'subagent_spawn',
   'subagent_end',
   'subagent_thinking_delta',

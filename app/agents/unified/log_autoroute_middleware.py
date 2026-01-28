@@ -20,6 +20,8 @@ from uuid import uuid4
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 
+from .attachment_processor import get_attachment_processor
+
 try:
     from langchain.agents.middleware import AgentMiddleware
     from langchain.agents.middleware.types import ModelRequest, ModelResponse
@@ -131,6 +133,52 @@ def _extract_attachment_blocks(messages: list[BaseMessage]) -> dict[str, str]:
     return blocks_by_name
 
 
+def _get_attachment_attr(attachment: Any, attr: str) -> Optional[Any]:
+    if isinstance(attachment, dict):
+        return attachment.get(attr)
+    return getattr(attachment, attr, None)
+
+
+def _get_state_attachments(state: Any) -> list[Any]:
+    if state is None:
+        return []
+    if isinstance(state, dict):
+        return list(state.get("attachments") or [])
+    return list(getattr(state, "attachments", []) or [])
+
+
+def _clear_state_attachments(state: Any) -> None:
+    if state is None:
+        return
+    if isinstance(state, dict):
+        state["attachments"] = []
+        return
+    try:
+        setattr(state, "attachments", [])
+    except Exception:
+        return
+
+
+def _extract_log_pairs_from_state(attachments: list[Any]) -> list[tuple[str, str]]:
+    processor = get_attachment_processor()
+    pairs: list[tuple[str, str]] = []
+    for idx, attachment in enumerate(attachments or []):
+        is_log, _ = processor.is_log_attachment(attachment)
+        if not is_log:
+            continue
+        name = _get_attachment_attr(attachment, "name") or ""
+        data_url = _get_attachment_attr(attachment, "data_url")
+        if not data_url:
+            continue
+        decoded = processor.decode_data_url(str(data_url))
+        if not decoded:
+            continue
+        content = processor.extract_log_content(decoded)
+        file_name = str(name).strip() or f"attachment_{idx + 1}.log"
+        pairs.append((file_name, content))
+    return pairs
+
+
 def _sha256_text(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8", errors="replace")).hexdigest()
 
@@ -180,22 +228,42 @@ class LogAutorouteMiddleware(AgentMiddleware if MIDDLEWARE_AVAILABLE else object
         if instruction is None:
             return await handler(request)
 
-        attachment_blocks = _extract_attachment_blocks(list(request.messages or []))
-        if not attachment_blocks:
-            return await handler(request)
-
         file_names = _parse_file_names_from_instruction(_coerce_message_text(instruction))
         selected: list[tuple[str, str]] = []
-        if file_names:
-            for name in file_names:
-                block = attachment_blocks.get(name.strip().lower())
-                if block:
-                    selected.append((name.strip(), block))
-        else:
-            selected = [(name, block) for name, block in attachment_blocks.items()]
+
+        attachments = _get_state_attachments(getattr(request, "state", None))
+        if attachments:
+            attachment_pairs = _extract_log_pairs_from_state(attachments)
+            if attachment_pairs:
+                by_name: dict[str, tuple[str, str]] = {}
+                for name, content in attachment_pairs:
+                    key = name.strip().lower()
+                    if key and key not in by_name:
+                        by_name[key] = (name, content)
+
+                if file_names:
+                    for name in file_names:
+                        block = by_name.get(name.strip().lower())
+                        if block:
+                            selected.append(block)
+                else:
+                    selected = list(by_name.values())
 
         if not selected:
-            return await handler(request)
+            attachment_blocks = _extract_attachment_blocks(list(request.messages or []))
+            if not attachment_blocks:
+                return await handler(request)
+
+            if file_names:
+                for name in file_names:
+                    block = attachment_blocks.get(name.strip().lower())
+                    if block:
+                        selected.append((name.strip(), block))
+            else:
+                selected = [(name, block) for name, block in attachment_blocks.items()]
+
+            if not selected:
+                return await handler(request)
 
         signature = _compute_signature(selected)
         prev_sig = _find_prev_signature(list(request.messages or []))
@@ -207,7 +275,8 @@ class LogAutorouteMiddleware(AgentMiddleware if MIDDLEWARE_AVAILABLE else object
         for file_name, block in selected:
             log_content = _strip_attachment_header(block)
             tool_calls.append({
-                "id": f"log_diagnoser_{uuid4().hex}",
+                # OpenAI tool_call_id expects a call_* format; keep synthetic IDs compatible.
+                "id": f"call_{uuid4().hex}",
                 "name": _LOG_TOOL_NAME,
                 "args": {
                     "file_name": file_name.strip(),
@@ -217,8 +286,11 @@ class LogAutorouteMiddleware(AgentMiddleware if MIDDLEWARE_AVAILABLE else object
             })
 
         # Return a single tool-call batch (parallelizable): one log analysis call per file.
-        return AIMessage(
+        response = AIMessage(
             content="",
             tool_calls=tool_calls,
             additional_kwargs={_AUTOROUTE_SIGNATURE_KEY: signature},
         )
+        if attachments:
+            _clear_state_attachments(getattr(request, "state", None))
+        return response

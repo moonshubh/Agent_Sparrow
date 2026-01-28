@@ -49,6 +49,32 @@ export function ClusterPreview({
   onClose: () => void;
   onCommitted?: () => void;
 }) {
+  return (
+    <AnimatePresence>
+      {open && (
+        <ClusterPreviewContent
+          key={relationshipId}
+          relationshipId={relationshipId}
+          nodeById={nodeById}
+          onClose={onClose}
+          onCommitted={onCommitted}
+        />
+      )}
+    </AnimatePresence>
+  );
+}
+
+function ClusterPreviewContent({
+  relationshipId,
+  nodeById,
+  onClose,
+  onCommitted,
+}: {
+  relationshipId: string;
+  nodeById: Map<string, TreeNodeData>;
+  onClose: () => void;
+  onCommitted?: () => void;
+}) {
   const previewMutation = useSplitRelationshipPreview();
   const commitMutation = useSplitRelationshipCommit();
 
@@ -68,8 +94,6 @@ export function ClusterPreview({
   }, []);
 
   useEffect(() => {
-    if (!open) return;
-
     requestIdRef.current += 1;
     const requestId = requestIdRef.current;
 
@@ -113,7 +137,7 @@ export function ClusterPreview({
         },
       }
     );
-  }, [open, previewMutation, relationshipId]);
+  }, [previewMutation, relationshipId]);
 
   const existingRelationshipCount = preview?.existing_relationship_ids?.length ?? 0;
 
@@ -154,52 +178,50 @@ export function ClusterPreview({
   };
 
   return (
-    <AnimatePresence>
-      {open && (
-        <motion.div
-          className="cluster-preview-overlay"
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          exit={{ opacity: 0 }}
-          onClick={handleClose}
-        >
-          <motion.div
-            className="cluster-preview-modal"
-            initial={{ opacity: 0, scale: 0.96, y: 16 }}
-            animate={{ opacity: 1, scale: 1, y: 0 }}
-            exit={{ opacity: 0, scale: 0.96, y: 16 }}
-            transition={{ type: 'spring', stiffness: 420, damping: 36 }}
-            onClick={(e) => e.stopPropagation()}
+    <motion.div
+      className="cluster-preview-overlay"
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      onClick={handleClose}
+    >
+      <motion.div
+        className="cluster-preview-modal"
+        initial={{ opacity: 0, scale: 0.96, y: 16 }}
+        animate={{ opacity: 1, scale: 1, y: 0 }}
+        exit={{ opacity: 0, scale: 0.96, y: 16 }}
+        transition={{ type: 'spring', stiffness: 420, damping: 36 }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="cluster-preview__header">
+          <div className="cluster-preview__title">
+            <Sparkles size={16} />
+            Split Preview
+          </div>
+          <button
+            className="cluster-preview__close"
+            onClick={handleClose}
+            title="Close"
           >
-            <div className="cluster-preview__header">
-              <div className="cluster-preview__title">
-                <Sparkles size={16} />
-                Split Preview
-              </div>
-              <button
-                className="cluster-preview__close"
-                onClick={handleClose}
-                title="Close"
-              >
-                <X size={16} />
-              </button>
-            </div>
+            <X size={16} />
+          </button>
+        </div>
 
-            <div className="cluster-preview__meta">
-              <div className="cluster-preview__meta-line">
-                Replaces <strong>{existingRelationshipCount}</strong> existing relationship
-                {existingRelationshipCount === 1 ? '' : 's'} between these entities.
-              </div>
-              <div className="cluster-preview__meta-line">
-                {previewMutation.isPending && !preview
-                  ? 'Generating preview…'
-                  : preview?.used_ai
-                    ? `AI-assisted labels enabled · ${preview.ai_model_id ?? 'Gemini'}`
-                    : preview?.ai_error
-                      ? preview.ai_error
-                      : 'Heuristic labels (AI unavailable)'}
-              </div>
-            </div>
+        <div className="cluster-preview__meta">
+          <div className="cluster-preview__meta-line">
+            Replaces <strong>{existingRelationshipCount}</strong> existing relationship
+            {existingRelationshipCount === 1 ? '' : 's'} between these entities.
+          </div>
+          <div className="cluster-preview__meta-line">
+            {previewMutation.isPending && !preview
+              ? 'Generating preview…'
+              : preview?.used_ai
+                ? `AI-assisted labels enabled · ${preview.ai_model_id ?? 'Gemini'}`
+                : preview?.ai_error
+                  ? preview.ai_error
+                  : 'Heuristic labels (AI unavailable)'}
+          </div>
+        </div>
 
             <AnimatePresence>
               {!previewMutation.isPending && error && (
@@ -379,9 +401,7 @@ export function ClusterPreview({
                 {commitMutation.isPending ? 'Committing…' : 'Commit Split'}
               </button>
             </div>
-          </motion.div>
-        </motion.div>
-      )}
-    </AnimatePresence>
+      </motion.div>
+    </motion.div>
   );
 }

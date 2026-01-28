@@ -36,6 +36,7 @@ const MAX_ARG_LENGTH = 160;
 const MAX_DETAIL_LENGTH = 600;
 const DEFAULT_THOUGHT_PLACEHOLDER = 'model reasoning';
 const INTERNAL_TOOL_NAMES = new Set(['write_todos', 'trace_update']);
+const SENSITIVE_TOOL_NAMES = new Set(['log_diagnoser', 'log_diagnoser_tool']);
 
 type TimelineKind = 'thought' | 'tool' | 'todo' | 'result';
 
@@ -51,6 +52,8 @@ type TimelineItem = {
 };
 
 const normalizeWhitespace = (value: string): string => value.replace(/\s+/g, ' ').trim();
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 const stripThoughtMarkers = (value: string): string => (
   value
     .replace(/:::\s*(?:thinking|think|analysis|reasoning)\s*/gi, '')
@@ -142,6 +145,32 @@ const formatToolArgs = (args: unknown): string | null => {
     }
   }
   return null;
+};
+
+const summarizeRetrievalPayload = (raw: unknown): string | null => {
+  const parsed = typeof raw === 'string' ? parseToolOutput(raw) : raw;
+  if (!isRecord(parsed)) return null;
+  if (!('retrieval_id' in parsed || 'sources_searched' in parsed || 'results' in parsed)) return null;
+
+  const sourcesRaw = parsed.sources_searched;
+  const sources = Array.isArray(sourcesRaw)
+    ? sourcesRaw.filter((item): item is string => typeof item === 'string' && item.trim())
+    : [];
+  const results = Array.isArray(parsed.results) ? parsed.results : [];
+
+  if (!sources.length && !results.length) return null;
+
+  const counts = results.reduce<Record<string, number>>((acc, item) => {
+    const source = isRecord(item) && typeof item.source === 'string' ? item.source : 'other';
+    acc[source] = (acc[source] || 0) + 1;
+    return acc;
+  }, {});
+  const countsLine = Object.entries(counts)
+    .map(([source, count]) => `${source}: ${count}`)
+    .join(', ');
+  if (countsLine) return `Results: ${countsLine}`;
+  if (sources.length) return `Sources: ${sources.join(', ')}`;
+  return results.length ? `Results: ${results.length}` : null;
 };
 
 const truncateLine = (value: string, maxLength: number) => {
@@ -265,6 +294,13 @@ const getToolLabel = (step: TraceStep): string => {
   const toolNameValue = (toolName || '').toLowerCase();
   const metadata = (step.metadata ?? {}) as Record<string, unknown>;
   const rawArgs = metadata.input ?? metadata.args ?? metadata.arguments;
+  if (SENSITIVE_TOOL_NAMES.has(toolNameValue)) {
+    const argsRecord = typeof rawArgs === 'object' && rawArgs !== null
+      ? (rawArgs as Record<string, unknown>)
+      : null;
+    const fileName = argsRecord && typeof argsRecord.file_name === 'string' ? argsRecord.file_name : '';
+    return fileName ? `Analyzing log: ${fileName}` : 'Analyzing attached logs';
+  }
   const todoBlock = formatTodosBlock(rawArgs);
   const argPreview = formatToolArgs(rawArgs);
   const cleanedPreview = argPreview && /^[{\[]/.test(argPreview.trim()) ? null : argPreview;
@@ -319,6 +355,10 @@ const getToolLabel = (step: TraceStep): string => {
 
 const buildToolDetailLines = (step: TraceStep, evidence?: ToolEvidenceUpdateEvent | null): string[] => {
   const metadata = (step.metadata ?? {}) as Record<string, unknown>;
+  const toolName = (getStepToolName(step) || '').toLowerCase();
+  if (SENSITIVE_TOOL_NAMES.has(toolName)) {
+    return [];
+  }
   const rawInput = metadata.input ?? metadata.args ?? metadata.arguments;
   const rawOutput = metadata.output ?? metadata.result ?? metadata.data ?? metadata.value;
   const detailLines: string[] = [];
@@ -342,6 +382,12 @@ const buildToolDetailLines = (step: TraceStep, evidence?: ToolEvidenceUpdateEven
   if (todoOutput) {
     detailLines.push(todoOutput);
   } else {
+    const retrievalSummary = summarizeRetrievalPayload(rawOutput) || summarizeRetrievalPayload(rawInput);
+    if (retrievalSummary) {
+      detailLines.push(retrievalSummary);
+      return detailLines;
+    }
+
     const inputLine = formatToolArgs(rawInput);
     if (inputLine) {
       detailLines.push(`Input: ${truncateLine(normalizeWhitespace(inputLine), MAX_ARG_LENGTH)}`);

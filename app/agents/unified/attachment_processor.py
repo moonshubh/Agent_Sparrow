@@ -305,35 +305,50 @@ class AttachmentProcessor:
         skipped: List[Dict[str, Any]] = []
 
         for att in attachments or []:
-            mime = self._get_attr(att, "mime_type")
-            name = (self._get_attr(att, "name") or "").lower()
-            data_url = self._get_attr(att, "data_url")
-
-            if not data_url:
+            is_log, detail = self.is_log_attachment(att)
+            if detail.get("reason") == "non_text_mime":
+                skipped.append(
+                    {
+                        "name": detail.get("name") or "",
+                        "mime": detail.get("mime"),
+                        "reason": "non_text_mime",
+                    }
+                )
                 continue
-
-            if not self.is_text_mime(mime, name):
-                skipped.append({"name": name, "mime": mime, "reason": "non_text_mime"})
-                continue
-
-            looks_like_log = False
-            detail: Dict[str, Any] = {"signals": {}}
-
-            if name.endswith(".log") or (name.endswith(".txt") and "log" in name):
-                looks_like_log = True
-            else:
-                sample = self.decode_data_url(str(data_url), max_chars=8000) or ""
-                if sample:
-                    looks_like_log, detail = self._looks_like_log_text(sample)
-
-            if looks_like_log:
-                candidates.append({"name": name, "mime": mime, **detail})
+            if is_log:
+                candidates.append(detail)
 
         return {
             "has_log": bool(candidates),
             "candidates": candidates,
             "non_text_skipped": skipped,
         }
+
+    def is_log_attachment(self, attachment: "Attachment") -> tuple[bool, Dict[str, Any]]:
+        """Return True if an attachment looks like a log file."""
+        mime = self._get_attr(attachment, "mime_type")
+        name = self._get_attr(attachment, "name") or ""
+        name_lower = str(name).lower()
+        data_url = self._get_attr(attachment, "data_url")
+
+        if not data_url:
+            return False, {"name": name_lower, "mime": mime, "reason": "missing_data_url"}
+
+        if not self.is_text_mime(mime, name_lower):
+            return False, {"name": name_lower, "mime": mime, "reason": "non_text_mime"}
+
+        looks_like_log = False
+        detail: Dict[str, Any] = {"name": name_lower, "mime": mime, "signals": {}}
+
+        if name_lower.endswith(".log") or (name_lower.endswith(".txt") and "log" in name_lower):
+            looks_like_log = True
+        else:
+            sample = self.decode_data_url(str(data_url), max_chars=8000) or ""
+            if sample:
+                looks_like_log, signal_detail = self._looks_like_log_text(sample)
+                detail["signals"] = signal_detail.get("signals", {})
+
+        return looks_like_log, detail
 
     def extract_log_content(self, text: str) -> str:
         """Extract meaningful content from log text.

@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useCallback, useRef, useEffect, KeyboardEvent, ChangeEvent } from 'react';
+import React, { useState, useCallback, useRef, useEffect, useLayoutEffect, KeyboardEvent, ChangeEvent } from 'react';
 import { useAgent } from '@/features/librechat/AgentContext';
 import { ArrowUp, Square, Paperclip } from 'lucide-react';
 import type { AttachmentInput } from '@/services/ag-ui/types';
@@ -57,19 +57,44 @@ export function ChatInput({ initialInput, onInitialInputUsed }: ChatInputProps) 
     return 'application/octet-stream';
   }, []);
 
+  // Check if browser supports field-sizing: content (CSS handles auto-grow)
+  // If not supported, use JavaScript fallback
+  const supportsFieldSizing = useRef<boolean | null>(null);
+
+  useLayoutEffect(() => {
+    const textarea = textareaRef.current;
+    if (!textarea) return;
+
+    // Check support once
+    if (supportsFieldSizing.current === null) {
+      supportsFieldSizing.current = CSS.supports('field-sizing', 'content');
+    }
+
+    // If CSS field-sizing is supported, no JS needed - CSS handles everything
+    if (supportsFieldSizing.current) {
+      return;
+    }
+
+    // Fallback for browsers without field-sizing support
+    // Reset height to get accurate scrollHeight
+    textarea.style.height = '0px';
+    const scrollHeight = textarea.scrollHeight;
+    const newHeight = Math.max(24, Math.min(scrollHeight, 200));
+    textarea.style.height = `${newHeight}px`;
+    textarea.style.overflowY = scrollHeight > 200 ? 'auto' : 'hidden';
+  }, [input]);
+
   // Handle initial input from starters
   useEffect(() => {
     if (initialInput && initialInput !== lastAppliedInitialInputRef.current) {
       setInput(initialInput);
       lastAppliedInitialInputRef.current = initialInput;
       onInitialInputUsed?.();
-      // Focus the textarea and position cursor at end
-      if (textareaRef.current) {
-        textareaRef.current.focus();
-        // Resize textarea for content
-        textareaRef.current.style.height = 'auto';
-        textareaRef.current.style.height = Math.min(textareaRef.current.scrollHeight, 200) + 'px';
-      }
+      requestAnimationFrame(() => {
+        if (textareaRef.current) {
+          textareaRef.current.focus();
+        }
+      });
     }
   }, [initialInput, onInitialInputUsed]);
 
@@ -100,7 +125,7 @@ export function ChatInput({ initialInput, onInitialInputUsed }: ChatInputProps) 
 
     // Reset textarea height
     if (textareaRef.current) {
-      textareaRef.current.style.height = 'auto';
+      textareaRef.current.style.height = '24px';
     }
 
     await sendMessage(message, currentAttachments);
@@ -124,11 +149,10 @@ export function ChatInput({ initialInput, onInitialInputUsed }: ChatInputProps) 
 
   const handleInputChange = useCallback((e: ChangeEvent<HTMLTextAreaElement>) => {
     setInput(e.target.value);
+  }, []);
 
-    // Auto-resize textarea
-    const textarea = e.target;
-    textarea.style.height = 'auto';
-    textarea.style.height = Math.min(textarea.scrollHeight, 200) + 'px';
+  const handlePaste = useCallback(() => {
+    // useLayoutEffect will handle resize when input state updates
   }, []);
 
   const handleFileSelect = useCallback(async (files: FileList | null) => {
@@ -285,6 +309,7 @@ export function ChatInput({ initialInput, onInitialInputUsed }: ChatInputProps) 
             value={input}
             onChange={handleInputChange}
             onKeyDown={handleKeyDown}
+            onPaste={handlePaste}
             rows={1}
             disabled={isStreaming}
             aria-label="Message input"
