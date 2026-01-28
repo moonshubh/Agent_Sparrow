@@ -17,6 +17,25 @@
 /* Chat Layout Overrides for Centered Content */
 @layer components {
 
+  /* Textarea auto-grow support - CSS field-sizing handles everything */
+  .lc-textarea {
+    /* Modern CSS auto-sizing - textarea grows with content */
+    field-sizing: content !important;
+    /* Flex settings */
+    flex: 1 1 0% !important;
+    min-width: 0 !important;
+    max-width: 100% !important;
+    box-sizing: border-box !important;
+    /* Text wrapping properties */
+    white-space: pre-wrap !important;
+    word-wrap: break-word !important;
+    overflow-wrap: break-word !important;
+    word-break: break-word !important;
+    /* Overflow */
+    overflow-x: hidden !important;
+    overflow-y: auto !important;
+  }
+
   /* Ensure sidebar behaves as overlay */
   [data-sidebar="sidebar"] {
     position: relative;

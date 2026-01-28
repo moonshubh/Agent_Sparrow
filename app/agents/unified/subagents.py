@@ -235,7 +235,7 @@ def _provider_api_key_available(provider: str) -> bool:
         # (Minimax models route through OpenRouter code path)
         return bool(getattr(settings, "openrouter_api_key", None)) or bool(
             getattr(settings, "minimax_api_key", None)
-        )
+        ) or bool(getattr(settings, "minimax_coding_plan_api_key", None))
     return False
 
 
@@ -344,7 +344,7 @@ def _research_subagent(*, zendesk: bool = False) -> Dict[str, Any]:
     - Google grounding search (grounding_search)
     - Tavily web search (web_search)
     - Firecrawl tools (fetch, map, crawl, extract, search)
-    - Minimax tools (web_search, understand_image) - prioritized when using Minimax model
+    - Minimax tools (web_search, understand_image) - prioritized when Minimax MCP is available
 
     """
     model_name, provider, model = _get_subagent_model(
@@ -354,63 +354,45 @@ def _research_subagent(*, zendesk: bool = False) -> Dict[str, Any]:
     )
     current_date = get_current_utc_date()
 
-    # Check if using Minimax model - prioritize Minimax tools when available
-    use_minimax = _is_minimax_model(model_name) and is_minimax_available()
+    # Prioritize Minimax MCP tools whenever available (regardless of model choice).
+    use_minimax = is_minimax_available()
 
-    # Build tools list with appropriate priority based on model
+    tools = [
+        kb_search_tool,
+        feedme_search_tool,
+    ]
     if use_minimax:
-        # Minimax model: Prioritize Minimax tools for web search and image understanding
-        tools = [
-            kb_search_tool,
-            feedme_search_tool,
-            # Minimax tools FIRST when using Minimax model
-            minimax_web_search_tool,      # AI-powered web search via Minimax
+        tools.extend([
+            minimax_web_search_tool,       # AI-powered web search via Minimax
             minimax_understand_image_tool, # Image analysis via Minimax vision
-            # Firecrawl for advanced web scraping (MCP-backed)
-            firecrawl_fetch_tool,
-            firecrawl_map_tool,
-            firecrawl_crawl_tool,
-            firecrawl_extract_tool,
-            firecrawl_search_tool,
-            *(
-                [firecrawl_agent_tool]
-                if is_firecrawl_agent_enabled()
-                else []
-            ),
-            firecrawl_agent_status_tool,
-            # Tavily as fallback
-            web_search_tool,
-            tavily_extract_tool,
-            grounding_search_tool,
-        ]
+        ])
         logger.info(
             "research_subagent_minimax_tools_prioritized",
             model=model_name,
             minimax_tools=["minimax_web_search", "minimax_understand_image"],
         )
-    else:
-        # Non-Minimax model: Standard tool priority
-        tools = [
-            kb_search_tool,
-            feedme_search_tool,
-            # Prefer Firecrawl first for web scraping (MCP-backed with full feature support)
-            firecrawl_fetch_tool,
-            firecrawl_map_tool,
-            firecrawl_crawl_tool,
-            firecrawl_extract_tool,
-            firecrawl_search_tool,
-            *(
-                [firecrawl_agent_tool]
-                if is_firecrawl_agent_enabled()
-                else []
-            ),
-            firecrawl_agent_status_tool,
-            # Tavily as secondary for quick web search
-            web_search_tool,
-            tavily_extract_tool,
-            # Grounding as last resort for quick factual lookups
-            grounding_search_tool,
-        ]
+
+    # Firecrawl for advanced web scraping (MCP-backed)
+    tools.extend([
+        firecrawl_fetch_tool,
+        firecrawl_map_tool,
+        firecrawl_crawl_tool,
+        firecrawl_extract_tool,
+        firecrawl_search_tool,
+        *(
+            [firecrawl_agent_tool]
+            if is_firecrawl_agent_enabled()
+            else []
+        ),
+        firecrawl_agent_status_tool,
+    ])
+
+    # Tavily as fallback
+    tools.extend([
+        web_search_tool,
+        tavily_extract_tool,
+        grounding_search_tool,
+    ])
 
     subagent_spec: Dict[str, Any] = {
         "name": "research-agent",
@@ -460,17 +442,17 @@ def _log_diagnoser_subagent(*, zendesk: bool = False) -> Dict[str, Any]:
     )
     current_date = get_current_utc_date()
 
-    # Check if using Minimax model - add image understanding for screenshot analysis
-    use_minimax = _is_minimax_model(model_name) and is_minimax_available()
+    # Prefer Minimax MCP tools whenever available.
+    use_minimax = is_minimax_available()
 
     # Log diagnoser is typically minimal, but Minimax image understanding is useful
     # for analyzing error screenshots
     tools = []
     if use_minimax:
-        tools = [
+        tools.extend([
             minimax_understand_image_tool,  # Analyze error screenshots
             minimax_web_search_tool,        # Research error messages
-        ]
+        ])
         logger.info(
             "log_diagnoser_subagent_minimax_tools_added",
             model=model_name,
@@ -531,6 +513,20 @@ def _db_retrieval_subagent(*, zendesk: bool = False) -> Dict[str, Any]:
     )
     current_date = get_current_utc_date()
 
+    use_minimax = is_minimax_available()
+    tools = []
+    if use_minimax:
+        tools.extend([
+            minimax_web_search_tool,
+            minimax_understand_image_tool,
+        ])
+        logger.info(
+            "db_retrieval_subagent_minimax_tools_added",
+            model=model_name,
+            minimax_tools=["minimax_web_search", "minimax_understand_image"],
+        )
+    tools.extend(get_db_retrieval_tools())
+
     subagent_spec: Dict[str, Any] = {
         "name": "db-retrieval",
         "description": (
@@ -540,7 +536,7 @@ def _db_retrieval_subagent(*, zendesk: bool = False) -> Dict[str, Any]:
             "Use for finding specific information before synthesis."
         ),
         "system_prompt": f"{DATABASE_RETRIEVAL_PROMPT}\n\nCurrent date: {current_date}",
-        "tools": get_db_retrieval_tools(),
+        "tools": tools,
         "preferred_tool_priority": [
             "db_unified_search",  # semantic/hybrid first
             "db_context_search",  # full doc/context retrieval
@@ -558,6 +554,7 @@ def _db_retrieval_subagent(*, zendesk: bool = False) -> Dict[str, Any]:
         provider=provider,
         tools=[t.name for t in subagent_spec["tools"]],
         middleware_count=len(subagent_spec["middleware"]),
+        minimax_prioritized=use_minimax,
     )
 
     return subagent_spec
@@ -569,7 +566,7 @@ def _explorer_subagent(*, zendesk: bool = False) -> Dict[str, Any]:
     Phase 2 requirement:
     - Read/search/list capabilities only.
     - Suggestions-only output contract (no final answers, no actions).
-    - Minimax tools prioritized when using Minimax model.
+    - Minimax tools prioritized when Minimax MCP is available.
     """
     model_name, provider, model = _get_subagent_model(
         "explorer",
@@ -578,45 +575,33 @@ def _explorer_subagent(*, zendesk: bool = False) -> Dict[str, Any]:
     )
     current_date = get_current_utc_date()
 
-    # Check if using Minimax model - prioritize Minimax tools when available
-    use_minimax = _is_minimax_model(model_name) and is_minimax_available()
+    # Prefer Minimax MCP tools whenever available.
+    use_minimax = is_minimax_available()
 
+    tools = [
+        kb_search_tool,
+        feedme_search_tool,
+    ]
     if use_minimax:
-        # Minimax model: Prioritize Minimax tools
-        tools = [
-            kb_search_tool,
-            feedme_search_tool,
-            # Minimax tools FIRST
+        tools.extend([
             minimax_web_search_tool,
             minimax_understand_image_tool,
-            # Firecrawl for advanced scraping
-            firecrawl_search_tool,
-            firecrawl_fetch_tool,
-            firecrawl_map_tool,
-            firecrawl_extract_tool,
-            # Tavily as fallback
-            web_search_tool,
-            tavily_extract_tool,
-            grounding_search_tool,
-        ]
+        ])
         logger.info(
             "explorer_subagent_minimax_tools_prioritized",
             model=model_name,
             minimax_tools=["minimax_web_search", "minimax_understand_image"],
         )
-    else:
-        # Standard tool priority
-        tools = [
-            kb_search_tool,
-            feedme_search_tool,
-            firecrawl_search_tool,
-            firecrawl_fetch_tool,
-            firecrawl_map_tool,
-            firecrawl_extract_tool,
-            web_search_tool,
-            tavily_extract_tool,
-            grounding_search_tool,
-        ]
+
+    tools.extend([
+        firecrawl_search_tool,
+        firecrawl_fetch_tool,
+        firecrawl_map_tool,
+        firecrawl_extract_tool,
+        web_search_tool,
+        tavily_extract_tool,
+        grounding_search_tool,
+    ])
 
     subagent_spec: Dict[str, Any] = {
         "name": "explorer",

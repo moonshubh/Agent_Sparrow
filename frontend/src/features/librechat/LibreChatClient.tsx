@@ -139,7 +139,7 @@ const DEFAULT_MODELS: Record<Provider, string> = {
 
 // Chat configuration constants
 const CHAT_CONFIG = {
-  maxConversations: 10,
+  maxConversations: 100,
   maxMessagesToLoad: 100,
 } as const;
 
@@ -166,7 +166,6 @@ export default function LibreChatClient() {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [currentConversationId, setCurrentConversationId] = useState<string | undefined>();
   const initializedRef = useRef(false);
-  const artifactRestoreTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const getActiveModelSelection = useCallback((): { provider: Provider; model: string } => {
     const agentState = agent?.state as Record<string, unknown> | undefined;
@@ -212,7 +211,7 @@ export default function LibreChatClient() {
       // Load existing sessions from backend
       let existingSessions: Conversation[] = [];
       try {
-        const sessions = await sessionsAPI.list(50, 0);
+        const sessions = await sessionsAPI.list(CHAT_CONFIG.maxConversations, 0);
         existingSessions = sessions.map((s) => ({
           id: String(s.id),
           title: s.title || 'Untitled Chat',
@@ -275,15 +274,8 @@ export default function LibreChatClient() {
         // Set loaded messages on the agent
         newAgent.messages = messages;
 
-        // Restore artifacts from message metadata (deferred to allow store initialization)
-        // Clear any pending restore timeout before scheduling a new one
-        if (artifactRestoreTimeoutRef.current) {
-          clearTimeout(artifactRestoreTimeoutRef.current);
-        }
-        artifactRestoreTimeoutRef.current = setTimeout(() => {
-          restoreArtifactsFromMessages(messages);
-          artifactRestoreTimeoutRef.current = null;
-        }, 0);
+        // Restore artifacts from message metadata
+        restoreArtifactsFromMessages(messages);
 
         setSessionId(mostRecent.id);
         setTraceId(newTraceId);
@@ -326,16 +318,6 @@ export default function LibreChatClient() {
   useEffect(() => {
     void initialize();
   }, [initialize]);
-
-  // Cleanup timeout on unmount to prevent memory leaks
-  useEffect(() => {
-    return () => {
-      if (artifactRestoreTimeoutRef.current) {
-        clearTimeout(artifactRestoreTimeoutRef.current);
-        artifactRestoreTimeoutRef.current = null;
-      }
-    };
-  }, []);
 
   const handleRetry = useCallback(() => {
     initializedRef.current = false;
@@ -446,14 +428,8 @@ export default function LibreChatClient() {
       // Set loaded messages on the agent
       newAgent.messages = messages;
 
-      // Restore artifacts from message metadata (deferred to allow store initialization)
-      if (artifactRestoreTimeoutRef.current) {
-        clearTimeout(artifactRestoreTimeoutRef.current);
-      }
-      artifactRestoreTimeoutRef.current = setTimeout(() => {
-        restoreArtifactsFromMessages(messages);
-        artifactRestoreTimeoutRef.current = null;
-      }, 0);
+      // Restore artifacts from message metadata
+      restoreArtifactsFromMessages(messages);
 
       setSessionId(conversationId);
       setTraceId(selectedTraceId);

@@ -14,11 +14,13 @@ import {
 import { sessionsAPI, type AgentType as PersistedAgentType } from '@/services/api/endpoints/sessions';
 import { getGlobalArtifactStore } from './artifacts';
 import type { Artifact } from './artifacts/types';
-import { formatLogAnalysisResult } from './formatters/logFormatter';
+import { formatLogAnalysisResult, formatLogAnalysisText } from './formatters/logFormatter';
 import {
   stripCodeFence,
   extractTodosFromPayload,
   formatIfStructuredLog,
+  stripInternalSearchPayloads,
+  hasInternalToolPayload,
 } from './utils';
 
 /**
@@ -91,6 +93,9 @@ interface AgentContextValue {
   setTraceCollapsed: (collapsed: boolean) => void;
   resolvedModel?: string;
   resolvedTaskType?: string;
+  researchProgress: number;
+  researchStatus: ResearchStatus;
+  isResearching: boolean;
   messageAttachments: Record<string, AttachmentInput[]>;
   updateMessageContent: (messageId: string, content: string) => void;
   updateMessageMetadata: (messageId: string, metadata: Record<string, unknown>) => void;
@@ -118,8 +123,87 @@ const stripMarkdownDataUriImages = (text: string): string => {
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 
+type ResearchStatus = 'idle' | 'running' | 'stuck' | 'failed';
+
+const RESEARCH_TOOL_NAMES = new Set([
+  'kb_search',
+  'feedme_search',
+  'web_search',
+  'grounding_search',
+  'tavily_extract',
+  'minimax_web_search',
+  'minimax_understand_image',
+  'firecrawl_search',
+  'firecrawl_extract',
+  'firecrawl_fetch',
+  'firecrawl_map',
+  'firecrawl_crawl',
+  'firecrawl_agent',
+  'firecrawl_agent_status',
+]);
+
+const isResearchToolName = (toolName: string): boolean =>
+  RESEARCH_TOOL_NAMES.has(toolName.toLowerCase());
+
+const RESEARCH_PROGRESS_STEP = 10;
+const RESEARCH_PROGRESS_MAX = 90;
+const RESEARCH_PROGRESS_INTERVAL_MS = 12000;
+const RESEARCH_STUCK_MS = 120000;
+
 const truncateText = (value: string, maxChars: number): string =>
   value.length > maxChars ? `${value.slice(0, maxChars).trimEnd()}...` : value;
+
+const ARTICLE_HASH_MAX_CHARS = 4096;
+
+const hashText = (value: string): string => {
+  const snippet = value.length > ARTICLE_HASH_MAX_CHARS ? value.slice(0, ARTICLE_HASH_MAX_CHARS) : value;
+  let hash = 0;
+  for (let i = 0; i < snippet.length; i += 1) {
+    hash = (hash * 31 + snippet.charCodeAt(i)) >>> 0;
+  }
+  return `${hash.toString(16)}-${value.length}`;
+};
+
+const buildArticleKey = (title: string, content: string): string =>
+  `${title}::${hashText(`${title}::${content}`)}`;
+
+type WriteArticleResult = {
+  title: string;
+  content: string;
+  images?: Array<{ url?: string; alt?: string }>;
+};
+
+const parseWriteArticleResult = (raw: string): WriteArticleResult | null => {
+  const trimmed = raw.trim();
+  if (!trimmed.startsWith('{') || !trimmed.endsWith('}')) return null;
+  try {
+    const parsed = JSON.parse(trimmed);
+    if (!isRecord(parsed) || parsed.success !== true) return null;
+    const title = typeof parsed.title === 'string' ? parsed.title.trim() : '';
+    const content = typeof parsed.content === 'string' ? parsed.content : '';
+    const images = Array.isArray(parsed.images) ? parsed.images : undefined;
+    if (!title) return null;
+    if (!content && !images?.length) return null;
+    if (content) return { title, content, images };
+
+    const imageLines: string[] = [];
+    for (const image of images ?? []) {
+      if (!isRecord(image)) continue;
+      const url = typeof image.url === 'string' ? image.url : '';
+      if (!url) continue;
+      const alt = typeof image.alt === 'string' && image.alt.trim() ? image.alt.trim() : 'Image';
+      imageLines.push(`![${alt}](${url})`);
+    }
+    if (!imageLines.length) return null;
+    return {
+      title,
+      content: `# ${title}\n\n## Images\n\n${imageLines.join('\n\n')}`,
+      images,
+    };
+  } catch {
+    return null;
+  }
+};
 
 type LogAnalysisNoteMetadata = {
   file_name?: string;
@@ -353,6 +437,7 @@ const hasLogAttachment = (attachments?: AttachmentInput[]): boolean => {
 const looksLikeJsonPayload = (text: string): boolean => {
   const trimmed = stripCodeFence(text).trim();
   if (!trimmed) return false;
+  if (hasInternalToolPayload(trimmed)) return true;
   if (!(trimmed.startsWith('{') || trimmed.startsWith('['))) return false;
   return trimmed.length > 80;
 };
@@ -767,6 +852,9 @@ export function AgentProvider({
   const [isTraceCollapsed, setTraceCollapsed] = useState(true);
   const [resolvedModel, setResolvedModel] = useState<string | undefined>(undefined);
   const [resolvedTaskType, setResolvedTaskType] = useState<string | undefined>(undefined);
+  const [researchProgress, setResearchProgress] = useState(0);
+  const [researchStatus, setResearchStatus] = useState<ResearchStatus>('idle');
+  const [isResearching, setIsResearching] = useState(false);
   const [messageAttachments, setMessageAttachments] = useState<Record<string, AttachmentInput[]>>({});
   const interruptResolverRef = useRef<((value: string) => void) | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
@@ -777,9 +865,232 @@ export function AgentProvider({
   const persistedMessageIdRef = useRef<Record<string, string>>({});
   // Track artifacts created during the current run for persistence
   const pendingArtifactsRef = useRef<SerializedArtifact[]>([]);
+  const articleArtifactKeysRef = useRef<Set<string>>(new Set());
   const pendingLogAnalysisNotesRef = useRef<Record<string, unknown>>({});
+  const researchProgressRef = useRef(0);
+  const researchStatusRef = useRef<ResearchStatus>('idle');
+  const researchTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const researchLastActivityRef = useRef<number>(0);
+  const researchToolCountRef = useRef(0);
+  const researchToolCompletedRef = useRef(0);
+  const isResearchingRef = useRef(false);
+
+  useEffect(() => {
+    researchProgressRef.current = researchProgress;
+  }, [researchProgress]);
+
+  useEffect(() => {
+    researchStatusRef.current = researchStatus;
+  }, [researchStatus]);
+
+  useEffect(() => {
+    isResearchingRef.current = isResearching;
+  }, [isResearching]);
+
+  useEffect(() => {
+    articleArtifactKeysRef.current = new Set();
+  }, [sessionId]);
+
+  const clearResearchTimer = useCallback(() => {
+    if (researchTimerRef.current) {
+      clearInterval(researchTimerRef.current);
+      researchTimerRef.current = null;
+    }
+  }, []);
+
+  const markResearchActivity = useCallback(() => {
+    researchLastActivityRef.current = Date.now();
+    if (researchStatusRef.current === 'stuck') {
+      setResearchStatus('running');
+    }
+  }, []);
+
+  const startResearchTracking = useCallback(() => {
+    if (!isResearchingRef.current) {
+      setIsResearching(true);
+      setResearchStatus('running');
+    }
+    if (researchProgressRef.current < RESEARCH_PROGRESS_STEP) {
+      setResearchProgress(RESEARCH_PROGRESS_STEP);
+    }
+    markResearchActivity();
+  }, [markResearchActivity]);
+
+  const bumpResearchProgress = useCallback((minProgress: number) => {
+    setResearchProgress((prev) => {
+      const next = Math.min(RESEARCH_PROGRESS_MAX, Math.max(prev, minProgress));
+      return next;
+    });
+  }, []);
+
+  const completeResearchTracking = useCallback(() => {
+    if (!isResearchingRef.current) return;
+    clearResearchTimer();
+    setResearchProgress(100);
+    setIsResearching(false);
+    isResearchingRef.current = false;
+    window.setTimeout(() => {
+      setResearchStatus('idle');
+      setResearchProgress(0);
+    }, 1200);
+  }, [clearResearchTimer]);
+
+  const registerArticleArtifact = useCallback((payload: {
+    id?: string;
+    title: string;
+    content: string;
+    messageId?: string;
+  }): boolean => {
+    const title = payload.title.trim() || 'Article';
+    const content = payload.content ?? '';
+    if (!content) return false;
+
+    const key = buildArticleKey(title, content);
+    if (articleArtifactKeysRef.current.has(key)) return false;
+
+    if (
+      pendingArtifactsRef.current.some(
+        (artifact) =>
+          artifact.type === 'article' && artifact.title === title && artifact.content === content
+      )
+    ) {
+      articleArtifactKeysRef.current.add(key);
+      return false;
+    }
+
+    const store = getGlobalArtifactStore();
+    if (store) {
+      const state = store.getState();
+      const alreadyExists = Object.values(state.artifactsById).some(
+        (artifact) =>
+          artifact?.type === 'article' && artifact.title === title && artifact.content === content
+      );
+      if (alreadyExists) {
+        articleArtifactKeysRef.current.add(key);
+        return false;
+      }
+    }
+
+    const artifactId = payload.id || `article-fallback-${hashText(key)}`;
+    const messageId = payload.messageId || '';
+
+    if (store) {
+      const state = store.getState();
+      state.addArtifact({
+        id: artifactId,
+        type: 'article',
+        title,
+        content,
+        messageId,
+      });
+      state.setCurrentArtifact(artifactId);
+      state.setArtifactsVisible(true);
+    }
+
+    pendingArtifactsRef.current.push({
+      id: artifactId,
+      type: 'article',
+      title,
+      content,
+    });
+    articleArtifactKeysRef.current.add(key);
+    return true;
+  }, []);
+
+  const hydrateArticleArtifactsFromMessages = useCallback(
+    (nextMessages: Message[]): void => {
+      if (!nextMessages.length) return;
+
+      const toolCallNameById = new Map<string, string>();
+      for (const msg of nextMessages) {
+        if (msg.role !== 'assistant') continue;
+        const toolCalls = ((msg as any).toolCalls || (msg as any).tool_calls) as unknown;
+        if (!Array.isArray(toolCalls)) continue;
+        for (const call of toolCalls) {
+          if (!call || typeof call !== 'object') continue;
+          const id = typeof (call as any).id === 'string' ? (call as any).id : '';
+          const name =
+            typeof (call as any).name === 'string'
+              ? (call as any).name
+              : typeof (call as any).function?.name === 'string'
+                ? (call as any).function.name
+                : '';
+          if (id && name) {
+            toolCallNameById.set(id, name);
+          }
+        }
+      }
+
+      const lastAssistantId =
+        [...nextMessages].reverse().find((msg) => msg.role === 'assistant')?.id ?? '';
+
+      for (const msg of nextMessages) {
+        if (msg.role !== 'tool') continue;
+        const toolCallId =
+          (msg as any).tool_call_id || (msg as any).toolCallId || '';
+        const toolName =
+          (toolCallId && toolCallNameById.get(toolCallId)) ||
+          (typeof (msg as any).name === 'string' ? (msg as any).name : '');
+        if (toolName !== 'write_article') continue;
+
+        if (typeof msg.content !== 'string') continue;
+        const parsed = parseWriteArticleResult(msg.content);
+        if (!parsed) continue;
+        registerArticleArtifact({
+          title: parsed.title,
+          content: parsed.content,
+          messageId: lastAssistantId || msg.id,
+        });
+      }
+    },
+    [registerArticleArtifact]
+  );
+
+  const failResearchTracking = useCallback(() => {
+    clearResearchTimer();
+    setResearchStatus('failed');
+    setIsResearching(false);
+    isResearchingRef.current = false;
+  }, [clearResearchTimer]);
+
+  useEffect(() => {
+    if (!isResearching) {
+      clearResearchTimer();
+      return;
+    }
+
+    clearResearchTimer();
+    researchTimerRef.current = setInterval(() => {
+      const idleMs = Date.now() - researchLastActivityRef.current;
+      if (idleMs > RESEARCH_STUCK_MS && researchStatusRef.current !== 'failed') {
+        setResearchStatus('stuck');
+      }
+
+      if (researchStatusRef.current === 'running') {
+        setResearchProgress((prev) => {
+          if (prev >= RESEARCH_PROGRESS_MAX) return prev;
+          const next = Math.min(RESEARCH_PROGRESS_MAX, prev + RESEARCH_PROGRESS_STEP);
+          return next;
+        });
+      }
+    }, RESEARCH_PROGRESS_INTERVAL_MS);
+
+    return () => {
+      clearResearchTimer();
+    };
+  }, [isResearching, clearResearchTimer]);
   const sendMessage = useCallback(async (content: string, attachments?: AttachmentInput[]) => {
     if (!agent || isStreaming) return;
+
+    clearResearchTimer();
+    researchProgressRef.current = 0;
+    researchToolCountRef.current = 0;
+    researchToolCompletedRef.current = 0;
+    researchStatusRef.current = 'idle';
+    isResearchingRef.current = false;
+    setResearchProgress(0);
+    setResearchStatus('idle');
+    setIsResearching(false);
 
     setIsStreaming(true);
     setError(null);
@@ -794,6 +1105,7 @@ export function AgentProvider({
     assistantPersistedRef.current = false;
     lastRunUserMessageIdRef.current = null;
     pendingArtifactsRef.current = [];
+    articleArtifactKeysRef.current = new Set();
     pendingLogAnalysisNotesRef.current = {};
 
     try {
@@ -855,7 +1167,15 @@ export function AgentProvider({
           metadata: Object.keys(metadata).length > 0 ? metadata : undefined,
         }).then((record) => {
           if (record?.id !== undefined && record?.id !== null) {
-            persistedMessageIdRef.current[userMessage.id] = String(record.id);
+            const persistedId = String(record.id);
+            persistedMessageIdRef.current[userMessage.id] = persistedId;
+            if (attachments && attachments.length > 0) {
+              setMessageAttachments((prev) => {
+                if (prev[persistedId]) return prev;
+                const existing = prev[userMessage.id] || attachments;
+                return { ...prev, [persistedId]: existing };
+              });
+            }
           }
         }).catch((err) => {
           console.error('[Persistence] Failed to persist user message:', err);
@@ -878,7 +1198,7 @@ export function AgentProvider({
         });
       }
 
-        // No need for placeholder - streaming will handle assistant messages
+      // No need for placeholder - streaming will handle assistant messages
 
       // Build forwardedProps to influence backend orchestration
       const stateProvider = getStringFromRecord(agent.state, 'provider');
@@ -891,6 +1211,7 @@ export function AgentProvider({
         provider: stateProvider || 'google',
         model: stateModel || 'gemini-3-flash-preview',
         agent_type: hasLogAttachment(attachments) ? 'log_analysis' : stateAgentType,
+        attachments: attachments || [],
       };
 
       // Run agent with streaming updates
@@ -910,14 +1231,27 @@ export function AgentProvider({
                 return;
               }
 
-            // CRITICAL: Strip markdown images with data URIs - safety filter
-            // Pattern: ![alt text](data:image/...)
-            // Images are already displayed as artifacts, so this is just garbage in chat.
-            const cleaned = stripMarkdownDataUriImages(buffer);
-            if (cleaned !== buffer) {
-              if (!cleaned) return;
-              buffer = cleaned;
-            }
+              if (isResearchingRef.current) {
+                markResearchActivity();
+                if (researchProgressRef.current < RESEARCH_PROGRESS_MAX) {
+                  bumpResearchProgress(RESEARCH_PROGRESS_MAX);
+                }
+              }
+
+              // CRITICAL: Strip markdown images with data URIs - safety filter
+              // Pattern: ![alt text](data:image/...)
+              // Images are already displayed as artifacts, so this is just garbage in chat.
+              const cleaned = stripMarkdownDataUriImages(buffer);
+              if (cleaned !== buffer) {
+                if (!cleaned) return;
+                buffer = cleaned;
+              }
+
+              const withoutInternal = stripInternalSearchPayloads(buffer);
+              if (withoutInternal !== buffer) {
+                if (!withoutInternal) return;
+                buffer = withoutInternal;
+              }
 
               if (agentType === 'log_analysis') {
                 const formatted = formatIfStructuredLog(buffer);
@@ -927,24 +1261,24 @@ export function AgentProvider({
                   buffer = '';
                 }
               }
-                setMessages((prev) => {
-                  const lastMsg = prev[prev.length - 1];
-                  const next: Message[] = (() => {
-                    if (lastMsg && lastMsg.role === 'assistant') {
-                      return [...prev.slice(0, -1), { ...lastMsg, content: buffer }];
-                    }
+              setMessages((prev) => {
+                const lastMsg = prev[prev.length - 1];
+                const next: Message[] = (() => {
+                  if (lastMsg && lastMsg.role === 'assistant') {
+                    return [...prev.slice(0, -1), { ...lastMsg, content: buffer }];
+                  }
 
-                    const assistantMessage: Message = {
-                      id: crypto.randomUUID(),
-                      role: 'assistant',
-                      content: buffer,
-                    };
-                    return [...prev, assistantMessage];
-                  })();
+                  const assistantMessage: Message = {
+                    id: crypto.randomUUID(),
+                    role: 'assistant',
+                    content: buffer,
+                  };
+                  return [...prev, assistantMessage];
+                })();
 
-                  messagesRef.current = next;
-                  return next;
-                });
+                messagesRef.current = next;
+                return next;
+              });
             },
 
             // Handle complete message updates
@@ -962,6 +1296,56 @@ export function AgentProvider({
                 const cleaned = stripMarkdownDataUriImages(msg.content);
                 if (cleaned === msg.content) return msg;
                 return { ...msg, content: cleaned };
+              });
+
+              messagesWithIds = messagesWithIds
+                .map((msg) => {
+                  if (msg.role !== 'assistant') return msg;
+                  const cleaned = stripInternalSearchPayloads(msg.content);
+                  if (cleaned === msg.content) return msg;
+                  if (!cleaned) {
+                    const raw = typeof msg.content === 'string' ? msg.content : '';
+                    const hasLogPayload =
+                      raw.includes('"customer_ready"') && raw.includes('"internal_notes"');
+                    if (hasLogPayload) {
+                      return {
+                        ...msg,
+                        metadata: { ...(msg.metadata ?? {}), internal_payload: true },
+                      };
+                    }
+                    if (hasInternalToolPayload(raw)) {
+                      return null;
+                    }
+                    return null;
+                  }
+                  return { ...msg, content: cleaned };
+                })
+                .filter((msg): msg is Message => Boolean(msg));
+
+              const persistedToLocal = new Map<string, string>();
+              Object.entries(persistedMessageIdRef.current).forEach(([localId, persistedId]) => {
+                persistedToLocal.set(String(persistedId), localId);
+              });
+              const existingById = new Map(messagesRef.current.map((msg) => [msg.id, msg]));
+              const mergeMetadata = (
+                incoming?: Record<string, unknown>,
+                existing?: Record<string, unknown>
+              ): Record<string, unknown> | undefined => {
+                if (!incoming && !existing) return undefined;
+                if (!existing) return incoming;
+                if (!incoming) return existing;
+                return { ...existing, ...incoming };
+              };
+
+              messagesWithIds = messagesWithIds.map((msg) => {
+                const existing =
+                  existingById.get(msg.id) ||
+                  (persistedToLocal.has(msg.id)
+                    ? existingById.get(persistedToLocal.get(msg.id) as string)
+                    : undefined);
+                if (!existing?.metadata) return msg;
+                const mergedMetadata = mergeMetadata(msg.metadata, existing.metadata);
+                return mergedMetadata ? { ...msg, metadata: mergedMetadata } : msg;
               });
 
               try {
@@ -1038,6 +1422,17 @@ export function AgentProvider({
                     ...msg,
                     content: formatted,
                     metadata: { ...(msg.metadata ?? {}), structured_log: true },
+                  };
+                });
+
+                messagesWithIds = messagesWithIds.map((msg) => {
+                  if (msg.role !== 'assistant') return msg;
+                  const transformed = formatLogAnalysisText(msg.content);
+                  if (!transformed) return msg;
+                  return {
+                    ...msg,
+                    content: transformed,
+                    metadata: { ...(msg.metadata ?? {}), structured_log: false },
                   };
                 });
 
@@ -1156,6 +1551,7 @@ export function AgentProvider({
               // Note: Persistence moved to finally block to ensure all artifacts are collected
               // before persisting (custom events like article_artifact arrive after onMessagesChanged)
               setMessages(nextMessages);
+              hydrateArticleArtifactsFromMessages(nextMessages);
             },
 
             // Handle custom events (interrupts, timeline updates, tool evidence)
@@ -1309,40 +1705,29 @@ export function AgentProvider({
                       resolution: payload.resolution,
                     });
                   }
+                } else if (maybeAgentEvent.name === 'article_artifact') {
+                  const payload = maybeAgentEvent.value as any;
+                  const id = typeof payload?.id === 'string' ? payload.id : undefined;
+                  const title = typeof payload?.title === 'string' ? payload.title : 'Article';
+                  const content = typeof payload?.content === 'string' ? payload.content : '';
+                  const messageId = typeof payload?.messageId === 'string' ? payload.messageId : '';
+                  if (content) {
+                    console.debug('[AG-UI] Article artifact event:', title, 'length:', content.length);
+                    registerArticleArtifact({ id, title, content, messageId });
+                  }
                 }
                 return undefined;
               }
 
               // Custom (non-AG-UI) events
               if (event.name === 'article_artifact' && isRecord(payloadValue)) {
-                const id = payloadValue.id;
-                const content = payloadValue.content;
-                if (typeof id === 'string' && typeof content === 'string') {
+                const id = typeof payloadValue.id === 'string' ? payloadValue.id : undefined;
+                const content = typeof payloadValue.content === 'string' ? payloadValue.content : '';
+                if (content) {
                   const title = typeof payloadValue.title === 'string' ? payloadValue.title : 'Article';
                   const messageId = typeof payloadValue.messageId === 'string' ? payloadValue.messageId : '';
                   console.debug('[AG-UI] Article artifact event:', title, 'length:', content.length);
-
-                  const store = getGlobalArtifactStore();
-                  if (store) {
-                    const state = store.getState();
-                    state.addArtifact({
-                      id,
-                      type: 'article',
-                      title,
-                      content,
-                      messageId,
-                    });
-                    state.setCurrentArtifact(id);
-                    state.setArtifactsVisible(true);
-                  }
-
-                  // Track for persistence (exclude messageId - will be set on restore)
-                  pendingArtifactsRef.current.push({
-                    id,
-                    type: 'article',
-                    title,
-                    content,
-                  });
+                  registerArticleArtifact({ id, title, content, messageId });
                 }
               }
 
@@ -1392,6 +1777,15 @@ export function AgentProvider({
                     : toolCallId;
 
               console.debug('[AG-UI] Tool call started:', toolCallName, toolCallId);
+              if (isResearchToolName(toolCallName)) {
+                startResearchTracking();
+                researchToolCountRef.current += 1;
+                const nextProgress = Math.min(
+                  RESEARCH_PROGRESS_MAX,
+                  RESEARCH_PROGRESS_STEP * Math.min(researchToolCountRef.current + 1, 6),
+                );
+                bumpResearchProgress(nextProgress);
+              }
               toolNameByIdRef.current[toolCallId] = toolCallName;
               setActiveTools((prev) => (prev.includes(toolCallName) ? prev : [...prev, toolCallName]));
             },
@@ -1409,6 +1803,14 @@ export function AgentProvider({
                 (isRecord(event) && typeof event.tool_call_name === 'string' ? event.tool_call_name : undefined);
 
               console.debug('[AG-UI] Tool call result:', id);
+              if (name && isResearchToolName(name)) {
+                markResearchActivity();
+                researchToolCompletedRef.current += 1;
+                const ratio = researchToolCompletedRef.current / Math.max(1, researchToolCountRef.current);
+                const scaled = RESEARCH_PROGRESS_STEP + Math.round(ratio * 60);
+                const snapped = Math.min(RESEARCH_PROGRESS_MAX, Math.ceil(scaled / 10) * 10);
+                bumpResearchProgress(snapped);
+              }
 
               // Try to extract todos from the result payload even if it arrives as a JSON string
               const output = isRecord(event)
@@ -1420,18 +1822,21 @@ export function AgentProvider({
                 if (nextTodos.length) setTodos(nextTodos);
               }
 
-                if (name) {
-                  if (id) {
-                    delete toolNameByIdRef.current[id];
-                  }
-                  setActiveTools((prev) => prev.filter((n) => n !== name));
+              if (name) {
+                if (id) {
+                  delete toolNameByIdRef.current[id];
                 }
-              },
+                setActiveTools((prev) => prev.filter((n) => n !== name));
+              }
+            },
 
             // Handle errors
             onRunFailed: ({ error: runError }: { error: unknown }) => {
               const normalized = normalizeUnknownError(runError);
               console.error('[AG-UI] Run failed:', normalized.message, runError);
+              if (isResearchingRef.current) {
+                failResearchTracking();
+              }
               setError(normalized);
             },
           },
@@ -1445,12 +1850,15 @@ export function AgentProvider({
         };
       }
 
-    } catch (err) {
-      if (err instanceof Error && err.name !== 'AbortError') {
-        console.error('[AG-UI] Error sending message:', err);
-        setError(err);
-      }
+      } catch (err) {
+        if (err instanceof Error && err.name !== 'AbortError') {
+          console.error('[AG-UI] Error sending message:', err);
+          setError(err);
+        }
       } finally {
+        if (isResearchingRef.current && researchStatusRef.current !== 'failed') {
+          completeResearchTracking();
+        }
         setIsStreaming(false);
         abortControllerRef.current = null;
         setActiveTools([]);
@@ -1581,7 +1989,17 @@ export function AgentProvider({
           }
         }
       }
-    }, [agent, isStreaming, sessionId]);
+    }, [
+      agent,
+      isStreaming,
+      sessionId,
+      bumpResearchProgress,
+      clearResearchTimer,
+      completeResearchTracking,
+      failResearchTracking,
+      markResearchActivity,
+      startResearchTracking,
+    ]);
 
   const abortRun = useCallback(() => {
     if (abortControllerRef.current) {
@@ -1703,7 +2121,8 @@ export function AgentProvider({
     setMessages(sanitizedMessages);
     messagesRef.current = sanitizedMessages;
     setMessageAttachments(attachmentsByMessage);
-  }, [agent]);
+    hydrateArticleArtifactsFromMessages(sanitizedMessages);
+  }, [agent, hydrateArticleArtifactsFromMessages]);
 
   useEffect(() => {
     messagesRef.current = messages;
@@ -1734,6 +2153,9 @@ export function AgentProvider({
         setTraceCollapsed: setTraceCollapsedState,
         resolvedModel,
         resolvedTaskType,
+        researchProgress,
+        researchStatus,
+        isResearching,
         messageAttachments,
         updateMessageContent,
         updateMessageMetadata,

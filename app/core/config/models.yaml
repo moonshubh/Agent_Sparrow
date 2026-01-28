@@ -83,7 +83,9 @@ coordinators:
   minimax:
     model_id: "minimax/MiniMax-M2.1"
     provider: "openrouter"        # Uses OpenRouter code path, auto-routed to Minimax API
-    temperature: 1.0              # Minimax recommended: 1.0
+    temperature: 1.0
+    top_p: 0.95
+    top_k: 40
     context_window: 204800        # 200K token context window
     rate_limits:
       rpm: 100
@@ -93,6 +95,8 @@ coordinators:
     model_id: "minimax/MiniMax-M2.1"
     provider: "openrouter"
     temperature: 1.0
+    top_p: 0.95
+    top_k: 40
     context_window: 204800        # 200K token context window
     rate_limits:
       rpm: 80
@@ -131,6 +135,18 @@ internal:
       rpm: 50
       rpd: 2000
 
+  # Minimax MCP tools (web search + image understanding)
+  minimax_tools:
+    model_id: "minimax/MiniMax-M2.1"
+    provider: "openrouter"
+    temperature: 1.0
+    top_p: 0.95
+    top_k: 40
+    context_window: 204800
+    rate_limits:
+      rpm: 120
+      rpd: 5000
+
   # FeedMe extraction / structured parsing
   feedme:
     model_id: "gemini-2.5-flash-lite-preview-09-2025"
@@ -168,7 +184,7 @@ internal:
 # -----------------------------------------------------------------------------
 subagents:
   # Default model for all subagents - Minimax M2.1
-  # Uses direct Minimax API (not OpenRouter) when MINIMAX_API_KEY is set.
+  # Uses Minimax API via OpenAI-compatible wrapper when MINIMAX_API_KEY is set.
   # Minimax M2.1 features:
   # - 200K context window
   # - Interleaved Thinking (reasoning preserved across turns)
@@ -176,7 +192,9 @@ subagents:
   _default:
     model_id: "minimax/MiniMax-M2.1"
     provider: "openrouter"            # Routes to Minimax API when MINIMAX_API_KEY set
-    temperature: 1.0                  # Minimax recommended
+    temperature: 1.0
+    top_p: 0.95
+    top_k: 40
     context_window: 204800            # 200K tokens
     rate_limits:
       rpm: 60
@@ -228,15 +246,17 @@ zendesk:
 
   subagents:
     _default:
-      model_id: "gemini-3-flash-preview"
-      provider: "google"
-      temperature: 0.1
-      context_window: 1048576
+      model_id: "minimax/MiniMax-M2.1"
+      provider: "openrouter"
+      temperature: 1.0
+      top_p: 0.95
+      top_k: 40
+      context_window: 204800
       rate_limits:
         rpm: 60
         rpd: 1000
 
-    # Explicit null entries fall back to _default (Gemini 3 Flash Preview).
+    # Explicit null entries fall back to _default (Minimax M2.1).
     research-agent:
     log-diagnoser:
     db-retrieval:

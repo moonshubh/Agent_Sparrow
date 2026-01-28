@@ -1506,39 +1506,74 @@ async def log_diagnoser_tool(
             except Exception as exc:  # pragma: no cover - best effort only
                 logger.debug("web_search_failed", error=str(exc))
 
+        solution_blocks: list[dict[str, Any]] = []
+        raw_solutions = payload.get("proposed_solutions") or payload.get("solutions") or []
+        if isinstance(raw_solutions, list):
+            for solution in raw_solutions:
+                if not isinstance(solution, dict):
+                    continue
+                title = str(solution.get("title") or "Recommended step").strip()
+                steps = [
+                    step.strip()
+                    for step in (solution.get("steps") or [])
+                    if isinstance(step, str) and step.strip()
+                ]
+                if steps:
+                    solution_blocks.append({"title": title, "steps": steps})
+
+        if not solution_blocks and recommended_actions:
+            solution_blocks.append(
+                {
+                    "title": "Recommended steps",
+                    "steps": recommended_actions[:8],
+                }
+            )
+
         customer_ready_parts: list[str] = []
-        if input.file_name:
-            customer_ready_parts.append(f"Log file: {input.file_name}")
+        customer_ready_parts.append(
+            "I understand how disruptive this can be, especially when you rely on email for daily work. Here is what the logs show and what to do next."
+        )
+
+        customer_ready_parts.append("## 🔍 The Diagnosis")
         if overall_summary:
             customer_ready_parts.append(overall_summary)
-        if internal_sources.get("kb"):
-            kb_lines = [
-                f"- {item.get('title')}: {item.get('url')}"
-                for item in internal_sources.get("kb", [])[:3]
-                if isinstance(item, dict) and item.get("title") and item.get("url")
-            ]
-            if kb_lines:
-                customer_ready_parts.append("Relevant KB articles:\n" + "\n".join(kb_lines))
-        if internal_sources.get("feedme"):
-            feedme_lines = [
-                f"- Conversation {item.get('conversation_id')}: {item.get('title')}"
-                for item in internal_sources.get("feedme", [])[:3]
-                if isinstance(item, dict) and item.get("conversation_id")
-            ]
-            if feedme_lines:
-                customer_ready_parts.append("Similar FeedMe conversations:\n" + "\n".join(feedme_lines))
-        if external_sources:
-            web_lines = [
-                f"- {item.get('title')}: {item.get('url')}"
-                for item in external_sources[:3]
-                if item.get("title") and item.get("url")
-            ]
-            if web_lines:
-                customer_ready_parts.append("External references:\n" + "\n".join(web_lines))
-        if recommended_actions:
+
+        if isinstance(issues, list):
+            issue_lines: list[str] = []
+            for issue in issues[:6]:
+                if not isinstance(issue, dict):
+                    continue
+                title = str(issue.get("title") or "").strip()
+                details = str(issue.get("details") or issue.get("description") or "").strip()
+                if title and details:
+                    issue_lines.append(f"- **{title}:** {details}")
+                elif title:
+                    issue_lines.append(f"- **{title}**")
+                elif details:
+                    issue_lines.append(f"- {details}")
+            if issue_lines:
+                customer_ready_parts.append("\n".join(issue_lines))
+
+        if evidence:
             customer_ready_parts.append(
-                "Recommended next steps:\n- " + "\n- ".join(recommended_actions[:6])
+                "**Top signals**\n- " + "\n- ".join(evidence[:6])
             )
+
+        if solution_blocks:
+            customer_ready_parts.append("## ✅ How to Fix It")
+            for idx, block in enumerate(solution_blocks[:3]):
+                title = str(block.get("title") or f"Step {idx + 1}").strip()
+                steps = block.get("steps") or []
+                block_lines = [f"**Step {idx + 1}: {title}**"]
+                for step_idx, step in enumerate(steps[:8]):
+                    block_lines.append(f"{step_idx + 1}. {step}")
+                customer_ready_parts.append("\n".join(block_lines))
+        else:
+            customer_ready_parts.append("## Next Steps")
+            customer_ready_parts.append("Open Technical details for per-file diagnostics.")
+
+        if open_questions:
+            customer_ready_parts.append("## Open Questions\n- " + "\n- ".join(open_questions[:6]))
 
         customer_ready = "\n\n".join(customer_ready_parts).strip()
 

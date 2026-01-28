@@ -55,6 +55,11 @@ def _normalize_google_model_id(model_id: str) -> str:
     return normalized
 
 
+def _is_minimax_model(model_id: str) -> bool:
+    """Check whether a model_id targets Minimax (e.g., minimax/MiniMax-M2.1)."""
+    return "minimax" in (model_id or "").lower()
+
+
 def _estimate_tokens(text: str) -> int:
     return max(1, len(text) // 4)
 
@@ -113,11 +118,20 @@ def _collect_targets(config: ModelsConfig) -> Dict[Tuple[str, str, bool], Health
 
 
 def _provider_status() -> Dict[str, bool]:
+    openrouter_ready = bool(getattr(settings, "openrouter_api_key", None)) or bool(
+        getattr(settings, "minimax_api_key", None)
+    )
     return {
         "google": bool(settings.gemini_api_key),
         "xai": bool(settings.xai_api_key),
-        "openrouter": bool(getattr(settings, "openrouter_api_key", None)),
+        "openrouter": openrouter_ready,
     }
+
+
+def _openrouter_ready_for_model(model_id: str) -> bool:
+    if getattr(settings, "openrouter_api_key", None):
+        return True
+    return _is_minimax_model(model_id) and bool(getattr(settings, "minimax_api_key", None))
 
 
 async def _check_google_model(model_id: str, *, is_embedding: bool, timeout: float) -> bool:
@@ -153,16 +167,29 @@ async def _check_google_model(model_id: str, *, is_embedding: bool, timeout: flo
 
 async def _check_openrouter_model(model_id: str, *, timeout: float) -> bool:
     api_key = getattr(settings, "openrouter_api_key", None)
-    if not api_key:
-        return False
-
     base_url = getattr(settings, "openrouter_base_url", None) or "https://openrouter.ai/api/v1"
-    endpoint = f"{base_url.rstrip('/')}/chat/completions"
     headers = {
         "Authorization": f"Bearer {api_key}",
         "HTTP-Referer": getattr(settings, "openrouter_referer", None) or "https://agentsparrow.local",
         "X-Title": getattr(settings, "openrouter_app_name", None) or "Agent Sparrow",
     }
+
+    # Minimax models route through the same OpenRouter path but use Minimax's API
+    # directly when MINIMAX_API_KEY or MINIMAX_CODING_PLAN_API_KEY is configured.
+    # Prefer the Coding Plan key as it works for both chat completions and MCP tools.
+    minimax_key = getattr(settings, "minimax_coding_plan_api_key", None) or getattr(
+        settings, "minimax_api_key", None
+    )
+    if _is_minimax_model(model_id) and minimax_key:
+        api_key = minimax_key
+        base_url = getattr(settings, "minimax_base_url", None) or "https://api.minimax.io/v1"
+        headers = {"Authorization": f"Bearer {api_key}"}
+        model_id = model_id.split("/")[-1] if "/" in model_id else model_id
+
+    if not api_key:
+        return False
+
+    endpoint = f"{base_url.rstrip('/')}/chat/completions"
     payload = {
         "model": model_id,
         "messages": [{"role": "user", "content": HEALTH_CHECK_PROMPT}],
@@ -349,7 +376,13 @@ async def run_startup_health_checks(
 
         async def _run_target(target: HealthCheckTarget) -> None:
             async with semaphore:
-                if not provider_ready.get(target.provider, False):
+                if target.provider == "openrouter":
+                    if not _openrouter_ready_for_model(target.model_id):
+                        outcomes.append(
+                            HealthCheckOutcome(target=target, ok=False, reason="api_key_missing")
+                        )
+                        return
+                elif not provider_ready.get(target.provider, False):
                     outcomes.append(
                         HealthCheckOutcome(target=target, ok=False, reason="api_key_missing")
                     )

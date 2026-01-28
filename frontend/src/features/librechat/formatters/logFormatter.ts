@@ -106,6 +106,13 @@ export function formatLogAnalysisResult(raw: any): string | null {
     }
   }
 
+  if (data && typeof data === 'object') {
+    const customerReady = (data as any).customer_ready || (data as any).customerReady;
+    if (typeof customerReady === 'string' && customerReady.trim()) {
+      return customerReady.trim();
+    }
+  }
+
   // typeof null === 'object' in JS, so explicit null check needed
   if (data === null || typeof data !== 'object') return null;
 
@@ -114,14 +121,21 @@ export function formatLogAnalysisResult(raw: any): string | null {
   const concerns: any[] = Array.isArray(data.priority_concerns) ? data.priority_concerns : [];
   const issues: any[] = Array.isArray(data.identified_issues || data.issues) ? (data.identified_issues || data.issues) : [];
   const solutions: any[] = Array.isArray(data.proposed_solutions || data.solutions) ? (data.proposed_solutions || data.solutions) : [];
+  const recommendedActions: string[] = Array.isArray((data as any).recommended_actions)
+    ? (data as any).recommended_actions.filter((item: any) => typeof item === 'string')
+    : [];
   const confidence = data.confidence_level;
 
   const lines: string[] = [];
-  if (summary) lines.push(`Summary: ${summary}`);
-  if (health) lines.push(`Health: ${health}`);
-  if (concerns.length) {
-    const bullet = concerns.filter(Boolean).join('; ');
-    if (bullet) lines.push(`Top concerns: ${bullet}`);
+  const hasDiagnosis = summary || health || concerns.length || issues.length;
+  if (hasDiagnosis) {
+    lines.push('## The Diagnosis');
+    if (summary) lines.push(summary);
+    if (health) lines.push(`- Health: ${health}`);
+    if (concerns.length) {
+      lines.push('**Top concerns**');
+      concerns.filter(Boolean).forEach((item) => lines.push(`- ${item}`));
+    }
   }
 
   issues.forEach((issue) => {
@@ -131,27 +145,81 @@ export function formatLogAnalysisResult(raw: any): string | null {
     const details = issue.details || issue.description || '';
     const line = `${sev}${title}`.trim();
     if (line || details) {
+      if (!hasDiagnosis) {
+        lines.push('## The Diagnosis');
+      }
       lines.push(`- ${line}${line && details ? ': ' : ''}${details}`);
     }
   });
 
-  solutions.forEach((solution) => {
-    if (typeof solution !== 'object') return;
-    const title = solution.title || 'Recommended action';
-    const steps: string[] = Array.isArray(solution.steps) ? solution.steps : [];
-    if (!steps.length) return;
-    lines.push(`- ${title}:`);
-    steps.forEach((step, idx) => {
-      lines.push(`   ${idx + 1}. ${step}`);
+  if (solutions.length) {
+    if (lines.length) lines.push('');
+    lines.push('## How to Fix It');
+    solutions.forEach((solution, index) => {
+      if (typeof solution !== 'object') return;
+      const title = solution.title || 'Recommended action';
+      const steps: string[] = Array.isArray(solution.steps) ? solution.steps : [];
+      if (!steps.length) return;
+      lines.push(`**Step ${index + 1}: ${title}**`);
+      steps.forEach((step, idx) => {
+        lines.push(`${idx + 1}. ${step}`);
+      });
     });
-  });
+  } else if (recommendedActions.length) {
+    if (lines.length) lines.push('');
+    lines.push('## How to Fix It');
+    recommendedActions.slice(0, 10).forEach((action, index) => {
+      lines.push(`${index + 1}. ${action}`);
+    });
+  }
 
   if (confidence !== undefined) {
     const pct = Math.round(Number(confidence) * 100);
     if (!Number.isNaN(pct)) {
+      if (lines.length) lines.push('');
       lines.push(`Confidence: ~${pct}%`);
     }
   }
 
   return lines.length ? lines.join('\n') : null;
+}
+
+const hasStructuredMarkdown = (text: string): boolean => {
+  if (!text) return false;
+  return /(^|\n)\s*##\s+/.test(text) || /(^|\n)\s*[-*]\s+/.test(text) || /(^|\n)\s*\d+\.\s+/.test(text);
+};
+
+export function formatLogAnalysisText(raw: string): string | null {
+  if (!raw) return null;
+  const text = raw.trim();
+  if (!text || hasStructuredMarkdown(text)) return null;
+
+  const labelRegex = /([A-Z][A-Za-z0-9 /&()_-]{2,50}):/g;
+  const matches = [...text.matchAll(labelRegex)];
+  if (matches.length < 2) return null;
+
+  const sections: { label: string; body: string }[] = [];
+  for (let i = 0; i < matches.length; i += 1) {
+    const current = matches[i];
+    const start = current.index ?? 0;
+    const end = i + 1 < matches.length ? matches[i + 1].index ?? text.length : text.length;
+    const label = current[1].trim();
+    const body = text.slice(start + current[0].length, end).trim();
+    if (label && body) sections.push({ label, body });
+  }
+
+  if (sections.length < 2) return null;
+
+  const diagnosis = sections.shift();
+  const lines: string[] = [];
+  if (diagnosis) {
+    lines.push('## 🔍 The Diagnosis', diagnosis.body.trim());
+  }
+
+  lines.push('', '## ✅ How to Fix It');
+  sections.forEach((section, index) => {
+    lines.push(`${index + 1}. **${section.label}:** ${section.body}`);
+  });
+
+  return lines.join('\n');
 }

@@ -422,12 +422,19 @@ class StreamEventEmitter:
 
         # Add trace step (skip internal housekeeping tools; those have dedicated UI)
         if tool_name not in {"write_todos", "trace_update"}:
+            safe_input = input_data
+            if tool_name == "log_diagnoser":
+                if isinstance(input_data, dict):
+                    file_name = input_data.get("file_name") or input_data.get("fileName")
+                    safe_input = {"file_name": file_name} if file_name else None
+                else:
+                    safe_input = None
             trace_meta: Dict[str, Any] = {
                 "toolCallId": tool_call_id,
                 "toolName": tool_name,
             }
-            if input_data is not None:
-                trace_meta["input"] = safe_json_value(input_data)
+            if safe_input is not None:
+                trace_meta["input"] = safe_json_value(safe_input)
             if goal:
                 trace_meta["goal"] = goal
 

@@ -135,11 +135,105 @@ class MessagePreparer:
 
         # 4. Process attachments (multimodal for images/PDFs, text inline)
         if state.attachments:
+            attachments = list(state.attachments or [])
+            safe_attachments: List[Any] = []
+            deferred_log_names: List[str] = []
+            deferred_log_items: List[Tuple[str, Any]] = []
+            deferred_sensitive_names: List[str] = []
+
+            for idx, attachment in enumerate(attachments):
+                name = self._get_attachment_attr(attachment, "name")
+                mime = self._get_attachment_attr(attachment, "mime_type")
+                name_str = str(name or "").strip()
+                display_name = name_str or f"attachment_{idx + 1}"
+
+                is_log, _ = self.attachment_processor.is_log_attachment(attachment)
+                if is_log:
+                    deferred_log_names.append(display_name)
+                    deferred_log_items.append((display_name, attachment))
+                    continue
+
+                if self._is_sensitive_text_attachment(name_str, mime):
+                    deferred_sensitive_names.append(display_name)
+                    continue
+
+                safe_attachments.append(attachment)
+
+            stored_log_paths: List[str] = []
+            if deferred_log_items:
+                try:
+                    from app.agents.harness.store import SparrowWorkspaceStore
+
+                    session_id = getattr(state, "session_id", None) or getattr(state, "trace_id", None)
+                    forwarded = getattr(state, "forwarded_props", {}) or {}
+                    customer_id = None
+                    if isinstance(forwarded, dict):
+                        customer_id = forwarded.get("customer_id") or forwarded.get("customerId")
+
+                    if session_id:
+                        store = SparrowWorkspaceStore(
+                            session_id=str(session_id),
+                            customer_id=customer_id,
+                        )
+                        used_paths: set[str] = set()
+                        for idx, (display_name, attachment) in enumerate(deferred_log_items):
+                            data_url = self._get_attachment_attr(attachment, "data_url")
+                            if not data_url:
+                                continue
+                            decoded = self.attachment_processor.decode_data_url(str(data_url))
+                            if not decoded:
+                                continue
+                            content = self.attachment_processor.extract_log_content(decoded)
+                            if not content:
+                                continue
+                            safe_name = self._sanitize_attachment_name(display_name, idx)
+                            path = f"/knowledge/attachments/{safe_name}"
+                            if path in used_paths:
+                                path = f"/knowledge/attachments/{safe_name}_{idx + 1}"
+                            used_paths.add(path)
+                            await store.write_file(
+                                path,
+                                content,
+                                metadata={
+                                    "source": "user_attachment",
+                                    "original_name": display_name,
+                                },
+                            )
+                            stored_log_paths.append(f"- {display_name} -> {path}")
+                except Exception as exc:
+                    logger.debug("log_attachment_workspace_write_failed", error=str(exc))
+
+            if deferred_log_names:
+                messages.append(
+                    SystemMessage(
+                        content=(
+                            "Log files attached (contents withheld from prompt). "
+                            "They will be analyzed via the log_diagnoser tool.\n"
+                            + "\n".join(f"- {name}" for name in deferred_log_names)
+                            + (("\n\nStored in workspace:\n" + "\n".join(stored_log_paths)) if stored_log_paths else "")
+                        ),
+                        name="log_attachment_notice",
+                    )
+                )
+                stats["log_attachments_deferred"] = len(deferred_log_names)
+
+            if deferred_sensitive_names:
+                messages.append(
+                    SystemMessage(
+                        content=(
+                            "Sensitive text attachments detected (contents withheld from prompt):\n"
+                            + "\n".join(f"- {name}" for name in deferred_sensitive_names)
+                        ),
+                        name="sensitive_attachment_notice",
+                    )
+                )
+                stats["sensitive_attachments_deferred"] = len(deferred_sensitive_names)
+
             # Attachment processing (especially image re-encoding) can be CPU-heavy.
             # Run in a worker thread to avoid blocking the event loop.
             processed = await asyncio.to_thread(
                 self.multimodal_processor.process_attachments,
-                state.attachments,
+                safe_attachments,
             )
 
             if processed.has_multimodal:
@@ -566,6 +660,44 @@ class MessagePreparer:
         )
 
         return HumanMessage(content=content)
+
+    @staticmethod
+    def _get_attachment_attr(attachment: Any, attr: str) -> Optional[Any]:
+        if isinstance(attachment, dict):
+            return attachment.get(attr)
+        return getattr(attachment, attr, None)
+
+    @staticmethod
+    def _sanitize_attachment_name(name: str, index: int) -> str:
+        safe = re.sub(r"[^a-zA-Z0-9._-]+", "_", (name or "").strip())
+        safe = safe.strip("._") or f"attachment_{index + 1}.log"
+        if not safe.lower().endswith((".log", ".txt")):
+            safe = f"{safe}.log"
+        return safe
+
+    def _is_sensitive_text_attachment(self, name: str, mime: Optional[str]) -> bool:
+        if not name:
+            return False
+        if not self.attachment_processor.is_text_mime(mime, name):
+            return False
+        lower = name.strip().lower()
+        lock_names = {
+            "pnpm-lock.yaml",
+            "package-lock.json",
+            "yarn.lock",
+            "bun.lockb",
+            "poetry.lock",
+            "pipfile.lock",
+            "composer.lock",
+            "cargo.lock",
+        }
+        if lower in lock_names:
+            return True
+        if lower.endswith(".lock"):
+            return True
+        if "lock" in lower and lower.endswith((".yaml", ".yml", ".json")):
+            return True
+        return False
 
     def _estimate_tokens(self, messages: List[BaseMessage]) -> int:
         """Rough token estimation (~4 chars per token, ~1000 tokens per image)."""

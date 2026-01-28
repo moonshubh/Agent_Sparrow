@@ -14,6 +14,277 @@ export function stripCodeFence(text: string): string {
   return fenceMatch ? fenceMatch[1].trim() : trimmed;
 }
 
+const isInternalRetrievalPayload = (value: unknown): boolean => {
+  if (!value) return false;
+  if (Array.isArray(value)) {
+    return value.some((item) => isInternalRetrievalPayload(item));
+  }
+  if (typeof value !== 'object') return false;
+  const record = value as Record<string, unknown>;
+  return (
+    typeof record.retrieval_id === 'string' &&
+    Array.isArray(record.sources_searched) &&
+    Array.isArray(record.results)
+  );
+};
+
+const isStructuredLogPayload = (value: unknown): boolean => {
+  const isSegment = (item: Record<string, unknown>): boolean =>
+    'line_range' in item || 'lineRange' in item || 'key_info' in item || 'keyInfo' in item || 'relevance' in item;
+
+  if (Array.isArray(value)) {
+    return value.some((item) => {
+      if (!item || typeof item !== 'object' || Array.isArray(item)) return false;
+      return isSegment(item as Record<string, unknown>);
+    });
+  }
+  if (!value || typeof value !== 'object') return false;
+  const record = value as Record<string, unknown>;
+  const containers = ['segments', 'items', 'sections'] as const;
+  for (const key of containers) {
+    const list = record[key];
+    if (Array.isArray(list) && list.some((item) => isSegment(item as Record<string, unknown>))) {
+      return true;
+    }
+  }
+  return isSegment(record);
+};
+
+const isLogDiagnoserPayload = (value: unknown): boolean => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  const hasEvidence = Array.isArray(record.evidence);
+  const hasIssues = Array.isArray(record.issues) || Array.isArray(record.identified_issues);
+  const hasActions =
+    Array.isArray(record.actions) ||
+    Array.isArray(record.recommended_actions) ||
+    Array.isArray(record.proposed_solutions);
+  const hasAnswer = typeof record.answer === 'string' || typeof record.summary === 'string';
+  return (hasEvidence && (hasIssues || hasActions)) || (hasAnswer && (hasIssues || hasActions));
+};
+
+const isInternalToolPayload = (value: unknown): boolean =>
+  isInternalRetrievalPayload(value) || isStructuredLogPayload(value) || isLogDiagnoserPayload(value);
+
+const INTERNAL_MARKER_REGEX =
+  /"(retrieval_id|sources_searched|query_understood|customer_ready|internal_notes|recommended_actions|proposed_solutions|line_range|key_info|relevance_score|priority_concerns|identified_issues|structured_log)"/i;
+
+const tryParseJson = (raw: string): unknown | null => {
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+  if (
+    !((trimmed.startsWith('{') && trimmed.endsWith('}')) ||
+      (trimmed.startsWith('[') && trimmed.endsWith(']')))
+  ) {
+    return null;
+  }
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    return null;
+  }
+};
+
+export function extractJsonObjects(text: string): string[] {
+  const objects: string[] = [];
+  const startIdx = text.indexOf('{');
+  if (startIdx < 0) return objects;
+
+  let idx = startIdx;
+  while (idx >= 0 && idx < text.length) {
+    const start = text.indexOf('{', idx);
+    if (start < 0) break;
+
+    let depth = 0;
+    let inString = false;
+    let escape = false;
+    for (let i = start; i < text.length; i += 1) {
+      const ch = text[i];
+      if (inString) {
+        if (escape) {
+          escape = false;
+        } else if (ch === '\\') {
+          escape = true;
+        } else if (ch === '"') {
+          inString = false;
+        }
+        continue;
+      }
+      if (ch === '"') {
+        inString = true;
+        continue;
+      }
+      if (ch === '{') depth += 1;
+      if (ch === '}') depth -= 1;
+      if (depth === 0) {
+        objects.push(text.slice(start, i + 1));
+        idx = i + 1;
+        break;
+      }
+    }
+
+    if (depth !== 0) break;
+  }
+
+  return objects;
+}
+
+export function extractJsonBlocks(text: string): string[] {
+  const blocks: string[] = [];
+  const startIdx = text.search(/[{\[]/);
+  if (startIdx < 0) return blocks;
+
+  let idx = startIdx;
+  while (idx >= 0 && idx < text.length) {
+    const braceIdx = text.indexOf('{', idx);
+    const bracketIdx = text.indexOf('[', idx);
+    const start =
+      braceIdx >= 0 && bracketIdx >= 0
+        ? Math.min(braceIdx, bracketIdx)
+        : braceIdx >= 0
+          ? braceIdx
+          : bracketIdx;
+    if (start < 0) break;
+
+    const isArray = text[start] === '[';
+    const openChar = isArray ? '[' : '{';
+    const closeChar = isArray ? ']' : '}';
+    let depth = 0;
+    let inString = false;
+    let escape = false;
+
+    for (let i = start; i < text.length; i += 1) {
+      const ch = text[i];
+      if (inString) {
+        if (escape) {
+          escape = false;
+        } else if (ch === '\\') {
+          escape = true;
+        } else if (ch === '"') {
+          inString = false;
+        }
+        continue;
+      }
+      if (ch === '"') {
+        inString = true;
+        continue;
+      }
+      if (ch === openChar) depth += 1;
+      if (ch === closeChar) depth -= 1;
+      if (depth === 0) {
+        blocks.push(text.slice(start, i + 1));
+        idx = i + 1;
+        break;
+      }
+    }
+
+    if (depth !== 0) break;
+  }
+
+  return blocks;
+}
+
+export function hasInternalToolPayload(text: string): boolean {
+  if (!text) return false;
+  if (INTERNAL_MARKER_REGEX.test(text)) return true;
+  const blocks = extractJsonBlocks(text);
+  for (const block of blocks) {
+    const parsed = tryParseJson(block);
+    if (parsed && isInternalToolPayload(parsed)) return true;
+    if (INTERNAL_MARKER_REGEX.test(block)) return true;
+  }
+  return false;
+}
+
+export function stripInternalSearchPayloads(content: string): string {
+  if (!content) return content;
+
+  let changed = false;
+  let cleaned = content;
+  const hasMarkers = INTERNAL_MARKER_REGEX.test(cleaned);
+
+  const fenceRegex = /```(?:json)?\s*([\s\S]*?)```/gi;
+  cleaned = cleaned.replace(fenceRegex, (match, inner) => {
+    const parsed = tryParseJson(inner);
+    if (parsed && isInternalToolPayload(parsed)) {
+      changed = true;
+      return '';
+    }
+    return match;
+  });
+
+  const trimmed = stripCodeFence(cleaned).trim();
+  const parsedTop = tryParseJson(trimmed);
+  if (parsedTop && isInternalToolPayload(parsedTop)) {
+    return '';
+  }
+
+  const blocks = extractJsonBlocks(cleaned);
+  if (blocks.length) {
+    let next = cleaned;
+    blocks.forEach((block) => {
+      const parsed = tryParseJson(block);
+      if (parsed && isInternalToolPayload(parsed)) {
+        next = next.replace(block, '');
+        changed = true;
+        return;
+      }
+      if (hasMarkers && INTERNAL_MARKER_REGEX.test(block)) {
+        next = next.replace(block, '');
+        changed = true;
+      }
+    });
+    cleaned = next;
+  }
+
+  if (!changed && hasMarkers) {
+    const pruned = cleaned
+      .split('\n')
+      .filter((line) => !INTERNAL_MARKER_REGEX.test(line))
+      .filter((line) => {
+        const trimmedLine = line.trim();
+        return !['{', '}', '[', ']'].includes(trimmedLine);
+      })
+      .join('\n');
+    cleaned = pruned;
+    changed = true;
+  }
+
+  if (!changed) return content;
+
+  const isPrefaceLine = (line: string): boolean => {
+    const lower = line.toLowerCase();
+    if (!/(json|retrieval|sources?\s+searched|kb|macros|feedme)/.test(lower)) return false;
+    if (
+      /(compile|format|results|following|below|here|required|provide|structured)/.test(lower) ||
+      lower.startsWith('now i have') ||
+      lower.startsWith('let me')
+    ) {
+      return true;
+    }
+    return false;
+  };
+
+  const lines = cleaned
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const filtered = lines.filter((line) => !isPrefaceLine(line));
+
+  if (!filtered.length) return '';
+
+  const cleanedResult = filtered.join('\n').replace(/\n{3,}/g, '\n\n').trim();
+  if (changed) {
+    const compact = cleanedResult.replace(/\s+/g, ' ').trim();
+    const hasSentenceEnd = /[.!?]/.test(compact);
+    if (compact.length < 180 && !hasSentenceEnd) {
+      return '';
+    }
+  }
+
+  return cleanedResult;
+}
+
 /**
  * Parse a potentially nested/wrapped output value into a usable object.
  * Handles various formats:

@@ -15,6 +15,7 @@ from typing import Any, TYPE_CHECKING
 from langchain_core.messages import BaseMessage
 from loguru import logger
 import json
+import httpx
 
 try:
     from langchain_google_genai.chat_models import ChatGoogleGenerativeAIError
@@ -299,6 +300,7 @@ class StreamEventHandler:
         state: "GraphState",
         messages: list[BaseMessage],
         *,
+        fallback_agent_factory: Any | None = None,
         helper: GemmaHelper | None = None,
         session_cache: dict[str, dict[str, Any]] | None = None,
         last_user_query: str | None = None,
@@ -320,6 +322,7 @@ class StreamEventHandler:
         self.config = config
         self.state = state
         self.messages = messages
+        self.fallback_agent_factory = fallback_agent_factory
         self.helper = helper
         self.session_cache = session_cache or {}
         self.last_user_query = last_user_query
@@ -349,6 +352,15 @@ class StreamEventHandler:
         # Track model runs that appear to be streaming structured tool payloads (JSON contracts).
         self._json_payload_prefix: dict[str, str] = {}
         self._json_payload_runs: set[str] = set()
+
+    @staticmethod
+    def _is_google_overloaded_error(error: Exception) -> bool:
+        message = str(error).lower()
+        if "model is overloaded" in message:
+            return True
+        if "503" in message and "service unavailable" in message:
+            return True
+        return False
 
     async def stream_and_process(self) -> dict[str, Any] | None:
         """Main streaming loop with event processing.
@@ -397,7 +409,7 @@ class StreamEventHandler:
 
             # Try fallback invoke with retry and exponential backoff (LangGraph pattern)
             # Retry transient errors up to 3 times with jitter to avoid thundering herd
-            retryable_exceptions: list[type] = [ConnectionError, TimeoutError, OSError]
+            retryable_exceptions: list[type] = [ConnectionError, TimeoutError, OSError, httpx.ReadTimeout]
             if ChatGoogleGenerativeAIError is not None:
                 retryable_exceptions.append(ChatGoogleGenerativeAIError)
             if QuotaExceededError is not None:
@@ -414,11 +426,43 @@ class StreamEventHandler:
 
             try:
                 fallback_inputs = self._agent_inputs()
+                fallback_agent = self.agent
+                fallback_config = self.config
+                fallback_meta: dict[str, Any] | None = None
+
+                if self.fallback_agent_factory and self._is_google_overloaded_error(e):
+                    try:
+                        built = self.fallback_agent_factory()
+                    except Exception as build_exc:  # pragma: no cover - defensive
+                        logger.warning("fallback_agent_build_failed", error=str(build_exc))
+                    else:
+                        if built:
+                            fallback_agent, fallback_config, fallback_runtime = built
+                            fallback_meta = {
+                                "fallback": True,
+                                "provider": getattr(fallback_runtime, "provider", None),
+                                "model": getattr(fallback_runtime, "model", None),
+                            }
+                            self.emitter.emit_custom_event(
+                                "agent_thinking_trace",
+                                {
+                                    "totalSteps": 2,
+                                    "latestStep": {
+                                        "id": f"fallback-switch-{int(time.time() * 1000)}",
+                                        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                                        "type": "thought",
+                                        "content": (
+                                            "Primary model overloaded; switching to fallback model."
+                                        ),
+                                        "metadata": fallback_meta,
+                                    },
+                                },
+                            )
 
                 async def _fallback_invoke() -> Any:
-                    return await self.agent.ainvoke(
+                    return await fallback_agent.ainvoke(
                         fallback_inputs,
-                        config=self.config,
+                        config=fallback_config,
                     )
 
                 self.final_output = await retry_with_backoff(
@@ -431,6 +475,9 @@ class StreamEventHandler:
                 await self._emit_artifacts_from_fallback_output(self.final_output)
 
                 # Emit success event after fallback completes
+                success_metadata = {"fallback": True, "retry_enabled": True}
+                if fallback_meta:
+                    success_metadata.update(fallback_meta)
                 self.emitter.emit_custom_event(
                     "agent_thinking_trace",
                     {
@@ -440,7 +487,7 @@ class StreamEventHandler:
                             "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                             "type": "result",
                             "content": "Fallback invoke completed successfully (with retry)",
-                            "metadata": {"fallback": True, "retry_enabled": True},
+                            "metadata": success_metadata,
                         },
                     },
                 )
@@ -713,6 +760,12 @@ class StreamEventHandler:
         event["name"] = tool_name
         if tool_name == "trace_update":
             return
+
+        # Prevent leaking raw log content and structured payloads into the UI trace.
+        # Keep only minimal output for log analysis tools so the final response can
+        # be shown safely via formatted notes instead.
+        if tool_name == "log_diagnoser":
+            output = {"status": "log_analysis_complete"}
 
         # =====================================================================
         # SPECIAL TOOL HANDLING (BEFORE EVICTION)
@@ -1049,6 +1102,9 @@ class StreamEventHandler:
                         '"overall_summary"',
                         '"identified_issues"',
                         '"proposed_solutions"',
+                        '"retrieval_id"',
+                        '"sources_searched"',
+                        '"query_understood"',
                     )
                     if any(marker in sniff_lower for marker in contract_markers):
                         self._json_payload_runs.add(run_id_str)

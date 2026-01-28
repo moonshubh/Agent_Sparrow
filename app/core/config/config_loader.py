@@ -64,6 +64,8 @@ class ModelConfig(BaseModel):
     model_id: str
     provider: str | None = None
     temperature: float = 0.3
+    top_p: float | None = None
+    top_k: int | None = None
     context_window: int = 128000
     rate_limits: RateLimits
     embedding_dims: int | None = None
@@ -98,6 +100,24 @@ class ModelConfig(BaseModel):
     def validate_temperature(cls, value: float) -> float:
         if value < 0.0 or value > 2.0:
             raise ValueError("temperature must be between 0.0 and 2.0")
+        return value
+
+    @field_validator("top_p")
+    @classmethod
+    def validate_top_p(cls, value: float | None) -> float | None:
+        if value is None:
+            return value
+        if value <= 0.0 or value > 1.0:
+            raise ValueError("top_p must be between 0.0 (exclusive) and 1.0")
+        return value
+
+    @field_validator("top_k")
+    @classmethod
+    def validate_top_k(cls, value: int | None) -> int | None:
+        if value is None:
+            return value
+        if value <= 0:
+            raise ValueError("top_k must be positive when set")
         return value
 
     @field_validator("provider")

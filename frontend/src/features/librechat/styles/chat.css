@@ -481,6 +481,21 @@
   color: var(--lc-text-primary);
 }
 
+.lc-message-body h2,
+.lc-message-body h3 {
+  padding-left: 10px;
+  border-left: 3px solid var(--lc-accent);
+  letter-spacing: 0.2px;
+}
+
+.lc-message-body h2 {
+  font-size: 18px;
+}
+
+.lc-message-body h3 {
+  font-size: 16px;
+}
+
 .lc-message-body h1:first-child,
 .lc-message-body h2:first-child,
 .lc-message-body h3:first-child,
@@ -885,12 +900,15 @@
   display: flex;
   align-items: flex-end;
   gap: 8px;
+  width: 100%;
+  box-sizing: border-box;
   padding: 12px 16px;
   border-radius: 16px;
   border: 1px solid var(--lc-border);
   background-color: var(--lc-surface-secondary);
   transition: border-color 0.15s ease, box-shadow 0.15s ease;
   position: relative;
+  /* overflow: hidden removed - was preventing textarea text wrapping */
 }
 
 .lc-input-box:focus-within {
@@ -899,22 +917,37 @@
 }
 
 .lc-textarea {
-  flex: 1;
+  /* Modern CSS auto-grow: field-sizing handles height automatically */
+  field-sizing: content;
+  /* Flex child settings */
+  flex: 1 1 0%;
+  min-width: 0;
+  box-sizing: border-box;
   resize: none;
   border: none;
   outline: none;
   background: transparent;
   color: var(--lc-text-primary);
-  font-size: 15px;
+  font-size: 16px;
   line-height: 1.5;
   max-height: 200px;
   min-height: 24px;
   font-family: inherit;
+  /* Text wrapping */
+  word-wrap: break-word;
+  overflow-wrap: break-word;
+  word-break: break-word;
+  white-space: pre-wrap;
+  /* Overflow for when content exceeds max-height */
+  overflow-x: hidden;
+  overflow-y: auto;
 }
 
 .lc-textarea::placeholder {
   color: var(--lc-text-tertiary);
 }
+
+/* Note: Hidden measurement div removed - using scrollHeight approach instead */
 
 .lc-send-btn {
   display: flex;
@@ -1556,6 +1589,73 @@
   margin: 8px 0;
   font-size: 13px;
   color: var(--lc-text-secondary);
+}
+
+/* Research progress indicator */
+.lc-research-progress-anchor {
+  display: flex;
+  justify-content: flex-start;
+  margin: 8px 0;
+}
+
+.lc-research-progress-anchor--attached {
+  margin-top: -10px;
+  margin-left: 10px;
+}
+
+.lc-research-progress {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  background-color: var(--lc-surface-secondary);
+  border-radius: 999px;
+  border: 1px solid var(--lc-border-light);
+  font-size: 11px;
+  color: var(--lc-text-tertiary);
+}
+
+.lc-research-pulse {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background-color: var(--lc-accent);
+  animation: lc-pulse 1.4s ease-in-out infinite;
+}
+
+.lc-research-bar {
+  width: 160px;
+  height: 6px;
+  background-color: var(--lc-border);
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.lc-research-fill {
+  height: 100%;
+  background-color: var(--lc-accent);
+  transition: width 200ms ease;
+}
+
+.lc-research-label {
+  font-size: 11px;
+  color: var(--lc-text-tertiary);
+  white-space: nowrap;
+}
+
+.lc-research-progress[data-status='stuck'] .lc-research-fill,
+.lc-research-progress[data-status='failed'] .lc-research-fill {
+  background-color: var(--lc-error);
+}
+
+.lc-research-progress[data-status='stuck'] .lc-research-label,
+.lc-research-progress[data-status='failed'] .lc-research-label {
+  color: var(--lc-error);
+}
+
+.lc-research-progress[data-status='stuck'] .lc-research-pulse,
+.lc-research-progress[data-status='failed'] .lc-research-pulse {
+  background-color: var(--lc-error);
 }
 
 .lc-tool-spinner {

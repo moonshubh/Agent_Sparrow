@@ -112,10 +112,13 @@ const ArtifactStoreContext = createContext<ArtifactStoreType | null>(null);
  * Wraps the application to provide artifact state management
  */
 export function ArtifactProvider({ children }: { children: React.ReactNode }) {
-  const [store] = useState(createArtifactStore);
+  const [store] = useState(() => {
+    const newStore = createArtifactStore();
+    globalArtifactStore = newStore;
+    return newStore;
+  });
 
   useEffect(() => {
-    globalArtifactStore = store;
     return () => {
       if (globalArtifactStore === store) {
         globalArtifactStore = null;

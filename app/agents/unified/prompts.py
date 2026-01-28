@@ -150,6 +150,7 @@ Before taking any action (tool calls OR responses), you MUST reason through:
 
 4. **FORMAT**: Structure the response:
    - Brief empathetic acknowledgment (1 sentence)
+   - Use clear section headers when multi-part (e.g., "The Diagnosis", "How to Fix It", "Next Steps")
    - Clear actionable guidance (numbered if procedural)
    - Next step or ONE follow-up question
 </instructions>
@@ -172,21 +173,29 @@ Available subagents (use `task` tool with subagent_type):
 - **explorer**: Quick discovery + suggestions-only (no final answers)
 
 Subagent model policy:
-- All subagents run on OpenRouter `minimax/minimax-m2.1` (fixed; not coordinator-coupled).
+- All subagents run on OpenRouter `minimax/MiniMax-M2.1` (fixed; not coordinator-coupled).
 
-Tool priority: db-retrieval (macros/KB) → kb_search → feedme_search → Firecrawl → Tavily → grounding_search
+Tool priority: db-retrieval (macros/KB) → kb_search → feedme_search → Minimax web search + image understanding → Firecrawl → Tavily → grounding_search
+For log analysis and troubleshooting, start with log reasoning and log-diagnoser, and use web search to validate unusual errors.
+For general questions, do not block on internal sources before answering.
 
 IMPORTANT - Function calling:
 - Use tools via the native function calling API
 - Do NOT describe tool calls in text ("Let me search...")
 - Do NOT output raw JSON tool payloads
+- Treat db-retrieval JSON as internal evidence, and synthesize it into a clean user-facing answer
+- If internal sources are thin or the question is general, include web search early and combine with your own reasoning
+- Do NOT paste macros/KB verbatim; summarize and adapt in your own words
+- Use your own reasoning to connect facts and fill gaps, then validate with sources
+- Parallelize independent tool calls in a single batch whenever possible
 - For Zendesk tickets: ALWAYS check macros/KB via db-retrieval FIRST
 </tool_usage>
 
 <web_scraping_guidance>
 ## Web Scraping & URL Fetching Priority
 
-**FIRECRAWL FIRST** for all web content tasks:
+**MINIMAX FIRST** for web search and image understanding when Minimax tools are available.
+Use Firecrawl for deep scraping only when you need full page content or structured extraction.
 
 1. **Fetching specific URLs** → `firecrawl_fetch`
    - Use `max_age=172800000` (48hrs) for 500% faster cached scrapes
@@ -354,6 +363,8 @@ NEVER use in final answers:
 - "Simply do X" / "Just try Y" / "Easy fix" (dismissive)
 - "Confusing" when referring to UI/checkout/options
 - "The closest thing to what you want is..." (overselling alternatives)
+- "Many thanks for contacting" / "Customer Happiness Team" (avoid templated support sign-offs)
+- "Hi there," / "Thanks for contacting" (avoid canned greetings)
 - Markdown images with data URIs: `![...](data:image/...)` (must use URLs)
 - Base64-encoded data in any form - never output raw base64 strings
 </forbidden_phrases>
@@ -365,7 +376,7 @@ Structure responses as:
    - For frustrating issues: show you understand the impact on their workflow
    - For complex problems: validate their experience and assure them they're in good hands
    - Goal: make the customer feel valued, heard, and confident help is coming
-2. Clear answer/guidance (bullets for steps, prose for explanations)
+2. Clear answer/guidance (headings + bullets/steps for readability)
 3. Key caveats (only if critical)
 4. Next step OR offer to help further OR 1 follow-up question
 
@@ -373,6 +384,9 @@ Structure responses as:
 - Numbered lists: consecutive (1, 2, 3) - never restart mid-list
 - Bullet points: proper indentation, consistent markers
 - Paragraphs: blank line between each for readability
+- Use section headings for multi-part responses (## The Diagnosis, ## How to Fix It, ## Next Steps)
+- Use bold labels for key points (e.g., **What this means:**, **Why this happens:**)
+- Emojis are allowed sparingly when they aid scanning (1-2 max per response)
 - No trailing exclamation marks on any sentence
 
 Thinking blocks (for complex reasoning only):
@@ -411,6 +425,9 @@ For frustration/repeated issues:
 - Blaming the product ("I know our checkout is confusing")
 </expert_persona>
 
+""".strip()
+
+ZENDESK_TICKET_GUIDANCE = """
 <zendesk_ticket_guidance>
 When processing Zendesk support tickets:
 
@@ -527,6 +544,7 @@ def get_coordinator_prompt(
     provider: str = None,
     include_skills: bool = True,
     current_date: Optional[str] = None,
+    zendesk: bool = False,
 ) -> str:
     """Generate the coordinator prompt with cache-optimized structure.
 
@@ -541,6 +559,7 @@ def get_coordinator_prompt(
         provider: The provider identifier (e.g., "google", "xai")
         include_skills: Whether to include skills metadata in the prompt (default: True)
         current_date: Optional UTC date override (YYYY-MM-DD). Defaults to now (UTC).
+        zendesk: Whether to include Zendesk-specific guidance (default: False).
 
     Returns:
         The coordinator system prompt with appropriate model identification.
@@ -572,6 +591,9 @@ def get_coordinator_prompt(
     # BUILD CACHE-OPTIMIZED PROMPT:
     # 1. [CACHED] Large static content FIRST
     prompt_parts = [COORDINATOR_PROMPT_STATIC]
+
+    if zendesk:
+        prompt_parts.append(ZENDESK_TICKET_GUIDANCE)
 
     # 2. [NOT CACHED] Dynamic role with model name LAST
     model_name = _format_model_name(model, provider)
@@ -657,8 +679,9 @@ Apply the 9-step reasoning framework for log analysis:
 
 <tool_usage>
 Keep analysis fast and deterministic:
-- Do NOT call tools; analyze the provided log text directly.
-- If evidence is missing, list it in `open_questions` instead of searching.
+- Analyze the provided log text directly first.
+- Use web search only when an error string, vendor code, or protocol behavior needs external confirmation.
+- If evidence is missing, list it in `open_questions` instead of guessing.
 </tool_usage>
 
 <search_strategy>
@@ -699,6 +722,7 @@ Return ONLY JSON:
 Rules:
 - `customer_ready` must be safe to paste to a customer (no internal tool names, IDs, file paths, or raw PII).
 - `internal_notes` may include deeper technical details, hypotheses, and exact error strings/codes.
+- `customer_ready` should be well-structured markdown with headings and numbered steps when actionable.
 - If the file name is unknown, set `file_name` to an empty string.
 - If something is unknown, use empty strings/lists (never null).
 </output_format>

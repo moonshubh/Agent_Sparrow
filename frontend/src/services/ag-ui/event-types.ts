@@ -195,6 +195,18 @@ export interface ImageArtifactEvent {
   pageUrl?: string;
 }
 
+/**
+ * Event payload for `article_artifact` custom events.
+ * Contains article markdown for frontend artifact display.
+ */
+export interface ArticleArtifactEvent {
+  id: string;
+  type: 'article';
+  title: string;
+  content: string;
+  messageId: string;
+}
+
 // -----------------------------------------------------------------------------
 // Union Type for All Custom Events
 // -----------------------------------------------------------------------------
@@ -209,7 +221,8 @@ export type AgentCustomEvent =
   | { name: 'tool_evidence_update'; value: ToolEvidenceUpdateEvent }
   | { name: 'agent_todos_update'; value: AgentTodosUpdateEvent }
   | { name: 'genui_state_update'; value: GenuiStateUpdateEvent }
-  | { name: 'image_artifact'; value: ImageArtifactEvent };
+  | { name: 'image_artifact'; value: ImageArtifactEvent }
+  | { name: 'article_artifact'; value: ArticleArtifactEvent };
 
 /**
  * Known AG-UI custom event names as const tuple for compile-time type derivation.
@@ -221,6 +234,7 @@ export const KNOWN_EVENT_NAMES = [
   'agent_todos_update',
   'genui_state_update',
   'image_artifact',
+  'article_artifact',
 ] as const;
 
 /**

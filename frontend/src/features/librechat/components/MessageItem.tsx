@@ -5,12 +5,14 @@ import dynamic from 'next/dynamic';
 import type { Message } from '@/services/ag-ui/client';
 import { useAgent } from '@/features/librechat/AgentContext';
 import { ThinkingPanel } from './ThinkingPanel';
+import { ResearchProgress } from './ResearchProgress';
 import { ToolIndicator } from './ToolIndicator';
 import { Copy, Check, RefreshCw, Pencil } from 'lucide-react';
 import { AttachmentPreviewList } from '@/features/librechat/components/AttachmentPreview';
 import { EnhancedMarkdown } from '@/features/librechat/components/EnhancedMarkdown';
 import { FeedbackPopover } from './FeedbackPopover';
 import { LogAnalysisNotesDropdown } from './log-analysis-notes-dropdown';
+import { extractJsonObjects, stripInternalSearchPayloads } from '@/features/librechat/utils';
 
 const TipTapEditor = dynamic(
   () => import('./tiptap/TipTapEditor').then((mod) => mod.TipTapEditor),
@@ -95,50 +97,6 @@ const looksLikeLogDiagnoserPayload = (text: string): boolean => {
   return sample.includes('"customer_ready"') && sample.includes('"internal_notes"') && sample.includes('"file_name"');
 };
 
-const extractJsonObjects = (text: string): string[] => {
-  const objects: string[] = [];
-  const startIdx = text.indexOf('{');
-  if (startIdx < 0) return objects;
-
-  let idx = startIdx;
-  while (idx >= 0 && idx < text.length) {
-    const start = text.indexOf('{', idx);
-    if (start < 0) break;
-
-    let depth = 0;
-    let inString = false;
-    let escape = false;
-    for (let i = start; i < text.length; i += 1) {
-      const ch = text[i];
-      if (inString) {
-        if (escape) {
-          escape = false;
-        } else if (ch === '\\') {
-          escape = true;
-        } else if (ch === '"') {
-          inString = false;
-        }
-        continue;
-      }
-      if (ch === '"') {
-        inString = true;
-        continue;
-      }
-      if (ch === '{') depth += 1;
-      if (ch === '}') depth -= 1;
-      if (depth === 0) {
-        objects.push(text.slice(start, i + 1));
-        idx = i + 1;
-        break;
-      }
-    }
-
-    if (depth !== 0) break;
-  }
-
-  return objects;
-};
-
 const parseLogDiagnoserPayload = (
   text: string,
   metadata?: Record<string, unknown>
@@ -161,6 +119,11 @@ const parseLogDiagnoserPayload = (
 
   const notes: Record<string, ParsedLogDiagnoserNote> = {};
   const recommendedActions: string[] = [];
+  const customerReadyBlocks: Array<{
+    fileName?: string;
+    content: string;
+    summary?: string;
+  }> = [];
 
   parsed.forEach((obj, idx) => {
     const fileName = typeof obj.file_name === 'string' ? obj.file_name : '';
@@ -173,6 +136,18 @@ const parseLogDiagnoserPayload = (
     const questions = Array.isArray(obj.open_questions)
       ? obj.open_questions.filter((v): v is string => typeof v === 'string')
       : undefined;
+
+    const customerReady =
+      typeof obj.customer_ready === 'string' && obj.customer_ready.trim()
+        ? obj.customer_ready.trim()
+        : '';
+    const summaryRaw =
+      typeof obj.overall_summary === 'string'
+        ? obj.overall_summary
+        : typeof obj.summary === 'string'
+          ? obj.summary
+          : '';
+    const summary = summaryRaw.trim();
 
     if (actions?.length) {
       actions.forEach((action) => {
@@ -191,6 +166,14 @@ const parseLogDiagnoserPayload = (
       recommended_actions: actions,
       open_questions: questions,
     };
+
+    if (customerReady) {
+      customerReadyBlocks.push({
+        fileName: fileName || undefined,
+        content: customerReady,
+        summary: summary || (evidence?.[0] ?? undefined),
+      });
+    }
   });
 
   const artifactTitle = (() => {
@@ -202,20 +185,38 @@ const parseLogDiagnoserPayload = (
     return typeof title === 'string' && title.trim() ? title.trim() : null;
   })();
 
+  if (customerReadyBlocks.length > 0) {
+    const primary = customerReadyBlocks[0];
+    let answer = primary.content;
+    if (customerReadyBlocks.length > 1) {
+      const extraLines: string[] = [];
+      extraLines.push('', '## Additional Files');
+      customerReadyBlocks.slice(1).forEach((block, index) => {
+        const label = block.fileName || `Log file ${index + 2}`;
+        const detail = block.summary || 'Additional log analyzed.';
+        extraLines.push(`- **${label}:** ${detail}`);
+      });
+      answer = `${answer}\n${extraLines.join('\n')}`;
+    }
+    return { answer, notes };
+  }
+
   const lines: string[] = [];
+  lines.push('Thanks for the log file. Here is a focused summary and next steps.');
+  lines.push('', '## The Diagnosis');
+  lines.push(`- Reviewed ${parsed.length} attached log file${parsed.length === 1 ? '' : 's'}.`);
   if (artifactTitle) {
-    lines.push(`Created artifact: ${artifactTitle}.`);
-  } else {
-    lines.push(`Analyzed ${parsed.length} attached log file${parsed.length === 1 ? '' : 's'}.`);
+    lines.push(`- Created artifact: ${artifactTitle}.`);
   }
 
   if (recommendedActions.length) {
-    lines.push('', 'Recommended next steps:');
-    recommendedActions.slice(0, 12).forEach((action) => {
-      lines.push(`- ${action}`);
+    lines.push('', '## How to Fix It');
+    recommendedActions.slice(0, 12).forEach((action, index) => {
+      lines.push(`${index + 1}. ${action}`);
     });
   } else {
-    lines.push('', 'Open Technical details for per-file diagnostics.');
+    lines.push('', '## Next Steps');
+    lines.push('Open Technical details for per-file diagnostics.');
   }
 
   return { answer: lines.join('\n'), notes };
@@ -337,32 +338,46 @@ export const MessageItem = memo(function MessageItem({
   onEditMessage,
   onRegenerate,
 }: MessageItemProps) {
-  const { thinkingTrace, activeTraceStepId, activeTools, messageAttachments, todos, toolEvidence } = useAgent();
+  const {
+    thinkingTrace,
+    activeTraceStepId,
+    activeTools,
+    messageAttachments,
+    todos,
+    toolEvidence,
+    researchProgress,
+    researchStatus,
+    isResearching,
+  } = useAgent();
   const [isEditing, setIsEditing] = useState(false);
   const [editContent, setEditContent] = useState('');
   const [isUserExpanded, setIsUserExpanded] = useState(false);
 
   const attachments = messageAttachments[message.id] || [];
   const metadata = isRecord(message.metadata) ? message.metadata : undefined;
-  const attachmentsOnly = metadata?.attachments_only === true;
+  const isUserMessage = message.role === 'user';
+  const isToolMessage = message.role === 'tool';
+
+  const rawContent = typeof message.content === 'string' ? message.content : '';
+  const attachmentsOnly =
+    metadata?.attachments_only === true ||
+    (!rawContent.trim() && attachments.length > 0);
   const attachmentLabel = attachments.length === 1 ? 'Attachment' : `${attachments.length} attachments`;
   const logAnalysisNotes = metadata?.logAnalysisNotes ?? metadata?.log_analysis_notes;
 
   // Content comes directly from message (updated by context)
-  const rawContent = typeof message.content === 'string' ? message.content : '';
-  const displayContent = attachmentsOnly && attachments.length > 0 ? attachmentLabel : rawContent;
+  const baseContent = attachmentsOnly && attachments.length > 0 ? attachmentLabel : rawContent;
+  const displayContent = isUserMessage ? baseContent : stripInternalSearchPayloads(baseContent);
   const { thinking, mainContent, hadThinking } = extractThinking(displayContent);
-
-  const isUserMessage = message.role === 'user';
-  const isToolMessage = message.role === 'tool';
   const showStreaming = isLast && isStreaming && !isUserMessage && !mainContent;
   const shouldRegisterArtifacts = !(isLast && isStreaming);
   const showThinking = !isUserMessage && (thinking || (isLast && thinkingTrace.length > 0));
+  const showResearchProgress = isLast && !isUserMessage && (isResearching || researchStatus !== 'idle');
   const showToolIndicator = isLast && !isUserMessage && activeTools.length > 0;
   const roleName = isUserMessage ? 'You' : 'Agent Sparrow';
 
-  const derivedLogPayload = !isUserMessage ? parseLogDiagnoserPayload(displayContent, metadata) : null;
-  const looksLikeLogPayload = !isUserMessage && looksLikeLogDiagnoserPayload(displayContent);
+  const derivedLogPayload = !isUserMessage ? parseLogDiagnoserPayload(rawContent, metadata) : null;
+  const looksLikeLogPayload = !isUserMessage && looksLikeLogDiagnoserPayload(rawContent);
   const artifactTitle = (() => {
     const artifacts = metadata?.artifacts;
     if (!Array.isArray(artifacts) || artifacts.length === 0) return null;
@@ -374,7 +389,7 @@ export const MessageItem = memo(function MessageItem({
   const fallbackNotes = (() => {
     if (!looksLikeLogPayload) return null;
     if (logAnalysisNotes || derivedLogPayload?.notes) return null;
-    const payload = displayContent.trim();
+    const payload = rawContent.trim();
     if (!payload) return null;
     return {
       raw_payload: {
@@ -469,7 +484,23 @@ export const MessageItem = memo(function MessageItem({
               activeStepId={isLast ? activeTraceStepId : undefined}
               isStreaming={isLast && isStreaming}
             />
+            {showResearchProgress && (
+              <ResearchProgress
+                progress={researchProgress}
+                status={researchStatus}
+                visible={showResearchProgress}
+                attached
+              />
+            )}
           </div>
+        )}
+
+        {!showThinking && showResearchProgress && (
+          <ResearchProgress
+            progress={researchProgress}
+            status={researchStatus}
+            visible={showResearchProgress}
+          />
         )}
 
         {showToolIndicator && <ToolIndicator tools={activeTools} />}
