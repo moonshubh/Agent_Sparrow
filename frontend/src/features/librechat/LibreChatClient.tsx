@@ -82,7 +82,9 @@ function restoreArtifactsFromMessages(messages: Message[]): void {
     for (const artifact of artifacts) {
       // Validate required fields - image artifacts may use URL content or legacy base64 imageData
       const hasRequiredFields = artifact.id && artifact.type;
-      const hasContent = artifact.content || (artifact.type === 'image' && artifact.imageData);
+      const hasContent =
+        artifact.content ||
+        (artifact.type === 'image' && (artifact.imageData || artifact.imageUrl));
       if (!hasRequiredFields || !hasContent) {
         console.debug('[Artifacts] Skipping invalid artifact:', {
           id: artifact.id,
@@ -94,21 +96,22 @@ function restoreArtifactsFromMessages(messages: Message[]): void {
         continue;
       }
 
-      state.addArtifact({
-        id: artifact.id,
-        type: artifact.type,
-        title: artifact.title || 'Untitled',
-        content: artifact.content,
-        messageId: message.id,
-        language: artifact.language,
-        identifier: artifact.identifier,
-        index: artifact.index,
-        imageData: artifact.imageData,
-        mimeType: artifact.mimeType,
-        altText: artifact.altText,
-        aspectRatio: artifact.aspectRatio,
-        resolution: artifact.resolution,
-      });
+        state.addArtifact({
+          id: artifact.id,
+          type: artifact.type,
+          title: artifact.title || 'Untitled',
+        content: artifact.content || artifact.imageUrl || '',
+          messageId: message.id,
+          language: artifact.language,
+          identifier: artifact.identifier,
+          index: artifact.index,
+          imageData: artifact.imageData,
+          imageUrl: artifact.imageUrl,
+          mimeType: artifact.mimeType,
+          altText: artifact.altText,
+          aspectRatio: artifact.aspectRatio,
+          resolution: artifact.resolution,
+        });
       restoredCount += 1;
     }
   }

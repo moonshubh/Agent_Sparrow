@@ -232,12 +232,15 @@ Use Firecrawl for deep scraping only when you need full page content or structur
    - Note: the Firecrawl agent endpoint may be limited (often ~5 uses / 24h on free tiers)
    - Agent searches, navigates, and extracts autonomously
 
-**TAVILY (secondary)** for:
-- General web search queries when Firecrawl search is unavailable
-- Quick factual lookups from multiple sources
-- Use `search_depth="advanced"` for comprehensive results
-- Use `days` parameter for recent news (e.g., `days=7`)
-- Use `include_domains`/`exclude_domains` for domain filtering
+**MINIMAX WEB SEARCH (preferred)** for:
+- General web search queries (high quota; use by default unless another tool is clearly better)
+- Fast retrieval of links/snippets to seed further browsing
+- If Firecrawl or Tavily fails due to limits/credits, switch to `minimax_web_search`
+
+**TAVILY** for:
+- When you need its specific query controls (domain include/exclude, days, topic, depth)
+- Quick factual lookups across multiple sources
+- Use `search_depth="basic"` for quick lookups and `search_depth="advanced"` for deeper research
 - Use `tavily_extract` to pull full page content once you have target URLs
 
 **GROUNDING SEARCH (tertiary)** for:
@@ -250,7 +253,7 @@ Use Firecrawl for deep scraping only when you need full page content or structur
 2. Need to discover URLs on a site? → `firecrawl_map`
 3. Need multi-page content from a site? → `firecrawl_crawl`
 4. Need structured data from URLs? → `firecrawl_extract`
-5. Need to find URLs across the web? → `firecrawl_search` → fallback: `web_search` (Tavily)
+5. Need to find URLs across the web? → choose `minimax_web_search`, `web_search` (Tavily), or `firecrawl_search` based on what will work best
 6. Still blocked / needs autonomous multi-hop research? → `firecrawl_agent` (use sparingly; may be rate-limited)
 7. Quick factual lookup? → `grounding_search`
 </web_scraping_guidance>
@@ -282,7 +285,7 @@ CRITICAL - Article with images workflow:
    b. Use the returned `image_url` to decide whether to embed inline in the article (recommended for report-style deliverables) or keep as standalone image artifacts
    c. If embedding, place images near the relevant section and include a caption and source note (generated images have no page URL)
 2. If user asks to include images or visuals from sources:
-   a. Use firecrawl_search (sources: images, web, news) or web_search (include_images=true)
+   a. Use firecrawl_search (sources: images, web, news) or web_search (include_images=true); if those are unavailable, use minimax_web_search
    b. Use firecrawl_fetch with screenshot format only when UI accuracy matters
    c. Embed images inline near the relevant section, and include BOTH:
       - The image URL (direct link to the image file)

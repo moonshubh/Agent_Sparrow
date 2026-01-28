@@ -37,6 +37,7 @@ export interface SerializedArtifact {
   index?: number;
   // Image artifact fields
   imageData?: string;
+  imageUrl?: string;
   mimeType?: string;
   altText?: string;
   aspectRatio?: string;
@@ -217,7 +218,8 @@ const parseWriteArticleResult = (raw: string): WriteArticleResult | null => {
       content: `# ${title}\n\n## Images\n\n${imageLines.join('\n\n')}`,
       images,
     };
-  } catch {
+  } catch (err) {
+    console.debug('[Artifacts] Failed to parse write_article payload:', err);
     return null;
   }
 };
@@ -306,7 +308,8 @@ const safeJsonStringify = (value: unknown): string => {
   try {
     const serialized = JSON.stringify(value);
     return typeof serialized === 'string' ? serialized : '';
-  } catch {
+  } catch (err) {
+    console.debug('[Context] Failed to serialize value:', err);
     return '';
   }
 };
@@ -992,6 +995,21 @@ export function AgentProvider({
     const content = payload.content ?? '';
     if (!content) return false;
 
+    const store = getGlobalArtifactStore();
+
+    const showExistingArtifact = (): boolean => {
+      if (!store) return false;
+      const state = store.getState();
+      const existing = Object.values(state.artifactsById).find(
+        (artifact) =>
+          artifact?.type === 'article' && artifact.title === title && artifact.content === content
+      );
+      if (!existing) return false;
+      state.setCurrentArtifact(existing.id);
+      state.setArtifactsVisible(true);
+      return true;
+    };
+
     const key = buildArticleKey(title, content);
     if (articleArtifactKeysRef.current.has(key)) return false;
 
@@ -1001,11 +1019,11 @@ export function AgentProvider({
           artifact.type === 'article' && artifact.title === title && artifact.content === content
       )
     ) {
+      showExistingArtifact();
       articleArtifactKeysRef.current.add(key);
       return false;
     }
 
-    const store = getGlobalArtifactStore();
     if (store) {
       const state = store.getState();
       const alreadyExists = Object.values(state.artifactsById).some(
@@ -1013,6 +1031,7 @@ export function AgentProvider({
           artifact?.type === 'article' && artifact.title === title && artifact.content === content
       );
       if (alreadyExists) {
+        showExistingArtifact();
         articleArtifactKeysRef.current.add(key);
         return false;
       }
@@ -1162,8 +1181,8 @@ export function AgentProvider({
       try {
         const sanitizedMessages = sanitizeMessagesForRun(messagesRef.current);
         agent.messages = sanitizedMessages;
-      } catch {
-        // ignore
+      } catch (err) {
+        console.warn('[Context] Failed to sanitize messages for run:', err);
       }
 
       const trimmedContent = content.trim();
@@ -1398,8 +1417,8 @@ export function AgentProvider({
 
               try {
                 agent.messages = messagesWithIds;
-              } catch {
-                // ignore
+              } catch (err) {
+                console.warn('[Context] Failed to sync agent messages (history):', err);
               }
 
               // If running log analysis (explicitly or inferred) and the stream ended with a tool result, surface a readable assistant reply.
@@ -1588,8 +1607,8 @@ export function AgentProvider({
 
               try {
                 agent.messages = nextMessages;
-              } catch {
-                // ignore
+              } catch (err) {
+                console.warn('[Context] Failed to sync agent messages (stream):', err);
               }
 
               // CRITICAL: Update messagesRef synchronously before setMessages
@@ -1804,6 +1823,7 @@ export function AgentProvider({
                         title: payload.title || 'Generated Image',
                         content,
                         messageId: payload.messageId,
+                        imageUrl: imageUrl || undefined,
                         imageData: imageData || undefined,
                         mimeType: payload.mimeType || 'image/png',
                         altText: payload.altText,
@@ -1819,6 +1839,7 @@ export function AgentProvider({
                       type: 'image',
                       title: payload.title || 'Generated Image',
                       content,
+                      imageUrl: imageUrl || undefined,
                       imageData: imageData || undefined,
                       mimeType: payload.mimeType || 'image/png',
                       altText: payload.altText,
@@ -1987,7 +2008,7 @@ export function AgentProvider({
         // Persist final assistant message after run completes so all artifacts/custom events are captured.
         if (sessionId && !assistantPersistedRef.current) {
           const sessionKey = String(sessionId);
-          const currentMessages = messagesRef.current;
+          let currentMessages = messagesRef.current;
 
           // Only persist an assistant message if it happened AFTER the user message in this run.
           const runUserMessageId = lastRunUserMessageIdRef.current;
@@ -1995,7 +2016,7 @@ export function AgentProvider({
             ? findLastIndex(currentMessages, (msg) => msg.id === runUserMessageId)
             : -1;
 
-          const candidateIndex = findLastIndex(
+          let candidateIndex = findLastIndex(
             currentMessages,
             (msg) => msg.role === 'assistant',
           );
@@ -2003,13 +2024,40 @@ export function AgentProvider({
           // Early exit conditions - use nested if instead of return to avoid masking exceptions
           const hasPendingArtifacts = pendingArtifactsRef.current.length > 0;
           const hasPendingLogNotes = Object.keys(pendingLogAnalysisNotesRef.current).length > 0;
-          const hasCandidateAssistant = candidateIndex > runUserIndex;
+          const hasRunUserMessage = runUserIndex >= 0;
+
+          if ((hasPendingArtifacts || hasPendingLogNotes) && candidateIndex <= runUserIndex) {
+            const fallbackMessage: Message = {
+              id: crypto.randomUUID(),
+              role: 'assistant',
+              content: '',
+            };
+            const nextMessages = [...currentMessages, fallbackMessage];
+            currentMessages = nextMessages;
+            messagesRef.current = nextMessages;
+            setMessages(nextMessages);
+            candidateIndex = nextMessages.length - 1;
+            console.debug('[Persistence] Created fallback assistant message for artifacts/log notes');
+          }
+
+          const hasCandidateAssistant =
+            candidateIndex >= 0 && (hasRunUserMessage ? candidateIndex > runUserIndex : true);
           const candidateHasContent =
             candidateIndex >= 0 && currentMessages[candidateIndex]?.content.trim().length > 0;
           const shouldPersist =
-            runUserIndex >= 0 &&
             hasCandidateAssistant &&
             (candidateHasContent || hasPendingArtifacts || hasPendingLogNotes);
+
+          if (!shouldPersist) {
+            console.debug('[Persistence] Skipping assistant persistence', {
+              runUserIndex,
+              candidateIndex,
+              hasCandidateAssistant,
+              candidateHasContent,
+              hasPendingArtifacts,
+              hasPendingLogNotes,
+            });
+          }
 
           // Only continue with persistence if conditions are met
           if (shouldPersist && candidateIndex >= 0) {
@@ -2236,8 +2284,8 @@ export function AgentProvider({
     const { sanitizedMessages, attachmentsByMessage } = hydrateMessagesForSession(agent.messages);
     try {
       agent.messages = sanitizedMessages;
-    } catch {
-      // ignore
+    } catch (err) {
+      console.warn('[Context] Failed to sync agent messages (init):', err);
     }
     setMessages(sanitizedMessages);
     messagesRef.current = sanitizedMessages;

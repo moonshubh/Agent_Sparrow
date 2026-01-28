@@ -41,7 +41,7 @@ kill_service() {
 # Stop all services
 kill_service "Backend (FastAPI)" "8000" "uvicorn.*app.main:app"
 kill_service "Frontend (Next.js)" "3000" "next-server"
-kill_service "FeedMe Celery Worker" "" "celery.*worker"
+kill_service "FeedMe Celery Worker" "8001" "celery.*worker"
 
 echo ""
 echo "--- All services stopped ---"

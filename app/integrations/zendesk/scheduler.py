@@ -3462,7 +3462,7 @@ async def _set_last_run(ts: datetime) -> None:
 async def _get_month_usage() -> Dict[str, Any]:
     supa = get_supabase_client()
     mk = datetime.now(timezone.utc).strftime("%Y-%m")
-    desired_budget = int(getattr(settings, "zendesk_monthly_api_budget", 0) or 0)
+    desired_budget = 0
     resp = await supa._exec(
         lambda: supa.client.table("zendesk_usage")
         .select("month_key,calls_used,budget")
@@ -3494,25 +3494,23 @@ async def _get_month_usage() -> Dict[str, Any]:
         budget = int(data.get("budget", desired_budget) or desired_budget)
     except Exception:
         budget = desired_budget
-    if budget <= 0:
-        budget = desired_budget
+    budget = 0
 
-    if desired_budget > 0 and budget != desired_budget:
+    if int(data.get("budget", 0) or 0) != 0:
         try:
             await supa._exec(
                 lambda: supa.client.table("zendesk_usage")
                 .update(
                     {
-                        "budget": desired_budget,
+                        "budget": 0,
                         "updated_at": datetime.now(timezone.utc).isoformat(),
                     }
                 )
                 .eq("month_key", mk)
                 .execute()
             )
-            budget = desired_budget
         except Exception:
-            budget = desired_budget
+            pass
 
     return {"month_key": mk, "calls_used": calls_used, "budget": budget}
 
@@ -4982,23 +4980,7 @@ async def _process_window(
     if not rows:
         return {"processed": 0, "skipped_budget": False}
 
-    # Enforce monthly budget before doing any work (server-side check)
-    try:
-        mu = await _get_month_usage()
-        calls_used = int(mu.get("calls_used", 0) or 0)
-        budget = int(
-            mu.get("budget", getattr(settings, "zendesk_monthly_api_budget", 0) or 0) or 0
-        )
-        if budget > 0 and not dry_run and calls_used >= budget:
-            logger.warning(
-                "Monthly Zendesk budget exhausted (calls_used=%s budget=%s month_key=%s); stopping processing",
-                calls_used,
-                budget,
-                mu.get("month_key"),
-            )
-            return {"processed": 0, "failed": 0, "skipped_budget": True}
-    except Exception as e:
-        logger.debug("failed to read monthly usage: %s", e)
+    # Monthly Zendesk budget enforcement has been removed (no monthly cap).
 
     # Prepare Zendesk client (validate creds)
     if not (
@@ -5266,10 +5248,9 @@ async def start_background_scheduler() -> None:
     """Background loop that runs every N seconds and drains the pending queue respecting RPM & daily limits."""
     interval_sec = max(1, int(getattr(settings, "zendesk_poll_interval_sec", 60)))
     logger.info(
-        "Zendesk scheduler starting (interval=%d sec, rpm=%d, monthly_budget=%d)",
+        "Zendesk scheduler starting (interval=%d sec, rpm=%d, monthly_budget=disabled)",
         interval_sec,
         int(getattr(settings, "zendesk_rpm_limit", 240) or 240),
-        int(getattr(settings, "zendesk_monthly_api_budget", 1500) or 1500),
     )
 
     while True:

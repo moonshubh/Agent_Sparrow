@@ -1,7 +1,7 @@
 'use client';
 
 import React, { createContext, useContext, useEffect, useState } from 'react';
-import { create } from 'zustand';
+import { create, useStore } from 'zustand';
 import type { Artifact, ArtifactStore } from './types';
 
 /**
@@ -136,25 +136,31 @@ export function ArtifactProvider({ children }: { children: React.ReactNode }) {
 /**
  * Hook to access the artifact store
  * Must be used within ArtifactProvider
+ *
+ * IMPORTANT: Uses useStore() for proper React subscription to state changes.
+ * Previously used store() directly which only returned a snapshot without subscribing.
  */
 export function useArtifactStore(): ArtifactStore {
   const store = useContext(ArtifactStoreContext);
   if (!store) {
     throw new Error('useArtifactStore must be used within ArtifactProvider');
   }
-  return store();
+  return useStore(store);
 }
 
 /**
  * Hook to access specific artifact store selectors
  * Provides memoized access to prevent unnecessary re-renders
+ *
+ * IMPORTANT: Uses useStore() for proper React subscription to state changes.
+ * Previously used store(selector) directly which only returned a snapshot without subscribing.
  */
 export function useArtifactSelector<T>(selector: (state: ArtifactStore) => T): T {
   const store = useContext(ArtifactStoreContext);
   if (!store) {
     throw new Error('useArtifactSelector must be used within ArtifactProvider');
   }
-  return store(selector);
+  return useStore(store, selector);
 }
 
 /**

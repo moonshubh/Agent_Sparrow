@@ -362,7 +362,7 @@ class Settings(BaseSettings):
     zendesk_poll_interval_sec: int = Field(default=60, alias="ZENDESK_POLL_INTERVAL_SEC")
     zendesk_rpm_limit: int = Field(default=240, alias="ZENDESK_RPM_LIMIT")
     zendesk_import_rpm_limit: int = Field(default=10, alias="ZENDESK_IMPORT_RPM_LIMIT")
-    zendesk_monthly_api_budget: int = Field(default=1500, alias="ZENDESK_MONTHLY_API_BUDGET")
+    zendesk_monthly_api_budget: int = Field(default=0, alias="ZENDESK_MONTHLY_API_BUDGET")
     zendesk_gemini_daily_limit: int = Field(default=380, alias="ZENDESK_GEMINI_DAILY_LIMIT")
     zendesk_max_retries: int = Field(default=5, alias="ZENDESK_MAX_RETRIES")
     zendesk_queue_retention_days: int = Field(default=30, alias="ZENDESK_QUEUE_RETENTION_DAYS")
@@ -593,11 +593,18 @@ class Settings(BaseSettings):
             raise ValueError("zendesk_poll_interval_sec must be positive")
         return v
 
-    @field_validator('zendesk_rpm_limit', 'zendesk_import_rpm_limit', 'zendesk_monthly_api_budget', 'zendesk_gemini_daily_limit', 'zendesk_max_retries')
+    @field_validator('zendesk_rpm_limit', 'zendesk_import_rpm_limit', 'zendesk_gemini_daily_limit', 'zendesk_max_retries')
     @classmethod
     def validate_zendesk_limits(cls, v: int) -> int:
         if v <= 0:
             raise ValueError("Zendesk limits must be positive integers")
+        return v
+
+    @field_validator('zendesk_monthly_api_budget')
+    @classmethod
+    def validate_zendesk_monthly_budget(cls, v: int) -> int:
+        if v < 0:
+            raise ValueError("zendesk_monthly_api_budget must be zero or a positive integer")
         return v
 
     @field_validator('zendesk_queue_retention_days')

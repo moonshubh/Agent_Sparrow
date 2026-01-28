@@ -7,7 +7,19 @@ set -e
 
 # --- Project Root and Log Setup ---
 ROOT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
+SCRIPT_DIR=$(dirname "${BASH_SOURCE[0]}")
 echo "Project Root: $ROOT_DIR"
+
+# --- Stop any existing services first ---
+echo "--- Stopping any existing services ---"
+if [ -x "$SCRIPT_DIR/stop_system.sh" ]; then
+    "$SCRIPT_DIR/stop_system.sh" || true
+    echo "Waiting for ports to be released..."
+    sleep 2
+else
+    echo "Warning: stop_system.sh not found, skipping cleanup"
+fi
+echo ""
 
 LOG_DIR="$ROOT_DIR/system_logs"
 BACKEND_LOG_DIR="$LOG_DIR/backend"

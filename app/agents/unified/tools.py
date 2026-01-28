@@ -308,72 +308,6 @@ def _firecrawl_circuit_open() -> bool:
         return time.time() < _FIRECRAWL_CIRCUIT_OPEN_UNTIL
 
 
-async def _tavily_search_fallback_for_firecrawl(
-    *,
-    query: str,
-    limit: int,
-    include_images: bool,
-) -> Dict[str, Any]:
-    """Return a Firecrawl-like search payload using Tavily (best-effort)."""
-    tavily = _tavily_client()
-    safe_limit = max(1, min(int(limit or 5), 10))
-
-    result = await asyncio.to_thread(
-        tavily.search,
-        query,
-        safe_limit,
-        bool(include_images),
-        "advanced",
-        None,
-        None,
-        None,
-        None,
-    )
-
-    web_items: list[dict[str, Any]] = []
-    image_items: list[dict[str, Any]] = []
-
-    if isinstance(result, dict):
-        for item in result.get("results") or []:
-            if not isinstance(item, dict):
-                continue
-            web_items.append(
-                {
-                    "url": item.get("url"),
-                    "title": item.get("title") or item.get("name"),
-                    "description": item.get("content")
-                    or item.get("snippet")
-                    or item.get("description"),
-                    "source": item.get("source"),
-                    "score": item.get("score"),
-                }
-            )
-
-        for img in result.get("images") or []:
-            if not isinstance(img, dict):
-                continue
-            source = img.get("source")
-            image_items.append(
-                {
-                    "url": img.get("url"),
-                    "alt": img.get("alt") or img.get("description") or img.get("title"),
-                    # By requirement: "source" refers to the page URL for web images.
-                    "source": source,
-                    "page_url": source,
-                    "width": img.get("width"),
-                    "height": img.get("height"),
-                }
-            )
-
-    payload: Dict[str, Any] = {
-        "data": {"web": _dedupe_results(web_items, url_key="url")},
-        "fallback": {"source": "tavily", "include_images": bool(include_images)},
-    }
-    if include_images:
-        payload["data"]["images"] = _dedupe_results(image_items, url_key="url")
-    return payload
-
-
 def _resolve_firecrawl_api_key() -> str:
     return settings.firecrawl_api_key or os.getenv("FIRECRAWL_API_KEY", "")
 
@@ -1827,28 +1761,6 @@ async def web_search_tool(
                     quota_exceeded=tavily_quota,
                     attempt=attempt + 1,
                 )
-                try:
-                    query_hash = hashlib.sha256(str(input.query).encode("utf-8")).hexdigest()[:16]
-                    fallback_sources = (
-                        ["web", "news", "images"]
-                        if input.include_images
-                        else ["web", "news"]
-                    )
-                    fallback = await firecrawl_search_tool.ainvoke(
-                        {
-                            "query": input.query,
-                            "limit": input.max_results,
-                            "sources": fallback_sources,
-                        }
-                    )
-                    if isinstance(fallback, dict) and not fallback.get("error"):
-                        return fallback
-                except Exception as fallback_exc:
-                    logger.error(
-                        "web_search_firecrawl_fallback_failed",
-                        query_hash=query_hash,
-                        error=str(fallback_exc),
-                    )
                 return {
                     "error": "web_search_failed",
                     "message": error_message,
@@ -2457,15 +2369,9 @@ async def firecrawl_search_tool(
                 include_images = True
 
     if _firecrawl_circuit_open():
-        logger.info(
-            "firecrawl_search_circuit_open_fallback",
-            reason=_firecrawl_circuit_reason(),
-        )
-        return await _tavily_search_fallback_for_firecrawl(
-            query=str(input.query or ""),
-            limit=int(input.limit or 5),
-            include_images=include_images,
-        )
+        reason = _firecrawl_circuit_reason() or "firecrawl_unavailable"
+        logger.info("firecrawl_search_circuit_open", reason=reason)
+        return {"error": reason}
 
     mcp_sources = None
     if input.sources:
@@ -2494,11 +2400,7 @@ async def firecrawl_search_tool(
             logger.warning("firecrawl_mcp_search_error", error=err_text or None)
             if err_text and _is_firecrawl_unavailable_error(err_text):
                 _open_firecrawl_circuit(err_text)
-                return await _tavily_search_fallback_for_firecrawl(
-                    query=str(input.query or ""),
-                    limit=int(input.limit or 5),
-                    include_images=include_images,
-                )
+                return {"error": err_text}
         else:
             return mcp_result
 
@@ -2534,11 +2436,7 @@ async def firecrawl_search_tool(
             err_text = str(result.get("error") or "").strip()
             if err_text and _is_firecrawl_unavailable_error(err_text):
                 _open_firecrawl_circuit(err_text)
-                return await _tavily_search_fallback_for_firecrawl(
-                    query=str(input.query or ""),
-                    limit=int(input.limit or 5),
-                    include_images=include_images,
-                )
+                return {"error": err_text}
             raise RuntimeError(err_text)
         return result
     except Exception as e:
@@ -2547,11 +2445,7 @@ async def firecrawl_search_tool(
         logger.error("firecrawl_search_tool_error", query_hash=query_hash, error=err_text)
         if err_text and _is_firecrawl_unavailable_error(err_text):
             _open_firecrawl_circuit(err_text)
-            return await _tavily_search_fallback_for_firecrawl(
-                query=str(input.query or ""),
-                limit=int(getattr(input, "limit", 5) or 5),
-                include_images=include_images,
-            )
+            return {"error": err_text}
         return {"error": err_text}
 
 

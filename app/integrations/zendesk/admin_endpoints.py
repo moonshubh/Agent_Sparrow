@@ -43,7 +43,7 @@ async def admin_health(request: Request) -> Dict[str, Any]:
     try:
         usage = await _upsert_month_usage(0)
     except Exception:
-        usage = {"month_key": None, "calls_used": None, "budget": settings.zendesk_monthly_api_budget}
+        usage = {"month_key": None, "calls_used": None, "budget": 0}
     try:
         # Use UTC date to align with tests and backend usage
         today = datetime.now(timezone.utc).date().isoformat()

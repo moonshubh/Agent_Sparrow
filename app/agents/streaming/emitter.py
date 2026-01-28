@@ -350,12 +350,17 @@ class StreamEventEmitter:
                     image_section += f"![{alt}]({url})\n\n"
             content = content + image_section if content else image_section
 
-        self.emit_custom_event("article_artifact", {
-            "id": artifact_id,
-            "type": "article",
-            "title": title,
-            "content": content,
-            "messageId": message_id,
+        # Don't truncate article content; send raw payload for artifact rendering.
+        self.writer({
+            "event": "on_custom_event",
+            "name": "article_artifact",
+            "data": {
+                "id": artifact_id,
+                "type": "article",
+                "title": title,
+                "content": content,
+                "messageId": message_id,
+            },
         })
         logger.info(
             "emit_article_artifact: id={}, title={}, content_length={}",

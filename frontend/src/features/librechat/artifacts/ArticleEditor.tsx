@@ -112,7 +112,7 @@ export function ArticleEditor({ artifact }: ArticleEditorProps) {
     if (!artifacts.length) return;
     const serialized = artifacts
       .map(serializeArtifact)
-      .filter((item) => item.type !== 'image' || Boolean(item.imageUrl));
+      .filter((item) => item.type !== 'image' || Boolean(item.imageUrl || item.imageData));
 
     const persistedId = resolvePersistedMessageId(messageId);
     if (!persistedId) return;
