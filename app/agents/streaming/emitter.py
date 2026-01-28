@@ -64,6 +64,11 @@ SUBAGENT_THINKING_BUFFER_FLUSH_MS = 150
 SUBAGENT_THINKING_BUFFER_MIN_CHARS = 50
 SUBAGENT_THINKING_BUFFER_MAX_CHARS = 2000
 
+# Payload safety limits for SSE events
+MAX_STRING_SIZE = 2000
+MAX_PAYLOAD_DEPTH = 10
+MAX_LIST_ITEMS = 100
+
 
 class StreamEventEmitter:
     """Centralized AG-UI event emission with state tracking.
@@ -149,14 +154,36 @@ class StreamEventEmitter:
     # Low-level emission
     # -------------------------------------------------------------------------
 
+    def _truncate_strings_in_payload(self, obj: Any, depth: int = 0) -> Any:
+        """Recursively truncate string values in payloads to avoid oversized SSE."""
+        if depth > MAX_PAYLOAD_DEPTH:
+            return "[max depth]"
+        if isinstance(obj, str):
+            if len(obj) <= MAX_STRING_SIZE:
+                return obj
+            overflow = len(obj) - MAX_STRING_SIZE + 30
+            return obj[: MAX_STRING_SIZE - 30] + f"[...{overflow} truncated]"
+        if isinstance(obj, dict):
+            return {
+                key: self._truncate_strings_in_payload(value, depth + 1)
+                for key, value in obj.items()
+            }
+        if isinstance(obj, list):
+            return [
+                self._truncate_strings_in_payload(item, depth + 1)
+                for item in obj[:MAX_LIST_ITEMS]
+            ]
+        return obj
+
     def emit_custom_event(self, name: str, payload: Dict[str, Any]) -> None:
         """Emit a custom AG-UI event."""
         if self.writer is None:
             return
+        sanitized_payload = self._truncate_strings_in_payload(payload)
         self.writer({
             "event": "on_custom_event",
             "name": name,
-            "data": payload,
+            "data": sanitized_payload,
         })
 
     def emit_tool_call_start(self, tool_call_id: str, tool_name: str) -> None:

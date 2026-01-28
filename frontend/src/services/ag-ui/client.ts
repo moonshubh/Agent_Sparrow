@@ -11,6 +11,7 @@ import { getAuthToken as getLocalToken } from '@/services/auth/local-auth';
 
 export const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 export const AGUI_STREAM_URL = `${API_URL}/api/v1/agui/stream`;
+const MAX_SSE_BUFFER_SIZE = 10_000_000; // 10MB
 
 function isAbortError(err: unknown): boolean {
   const e = err as any;
@@ -228,6 +229,12 @@ export function createSparrowAgent(config: AgentConfig): SparrowAgent {
           if (done) break;
 
           buffer += decoder.decode(value, { stream: true });
+          if (buffer.length > MAX_SSE_BUFFER_SIZE) {
+            console.error('[SparrowAgent] SSE buffer overflow');
+            await reader.cancel();
+            localAbortController.abort();
+            throw new Error('Response too large. Please try with smaller attachments.');
+          }
           const lines = buffer.split('\n');
           buffer = lines.pop() || '';
 

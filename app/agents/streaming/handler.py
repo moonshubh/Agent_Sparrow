@@ -93,6 +93,46 @@ MARKDOWN_DATA_URI_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
+# Maximum error string length to prevent oversized SSE payloads
+MAX_ERROR_MESSAGE_LENGTH = 2000
+
+
+def truncate_error_message(
+    error: Exception | str,
+    max_length: int = MAX_ERROR_MESSAGE_LENGTH,
+) -> str:
+    """Truncate error message to prevent unbounded SSE payloads."""
+    error_str = str(error)
+    if len(error_str) <= max_length:
+        return error_str
+    head_size = int(max_length * 0.6)
+    tail_size = int(max_length * 0.3)
+    return (
+        error_str[:head_size]
+        + f"\n[...{len(error_str) - head_size - tail_size} chars truncated...]\n"
+        + error_str[-tail_size:]
+    )
+
+
+def is_token_limit_error(error: Exception | str) -> bool:
+    """Check if error is a token/context limit error."""
+    error_str = str(error).lower()
+    return any(
+        pattern in error_str
+        for pattern in (
+            "token count exceeds",
+            "exceeds the maximum number of tokens",
+            "context length exceeded",
+        )
+    )
+
+
+def get_user_friendly_error(error: Exception | str) -> str:
+    """Convert internal errors to user-friendly messages."""
+    if is_token_limit_error(error):
+        return "The attached files are too large to process. Please try with smaller files."
+    return truncate_error_message(error)
+
 
 class ThinkingBlockTracker:
     """Tracks thinking block state across streaming chunks.
@@ -391,7 +431,10 @@ class StreamEventHandler:
                         "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                         "type": "thought",
                         "content": f"Streaming failed ({type(e).__name__}), attempting fallback invoke...",
-                        "metadata": {"error": str(e), "fallback": True},
+                        "metadata": {
+                            "error": get_user_friendly_error(e),
+                            "fallback": True,
+                        },
                     },
                 },
             )
@@ -462,7 +505,7 @@ class StreamEventHandler:
                             "type": "result",
                             "content": f"Fallback invoke failed after {retry_config.max_attempts} attempts: {type(fallback_error).__name__}",
                             "metadata": {
-                                "error": str(fallback_error),
+                                "error": get_user_friendly_error(fallback_error),
                                 "fallback": True,
                                 "failed": True,
                                 "max_attempts": retry_config.max_attempts,
