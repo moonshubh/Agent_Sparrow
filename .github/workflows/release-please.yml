@@ -10,6 +10,10 @@ permissions:
   contents: write
   pull-requests: write
 
+concurrency:
+  group: release-please
+  cancel-in-progress: false
+
 jobs:
   release-please:
     runs-on: ubuntu-latest
@@ -24,13 +28,17 @@ jobs:
       # Log release info for visibility
       - name: Release Info
         if: ${{ steps.release.outputs.release_created }}
+        env:
+          TAG_NAME: ${{ steps.release.outputs.tag_name }}
+          VERSION: ${{ steps.release.outputs.version }}
+          HTML_URL: ${{ steps.release.outputs.html_url }}
         run: |
-          echo "## Release Created" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Tag:** ${{ steps.release.outputs.tag_name }}" >> $GITHUB_STEP_SUMMARY
-          echo "**Version:** ${{ steps.release.outputs.version }}" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "View the release at: ${{ steps.release.outputs.html_url }}" >> $GITHUB_STEP_SUMMARY
+          echo "## Release Created" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "**Tag:** ${TAG_NAME}" >> "$GITHUB_STEP_SUMMARY"
+          echo "**Version:** ${VERSION}" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "View the release at: ${HTML_URL}" >> "$GITHUB_STEP_SUMMARY"
 
       # Prepare changelog for Slack (convert markdown links, truncate if needed)
       - name: Prepare Changelog for Slack
@@ -41,26 +49,35 @@ jobs:
         run: |
           # Convert GitHub markdown links [text](url) to Slack format <url|text>
           # Remove commit hashes in parentheses for cleaner output
-          # Truncate to 2800 chars (Slack limit is 3000, leave buffer)
-          SLACK_BODY=$(echo "$RELEASE_BODY" | \
+          # Truncate to 2400 chars (Slack section limit is 3000; toJSON escaping inflates ~20%)
+          SLACK_BODY=$(printf '%s' "$RELEASE_BODY" | \
             sed -E 's/\[([^\]]+)\]\(([^)]+)\)/<\2|\1>/g' | \
             sed -E 's/ \([a-f0-9]{7}\)//g' | \
-            head -c 2800)
+            cut -c -2400)
 
           # If truncated, add indicator
-          if [ ${#RELEASE_BODY} -gt 2800 ]; then
-            SLACK_BODY="${SLACK_BODY}...\n\n_See full release notes for more details._"
+          BODY_LEN=$(printf '%s' "$RELEASE_BODY" | wc -m | tr -d ' ')
+          if [ "$BODY_LEN" -gt 2400 ]; then
+            SLACK_BODY="${SLACK_BODY}..."$'\n\n'"_See full release notes for more details._"
+          fi
+
+          # Fallback if body is empty
+          if [ -z "$SLACK_BODY" ]; then
+            SLACK_BODY="No changelog details available. See the GitHub release for full notes."
           fi
 
           # Output using heredoc for multiline support
-          echo "body<<EOF" >> $GITHUB_OUTPUT
-          echo "$SLACK_BODY" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
+          {
+            echo "body<<SLACKEOF"
+            printf '%s\n' "$SLACK_BODY"
+            echo "SLACKEOF"
+          } >> "$GITHUB_OUTPUT"
 
       # Notify Slack on successful release
       - name: Notify Slack
         if: ${{ steps.release.outputs.release_created }}
         uses: slackapi/slack-github-action@v2.0.0
+        continue-on-error: true
         with:
           method: chat.postMessage
           token: ${{ secrets.SLACK_BOT_TOKEN }}
