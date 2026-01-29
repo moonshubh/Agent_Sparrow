@@ -26,7 +26,7 @@ export interface ModelConfig {
 
 // Fallback models when API is unavailable - main coordinator models only
 const FALLBACK_MODELS: Record<Provider, string[]> = {
-  google: ['gemini-3-flash-preview', 'gemini-2.5-pro', 'gemini-3-pro-preview'],
+  google: ['gemini-3-flash-preview', 'gemini-2.5-flash', 'gemini-2.5-flash-lite'],
   xai: ['grok-4-1-fast-reasoning'],
   openrouter: ['x-ai/grok-4.1-fast', 'minimax/minimax-m2.1'],
 }
@@ -34,9 +34,9 @@ const FALLBACK_MODELS: Record<Provider, string[]> = {
 // Official model display names (from ai.google.dev & docs.x.ai)
 const FALLBACK_DISPLAY_NAMES: Record<string, string> = {
   // Google Gemini (official names)
-  'gemini-3-pro-preview': 'Gemini 3.0 Pro',
   'gemini-3-flash-preview': 'Gemini 3.0 Flash',
-  'gemini-2.5-pro': 'Gemini 2.5 Pro',
+  'gemini-2.5-flash': 'Gemini 2.5 Flash',
+  'gemini-2.5-flash-lite': 'Gemini 2.5 Flash Lite',
   // xAI Grok
   'grok-4-1-fast-reasoning': 'Grok 4.1 Fast',
   // OpenRouter
@@ -197,7 +197,7 @@ export const modelsAPI = {
             {
               display_name: name,
               provider,
-              tier: id.includes('pro') || id === 'gemini-3-pro-preview' ? 'pro' : 'standard',
+              tier: id.includes('pro') ? 'pro' : 'standard',
               supports_reasoning: true,
               supports_vision: provider === 'google',
             } as ModelInfo,
@@ -211,8 +211,8 @@ export const modelsAPI = {
       },
       fallback_chains: {
         google: {
-          'gemini-3-pro-preview': 'gemini-2.5-pro',
-          'gemini-2.5-pro': 'gemini-3-flash-preview',
+          'gemini-2.5-flash-lite': 'gemini-2.5-flash',
+          'gemini-2.5-flash': 'gemini-3-flash-preview',
           'gemini-3-flash-preview': null,
         },
         xai: {

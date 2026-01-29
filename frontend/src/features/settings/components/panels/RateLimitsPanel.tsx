@@ -5,13 +5,11 @@ import { motion, useInView } from "motion/react"
 import { Button } from "@/shared/ui/button"
 import { Separator } from "@/shared/ui/separator"
 import { Badge } from "@/shared/ui/badge"
-import { rateLimitApi, type UsageStats } from "@/services/api/endpoints/rateLimitApi"
-import { apiKeyService, APIKeyType, type APIKeyListResponse } from "@/services/api/api-keys"
-import { Loader2, RefreshCw, Activity, AlertCircle, Shield } from "lucide-react"
+import { rateLimitApi, type RateLimitMetadata, type UsageStats } from "@/services/api/endpoints/rateLimitApi"
+import { Loader2, RefreshCw, Activity, Shield } from "lucide-react"
 
 export function RateLimitsPanel() {
   const [stats, setStats] = useState<UsageStats | null>(null)
-  const [keys, setKeys] = useState<APIKeyListResponse | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [refreshing, setRefreshing] = useState(false)
@@ -23,12 +21,8 @@ export function RateLimitsPanel() {
     setLoading(true)
     setError(null)
     try {
-      const [s, k] = await Promise.all([
-        rateLimitApi.getUsageStats(),
-        apiKeyService.listAPIKeys(),
-      ])
+      const s = await rateLimitApi.getUsageStats()
       setStats(s)
-      setKeys(k)
     } catch (e: any) {
       setError(e?.message || "failed")
     } finally {
@@ -42,20 +36,61 @@ export function RateLimitsPanel() {
 
   // Provider configuration flags are fetched above if needed later; limits shown below are static defaults
 
-  const gridStats = useMemo(() => {
-    const s = stats
-    const f = s?.flash_stats
-    const p = s?.pro_stats
-    const flashRpdLimit = f?.rpd_limit ? Math.min(f.rpd_limit, 250) : 250
-    return [
-      { value: f ? `${f.rpm_used}/${f.rpm_limit}` : '—', label: 'Gemini Flash RPM' },
-      { value: f ? `${f.rpd_used}/${flashRpdLimit}` : '—', label: 'Gemini Flash RPD' },
-      { value: p ? `${p.rpm_used}/${p.rpm_limit}` : '—', label: 'Gemini Pro RPM' },
-      { value: p ? `${p.rpd_used}/${p.rpd_limit}` : '—', label: 'Gemini Pro RPD' },
-      { value: '1000 /month', label: 'Tavily Wb/search' },
-      { value: '200 RPD', label: 'GPT‑5 mini RPD' },
-    ]
+  const selectedBuckets = useMemo(() => {
+    const buckets = stats?.buckets ?? {}
+
+    const findBucketKey = (
+      predicate: (bucket: RateLimitMetadata, key: string) => boolean
+    ): string | undefined => {
+      for (const [key, bucket] of Object.entries(buckets)) {
+        if (predicate(bucket, key)) return key
+      }
+      return undefined
+    }
+
+    const coordinatorBucketKey = buckets["coordinators.google_with_subagents"]
+      ? "coordinators.google_with_subagents"
+      : buckets["coordinators.google"]
+        ? "coordinators.google"
+        : findBucketKey(
+            (bucket, key) =>
+              bucket.provider === "google" &&
+              bucket.model === "gemini-3-flash-preview" &&
+              key.includes("coordinators") &&
+              !key.includes("zendesk")
+          )
+
+    const imageBucketKey = buckets["internal.image"]
+      ? "internal.image"
+      : findBucketKey(
+          (bucket) => bucket.provider === "google" && bucket.model.includes("pro-image")
+        )
+
+    return {
+      coordinatorBucketKey,
+      imageBucketKey,
+      coordinator: coordinatorBucketKey ? buckets[coordinatorBucketKey] : undefined,
+      image: imageBucketKey ? buckets[imageBucketKey] : undefined,
+    }
   }, [stats])
+
+  const gridStats = useMemo(() => {
+    const coordinator = selectedBuckets.coordinator
+    const image = selectedBuckets.image
+
+    const ratio = (used: number | null | undefined, limit: number | null | undefined): string => {
+      if (typeof used !== 'number' || typeof limit !== 'number') return '—'
+      return `${used}/${limit}`
+    }
+    return [
+      { value: ratio(coordinator?.rpm_used, coordinator?.rpm_limit), label: 'Gemini 3 Flash RPM' },
+      { value: ratio(coordinator?.tpm_used, coordinator?.tpm_limit ?? null), label: 'Gemini 3 Flash TPM' },
+      { value: ratio(coordinator?.rpd_used, coordinator?.rpd_limit), label: 'Gemini 3 Flash RPD' },
+      { value: ratio(image?.rpm_used, image?.rpm_limit), label: 'Gemini 3 Pro Image RPM' },
+      { value: ratio(image?.tpm_used, image?.tpm_limit ?? null), label: 'Gemini 3 Pro Image TPM' },
+      { value: ratio(image?.rpd_used, image?.rpd_limit), label: 'Gemini 3 Pro Image RPD' },
+    ]
+  }, [selectedBuckets])
 
   return (
     <section className="py-4">
@@ -74,6 +109,12 @@ export function RateLimitsPanel() {
         {error ? (
           <div className="rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive">
             Failed to load rate limits ({error}).
+          </div>
+        ) : null}
+
+        {stats && (!selectedBuckets.coordinatorBucketKey || !selectedBuckets.imageBucketKey) ? (
+          <div className="mt-2 rounded-md border border-border/50 bg-muted/20 p-3 text-xs text-muted-foreground">
+            Some rate-limit buckets are not available in this deployment; the panel is showing best-effort values.
           </div>
         ) : null}
 
@@ -130,14 +171,32 @@ export function RateLimitsPanel() {
             <h3 className="text-sm font-medium mb-2 flex items-center gap-2"><Shield className="h-4 w-4"/> Circuit Breakers</h3>
             {stats ? (
               <ul className="text-sm text-muted-foreground space-y-1">
-                <li>
-                  Flash: <Badge variant={stats.flash_circuit.state === 'open' ? 'destructive' : 'secondary'} className="mx-1">{stats.flash_circuit.state}</Badge>
-                  failures={stats.flash_circuit.failure_count}
-                </li>
-                <li>
-                  Pro: <Badge variant={stats.pro_circuit.state === 'open' ? 'destructive' : 'secondary'} className="mx-1">{stats.pro_circuit.state}</Badge>
-                  failures={stats.pro_circuit.failure_count}
-                </li>
+                {(() => {
+                  const coordinatorBucketKey =
+                    selectedBuckets.coordinatorBucketKey ?? 'coordinators.google'
+                  const imageBucketKey = selectedBuckets.imageBucketKey ?? 'internal.image'
+                  const coordinatorCircuit = stats.circuits?.[coordinatorBucketKey]
+                  const imageCircuit = stats.circuits?.[imageBucketKey]
+
+                  return (
+                    <>
+                      <li>
+                        Coordinator:{' '}
+                        <Badge variant={coordinatorCircuit?.state === 'open' ? 'destructive' : 'secondary'} className="mx-1">
+                          {coordinatorCircuit?.state ?? '—'}
+                        </Badge>
+                        failures={coordinatorCircuit?.failure_count ?? '—'}
+                      </li>
+                      <li>
+                        Image:{' '}
+                        <Badge variant={imageCircuit?.state === 'open' ? 'destructive' : 'secondary'} className="mx-1">
+                          {imageCircuit?.state ?? '—'}
+                        </Badge>
+                        failures={imageCircuit?.failure_count ?? '—'}
+                      </li>
+                    </>
+                  )
+                })()}
               </ul>
             ) : (
               <div className="text-sm text-muted-foreground">No data</div>

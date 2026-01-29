@@ -4168,11 +4168,11 @@ async def db_context_search_tool(
     return result
 
 
-# --- Image Generation Tool (Gemini Nano Banana Pro) ---
+# --- Image Generation Tool (Gemini 3 Pro Image) ---
 
 
 class ImageGenerationInput(BaseModel):
-    """Input schema for Gemini Nano Banana Pro image generation."""
+    """Input schema for Gemini image generation."""
 
     prompt: str = Field(
         ...,
@@ -4187,8 +4187,11 @@ class ImageGenerationInput(BaseModel):
         description="Resolution of the image. Options: 1K, 2K (4K requests are downgraded to 2K).",
     )
     model: str = Field(
-        default="gemini-2.5-flash-image",
-        description="Model to use. Options: gemini-2.5-flash-image (fast, GA), gemini-3-pro-image-preview (high-quality)",
+        default="gemini-3-pro-image-preview",
+        description=(
+            "Model to use. Options: gemini-3-pro-image-preview (high-quality), "
+            "gemini-2.5-flash-preview-image (fast)"
+        ),
     )
     input_image_base64: Optional[str] = Field(
         default=None,
@@ -4212,12 +4215,12 @@ async def generate_image_tool(
     prompt: Optional[str] = None,
     aspect_ratio: str = "16:9",
     resolution: str = "2K",
-    model: str = "gemini-2.5-flash-image",
+    model: str = "gemini-3-pro-image-preview",
     input_image_base64: Optional[str] = None,
     state: Annotated[Optional[GraphState], InjectedState] = None,
     runtime: Optional[ToolRuntime] = None,
 ) -> Dict[str, Any]:
-    """Generate images using Gemini Nano Banana Pro (Gemini 3 Pro Image Preview).
+    """Generate images using Gemini 3 Pro Image.
 
     Use this tool to:
     - Generate images from text descriptions
@@ -4491,7 +4494,7 @@ async def _rewrite_suspect_article_images(
             prompt=prompt,
             aspect_ratio="16:9",
             resolution="2K",
-            model="gemini-2.5-flash-image",
+            model="gemini-3-pro-image-preview",
             runtime=runtime,
         )
         if isinstance(result, dict) and not result.get("success"):

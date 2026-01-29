@@ -36,7 +36,12 @@ class MemoryStats(BaseModel):
 
 class QuotaStatus(BaseModel):
     """Real-time quota status across services"""
-    gemini_pro_pct: float = Field(..., ge=0, le=100, description="Gemini Pro usage percentage")
+    gemini_pro_pct: float = Field(
+        ...,
+        ge=0,
+        le=100,
+        description="Gemini Pro usage percentage (tool-only image generation)",
+    )
     gemini_flash_pct: float = Field(..., ge=0, le=100, description="Gemini Flash usage percentage")
     grounding_pct: float = Field(..., ge=0, le=100, description="Grounding service usage percentage")
     embeddings_pct: float = Field(..., ge=0, le=100, description="Embeddings usage percentage")
@@ -158,12 +163,12 @@ async def get_quota_status(
     """
     try:
         coordinator_bucket = coordinator_bucket_name("google", with_subagents=True, zendesk=False)
-        heavy_bucket = "coordinators.heavy"
+        image_bucket = "internal.image"
         grounding_bucket = "internal.grounding"
         embedding_bucket = "internal.embedding"
 
         # Get current usage for each service
-        gemini_pro_health = await quota_tracker.get_health(heavy_bucket)
+        gemini_pro_health = await quota_tracker.get_health(image_bucket)
         gemini_flash_health = await quota_tracker.get_health(coordinator_bucket)
         grounding_health = await quota_tracker.get_health(grounding_bucket)
         embedding_health = await quota_tracker.get_health(embedding_bucket)
@@ -195,7 +200,9 @@ async def get_quota_status(
         # Generate warnings
         warnings = []
         if gemini_pro_pct > 80:
-            warnings.append(f"Gemini Pro usage at {gemini_pro_pct:.0f}% - consider fallback")
+            warnings.append(
+                f"Gemini Pro Image usage at {gemini_pro_pct:.0f}% - consider fallback"
+            )
         if gemini_flash_pct > 80:
             warnings.append(f"Gemini Flash usage at {gemini_flash_pct:.0f}%")
         if grounding_pct > 80:
@@ -205,6 +212,7 @@ async def get_quota_status(
 
         # Detailed breakdowns
         gemini_pro_details = {
+            "bucket": gemini_pro_health.bucket,
             "rpm_used": gemini_pro_health.rpm_used,
             "rpm_limit": gemini_pro_health.rpm_limit,
             "rpd_used": gemini_pro_health.rpd_used,

@@ -171,10 +171,6 @@ class ModelRegistry:
         return self._spec_for_config(self._config.coordinators["openrouter_with_subagents"])
 
     @property
-    def coordinator_heavy(self) -> ModelSpec:
-        return self._spec_for_config(self._config.coordinators["heavy"])
-
-    @property
     def summarizer(self) -> ModelSpec:
         return self._spec_for_config(self._config.internal["summarizer"])
 
@@ -196,7 +192,7 @@ class ModelRegistry:
 
     @property
     def log_analysis(self) -> ModelSpec:
-        return self.coordinator_heavy
+        return self.coordinator_google
 
     @property
     def db_retrieval(self) -> ModelSpec:
@@ -220,8 +216,8 @@ class ModelRegistry:
                 config = resolve_coordinator_config(self._config, "google")
             return self._spec_for_config(config)
 
-        if role_normalized in {"coordinator_heavy", "log_analysis"}:
-            return self.coordinator_heavy
+        if role_normalized == "log_analysis":
+            return self.coordinator_google
 
         aliases = {"lightweight": "db_retrieval", "embeddings": "embedding"}
         role_key = aliases.get(role_normalized, role_normalized)
@@ -249,10 +245,7 @@ class ModelRegistry:
         chain: dict[str, str | None] = {}
 
         if provider_lower == "google":
-            heavy_id = self.coordinator_heavy.id
             google_id = self.coordinator_google.id
-            if heavy_id != google_id:
-                chain[heavy_id] = google_id
             chain.setdefault(google_id, None)
         elif provider_lower == "openrouter":
             openrouter_id = self.coordinator_openrouter.id

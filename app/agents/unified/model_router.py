@@ -24,7 +24,6 @@ def _default_model_map() -> Dict[CoordinatorTask, str]:
     registry = get_registry()
     required_attrs = [
         "coordinator_google",
-        "coordinator_heavy",
         "log_analysis",
         "db_retrieval",
         "embedding",
@@ -36,7 +35,6 @@ def _default_model_map() -> Dict[CoordinatorTask, str]:
 
     return {
         "coordinator": registry.coordinator_google.id,
-        "coordinator_heavy": registry.coordinator_heavy.id,
         "log_analysis": registry.log_analysis.id,
         "lightweight": registry.db_retrieval.id,
         "db_retrieval": registry.db_retrieval.id,
@@ -48,7 +46,7 @@ def _default_fallbacks() -> Dict[str, Optional[str]]:
     """Return the fallback chain for model selection from registry.
 
     The chain is defined in the registry and typically goes:
-    gemini-3-pro-preview -> gemini-2.5-pro -> gemini-2.5-flash -> gemini-2.5-flash-lite -> None
+    gemini-3-flash-preview -> None
     """
     registry = get_registry()
     return registry.get_fallback_chain("google")
@@ -59,7 +57,7 @@ class ModelRouter:
     """Simple task-based router with soft availability checks.
 
     The router maintains a fallback chain for graceful degradation:
-    gemini-2.5-pro -> gemini-2.5-flash -> gemini-2.5-flash-lite -> None
+    gemini-3-flash-preview -> None (unless overridden by the registry)
 
     When a model is unavailable (quota exhausted, circuit open), the router
     automatically tries the next model in the chain.
@@ -256,8 +254,6 @@ class ModelRouter:
             return "internal.helper"
         if normalized_task in {"embeddings", "embedding"}:
             return "internal.embedding"
-        if provider == "google" and normalized_task in {"coordinator_heavy", "log_analysis"}:
-            return "zendesk.coordinators.heavy" if zendesk else "coordinators.heavy"
 
         return coordinator_bucket_name(provider, with_subagents=with_subagents, zendesk=zendesk)
 

@@ -27,6 +27,7 @@ coordinators:
     context_window: 1048576
     rate_limits:
       rpm: 1000
+      tpm: 1000000
       rpd: 10000
 
   # Coordinator quota bucket when subagent orchestration is enabled.
@@ -36,8 +37,9 @@ coordinators:
     temperature: 1.0
     context_window: 1048576
     rate_limits:
-      rpm: 600
-      rpd: 6000
+      rpm: 1000
+      tpm: 1000000
+      rpd: 10000
 
   # Default coordinator for XAI provider
   xai:
@@ -102,38 +104,42 @@ coordinators:
       rpm: 80
       rpd: 4000
 
-  # Heavy reasoning coordinator (complex tasks, log analysis)
-  heavy:
-    model_id: "gemini-3-pro-preview"
-    temperature: 1.0
-    context_window: 1048576
-    rate_limits:
-      rpm: 5
-      rpd: 200
-
 # -----------------------------------------------------------------------------
 # INTERNAL MODELS - System components (not user-selectable)
 # -----------------------------------------------------------------------------
 internal:
   # Summarization / thread-state extraction
   summarizer:
-    model_id: "gemini-2.5-flash-preview-09-2025"
+    model_id: "gemini-2.5-flash"
     provider: "google"        # Explicit: always Google direct
     temperature: 0.2
     context_window: 1048576
     rate_limits:
-      rpm: 10
-      rpd: 250
+      rpm: 1000
+      tpm: 1000000
+      rpd: 10000
 
   # Helper model for lightweight rewrite/rerank/summarize (GemmaHelper)
   helper:
-    model_id: "gemini-2.5-flash-lite-preview-09-2025"
+    model_id: "gemini-2.5-flash-lite"
     provider: "google"
     temperature: 0.2
     context_window: 1048576
     rate_limits:
-      rpm: 50
-      rpd: 2000
+      rpm: 4000
+      tpm: 4000000
+      rpd: 1000000
+
+  # Image generation model (tool-only; not user-selectable)
+  image:
+    model_id: "gemini-3-pro-image-preview"
+    provider: "google"
+    temperature: 1.0
+    context_window: 1048576
+    rate_limits:
+      rpm: 20
+      tpm: 100000
+      rpd: 250
 
   # Minimax MCP tools (web search + image understanding)
   minimax_tools:
@@ -149,23 +155,25 @@ internal:
 
   # FeedMe extraction / structured parsing
   feedme:
-    model_id: "gemini-2.5-flash-lite-preview-09-2025"
+    model_id: "gemini-2.5-flash-lite"
     provider: "google"
     temperature: 0.3
     context_window: 1048576
     rate_limits:
-      rpm: 30
-      rpd: 1500
+      rpm: 4000
+      tpm: 4000000
+      rpd: 1000000
 
   # Gemini Search Grounding model
   grounding:
-    model_id: "gemini-2.5-flash-preview-09-2025"
+    model_id: "gemini-2.5-flash"
     provider: "google"
     temperature: 0.2
     context_window: 1048576
     rate_limits:
-      rpm: 30
-      rpd: 1000
+      rpm: 1000
+      tpm: 1000000
+      rpd: 10000
 
   # Vector embeddings
   embedding:
@@ -174,9 +182,9 @@ internal:
     context_window: 2048
     embedding_dims: 3072
     rate_limits:
-      rpm: 100
-      tpm: 30000
-      rpd: 1000
+      rpm: 3000
+      tpm: 1000000
+      rpd: 1000000
 
 # -----------------------------------------------------------------------------
 # SUBAGENT MODELS - DeepAgents subagents for specialized tasks
@@ -235,15 +243,6 @@ zendesk:
       rate_limits:
         rpm: 120
         rpd: 4000
-
-    heavy:
-      model_id: "gemini-3-flash-preview"
-      temperature: 1.0
-      context_window: 1048576
-      rate_limits:
-        rpm: 50
-        rpd: 2000
-
   subagents:
     _default:
       model_id: "minimax/MiniMax-M2.1"

@@ -9,14 +9,20 @@ const API_BASE_URL = getApiBasePath();
 
 // Type definitions matching backend schemas
 export interface RateLimitMetadata {
+  bucket: string;
+  provider: string;
   rpm_limit: number;
   rpm_used: number;
   rpm_remaining: number;
   rpd_limit: number;
   rpd_used: number;
   rpd_remaining: number;
+  tpm_limit: number | null;
+  tpm_used: number;
+  tpm_remaining: number | null;
   reset_time_rpm: string;
   reset_time_rpd: string;
+  reset_time_tpm: string | null;
   model: string;
   safety_margin: number;
 }
@@ -30,10 +36,8 @@ export interface CircuitBreakerStatus {
 }
 
 export interface UsageStats {
-  flash_stats: RateLimitMetadata;
-  pro_stats: RateLimitMetadata;
-  flash_circuit: CircuitBreakerStatus;
-  pro_circuit: CircuitBreakerStatus;
+  buckets: Record<string, RateLimitMetadata>;
+  circuits: Record<string, CircuitBreakerStatus>;
   total_requests_today: number;
   total_requests_this_minute: number;
   uptime_percentage: number;
@@ -52,17 +56,12 @@ export interface RateLimitStatus {
   details: {
     usage_stats: UsageStats;
     health: RateLimitHealth;
-    utilization: {
-      flash_rpm: number;
-      flash_rpd: number;
-      pro_rpm: number;
-      pro_rpd: number;
-    };
+    utilization: Record<string, { rpm: number; rpd: number; tpm: number | null }>;
   };
 }
 
 export interface RateLimitCheckResult {
-  model: string;
+  bucket: string;
   allowed: boolean;
   metadata: RateLimitMetadata;
   retry_after: number | null;
@@ -70,19 +69,22 @@ export interface RateLimitCheckResult {
 }
 
 export interface RateLimitConfig {
-  flash_limits: {
-    rpm: number;
-    rpd: number;
+  rate_limiting: {
+    safety_margin: number;
   };
-  pro_limits: {
-    rpm: number;
-    rpd: number;
-  };
-  safety_margin: number;
+  buckets: Record<
+    string,
+    {
+      model_id: string;
+      provider: string;
+      rate_limits: { rpm: number; rpd: number; tpm?: number | null };
+    }
+  >;
   circuit_breaker: {
     enabled: boolean;
     failure_threshold: number;
     timeout_seconds: number;
+    success_threshold: number;
   };
   redis: {
     key_prefix: string;
@@ -91,36 +93,7 @@ export interface RateLimitConfig {
   monitoring_enabled: boolean;
 }
 
-export interface RateLimitMetrics {
-  // Flash model metrics
-  gemini_flash_rpm_used: number;
-  gemini_flash_rpm_limit: number;
-  gemini_flash_rpd_used: number;
-  gemini_flash_rpd_limit: number;
-  
-  // Pro model metrics
-  gemini_pro_rpm_used: number;
-  gemini_pro_rpm_limit: number;
-  gemini_pro_rpd_used: number;
-  gemini_pro_rpd_limit: number;
-  
-  // Circuit breaker metrics
-  circuit_breaker_flash_state: number;
-  circuit_breaker_pro_state: number;
-  circuit_breaker_flash_failures: number;
-  circuit_breaker_pro_failures: number;
-  
-  // Overall metrics
-  total_requests_today: number;
-  total_requests_this_minute: number;
-  uptime_percentage: number;
-  
-  // Utilization metrics (0.0 to 1.0)
-  flash_rpm_utilization: number;
-  flash_rpd_utilization: number;
-  pro_rpm_utilization: number;
-  pro_rpd_utilization: number;
-}
+export type RateLimitMetrics = Record<string, number>;
 
 class RateLimitApiClient {
   private baseUrl: string;
@@ -172,10 +145,10 @@ class RateLimitApiClient {
   }
 
   /**
-   * Check if a request would be allowed for the specified model
+   * Check if a request would be allowed for the specified bucket (dry-run).
    */
-  async checkRateLimit(model: 'gemini-3-flash-preview' | 'gemini-2.5-pro' | 'gemini-3-pro-preview'): Promise<RateLimitCheckResult> {
-    return this.request<RateLimitCheckResult>(`/check/${model}`, {
+  async checkRateLimit(bucket: string): Promise<RateLimitCheckResult> {
+    return this.request<RateLimitCheckResult>(`/check/${encodeURIComponent(bucket)}`, {
       method: 'POST',
     });
   }
@@ -197,11 +170,11 @@ class RateLimitApiClient {
   /**
    * Reset rate limits (development/emergency use only)
    */
-  async resetLimits(model?: string): Promise<{ success: boolean; message: string; timestamp: string }> {
+  async resetLimits(bucket?: string): Promise<{ success: boolean; message: string; timestamp: string }> {
     return this.request<{ success: boolean; message: string; timestamp: string }>('/reset', {
       method: 'POST',
       body: JSON.stringify({
-        model,
+        bucket,
         confirm: true,
       }),
     });

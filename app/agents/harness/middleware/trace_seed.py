@@ -5,10 +5,16 @@ from __future__ import annotations
 import uuid
 from typing import Any, Dict, Optional
 
-from langchain.agents.middleware.types import AgentMiddleware
+try:  # pragma: no cover - optional dependency
+    from langchain.agents.middleware.types import AgentMiddleware
+
+    MIDDLEWARE_AVAILABLE = True
+except Exception:  # pragma: no cover
+    AgentMiddleware = object  # type: ignore[assignment]
+    MIDDLEWARE_AVAILABLE = False
 
 
-class TraceSeedMiddleware(AgentMiddleware):
+class TraceSeedMiddleware(AgentMiddleware if MIDDLEWARE_AVAILABLE else object):
     """Seed a correlation_id into sparrow_ctx."""
 
     name = "trace_seed"

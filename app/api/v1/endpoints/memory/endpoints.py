@@ -1141,7 +1141,7 @@ async def split_relationship_preview(
 
                     registry = get_registry()
                     model_id = getattr(
-                        registry, "memory_clustering", registry.coordinator_heavy
+                        registry, "memory_clustering", registry.coordinator_google
                     ).id
 
                     response_schema = {
@@ -1513,7 +1513,7 @@ async def split_relationship_preview(
             from app.core.config import get_registry
 
             registry = get_registry()
-            model_id = getattr(registry, "memory_clustering", registry.coordinator_heavy).id
+            model_id = getattr(registry, "memory_clustering", registry.coordinator_google).id
 
             response_schema = {
                 "type": "object",
@@ -2018,7 +2018,7 @@ async def analyze_relationship(
 
             registry = get_registry()
             ai_model_id = getattr(
-                registry, "memory_relationship_analysis", registry.coordinator_heavy
+                registry, "memory_relationship_analysis", registry.coordinator_google
             ).id
 
             response_schema = {

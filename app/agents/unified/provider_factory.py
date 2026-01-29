@@ -111,7 +111,7 @@ def build_chat_model(
         reasoning_enabled: For XAI models, whether to enable reasoning mode.
             If None, uses GROK_CONFIG["reasoning_enabled"] (always True).
         role: Optional agent role for role-based temperature selection.
-            One of: coordinator, coordinator_heavy, log_analysis, research,
+            One of: coordinator, log_analysis, research,
             db_retrieval, grounding, feedme.
 
     Returns:
@@ -161,7 +161,7 @@ def build_summarization_model() -> BaseChatModel:
     """Build the fixed summarization/state-extraction model.
 
     Spec requirement:
-    - Always uses Google direct Gemini 2.5 Flash Preview (Sep 2025).
+    - Always uses Google direct Gemini 2.5 Flash.
     - Must not depend on the coordinator provider/model selection.
     """
     config = get_models_config()
