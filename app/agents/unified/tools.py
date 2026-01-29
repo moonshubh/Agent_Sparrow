@@ -2706,19 +2706,13 @@ def get_registered_support_tools() -> List[BaseTool]:
     - Smaller tool schema payloads (reduces model overhead / quota pressure)
     - Faster, more predictable routing
     """
-    tools: List[BaseTool] = [
+    return [
         kb_search_tool,
         feedme_search_tool,
+        web_search_tool,
+        supabase_query_tool,
+        log_diagnoser_tool,
     ]
-    if getattr(settings, "enable_websearch", True):
-        tools.append(web_search_tool)
-    tools.extend(
-        [
-            supabase_query_tool,
-            log_diagnoser_tool,
-        ]
-    )
-    return tools
 
 
 class Step(BaseModel):

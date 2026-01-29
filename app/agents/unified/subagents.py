@@ -99,21 +99,15 @@ DB_RETRIEVAL_MW_CONFIG = MiddlewareConfig(max_tokens_before_summary=80000, messa
 
 def _subagent_read_tools() -> List[BaseTool]:
     """Shared read/search tools available to all subagents."""
-    tools: List[BaseTool] = [
+    return [
         memory_search_tool,
         memory_list_tool,
+        web_search_tool,
+        tavily_extract_tool,
+        grounding_search_tool,
+        firecrawl_search_tool,
+        firecrawl_fetch_tool,
     ]
-    if getattr(settings, "enable_websearch", True):
-        tools.extend(
-            [
-                web_search_tool,
-                tavily_extract_tool,
-                grounding_search_tool,
-                firecrawl_search_tool,
-                firecrawl_fetch_tool,
-            ]
-        )
-    return tools
 
 
 def _merge_tools(
