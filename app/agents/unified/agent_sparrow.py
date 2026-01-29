@@ -690,7 +690,7 @@ def _build_deep_agent(state: GraphState, runtime: AgentRuntimeConfig):
                 ticket_id=ticket_id,
                 subagents=subagent_models,
             )
-        except Exception as exc:  # pragma: no cover - logging only
+        except (KeyError, AttributeError, TypeError) as exc:  # pragma: no cover - logging only
             logger.debug("zendesk_subagent_models_log_failed", error=str(exc)[:180])
 
     todo_prompt = TODO_PROMPT if "TODO_PROMPT" in globals() else ""
@@ -1545,7 +1545,7 @@ def _safe_json_loads(payload: Any) -> dict[str, Any]:
         try:
             parsed = json.loads(payload)
             return parsed if isinstance(parsed, dict) else {}
-        except Exception:
+        except (json.JSONDecodeError, TypeError):
             return {}
     return {}
 
@@ -2219,7 +2219,7 @@ async def run_unified_agent(state: GraphState, config: Optional[RunnableConfig] 
                     web_search_tools=web_search_tools,
                     web_search_tool_count=web_search_tool_count,
                 )
-            except Exception as exc:  # pragma: no cover - logging only
+            except (KeyError, AttributeError, TypeError) as exc:  # pragma: no cover - logging only
                 logger.debug("zendesk_run_telemetry_failed", error=str(exc)[:180])
 
         # ------------------------------------------------------------------

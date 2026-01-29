@@ -729,7 +729,7 @@ class Settings(BaseSettings):
     @classmethod
     def parse_zendesk_excluded_tags(cls, v):
         if v is None:
-            return ["mac_general__feature_delivered"]
+            return ["mac_general__feature_delivered", "mb_spam_suspected"]
         if isinstance(v, str):
             raw = v.strip()
             if not raw:

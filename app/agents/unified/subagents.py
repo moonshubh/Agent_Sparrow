@@ -416,6 +416,10 @@ def _research_subagent(
     # Prioritize Minimax MCP tools whenever available (regardless of model choice).
     use_minimax = is_minimax_available()
 
+    # NOTE: Web tools are added unconditionally here because the research
+    # subagent's core purpose is web research.  The enable_websearch gate in
+    # _subagent_read_tools() applies to subagents that only *optionally*
+    # perform web access (log_diagnoser, db_retrieval).
     tools: List[BaseTool] = [
         kb_search_tool,
         feedme_search_tool,
@@ -648,6 +652,8 @@ def _explorer_subagent(
     # Prefer Minimax MCP tools whenever available.
     use_minimax = is_minimax_available()
 
+    # NOTE: Web tools unconditional — explorer's purpose is web research
+    # (same rationale as _research_subagent).
     tools: List[BaseTool] = [
         kb_search_tool,
         feedme_search_tool,

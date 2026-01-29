@@ -4,7 +4,7 @@ import re
 
 import bleach
 import mistune
-from bs4 import BeautifulSoup, NavigableString
+from bs4 import BeautifulSoup, NavigableString, Tag
 from mistune.plugins import url
 
 
@@ -150,7 +150,7 @@ def _ensure_trailing_br_nbsp(li, soup: BeautifulSoup) -> None:
     li.append(NavigableString("\u00a0"))
 
 
-def _convert_headings_to_bold(root, soup: BeautifulSoup) -> None:
+def _convert_headings_to_bold(root: Tag, soup: BeautifulSoup) -> None:
     """Convert heading tags to bold lines with Zendesk-friendly spacing.
 
     Zendesk applies large default margins to <h2>/<h3>, which creates

@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any, Iterable
 from urllib.parse import urlparse
 
-from PIL import Image
+from PIL import Image, UnidentifiedImageError
 
 from app.core.logging_config import get_logger
 from app.agents.unified.minimax_tools import (
@@ -112,10 +112,7 @@ def _extract_shortlink_counts(text: str) -> dict[str, int]:
         return counts
     for raw in URL_PATTERN.findall(text):
         url = _normalize_url(raw)
-        try:
-            parsed = urlparse(url)
-        except Exception:
-            continue
+        parsed = urlparse(url)
         domain = (parsed.netloc or "").lower()
         if domain.startswith("www."):
             domain = domain[4:]
@@ -135,10 +132,7 @@ def _summarize_repeated_shortlinks(counts: dict[str, int]) -> dict[str, Any]:
     repeated = {u: c for u, c in counts.items() if c >= 2}
     domains = set()
     for url in repeated.keys():
-        try:
-            parsed = urlparse(url)
-        except Exception:
-            continue
+        parsed = urlparse(url)
         domain = (parsed.netloc or "").lower()
         if domain.startswith("www."):
             domain = domain[4:]
@@ -160,32 +154,29 @@ def _make_thumbnail_path(image_path: str, *, max_size: int = 512) -> str | None:
             tmp.close()
             img.save(tmp.name, format="JPEG", quality=70, optimize=True)
             return tmp.name
-    except Exception as exc:
+    except (UnidentifiedImageError, OSError) as exc:
         logger.debug("spam_guard_thumbnail_failed", error=str(exc)[:180])
         return None
 
 
 def _parse_minimax_classification(payload: Any) -> tuple[str, float]:
-    try:
-        if isinstance(payload, dict):
-            text = payload.get("analysis") or ""
-        else:
-            text = str(payload or "")
-    except Exception:
-        text = ""
+    if isinstance(payload, dict):
+        text = payload.get("analysis") or ""
+    else:
+        text = str(payload or "")
 
-    match = re.search(r"\{.*\}", text, flags=re.DOTALL)
+    match = re.search(r"\{[^{}]*\}", text)
     if not match:
         return "uncertain", 0.0
     try:
         data = json.loads(match.group(0))
-    except Exception:
+    except (json.JSONDecodeError, TypeError):
         return "uncertain", 0.0
     label = str(data.get("label") or "uncertain").strip().lower()
     confidence = data.get("confidence")
     try:
         confidence_val = float(confidence)
-    except Exception:
+    except (TypeError, ValueError):
         confidence_val = 0.0
     if label not in {"explicit_adult", "suggestive", "benign", "uncertain"}:
         label = "uncertain"
@@ -231,8 +222,8 @@ async def _classify_explicit_images(
         finally:
             try:
                 Path(thumb_path).unlink(missing_ok=True)
-            except Exception:
-                pass
+            except OSError as exc:
+                logger.debug("spam_guard_thumbnail_cleanup_failed", error=str(exc)[:180])
 
     return "uncertain", 0.0
 
@@ -267,6 +258,8 @@ async def evaluate_spam_guard(
         )
 
     # If no strong text signal, look for explicit image content.
+    if not is_minimax_available():
+        return None
     attachments: list[AttachmentInfo] = []
     try:
         attachments = fetch_ticket_attachments(
