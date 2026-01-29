@@ -5116,7 +5116,8 @@ async def _process_window(
             )
             if spam_decision and spam_decision.skip:
                 try:
-                    zc.add_internal_note(
+                    await asyncio.to_thread(
+                        zc.add_internal_note,
                         tid,
                         spam_decision.note,
                         add_tag=spam_decision.tag,
