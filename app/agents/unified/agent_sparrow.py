@@ -6,11 +6,12 @@ Refactored to use modular streaming, event emission, and message preparation.
 from __future__ import annotations
 
 import asyncio
+import json
 import re
 import textwrap
 import uuid
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any, Optional, Iterable
 
 from langchain.agents import create_agent
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
@@ -548,6 +549,7 @@ def _build_skills_context(state: GraphState, runtime: AgentRuntimeConfig) -> str
             "is_final_response": True,  # Default to user-facing for coordinator
             "task_type": system_bucket.get("task_type") or forwarded_props.get("task_type"),
             "is_internal_call": forwarded_props.get("is_internal_call", False),
+            "is_zendesk_ticket": forwarded_props.get("is_zendesk_ticket", False),
         }
 
         # Use enhanced auto-detection
@@ -667,6 +669,29 @@ def _build_deep_agent(state: GraphState, runtime: AgentRuntimeConfig):
         zendesk=is_zendesk,
         workspace_tools=workspace_tools,
     )
+    if is_zendesk:
+        try:
+            forwarded = state.forwarded_props or {}
+            ticket_id = forwarded.get("zendesk_ticket_id") or forwarded.get("ticket_id")
+            subagent_models = [
+                {
+                    "name": spec.get("name"),
+                    "model": spec.get("model_name"),
+                    "provider": spec.get("model_provider"),
+                }
+                for spec in (subagents or [])
+            ]
+            if isinstance(state.scratchpad, dict):
+                system_bucket = state.scratchpad.setdefault("_system", {})
+                system_bucket["zendesk_subagent_models"] = subagent_models
+                state.scratchpad["_system"] = system_bucket
+            logger.info(
+                "zendesk_subagent_models_configured",
+                ticket_id=ticket_id,
+                subagents=subagent_models,
+            )
+        except Exception as exc:  # pragma: no cover - logging only
+            logger.debug("zendesk_subagent_models_log_failed", error=str(exc)[:180])
 
     todo_prompt = TODO_PROMPT if "TODO_PROMPT" in globals() else ""
     # Build coordinator prompt with dynamic model identification
@@ -1482,6 +1507,100 @@ def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+WEB_SEARCH_TOOL_NAMES: set[str] = {
+    "web_search",
+    "tavily_extract",
+    "grounding_search",
+    "firecrawl_search",
+    "firecrawl_fetch",
+    "firecrawl_map",
+    "firecrawl_crawl",
+    "firecrawl_extract",
+    "firecrawl_agent",
+    "minimax_web_search",
+}
+
+
+def _extract_tool_calls(messages: list[BaseMessage]) -> dict[str, dict[str, Any]]:
+    tool_calls_by_id: dict[str, dict[str, Any]] = {}
+    for msg in messages or []:
+        if not isinstance(msg, AIMessage):
+            continue
+        tool_calls = getattr(msg, "tool_calls", None) or (
+            (getattr(msg, "additional_kwargs", {}) or {}).get("tool_calls")
+        ) or []
+        for call in tool_calls:
+            if not isinstance(call, dict):
+                continue
+            call_id = call.get("id") or call.get("tool_call_id") or call.get("toolCallId")
+            if isinstance(call_id, str) and call_id:
+                tool_calls_by_id[call_id] = call
+    return tool_calls_by_id
+
+
+def _safe_json_loads(payload: Any) -> dict[str, Any]:
+    if isinstance(payload, dict):
+        return payload
+    if isinstance(payload, str):
+        try:
+            parsed = json.loads(payload)
+            return parsed if isinstance(parsed, dict) else {}
+        except Exception:
+            return {}
+    return {}
+
+
+def _extract_tool_usage(messages: list[BaseMessage]) -> dict[str, set[str]]:
+    tool_calls_by_id = _extract_tool_calls(messages)
+    requested: set[str] = set()
+    for call in tool_calls_by_id.values():
+        name = call.get("name") or call.get("tool") or call.get("tool_name")
+        if isinstance(name, str) and name:
+            requested.add(name)
+
+    executed: set[str] = set()
+    for msg in messages or []:
+        if not isinstance(msg, ToolMessage):
+            continue
+        tool_name = getattr(msg, "name", None)
+        if isinstance(tool_name, str) and tool_name:
+            executed.add(tool_name)
+            continue
+        tool_call_id = getattr(msg, "tool_call_id", None)
+        if isinstance(tool_call_id, str):
+            call = tool_calls_by_id.get(tool_call_id)
+            name = call.get("name") if isinstance(call, dict) else None
+            if isinstance(name, str) and name:
+                executed.add(name)
+
+    return {
+        "requested": requested,
+        "executed": executed,
+    }
+
+
+def _extract_subagent_deployments(messages: list[BaseMessage]) -> list[str]:
+    tool_calls_by_id = _extract_tool_calls(messages)
+    subagents: set[str] = set()
+    for call in tool_calls_by_id.values():
+        if call.get("name") != "task":
+            continue
+        args = call.get("args") or call.get("arguments") or {}
+        parsed_args = _safe_json_loads(args)
+        subagent_type = parsed_args.get("subagent_type") or parsed_args.get("subagentType")
+        if isinstance(subagent_type, str) and subagent_type:
+            subagents.add(subagent_type)
+    return sorted(subagents)
+
+
+def _limit_list(values: Iterable[str], *, max_items: int = 25) -> tuple[list[str], int]:
+    items = sorted({str(v) for v in values if v})
+    total = len(items)
+    if total > max_items:
+        return items[:max_items], total
+    return items, total
+
+
 def _extract_log_analysis_notes(
     messages: list[BaseMessage],
 ) -> dict[str, LogAnalysisNote]:
@@ -2070,6 +2189,38 @@ async def run_unified_agent(state: GraphState, config: Optional[RunnableConfig] 
             or state.forwarded_props
             or {}
         )
+        if is_zendesk:
+            try:
+                ticket_id = forwarded_props.get("zendesk_ticket_id") or forwarded_props.get("ticket_id")
+                system_bucket = scratchpad.get("_system", {}) if isinstance(scratchpad, dict) else {}
+                subagent_models = system_bucket.get("zendesk_subagent_models") if isinstance(system_bucket, dict) else None
+                tool_usage = _extract_tool_usage(updated_messages)
+                tools_requested, tools_requested_count = _limit_list(tool_usage.get("requested", set()))
+                tools_executed, tools_executed_count = _limit_list(tool_usage.get("executed", set()))
+                web_tools = set(tool_usage.get("executed", set())) & WEB_SEARCH_TOOL_NAMES
+                web_search_tools, web_search_tool_count = _limit_list(web_tools, max_items=10)
+                subagents_deployed = _extract_subagent_deployments(updated_messages)
+                subagents_deployed_list, subagents_deployed_count = _limit_list(
+                    subagents_deployed,
+                    max_items=10,
+                )
+                logger.info(
+                    "zendesk_run_telemetry",
+                    ticket_id=ticket_id,
+                    coordinator_model=runtime.model,
+                    coordinator_provider=runtime.provider,
+                    subagents_configured=subagent_models,
+                    subagents_deployed=subagents_deployed_list,
+                    subagents_deployed_count=subagents_deployed_count,
+                    tools_requested=tools_requested,
+                    tools_requested_count=tools_requested_count,
+                    tools_executed=tools_executed,
+                    tools_executed_count=tools_executed_count,
+                    web_search_tools=web_search_tools,
+                    web_search_tool_count=web_search_tool_count,
+                )
+            except Exception as exc:  # pragma: no cover - logging only
+                logger.debug("zendesk_run_telemetry_failed", error=str(exc)[:180])
 
         # ------------------------------------------------------------------
         # Phase 3: Persist internal log notes from per-file subagent runs

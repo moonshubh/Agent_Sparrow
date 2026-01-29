@@ -15,6 +15,17 @@ Great support writing transforms technical exchanges into human connections. You
 
 ---
 
+## Zendesk Support Constraints
+
+When writing Zendesk ticket replies:
+- No exclamation marks.
+- Do not address customers by name.
+- The first two lines are fixed and required by policy.
+- The first line after the greeting must be an empathetic bridge that reflects their emotional state.
+- Avoid Markdown headings (##). Use **bold** labels and short paragraphs for structure.
+
+---
+
 ## Part 1: Core Writing Principles
 
 ### 1. Write to One Person

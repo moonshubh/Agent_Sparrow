@@ -356,7 +356,7 @@ class Settings(BaseSettings):
         alias="ZENDESK_EXCLUDED_STATUSES",
     )
     zendesk_excluded_tags: List[str] = Field(
-        default_factory=lambda: ["mac_general__feature_delivered"],
+        default_factory=lambda: ["mac_general__feature_delivered", "mb_spam_suspected"],
         alias="ZENDESK_EXCLUDED_TAGS",
     )
     zendesk_excluded_brand_ids: List[str] = Field(

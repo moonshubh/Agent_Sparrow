@@ -16,6 +16,7 @@ from app.core.settings import settings
 from app.db.supabase.client import get_supabase_client
 from .client import ZendeskClient, ZendeskRateLimitError
 from .exclusions import compute_ticket_exclusion
+from .spam_guard import evaluate_spam_guard
 from app.core.user_context import UserContext, user_context_scope
 from app.agents.unified.agent_sparrow import run_unified_agent
 from app.agents.orchestration.orchestration.state import GraphState
@@ -4435,6 +4436,7 @@ async def _generate_reply(
                     "is_final_response": True,  # Triggers writing/empathy skills
                     "task_type": "support",  # Support ticket context
                     "is_zendesk_ticket": True,  # Explicit Zendesk marker
+                    "zendesk_ticket_id": ticket_id,
                     # Pattern-based context engineering
                     "ticket_category": inferred_category,
                     "similar_scenarios_path": "/context/similar_scenarios.md",
@@ -4610,6 +4612,11 @@ async def _generate_reply(
                         "- Start with exactly two lines:\n"
                         "  Hi there,\n"
                         "  Many thanks for contacting the Mailbird Customer Happiness Team.\n"
+                        "- After the greeting, add two sentences:\n"
+                        "  - First, an empathetic bridge that acknowledges their emotion and impact, referencing a specific detail they shared.\n"
+                        "  - Second, restate the main issue with their exact details (error text, provider, goal).\n"
+                        "- The empathetic bridge must be the third line. Avoid defaulting to \"It sounds like\".\n"
+                        "- If they provided logs, screenshots, or steps tried, thank them for the effort.\n"
                         "- Zendesk ticket policies (follow when applicable):\n"
                         "  - If requesting a log file, follow the macro titled: TECH: Request log file - Using Mailbird Number 2 (paraphrase, but keep ALL steps).\n"
                         "  - If the ticket is unclear, ask for the missing details and request a screenshot (macro: REQUEST:: Ask for a screenshot).\n"
@@ -4620,6 +4627,7 @@ async def _generate_reply(
                         "- Formatting: use short paragraphs separated by blank lines.\n"
                         "- Formatting: use '-' bullets (with 2-space indented sub-bullets) and '1.' numbered steps when needed.\n"
                         "- Formatting: use **bold** for UI labels / key actions and `inline code` for errors, server names, and ports.\n"
+                        "- Do NOT use Markdown headings (##). Use **bold** labels if you need structure.\n"
                         "- Do NOT output HTML (Markdown only).\n\n"
                         + (
                             f"Rewrite focus (policy compliance): {', '.join(rewrite_reasons)}\n\n"
@@ -4719,6 +4727,11 @@ async def _generate_reply(
                         "- Start with exactly two lines:\n"
                         "  Hi there,\n"
                         "  Many thanks for contacting the Mailbird Customer Happiness Team.\n"
+                        "- After the greeting, add two sentences:\n"
+                        "  - First, an empathetic bridge that acknowledges their emotion and impact, referencing a specific detail they shared.\n"
+                        "  - Second, restate the main issue with their exact details (error text, provider, goal).\n"
+                        "- The empathetic bridge must be the third line. Avoid defaulting to \"It sounds like\".\n"
+                        "- If they provided logs, screenshots, or steps tried, thank them for the effort.\n"
                         "- Zendesk ticket policies (follow when applicable):\n"
                         "  - If requesting a log file, follow the macro titled: TECH: Request log file - Using Mailbird Number 2 (paraphrase, but keep ALL steps).\n"
                         "  - If the ticket is unclear, ask for the missing details and request a screenshot (macro: REQUEST:: Ask for a screenshot).\n"
@@ -4729,6 +4742,7 @@ async def _generate_reply(
                         "- Formatting: use short paragraphs separated by blank lines.\n"
                         "- Formatting: use '-' bullets (with 2-space indented sub-bullets) and '1.' numbered steps when needed.\n"
                         "- Formatting: use **bold** for UI labels / key actions and `inline code` for errors, server names, and ports.\n"
+                        "- Do NOT use Markdown headings (##). Use **bold** labels if you need structure.\n"
                         "- Do NOT output HTML (Markdown only).\n\n"
                         + (
                             f"Rewrite focus (policy compliance): {', '.join(rewrite_reasons)}\n\n"
@@ -5076,6 +5090,57 @@ async def _process_window(
                                 "skipped": True,
                                 "skip_reason": exclusion.reason,
                                 **(exclusion.details or {}),
+                            },
+                        }
+                    )
+                    .eq("id", row["id"])
+                    .execute()
+                )
+                continue
+
+            # Spam guard: skip obvious spam bursts to avoid LLM processing costs.
+            comments = None
+            try:
+                via = ticket.get("via") if isinstance(ticket, dict) else {}
+                source = via.get("source") if isinstance(via, dict) else {}
+                from_obj = source.get("from") if isinstance(source, dict) else {}
+                recipients = from_obj.get("original_recipients")
+                if not (isinstance(recipients, list) and recipients):
+                    comments = await asyncio.to_thread(zc.get_ticket_comments, tid, 5)
+            except Exception:
+                comments = None
+            spam_decision = await evaluate_spam_guard(
+                ticket_id=tid,
+                ticket=ticket,
+                comments=comments,
+            )
+            if spam_decision and spam_decision.skip:
+                try:
+                    zc.add_internal_note(
+                        tid,
+                        spam_decision.note,
+                        add_tag=spam_decision.tag,
+                        use_html=False,
+                    )
+                except ZendeskRateLimitError:
+                    raise
+                except Exception as exc:
+                    logger.warning(
+                        "zendesk_spam_guard_note_failed ticket_id=%s error=%s",
+                        tid,
+                        str(exc)[:180],
+                    )
+                await supa._exec(
+                    lambda: supa.client.table("zendesk_pending_tickets")
+                    .update(
+                        {
+                            "status": "processed",
+                            "processed_at": datetime.now(timezone.utc).isoformat(),
+                            "status_details": {
+                                "processing_started_at": now_iso,
+                                "skipped": True,
+                                "skip_reason": spam_decision.reason,
+                                **(spam_decision.details or {}),
                             },
                         }
                     )

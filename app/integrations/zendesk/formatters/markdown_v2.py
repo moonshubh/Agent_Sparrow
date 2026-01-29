@@ -150,6 +150,35 @@ def _ensure_trailing_br_nbsp(li, soup: BeautifulSoup) -> None:
     li.append(NavigableString("\u00a0"))
 
 
+def _convert_headings_to_bold(root, soup: BeautifulSoup) -> None:
+    """Convert heading tags to bold lines with Zendesk-friendly spacing.
+
+    Zendesk applies large default margins to <h2>/<h3>, which creates
+    excessive whitespace. We replace headings with <strong> and controlled
+    <br>&nbsp; spacing to match manual edits.
+    """
+    for heading in list(root.find_all(["h1", "h2", "h3"])):
+        inside_li = heading.find_parent("li") is not None
+
+        strong = soup.new_tag("strong")
+        for child in list(heading.contents):
+            strong.append(child.extract())
+
+        heading.replace_with(strong)
+
+        if inside_li:
+            nodes = [soup.new_tag("br"), NavigableString("\u00a0")]
+        else:
+            nodes = [
+                soup.new_tag("br"),
+                NavigableString("\u00a0"),
+                soup.new_tag("br"),
+            ]
+
+        for node in reversed(nodes):
+            strong.insert_after(node)
+
+
 def _convert_paragraphs_to_br(root, soup: BeautifulSoup) -> None:
     # Convert <p> blocks into Zendesk-friendly <br>&nbsp;<br> spacing.
     for p in list(root.find_all("p")):
@@ -314,6 +343,7 @@ _ALLOWED_TAGS: list[str] = [
     "li",
     "a",
     "blockquote",
+    "h1",
     "h2",
     "h3",
 ]
@@ -379,6 +409,7 @@ def format_zendesk_internal_note_markdown_v2(
     if root is None:
         return cleaned
 
+    _convert_headings_to_bold(root, soup)
     _convert_paragraphs_to_br(root, soup)
     _ensure_br_nbsp_before_nested_lists(root, soup)
     _flatten_secondary_ordered_lists(root, soup)

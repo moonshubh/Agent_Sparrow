@@ -2706,13 +2706,19 @@ def get_registered_support_tools() -> List[BaseTool]:
     - Smaller tool schema payloads (reduces model overhead / quota pressure)
     - Faster, more predictable routing
     """
-    return [
+    tools: List[BaseTool] = [
         kb_search_tool,
         feedme_search_tool,
-        web_search_tool,
-        supabase_query_tool,
-        log_diagnoser_tool,
     ]
+    if getattr(settings, "enable_websearch", True):
+        tools.append(web_search_tool)
+    tools.extend(
+        [
+            supabase_query_tool,
+            log_diagnoser_tool,
+        ]
+    )
+    return tools
 
 
 class Step(BaseModel):
@@ -3308,11 +3314,30 @@ def _dedupe_memory_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 @tool("memory_search", args_schema=MemorySearchInput)
 async def memory_search_tool(
-    input: MemorySearchInput,
+    input: Optional[MemorySearchInput] = None,
+    query: Optional[str] = None,
+    q: Optional[str] = None,
+    limit: int = 8,
+    similarity_threshold: float = 0.5,
+    include_mem0: bool = True,
+    include_memory_ui: bool = True,
     state: Annotated[Optional[GraphState], InjectedState] = None,
     runtime: Optional[ToolRuntime] = None,
 ) -> Dict[str, Any]:
-    """Search memories across mem0 and Memory UI backends (read-only)."""
+    """Search memories across mem0 and Memory UI backends (read-only).
+
+    Supports both structured invocation with a MemorySearchInput object and
+    direct kwargs so that tool calls that pass raw arguments continue to work.
+    """
+    if input is None:
+        input = MemorySearchInput(
+            query=(query or q or "").strip(),
+            limit=limit,
+            similarity_threshold=similarity_threshold,
+            include_mem0=include_mem0,
+            include_memory_ui=include_memory_ui,
+        )
+
     query = (input.query or "").strip()
     if not query:
         return {
