@@ -3308,11 +3308,30 @@ def _dedupe_memory_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 @tool("memory_search", args_schema=MemorySearchInput)
 async def memory_search_tool(
-    input: MemorySearchInput,
-    state: Annotated[Optional[GraphState], InjectedState] = None,
-    runtime: Optional[ToolRuntime] = None,
-) -> Dict[str, Any]:
-    """Search memories across mem0 and Memory UI backends (read-only)."""
+    input: MemorySearchInput | None = None,
+    query: str | None = None,
+    q: str | None = None,
+    limit: int = 8,
+    similarity_threshold: float = 0.5,
+    include_mem0: bool = True,
+    include_memory_ui: bool = True,
+    state: Annotated[GraphState | None, InjectedState] = None,
+    runtime: ToolRuntime | None = None,  # noqa: ARG001
+) -> dict[str, Any]:
+    """Search memories across mem0 and Memory UI backends (read-only).
+
+    Supports both structured invocation with a MemorySearchInput object and
+    direct kwargs so that tool calls that pass raw arguments continue to work.
+    """
+    if input is None:
+        input = MemorySearchInput(
+            query=(query or q or "").strip(),
+            limit=limit,
+            similarity_threshold=similarity_threshold,
+            include_mem0=include_mem0,
+            include_memory_ui=include_memory_ui,
+        )
+
     query = (input.query or "").strip()
     if not query:
         return {

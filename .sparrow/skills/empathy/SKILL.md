@@ -13,6 +13,15 @@ Detect user emotions and adapt response tone for human-like, supportive interact
 
 ---
 
+## Support Ticket Specific Guidance (Zendesk)
+
+- Assume the customer has waited for a response; acknowledge the wait or effort when appropriate.
+- The first line after the required greeting should be an empathetic bridge that reflects their emotional state and impact.
+- If they provided logs, screenshots, or steps tried, explicitly thank them for the effort.
+- Show you read the ticket by referencing exact error messages, providers, or steps already taken.
+
+---
+
 ## Part 1: Decoding Digital Body Language
 
 In text-based support, 93% of normal communication cues (body language + tone) are stripped away. This creates "tonal ambiguity" where the brain defaults to negativity bias - interpreting neutral messages as cold or aggressive. Learn to read digital body language:
