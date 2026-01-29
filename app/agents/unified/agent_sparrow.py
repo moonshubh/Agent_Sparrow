@@ -780,7 +780,11 @@ def _build_deep_agent(state: GraphState, runtime: AgentRuntimeConfig):
 
         general_purpose_agent = False
         subagent_default_model = chat_model
-        if not is_zendesk and is_minimax_available():
+        if (
+            getattr(settings, "subagent_general_purpose_enabled", True)
+            and not is_zendesk
+            and is_minimax_available()
+        ):
             try:
                 from app.core.config import resolve_subagent_config
                 from .provider_factory import build_chat_model
@@ -794,6 +798,10 @@ def _build_deep_agent(state: GraphState, runtime: AgentRuntimeConfig):
                     role="research",
                 )
                 general_purpose_agent = True
+                logger.info(
+                    "general_purpose_subagent_enabled",
+                    model=str(subagent_cfg.model_id),
+                )
             except Exception as exc:  # pragma: no cover - best effort only
                 logger.warning(
                     "general_purpose_subagent_unavailable",

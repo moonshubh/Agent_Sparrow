@@ -538,9 +538,13 @@ class StreamEventHandler:
                 fallback_meta: dict[str, Any] | None = None
 
                 try:
-                    system_bucket = (self.state.scratchpad or {}).get("_system") or {}
-                    if isinstance(system_bucket, dict) and isinstance(system_bucket.get("streaming_failure"), dict):
-                        system_bucket["streaming_failure"]["fallback_attempted"] = True
+                    scratchpad = getattr(self.state, "scratchpad", None)
+                    if isinstance(scratchpad, dict):
+                        system_bucket = scratchpad.get("_system")
+                        if isinstance(system_bucket, dict):
+                            failure = system_bucket.get("streaming_failure")
+                            if isinstance(failure, dict):
+                                failure["fallback_attempted"] = True
                 except Exception:  # pragma: no cover - best effort only
                     pass
 
@@ -632,9 +636,13 @@ class StreamEventHandler:
                 )
 
                 try:
-                    system_bucket = (self.state.scratchpad or {}).get("_system") or {}
-                    if isinstance(system_bucket, dict) and isinstance(system_bucket.get("streaming_failure"), dict):
-                        system_bucket["streaming_failure"]["fallback_succeeded"] = True
+                    scratchpad = getattr(self.state, "scratchpad", None)
+                    if isinstance(scratchpad, dict):
+                        system_bucket = scratchpad.get("_system")
+                        if isinstance(system_bucket, dict):
+                            failure = system_bucket.get("streaming_failure")
+                            if isinstance(failure, dict):
+                                failure["fallback_succeeded"] = True
                 except Exception:  # pragma: no cover - best effort only
                     pass
 
@@ -645,15 +653,15 @@ class StreamEventHandler:
                     fallback_error,
                 )
                 try:
-                    system_bucket = (self.state.scratchpad or {}).get("_system") or {}
-                    if isinstance(system_bucket, dict) and isinstance(system_bucket.get("streaming_failure"), dict):
-                        system_bucket["streaming_failure"]["fallback_succeeded"] = False
-                        system_bucket["streaming_failure"]["fallback_error_type"] = type(
-                            fallback_error
-                        ).__name__
-                        system_bucket["streaming_failure"]["fallback_error"] = truncate_error_message(
-                            fallback_error
-                        )
+                    scratchpad = getattr(self.state, "scratchpad", None)
+                    if isinstance(scratchpad, dict):
+                        system_bucket = scratchpad.get("_system")
+                        if isinstance(system_bucket, dict):
+                            failure = system_bucket.get("streaming_failure")
+                            if isinstance(failure, dict):
+                                failure["fallback_succeeded"] = False
+                                failure["fallback_error_type"] = type(fallback_error).__name__
+                                failure["fallback_error"] = truncate_error_message(fallback_error)
                 except Exception:  # pragma: no cover - best effort only
                     pass
                 self.emitter.emit_custom_event(

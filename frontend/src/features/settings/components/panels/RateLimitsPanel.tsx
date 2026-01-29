@@ -5,7 +5,7 @@ import { motion, useInView } from "motion/react"
 import { Button } from "@/shared/ui/button"
 import { Separator } from "@/shared/ui/separator"
 import { Badge } from "@/shared/ui/badge"
-import { rateLimitApi, type UsageStats } from "@/services/api/endpoints/rateLimitApi"
+import { rateLimitApi, type RateLimitMetadata, type UsageStats } from "@/services/api/endpoints/rateLimitApi"
 import { Loader2, RefreshCw, Activity, Shield } from "lucide-react"
 
 export function RateLimitsPanel() {
@@ -36,12 +36,47 @@ export function RateLimitsPanel() {
 
   // Provider configuration flags are fetched above if needed later; limits shown below are static defaults
 
+  const selectedBuckets = useMemo(() => {
+    const buckets = stats?.buckets ?? {}
+
+    const findBucketKey = (
+      predicate: (bucket: RateLimitMetadata, key: string) => boolean
+    ): string | undefined => {
+      for (const [key, bucket] of Object.entries(buckets)) {
+        if (predicate(bucket, key)) return key
+      }
+      return undefined
+    }
+
+    const coordinatorBucketKey = buckets["coordinators.google_with_subagents"]
+      ? "coordinators.google_with_subagents"
+      : buckets["coordinators.google"]
+        ? "coordinators.google"
+        : findBucketKey(
+            (bucket, key) =>
+              bucket.provider === "google" &&
+              bucket.model === "gemini-3-flash-preview" &&
+              key.includes("coordinators") &&
+              !key.includes("zendesk")
+          )
+
+    const imageBucketKey = buckets["internal.image"]
+      ? "internal.image"
+      : findBucketKey(
+          (bucket) => bucket.provider === "google" && bucket.model.includes("pro-image")
+        )
+
+    return {
+      coordinatorBucketKey,
+      imageBucketKey,
+      coordinator: coordinatorBucketKey ? buckets[coordinatorBucketKey] : undefined,
+      image: imageBucketKey ? buckets[imageBucketKey] : undefined,
+    }
+  }, [stats])
+
   const gridStats = useMemo(() => {
-    const s = stats
-    const coordinator =
-      s?.buckets?.['coordinators.google_with_subagents'] ??
-      s?.buckets?.['coordinators.google']
-    const image = s?.buckets?.['internal.image']
+    const coordinator = selectedBuckets.coordinator
+    const image = selectedBuckets.image
 
     const ratio = (used: number | null | undefined, limit: number | null | undefined): string => {
       if (typeof used !== 'number' || typeof limit !== 'number') return '—'
@@ -55,7 +90,7 @@ export function RateLimitsPanel() {
       { value: ratio(image?.tpm_used, image?.tpm_limit ?? null), label: 'Gemini 3 Pro Image TPM' },
       { value: ratio(image?.rpd_used, image?.rpd_limit), label: 'Gemini 3 Pro Image RPD' },
     ]
-  }, [stats])
+  }, [selectedBuckets])
 
   return (
     <section className="py-4">
@@ -74,6 +109,12 @@ export function RateLimitsPanel() {
         {error ? (
           <div className="rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive">
             Failed to load rate limits ({error}).
+          </div>
+        ) : null}
+
+        {stats && (!selectedBuckets.coordinatorBucketKey || !selectedBuckets.imageBucketKey) ? (
+          <div className="mt-2 rounded-md border border-border/50 bg-muted/20 p-3 text-xs text-muted-foreground">
+            Some rate-limit buckets are not available in this deployment; the panel is showing best-effort values.
           </div>
         ) : null}
 
@@ -131,11 +172,11 @@ export function RateLimitsPanel() {
             {stats ? (
               <ul className="text-sm text-muted-foreground space-y-1">
                 {(() => {
-                  const coordinator =
-                    stats.buckets?.['coordinators.google_with_subagents'] ??
-                    stats.buckets?.['coordinators.google']
-                  const coordinatorCircuit = coordinator ? stats.circuits?.[coordinator.bucket] : undefined
-                  const imageCircuit = stats.circuits?.['internal.image']
+                  const coordinatorBucketKey =
+                    selectedBuckets.coordinatorBucketKey ?? 'coordinators.google'
+                  const imageBucketKey = selectedBuckets.imageBucketKey ?? 'internal.image'
+                  const coordinatorCircuit = stats.circuits?.[coordinatorBucketKey]
+                  const imageCircuit = stats.circuits?.[imageBucketKey]
 
                   return (
                     <>

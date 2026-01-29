@@ -105,6 +105,12 @@ class Settings(BaseSettings):
     subagent_workspace_bridge_enabled: bool = Field(default=True, alias="SUBAGENT_WORKSPACE_BRIDGE_ENABLED")
     subagent_report_read_limit_chars: int = Field(default=20000, alias="SUBAGENT_REPORT_READ_LIMIT_CHARS")
     subagent_context_capsule_max_chars: int = Field(default=12000, alias="SUBAGENT_CONTEXT_CAPSULE_MAX_CHARS")
+    # When enabled, allow the coordinator to delegate additional work to an implicit
+    # general-purpose subagent (best effort, usually routed to Minimax when available).
+    subagent_general_purpose_enabled: bool = Field(
+        default=True,
+        alias="SUBAGENT_GENERAL_PURPOSE_ENABLED",
+    )
     subagent_allow_unverified_models: bool = Field(
         default=False,
         alias="SUBAGENT_ALLOW_UNVERIFIED_MODELS",
