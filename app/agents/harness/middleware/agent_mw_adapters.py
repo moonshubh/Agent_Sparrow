@@ -8,9 +8,24 @@ import time
 from dataclasses import dataclass
 from typing import Any, Dict, Optional, Tuple, Type
 
-from langchain.agents.middleware.types import AgentMiddleware, ModelRequest, ModelResponse, ToolCallRequest
 from langchain_core.messages import ToolMessage
 from loguru import logger
+
+try:  # pragma: no cover - optional dependency
+    from langchain.agents.middleware.types import (
+        AgentMiddleware,
+        ModelRequest,
+        ModelResponse,
+        ToolCallRequest,
+    )
+
+    MIDDLEWARE_AVAILABLE = True
+except Exception:  # pragma: no cover
+    AgentMiddleware = object  # type: ignore[assignment]
+    ModelRequest = object  # type: ignore[assignment]
+    ModelResponse = object  # type: ignore[assignment]
+    ToolCallRequest = object  # type: ignore[assignment]
+    MIDDLEWARE_AVAILABLE = False
 
 
 class SafeMiddleware(AgentMiddleware):
@@ -181,4 +196,3 @@ class ToolCircuitBreakerMiddleware(AgentMiddleware):
                 state["opened_until"] = now + self.cooloff_s
                 logger.warning("tool_circuit_opened", tool=tool_name, cooloff=self.cooloff_s)
             raise
-

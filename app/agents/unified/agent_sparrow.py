@@ -173,14 +173,6 @@ TASK_TYPE_PATTERNS: dict[str, list[str]] = {
         # Log-like patterns
         r"\d{4}-\d{2}-\d{2}.*(?:error|warn|info)", r"\[error\]", r"\[warn",
     ],
-    "coordinator_heavy": [
-        # Explicit complexity requests
-        r"detailed\s*analysis", r"step[\s-]*by[\s-]*step", r"comprehensive",
-        r"thorough(?:ly)?", r"in[\s-]*depth", r"deep\s*dive",
-        # Multi-part tasks
-        r"compare.*and.*contrast", r"pros?\s*(?:and|&)\s*cons?",
-        r"analyze.*multiple", r"evaluate.*options",
-    ],
 }
 
 # Pre-compile patterns for performance
@@ -300,23 +292,13 @@ def _determine_task_type(state: GraphState) -> str:
     """Determine task type from state using fast keyword classification.
 
     Routing priority:
-    1. Explicit coordinator_mode from forwarded_props (heavy/pro → coordinator_heavy)
-    2. Fast keyword classification from message content (<5ms)
-    3. Attachment-based log detection (only if keywords didn't match, ~200ms)
-    4. Default to "coordinator" (light mode)
+    1. Fast keyword classification from message content (<5ms)
+    2. Attachment-based log detection (only if keywords didn't match, ~200ms)
+    3. Default to "coordinator"
     """
     forwarded_props = getattr(state, "forwarded_props", {}) or {}
-    coordinator_mode = forwarded_props.get("coordinator_mode") or getattr(state, "coordinator_mode", None)
-    heavy_mode = isinstance(coordinator_mode, str) and coordinator_mode.lower() in {"heavy", "pro", "coordinator_heavy"}
 
-    # 1. Priority #1: Explicit coordinator_mode takes precedence
-    if heavy_mode:
-        logger.info("task_type_explicit_mode", task_type="coordinator_heavy", trigger="coordinator_mode")
-        forwarded_props["task_detection_method"] = "explicit_mode"
-        state.forwarded_props = forwarded_props
-        return "coordinator_heavy"
-
-    # 2. Fast path: keyword classification from user message (~5ms)
+    # 1. Fast path: keyword classification from user message (~5ms)
     user_message = _extract_last_user_message(state)
     fast_task = _fast_classify_task(user_message)
 
@@ -333,11 +315,7 @@ def _determine_task_type(state: GraphState) -> str:
         state.agent_type = "log_analysis"
         return "log_analysis"
 
-    if fast_task == "coordinator_heavy":
-        logger.info("task_type_fast_path", task_type="coordinator_heavy", trigger="keyword_match")
-        return "coordinator_heavy"
-
-    # 3. Slow path: attachment-based detection (only if no keyword match, ~200ms)
+    # 2. Slow path: attachment-based detection (only if no keyword match, ~200ms)
     # Skip if no attachments to avoid unnecessary processing
     if attachments:
         detection = _attachments_indicate_logs(state)
@@ -351,7 +329,7 @@ def _determine_task_type(state: GraphState) -> str:
             # Use the standard coordinator model; per-file log analysis runs via tools.
             return "coordinator"
 
-    # 4. Default: light coordinator
+    # 3. Default: coordinator
     return "coordinator"
 
 
@@ -800,15 +778,37 @@ def _build_deep_agent(state: GraphState, runtime: AgentRuntimeConfig):
         if subagent_workspace_bridge is not None:
             middleware_stack.append(subagent_workspace_bridge)
 
+        general_purpose_agent = False
+        subagent_default_model = chat_model
+        if not is_zendesk and is_minimax_available():
+            try:
+                from app.core.config import resolve_subagent_config
+                from .provider_factory import build_chat_model
+
+                config = get_models_config()
+                subagent_cfg = resolve_subagent_config(config, "_default", zendesk=is_zendesk)
+                subagent_default_model = build_chat_model(
+                    provider=subagent_cfg.provider or "openrouter",
+                    model=str(subagent_cfg.model_id),
+                    temperature=subagent_cfg.temperature,
+                    role="research",
+                )
+                general_purpose_agent = True
+            except Exception as exc:  # pragma: no cover - best effort only
+                logger.warning(
+                    "general_purpose_subagent_unavailable",
+                    error=str(exc)[:180],
+                )
+
         coordinator_middleware = SubAgentMiddleware(
-            default_model=chat_model,
+            default_model=subagent_default_model,
             default_tools=tools,
             subagents=subagents,
             default_middleware=default_middleware,
             system_prompt=_build_task_system_prompt(state),
-            # Phase 2: keep subagent behavior/tooling strictly scoped to the
-            # explicitly-declared subagents (no implicit general-purpose subagent).
-            general_purpose_agent=False,
+            # When enabled, allow the coordinator to delegate extra parallel work
+            # to an implicit general-purpose subagent (kept on Minimax when available).
+            general_purpose_agent=general_purpose_agent,
         )
         middleware_stack.append(coordinator_middleware)
         # Some providers (notably xAI) reject `name` on non-user messages. We
@@ -1677,16 +1677,11 @@ async def run_unified_agent(state: GraphState, config: Optional[RunnableConfig] 
                 logger.warning("bucket_precheck_unavailable", bucket=bucket_name, error=str(exc))
                 return False
 
-        if runtime.provider == "google" and runtime.task_type in {"coordinator_heavy", "log_analysis"}:
-            primary_bucket = (
-                "zendesk.coordinators.heavy" if is_zendesk else "coordinators.heavy"
-            )
-        else:
-            primary_bucket = coordinator_bucket_name(
-                runtime.provider,
-                with_subagents=with_subagents,
-                zendesk=is_zendesk,
-            )
+        primary_bucket = coordinator_bucket_name(
+            runtime.provider,
+            with_subagents=with_subagents,
+            zendesk=is_zendesk,
+        )
 
         slot_ok = await _reserve_bucket_slot(primary_bucket)
         if not slot_ok:

@@ -218,7 +218,7 @@ All agent prompts use a **tiered architecture** based on Google's 9-step reasoni
 
 ### Google's 9-Step Reasoning Framework (Heavy Tier)
 
-Heavy tier agents implement Google's reasoning framework:
+Agents implement a reasoning framework:
 1. **Logical Dependencies** - Analyze constraints, prerequisites, order of operations
 2. **Risk Assessment** - LOW for searches, HIGH for state-changing actions
 3. **Abductive Reasoning** - Generate 1-3 hypotheses, prioritize by likelihood
@@ -236,7 +236,6 @@ Role-based temperature in `app/agents/unified/provider_factory.py`:
 ```python
 TEMPERATURE_CONFIG = {
     "coordinator": 0.2,       # Deterministic reasoning
-    "coordinator_heavy": 0.2, # Complex reasoning
     "log_analysis": 0.1,      # High precision for error diagnosis
     "research": 0.5,          # Creative synthesis of sources
     "db_retrieval": 0.1,      # Exact pattern matching

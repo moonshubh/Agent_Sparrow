@@ -6,12 +6,10 @@ import { Button } from "@/shared/ui/button"
 import { Separator } from "@/shared/ui/separator"
 import { Badge } from "@/shared/ui/badge"
 import { rateLimitApi, type UsageStats } from "@/services/api/endpoints/rateLimitApi"
-import { apiKeyService, APIKeyType, type APIKeyListResponse } from "@/services/api/api-keys"
-import { Loader2, RefreshCw, Activity, AlertCircle, Shield } from "lucide-react"
+import { Loader2, RefreshCw, Activity, Shield } from "lucide-react"
 
 export function RateLimitsPanel() {
   const [stats, setStats] = useState<UsageStats | null>(null)
-  const [keys, setKeys] = useState<APIKeyListResponse | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [refreshing, setRefreshing] = useState(false)
@@ -23,12 +21,8 @@ export function RateLimitsPanel() {
     setLoading(true)
     setError(null)
     try {
-      const [s, k] = await Promise.all([
-        rateLimitApi.getUsageStats(),
-        apiKeyService.listAPIKeys(),
-      ])
+      const s = await rateLimitApi.getUsageStats()
       setStats(s)
-      setKeys(k)
     } catch (e: any) {
       setError(e?.message || "failed")
     } finally {
@@ -44,16 +38,22 @@ export function RateLimitsPanel() {
 
   const gridStats = useMemo(() => {
     const s = stats
-    const f = s?.flash_stats
-    const p = s?.pro_stats
-    const flashRpdLimit = f?.rpd_limit ? Math.min(f.rpd_limit, 250) : 250
+    const coordinator =
+      s?.buckets?.['coordinators.google_with_subagents'] ??
+      s?.buckets?.['coordinators.google']
+    const image = s?.buckets?.['internal.image']
+
+    const ratio = (used: number | null | undefined, limit: number | null | undefined): string => {
+      if (typeof used !== 'number' || typeof limit !== 'number') return '—'
+      return `${used}/${limit}`
+    }
     return [
-      { value: f ? `${f.rpm_used}/${f.rpm_limit}` : '—', label: 'Gemini Flash RPM' },
-      { value: f ? `${f.rpd_used}/${flashRpdLimit}` : '—', label: 'Gemini Flash RPD' },
-      { value: p ? `${p.rpm_used}/${p.rpm_limit}` : '—', label: 'Gemini Pro RPM' },
-      { value: p ? `${p.rpd_used}/${p.rpd_limit}` : '—', label: 'Gemini Pro RPD' },
-      { value: '1000 /month', label: 'Tavily Wb/search' },
-      { value: '200 RPD', label: 'GPT‑5 mini RPD' },
+      { value: ratio(coordinator?.rpm_used, coordinator?.rpm_limit), label: 'Gemini 3 Flash RPM' },
+      { value: ratio(coordinator?.tpm_used, coordinator?.tpm_limit ?? null), label: 'Gemini 3 Flash TPM' },
+      { value: ratio(coordinator?.rpd_used, coordinator?.rpd_limit), label: 'Gemini 3 Flash RPD' },
+      { value: ratio(image?.rpm_used, image?.rpm_limit), label: 'Gemini 3 Pro Image RPM' },
+      { value: ratio(image?.tpm_used, image?.tpm_limit ?? null), label: 'Gemini 3 Pro Image TPM' },
+      { value: ratio(image?.rpd_used, image?.rpd_limit), label: 'Gemini 3 Pro Image RPD' },
     ]
   }, [stats])
 
@@ -130,14 +130,32 @@ export function RateLimitsPanel() {
             <h3 className="text-sm font-medium mb-2 flex items-center gap-2"><Shield className="h-4 w-4"/> Circuit Breakers</h3>
             {stats ? (
               <ul className="text-sm text-muted-foreground space-y-1">
-                <li>
-                  Flash: <Badge variant={stats.flash_circuit.state === 'open' ? 'destructive' : 'secondary'} className="mx-1">{stats.flash_circuit.state}</Badge>
-                  failures={stats.flash_circuit.failure_count}
-                </li>
-                <li>
-                  Pro: <Badge variant={stats.pro_circuit.state === 'open' ? 'destructive' : 'secondary'} className="mx-1">{stats.pro_circuit.state}</Badge>
-                  failures={stats.pro_circuit.failure_count}
-                </li>
+                {(() => {
+                  const coordinator =
+                    stats.buckets?.['coordinators.google_with_subagents'] ??
+                    stats.buckets?.['coordinators.google']
+                  const coordinatorCircuit = coordinator ? stats.circuits?.[coordinator.bucket] : undefined
+                  const imageCircuit = stats.circuits?.['internal.image']
+
+                  return (
+                    <>
+                      <li>
+                        Coordinator:{' '}
+                        <Badge variant={coordinatorCircuit?.state === 'open' ? 'destructive' : 'secondary'} className="mx-1">
+                          {coordinatorCircuit?.state ?? '—'}
+                        </Badge>
+                        failures={coordinatorCircuit?.failure_count ?? '—'}
+                      </li>
+                      <li>
+                        Image:{' '}
+                        <Badge variant={imageCircuit?.state === 'open' ? 'destructive' : 'secondary'} className="mx-1">
+                          {imageCircuit?.state ?? '—'}
+                        </Badge>
+                        failures={imageCircuit?.failure_count ?? '—'}
+                      </li>
+                    </>
+                  )
+                })()}
               </ul>
             ) : (
               <div className="text-sm text-muted-foreground">No data</div>

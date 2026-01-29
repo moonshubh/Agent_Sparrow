@@ -50,8 +50,9 @@ class SparrowRateLimitMiddleware(AgentMiddleware if AGENT_MIDDLEWARE_AVAILABLE e
     2. Automatically fall back to lower-tier models when quota exhausted
     3. Track usage statistics for observability
 
-    The middleware uses a fallback chain:
-    gemini-2.5-pro -> gemini-2.5-flash -> gemini-2.5-flash-lite -> (fail)
+    The middleware uses a fallback chain supplied by the ModelRegistry.
+    This deployment treats the configured Google coordinator as the primary
+    model and will not automatically downgrade unless the registry provides a chain.
 
     Usage:
         middleware = SparrowRateLimitMiddleware()

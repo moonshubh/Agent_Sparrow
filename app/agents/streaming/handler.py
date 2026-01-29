@@ -12,7 +12,7 @@ import time
 from contextlib import nullcontext
 from typing import Any, TYPE_CHECKING
 
-from langchain_core.messages import BaseMessage
+from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 from loguru import logger
 import json
 import httpx
@@ -21,6 +21,11 @@ try:
     from langchain_google_genai.chat_models import ChatGoogleGenerativeAIError
 except Exception:  # pragma: no cover - optional dependency
     ChatGoogleGenerativeAIError = None
+
+try:
+    from google.genai.errors import ServerError as GoogleGenaiServerError
+except Exception:  # pragma: no cover - optional dependency
+    GoogleGenaiServerError = None
 
 try:
     from app.agents.unified.quota_manager import QuotaExceededError
@@ -403,6 +408,45 @@ class StreamEventHandler:
             return True
         return False
 
+    @staticmethod
+    def _is_invalid_system_role_error(error: Exception) -> bool:
+        """Detect OpenAI-compatible providers that reject role=system in messages."""
+        message = str(error).lower()
+        return "invalid message role" in message and "system" in message
+
+    @staticmethod
+    def _coerce_system_messages_to_user(messages: list[BaseMessage]) -> list[BaseMessage]:
+        """Rewrite SystemMessage content into a HumanMessage prefix.
+
+        Some OpenAI-compatible endpoints reject role=system in the messages array.
+        When that happens (most often during fallback to an alternate provider),
+        we preserve the system content by inlining it into the first user turn.
+        """
+        system_parts: list[str] = []
+        non_system: list[BaseMessage] = []
+        for message in messages:
+            if isinstance(message, SystemMessage):
+                # Best-effort: coerce content into a compact string.
+                content = message.content
+                if isinstance(content, str):
+                    system_parts.append(content.strip())
+                else:
+                    system_parts.append(str(content).strip())
+                continue
+            non_system.append(message)
+
+        system_text = "\n\n".join(part for part in system_parts if part).strip()
+        if not system_text:
+            return list(messages)
+
+        prefix = f"SYSTEM INSTRUCTIONS:\n{system_text}"
+        for idx, message in enumerate(non_system):
+            if isinstance(message, HumanMessage):
+                coerced = HumanMessage(content=f"{prefix}\n\n{message.content}")
+                return [*non_system[:idx], coerced, *non_system[idx + 1 :]]
+
+        return [HumanMessage(content=prefix), *non_system]
+
     async def stream_and_process(self) -> dict[str, Any] | None:
         """Main streaming loop with event processing.
 
@@ -433,6 +477,23 @@ class StreamEventHandler:
         except Exception as e:
             logger.opt(exception=True).error("Error during agent streaming: {}", e)
 
+            # Track streaming failure in scratchpad for downstream decision-making.
+            try:
+                scratchpad = getattr(self.state, "scratchpad", None)
+                if not isinstance(scratchpad, dict):
+                    scratchpad = {}
+                    self.state.scratchpad = scratchpad
+                system_bucket = scratchpad.setdefault("_system", {})
+                system_bucket["streaming_failure"] = {
+                    "error_type": type(e).__name__,
+                    "error": truncate_error_message(e),
+                    "google_overloaded": self._is_google_overloaded_error(e),
+                    "fallback_attempted": False,
+                    "fallback_succeeded": False,
+                }
+            except Exception:  # pragma: no cover - best effort only
+                pass
+
             # Emit warning event to notify UI that streaming failed
             self.emitter.emit_custom_event(
                 "agent_thinking_trace",
@@ -456,6 +517,8 @@ class StreamEventHandler:
             retryable_exceptions: list[type] = [ConnectionError, TimeoutError, OSError, httpx.ReadTimeout]
             if ChatGoogleGenerativeAIError is not None:
                 retryable_exceptions.append(ChatGoogleGenerativeAIError)
+            if GoogleGenaiServerError is not None:
+                retryable_exceptions.append(GoogleGenaiServerError)
             if QuotaExceededError is not None:
                 retryable_exceptions.append(QuotaExceededError)
 
@@ -473,6 +536,13 @@ class StreamEventHandler:
                 fallback_agent = self.agent
                 fallback_config = self.config
                 fallback_meta: dict[str, Any] | None = None
+
+                try:
+                    system_bucket = (self.state.scratchpad or {}).get("_system") or {}
+                    if isinstance(system_bucket, dict) and isinstance(system_bucket.get("streaming_failure"), dict):
+                        system_bucket["streaming_failure"]["fallback_attempted"] = True
+                except Exception:  # pragma: no cover - best effort only
+                    pass
 
                 if self.fallback_agent_factory and self._is_google_overloaded_error(e):
                     try:
@@ -504,10 +574,35 @@ class StreamEventHandler:
                             )
 
                 async def _fallback_invoke() -> Any:
-                    return await fallback_agent.ainvoke(
-                        fallback_inputs,
-                        config=fallback_config,
-                    )
+                    try:
+                        return await fallback_agent.ainvoke(
+                            fallback_inputs,
+                            config=fallback_config,
+                        )
+                    except Exception as inner_exc:
+                        # Some OpenAI-compatible endpoints reject `role=system` inside messages.
+                        # If we see that error, coerce SystemMessage content into the first user message
+                        # and retry once immediately.
+                        if self._is_invalid_system_role_error(inner_exc):
+                            try:
+                                coerced_messages = self._coerce_system_messages_to_user(
+                                    list(fallback_inputs.get("messages") or [])
+                                )
+                                coerced_inputs = {**fallback_inputs, "messages": coerced_messages}
+                            except Exception:  # pragma: no cover - defensive
+                                raise inner_exc
+
+                            logger.warning(
+                                "fallback_system_role_coerced",
+                                provider=(fallback_meta or {}).get("provider"),
+                                model=(fallback_meta or {}).get("model"),
+                            )
+                            return await fallback_agent.ainvoke(
+                                coerced_inputs,
+                                config=fallback_config,
+                            )
+
+                        raise
 
                 self.final_output = await retry_with_backoff(
                     _fallback_invoke,
@@ -536,12 +631,31 @@ class StreamEventHandler:
                     },
                 )
 
+                try:
+                    system_bucket = (self.state.scratchpad or {}).get("_system") or {}
+                    if isinstance(system_bucket, dict) and isinstance(system_bucket.get("streaming_failure"), dict):
+                        system_bucket["streaming_failure"]["fallback_succeeded"] = True
+                except Exception:  # pragma: no cover - best effort only
+                    pass
+
             except Exception as fallback_error:
                 # Emit error event if fallback also fails after all retries
                 logger.opt(exception=True).error(
                     "Fallback invoke failed after retries: {}",
                     fallback_error,
                 )
+                try:
+                    system_bucket = (self.state.scratchpad or {}).get("_system") or {}
+                    if isinstance(system_bucket, dict) and isinstance(system_bucket.get("streaming_failure"), dict):
+                        system_bucket["streaming_failure"]["fallback_succeeded"] = False
+                        system_bucket["streaming_failure"]["fallback_error_type"] = type(
+                            fallback_error
+                        ).__name__
+                        system_bucket["streaming_failure"]["fallback_error"] = truncate_error_message(
+                            fallback_error
+                        )
+                except Exception:  # pragma: no cover - best effort only
+                    pass
                 self.emitter.emit_custom_event(
                     "agent_thinking_trace",
                     {
@@ -560,8 +674,23 @@ class StreamEventHandler:
                         },
                     },
                 )
-                # Don't re-raise, return None to indicate failure
-                self.final_output = None
+                # Avoid double-invoking the same provider upstream when we already
+                # attempted a non-streaming fallback. Return a user-visible error
+                # payload so the caller can normalize it like any other agent output.
+                if self._is_google_overloaded_error(e):
+                    self.final_output = {
+                        "output": (
+                            "The model provider is temporarily overloaded. "
+                            "Please try again in a few seconds."
+                        )
+                    }
+                else:
+                    self.final_output = {
+                        "output": (
+                            "The request failed while streaming, and automatic recovery "
+                            "also failed. Please try again."
+                        )
+                    }
 
         return self.final_output
 

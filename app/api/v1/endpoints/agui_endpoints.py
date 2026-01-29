@@ -679,7 +679,6 @@ def _merge_agui_context(
         "provider": provider or "unknown",
         "model": model or "unknown",
         "agent_type": agent_type or "primary",
-        "coordinator_mode": "heavy" if model and "pro" in model.lower() else "light",
     }
 
     # Feature flags for tracking usage patterns
@@ -710,11 +709,9 @@ def _merge_agui_context(
     if attachments:
         tag_candidates.append("attachments:true")
 
-    # Model and coordinator mode tags
+    # Model tags
     if model:
         tag_candidates.append(f"model:{model}")
-        coordinator_mode = "heavy" if "pro" in model.lower() else "light"
-        tag_candidates.append(f"coordinator_mode:{coordinator_mode}")
 
     # Agent type and task tags
     if agent_type:
