@@ -57,30 +57,36 @@ const AuthenticatedImage = ({
 
     let active = true;
     let objectUrl: string | null = null;
+    const controller = new AbortController();
 
     const fetchAsset = async () => {
       const token = await getAuthToken();
       const resp = await fetch(assetUrl, {
         headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+        signal: controller.signal,
       });
       if (!resp.ok) {
         throw new Error(`Asset fetch failed (${resp.status})`);
       }
       const blob = await resp.blob();
-      objectUrl = URL.createObjectURL(blob);
+      const newObjectUrl = URL.createObjectURL(blob);
       if (active) {
-        setBlobUrl(objectUrl);
+        objectUrl = newObjectUrl;
+        setBlobUrl(newObjectUrl);
+      } else {
+        URL.revokeObjectURL(newObjectUrl);
       }
     };
 
-    fetchAsset().catch(() => {
-      if (active) {
-        setBlobUrl(null);
-      }
+    fetchAsset().catch((err) => {
+      if (!active) return;
+      if (err instanceof DOMException && err.name === 'AbortError') return;
+      setBlobUrl(null);
     });
 
     return () => {
       active = false;
+      controller.abort();
       if (objectUrl) {
         URL.revokeObjectURL(objectUrl);
       }

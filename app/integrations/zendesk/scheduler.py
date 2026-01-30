@@ -1597,12 +1597,12 @@ def _queue_post_resolution_learning(
 
 
 _ZENDESK_ATTACHMENT_URL_PATTERNS: tuple[re.Pattern[str], ...] = (
-    re.compile(r"https?://[\\w.-]+\\.zendesk\\.com/attachments/[^\\s)\\]]+", re.IGNORECASE),
+    re.compile(r"https?://[\w.-]+\.zendesk\.com/attachments/[^\s)\]]+", re.IGNORECASE),
     re.compile(
-        r"https?://[\\w.-]+\\.zendesk\\.com/agent/tickets/\\d+/attachments/[^\\s)\\]]+",
+        r"https?://[\w.-]+\.zendesk\.com/agent/tickets/\d+/attachments/[^\s)\]]+",
         re.IGNORECASE,
     ),
-    re.compile(r"https?://[\\w.-]+\\.zendesk\\.com/api/v2/attachments/[^\\s)\\]]+", re.IGNORECASE),
+    re.compile(r"https?://[\w.-]+\.zendesk\.com/api/v2/attachments/[^\s)\]]+", re.IGNORECASE),
 )
 
 

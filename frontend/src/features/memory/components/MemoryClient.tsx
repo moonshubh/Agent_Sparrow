@@ -150,6 +150,10 @@ export default function MemoryClient() {
         limit: 200,
       });
 
+      if (!result.queued) {
+        toast.error(result.message || 'Import could not be queued');
+        return;
+      }
       const taskLabel = result.task_id ? ` (task ${result.task_id})` : '';
       toast.success(result.message || `Import queued${taskLabel}`);
       refetchStats();

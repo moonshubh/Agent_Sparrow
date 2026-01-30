@@ -1741,14 +1741,6 @@ async def web_search_tool(
             topic=topic,
         )
 
-    if _TAVILY_QUOTA_EXHAUSTED:
-        return {
-            "error": "web_search_failed",
-            "message": "Tavily quota exhausted in this process. Use Minimax or Firecrawl instead.",
-            "quota_exceeded": True,
-            "fallback_suggestion": "Use minimax_web_search or firecrawl_search for web discovery.",
-        }
-
     max_retries = 3
     tavily = _tavily_client()
 
@@ -1766,6 +1758,13 @@ async def web_search_tool(
         except Exception:
             return cached
     _cache_hit_miss(False, cache_key)
+    if _TAVILY_QUOTA_EXHAUSTED:
+        return {
+            "error": "web_search_failed",
+            "message": "Tavily quota exhausted in this process. Use Minimax or Firecrawl instead.",
+            "quota_exceeded": True,
+            "fallback_suggestion": "Use minimax_web_search or firecrawl_search for web discovery.",
+        }
 
     for attempt in range(max_retries):
         try:

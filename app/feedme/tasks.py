@@ -1281,14 +1281,14 @@ def _truncate_text(text: str, max_chars: int) -> str:
     return text[:max_chars].rstrip() + "…"
 
 
-def _extract_public_comment_text(comment: Dict[str, Any]) -> str:
+def _extract_public_comment_text(comment: dict[str, Any]) -> str:
     body = comment.get("body") or comment.get("html_body") or ""
     if not isinstance(body, str):
         return ""
     return _strip_html(body)
 
 
-def _extract_last_public_comment_at(comments: List[Dict[str, Any]]) -> Optional[str]:
+def _extract_last_public_comment_at(comments: list[dict[str, Any]]) -> str | None:
     latest = None
     for comment in comments:
         if not isinstance(comment, dict):
@@ -1300,7 +1300,7 @@ def _extract_last_public_comment_at(comments: List[Dict[str, Any]]) -> Optional[
             continue
         try:
             dt = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
-        except Exception:
+        except ValueError:
             continue
         if latest is None or dt > latest[0]:
             latest = (dt, created_at)
@@ -1356,7 +1356,7 @@ async def _analyze_log_file(
     file_name: str,
     content: str,
     question: str,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     from app.agents.unified.tools import log_diagnoser_tool
 
     result = await log_diagnoser_tool(
@@ -1368,9 +1368,9 @@ async def _analyze_log_file(
 
 
 @celery_app.task(bind=True, base=CallbackTask, name='app.feedme.tasks.import_zendesk_tagged')
-def import_zendesk_tagged(self, tag: str = "mb_playbook", limit: int = 200) -> Dict[str, Any]:
+def import_zendesk_tagged(self, tag: str = "mb_playbook", limit: int = 200) -> dict[str, Any]:
     """Queue ingestion of solved/closed Zendesk tickets tagged for MB_playbook learning."""
-    async def _run() -> Dict[str, Any]:
+    async def _run() -> dict[str, Any]:
         from app.integrations.zendesk.client import ZendeskClient, ZendeskRateLimitError
         from app.integrations.zendesk.attachments import (
             fetch_ticket_attachments,
@@ -1391,7 +1391,7 @@ def import_zendesk_tagged(self, tag: str = "mb_playbook", limit: int = 200) -> D
             subdomain=str(settings.zendesk_subdomain),
             email=str(settings.zendesk_email),
             api_token=str(settings.zendesk_api_token),
-            dry_run=False,
+            dry_run=bool(getattr(settings, "zendesk_dry_run", True)),
         )
 
         tag_value = (tag or "mb_playbook").strip()
@@ -1401,7 +1401,7 @@ def import_zendesk_tagged(self, tag: str = "mb_playbook", limit: int = 200) -> D
             f"type:ticket tags:{tag_value} status:solved",
             f"type:ticket tags:{tag_value} status:closed",
         ]
-        tickets: list[Dict[str, Any]] = []
+        tickets: list[dict[str, Any]] = []
         for q in queries:
             try:
                 batch = await asyncio.to_thread(zc.search_tickets, q, per_page=100, max_pages=10)
@@ -1412,7 +1412,7 @@ def import_zendesk_tagged(self, tag: str = "mb_playbook", limit: int = 200) -> D
             except Exception as exc:
                 logger.warning("zendesk_search_failed query=%s error=%s", q, str(exc)[:180])
 
-        deduped: Dict[str, Dict[str, Any]] = {}
+        deduped: dict[str, dict[str, Any]] = {}
         for item in tickets:
             tid = item.get("id")
             if tid is None:
@@ -1450,7 +1450,7 @@ def import_zendesk_tagged(self, tag: str = "mb_playbook", limit: int = 200) -> D
                 comments = []
             last_public_comment_at = _extract_last_public_comment_at(comments or [])
 
-            public_comments: List[str] = []
+            public_comments: list[str] = []
             for comment in comments or []:
                 if not isinstance(comment, dict):
                     continue
@@ -1469,8 +1469,8 @@ def import_zendesk_tagged(self, tag: str = "mb_playbook", limit: int = 200) -> D
             comment_excerpt = "\n".join(comment_excerpt_lines).strip()
 
             attachments = []
-            image_assets: list[Dict[str, Any]] = []
-            log_findings: list[Dict[str, Any]] = []
+            image_assets: list[dict[str, Any]] = []
+            log_findings: list[dict[str, Any]] = []
             try:
                 attachments = await asyncio.to_thread(
                     fetch_ticket_attachments,
@@ -1553,7 +1553,7 @@ def import_zendesk_tagged(self, tag: str = "mb_playbook", limit: int = 200) -> D
                 f"https://{subdomain}.zendesk.com/agent/tickets/{ticket_id}" if subdomain else ""
             )
 
-            lines: List[str] = []
+            lines: list[str] = []
             if subject:
                 lines.append(f"Zendesk Ticket {ticket_id}: {subject}")
             else:

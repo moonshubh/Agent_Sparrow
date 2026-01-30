@@ -30,7 +30,7 @@ from fastapi.responses import RedirectResponse, Response
 
 from app.core.security import get_current_user, TokenPayload
 from app.core.settings import settings
-from app.db.supabase.client import get_supabase_client
+from app.db.supabase.client import get_supabase_client, SupabaseClient
 from app.memory.title import derive_memory_title, ensure_memory_title
 from app.memory.memory_ui_service import MemoryUIService, get_memory_ui_service as _get_service
 
@@ -157,21 +157,21 @@ async def get_memory_me(
 async def get_memory_asset(
     bucket: str,
     object_path: str,
-    admin_user: Annotated[TokenPayload, Depends(require_admin)],
+    _admin_user: Annotated[TokenPayload, Depends(require_admin)],
+    supabase: SupabaseClient = Depends(get_supabase_client),
 ) -> Response:
     if not bucket or not object_path:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Asset not found")
 
-    supabase = get_supabase_client()
     try:
         data = await supabase._exec(
             lambda: supabase.client.storage.from_(bucket).download(object_path)
         )
     except Exception as exc:
         logger.debug("memory_asset_download_failed bucket=%s path=%s error=%s", bucket, object_path, str(exc)[:180])
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Asset not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Asset not found") from exc
 
-    if not data:
+    if data is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Asset not found")
 
     mime_type, _ = mimetypes.guess_type(object_path)
@@ -254,39 +254,6 @@ async def search_memories_text(
     agent_id: str | None = Query(default=None),
     tenant_id: str | None = Query(default=None),
 ) -> List[MemoryRecord]:
-    supabase = service._get_supabase()
-    trimmed = (query or "").strip()
-    if not trimmed:
-        return []
-
-    escaped = _escape_like_pattern(trimmed)
-    pattern = f"%{escaped}%"
-
-    try:
-        q = (
-            supabase.client.table("memories")
-            .select(service.MEMORY_SELECT_COLUMNS)
-            .ilike("content", pattern)
-            .gte("confidence_score", float(min_confidence))
-            .order("confidence_score", desc=True)
-            .limit(int(limit))
-        )
-        if agent_id:
-            q = q.eq("agent_id", agent_id)
-        if tenant_id:
-            q = q.eq("tenant_id", tenant_id)
-
-        resp = await supabase._exec(lambda: q.execute())
-        rows = list(resp.data or [])
-        return rows  # type: ignore[return-value]
-    except Exception as exc:
-        logger.exception("Error searching memories: %s", exc)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to search memories",
-        )
-
-
 @router.get(
     "/entities",
     response_model=List[MemoryEntityRecord],
@@ -3906,7 +3873,7 @@ async def import_memory_sources(
 )
 async def import_zendesk_tagged(
     request: ImportZendeskTaggedRequest,
-    admin_user: Annotated[TokenPayload, Depends(require_admin)],
+    _admin_user: Annotated[TokenPayload, Depends(require_admin)],
 ) -> ImportZendeskTaggedResponse:
     try:
         from app.feedme.tasks import import_zendesk_tagged as import_task
@@ -3918,365 +3885,11 @@ async def import_zendesk_tagged(
             message="Zendesk import queued",
         )
     except Exception as exc:
-        logger.exception("Failed to queue Zendesk import: %s", exc)
+        logger.exception("Failed to queue Zendesk import")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to queue Zendesk import",
-        )
-    supabase = service._get_supabase()
-
-    agent_id = getattr(settings, "memory_ui_agent_id", "sparrow") or "sparrow"
-    tenant_id = getattr(settings, "memory_ui_tenant_id", "mailbot") or "mailbot"
-    from app.security.pii_redactor import redact_pii, redact_pii_from_dict
-
-    def _looks_like_duplicate(exc: Exception) -> bool:
-        msg = str(exc).lower()
-        return (
-            "duplicate key value" in msg
-            or "unique constraint" in msg
-            or "23505" in msg
-            or "conflict" in msg and "id" in msg
-        )
-
-    async def _insert_memory(payload: Dict[str, Any]) -> bool:
-        try:
-            await supabase._exec(
-                lambda: supabase.client.table("memories").insert(payload).execute()
-            )
-            return True
-        except Exception as exc:
-            if _looks_like_duplicate(exc):
-                return False
-            raise
-
-    issue_imported = issue_skipped = issue_failed = 0
-    playbook_imported = playbook_skipped = playbook_failed = 0
-    playbook_files_imported = playbook_files_skipped = playbook_files_failed = 0
-    mem0_primary_imported = mem0_primary_skipped = mem0_primary_failed = 0
-
-    # ------------------------------------------------------------------------
-    # 1) Issue resolutions (pattern store) -> memories (reuse embeddings)
-    # ------------------------------------------------------------------------
-    if request.include_issue_resolutions:
-        try:
-            resp = await supabase._exec(
-                lambda: supabase.client.table("issue_resolutions")
-                .select(
-                    "id,ticket_id,category,problem_summary,solution_summary,was_escalated,kb_articles_used,macros_used,embedding,created_at"
-                )
-                .order("created_at", desc=True)
-                .limit(int(request.limit))
-                .execute()
-            )
-            rows = list(resp.data or [])
-        except Exception as exc:
-            logger.exception(
-                "memory_import_issue_resolutions_query_failed: %s", str(exc)[:180]
-            )
-            rows = []
-
-        for row in rows:
-            try:
-                embedding = row.get("embedding")
-                if not isinstance(embedding, list) or len(embedding) != 3072:
-                    issue_failed += 1
-                    continue
-
-                content = "\n".join(
-                    [
-                        f"Category: {row.get('category')}",
-                        f"Problem: {row.get('problem_summary')}",
-                        f"Solution: {row.get('solution_summary')}",
-                    ]
-                ).strip()
-
-                payload = {
-                    "id": row.get("id"),
-                    "content": redact_pii(content),
-                    "metadata": ensure_memory_title(
-                        redact_pii_from_dict(
-                            {
-                                "source": "issue_resolution_store",
-                                "resolution_id": row.get("id"),
-                                "ticket_id": row.get("ticket_id"),
-                                "category": row.get("category"),
-                                "was_escalated": row.get("was_escalated", False),
-                                "kb_articles_used": row.get("kb_articles_used") or [],
-                                "macros_used": row.get("macros_used") or [],
-                            }
-                        ),
-                        content=redact_pii(content),
-                    ),
-                    "source_type": "auto_extracted",
-                    "agent_id": agent_id,
-                    "tenant_id": tenant_id,
-                    "embedding": embedding,
-                    "created_at": row.get("created_at"),
-                    "updated_at": row.get("created_at"),
-                }
-
-                inserted = await _insert_memory(payload)
-                if inserted:
-                    issue_imported += 1
-                else:
-                    issue_skipped += 1
-            except Exception as exc:
-                issue_failed += 1
-                logger.debug(
-                    "memory_import_issue_resolution_failed: %s", str(exc)[:180]
-                )
-
-    # ------------------------------------------------------------------------
-    # 2) Playbook learned entries -> memories (optional embeddings)
-    # ------------------------------------------------------------------------
-    if request.include_playbook_entries:
-        statuses = request.playbook_statuses or ["approved", "pending_review"]
-        try:
-            q = (
-                supabase.client.table("playbook_learned_entries")
-                .select(
-                    "id,conversation_id,category,problem_summary,resolution_steps,final_solution,why_it_worked,key_learnings,status,quality_score,created_at"
-                )
-                .order("created_at", desc=True)
-                .limit(int(request.limit))
-            )
-            if statuses:
-                q = q.in_("status", statuses)
-            resp = await supabase._exec(lambda: q.execute())
-            rows = list(resp.data or [])
-        except Exception as exc:
-            logger.exception(
-                "memory_import_playbook_entries_query_failed: %s", str(exc)[:180]
-            )
-            rows = []
-
-        for row in rows:
-            try:
-                steps = row.get("resolution_steps") or []
-                step_lines: List[str] = []
-                if isinstance(steps, list):
-                    for raw in steps[:5]:
-                        if not isinstance(raw, dict):
-                            continue
-                        action = str(raw.get("action") or "").strip()
-                        rationale = str(raw.get("rationale") or "").strip()
-                        if not action:
-                            continue
-                        step_lines.append(
-                            f"- {action}{f' — {rationale}' if rationale else ''}"
-                        )
-
-                content_lines = [
-                    f"Category: {row.get('category')}",
-                    f"Problem: {row.get('problem_summary')}",
-                    f"Solution: {row.get('final_solution')}",
-                ]
-                why = str(row.get("why_it_worked") or "").strip()
-                if why:
-                    content_lines.append(f"Why it worked: {why}")
-                learnings = str(row.get("key_learnings") or "").strip()
-                if learnings:
-                    content_lines.append(f"Key learnings: {learnings}")
-                if step_lines:
-                    content_lines.append("Resolution steps:\n" + "\n".join(step_lines))
-
-                content = "\n".join(line for line in content_lines if line).strip()
-                content = redact_pii(content)
-
-                embedding = None
-                if request.include_playbook_embeddings:
-                    embedding = await service.generate_embedding(content)
-
-                payload: Dict[str, Any] = {
-                    "id": row.get("id"),
-                    "content": content,
-                    "metadata": ensure_memory_title(
-                        redact_pii_from_dict(
-                            {
-                                "source": "playbook_learned_entry",
-                                "playbook_entry_id": row.get("id"),
-                                "conversation_id": row.get("conversation_id"),
-                                "category": row.get("category"),
-                                "status": row.get("status"),
-                                "quality_score": row.get("quality_score"),
-                            }
-                        ),
-                        content=content,
-                    ),
-                    "source_type": "auto_extracted",
-                    "agent_id": agent_id,
-                    "tenant_id": tenant_id,
-                    "created_at": row.get("created_at"),
-                    "updated_at": row.get("created_at"),
-                }
-                if embedding is not None:
-                    payload["embedding"] = embedding
-
-                inserted = await _insert_memory(payload)
-                if inserted:
-                    playbook_imported += 1
-                else:
-                    playbook_skipped += 1
-            except Exception as exc:
-                playbook_failed += 1
-                logger.debug("memory_import_playbook_entry_failed: %s", str(exc)[:180])
-
-    # ------------------------------------------------------------------------
-    # 3) Workspace playbook files (/playbooks/*) -> memories (no embeddings)
-    # ------------------------------------------------------------------------
-    if request.include_playbook_files:
-        try:
-            resp = await supabase._exec(
-                lambda: supabase.client.table("store")
-                .select("prefix,key,value,created_at")
-                .like("prefix", "workspace:global:playbooks%")
-                .order("created_at", desc=True)
-                .limit(int(request.limit))
-                .execute()
-            )
-            rows = list(resp.data or [])
-        except Exception as exc:
-            logger.exception(
-                "memory_import_playbook_files_query_failed: %s", str(exc)[:180]
-            )
-            rows = []
-
-        for row in rows:
-            try:
-                prefix = str(row.get("prefix") or "").strip()
-                key = str(row.get("key") or "").strip()
-                raw_value = row.get("value")
-
-                content_value = ""
-                if isinstance(raw_value, dict):
-                    content_value = str(raw_value.get("content") or "").strip()
-                elif isinstance(raw_value, str):
-                    content_value = raw_value.strip()
-                else:
-                    try:
-                        content_value = json.dumps(raw_value) if raw_value is not None else ""
-                    except Exception:
-                        content_value = ""
-
-                if not prefix or not key or not content_value:
-                    playbook_files_failed += 1
-                    continue
-
-                path = f"{prefix}/{key}"
-                header = f"Playbook File: {path}\n\n"
-                max_len = 50000
-                trimmed_body = content_value[: max(0, max_len - len(header))].rstrip()
-                content = redact_pii((header + trimmed_body).strip())
-
-                payload = {
-                    "id": str(uuid5(NAMESPACE_URL, f"playbook_file:{path}")),
-                    "content": content,
-                    "metadata": ensure_memory_title(
-                        redact_pii_from_dict(
-                            {
-                                "source": "playbook_file",
-                                "path": path,
-                                "prefix": prefix,
-                                "key": key,
-                            }
-                        ),
-                        content=content,
-                    ),
-                    "source_type": "auto_extracted",
-                    "agent_id": agent_id,
-                    "tenant_id": tenant_id,
-                    "created_at": row.get("created_at"),
-                    "updated_at": row.get("created_at"),
-                }
-
-                inserted = await _insert_memory(payload)
-                if inserted:
-                    playbook_files_imported += 1
-                else:
-                    playbook_files_skipped += 1
-            except Exception as exc:
-                playbook_files_failed += 1
-                logger.debug("memory_import_playbook_file_failed: %s", str(exc)[:180])
-
-    # ------------------------------------------------------------------------
-    # 4) mem0 primary facts -> memories (no embeddings; deterministic IDs)
-    # ------------------------------------------------------------------------
-    if request.include_mem0_primary:
-        try:
-            from app.memory.service import memory_service
-
-            mem0_agent_id = getattr(settings, "memory_ui_agent_id", "sparrow") or "sparrow"
-            mem0_filters = {"tenant_id": tenant_id}
-            mem0_rows = await memory_service.list_primary_memories(
-                agent_id=mem0_agent_id,
-                limit=int(request.limit),
-                filters=mem0_filters,
-            )
-        except Exception as exc:
-            logger.exception(
-                "memory_import_mem0_primary_query_failed: %s", str(exc)[:180]
-            )
-            mem0_rows = []
-
-        for row in mem0_rows:
-            try:
-                mem0_id = row.get("id")
-                mem0_memory = row.get("memory")
-                mem0_meta = row.get("metadata") or {}
-
-                if not mem0_id or not isinstance(mem0_memory, str) or not mem0_memory.strip():
-                    mem0_primary_failed += 1
-                    continue
-
-                stable_id = str(uuid5(NAMESPACE_URL, f"mem0_primary:{mem0_id}"))
-                content = redact_pii(mem0_memory.strip())
-
-                payload = {
-                    "id": stable_id,
-                    "content": content,
-                    "metadata": ensure_memory_title(
-                        redact_pii_from_dict(
-                            {
-                                "source": "mem0_primary",
-                                "mem0_id": str(mem0_id),
-                                "mem0_agent_id": mem0_agent_id,
-                                "mem0_collection": getattr(settings, "memory_collection_primary", "mem_primary"),
-                                "original_metadata": mem0_meta,
-                            }
-                        ),
-                        content=content,
-                    ),
-                    "source_type": "auto_extracted",
-                    "agent_id": agent_id,
-                    "tenant_id": tenant_id,
-                    "created_at": datetime.now(timezone.utc).isoformat(),
-                    "updated_at": datetime.now(timezone.utc).isoformat(),
-                }
-
-                inserted = await _insert_memory(payload)
-                if inserted:
-                    mem0_primary_imported += 1
-                else:
-                    mem0_primary_skipped += 1
-            except Exception as exc:
-                mem0_primary_failed += 1
-                logger.debug("memory_import_mem0_primary_failed: %s", str(exc)[:180])
-
-    return ImportMemorySourcesResponse(
-        issue_resolutions_imported=issue_imported,
-        issue_resolutions_skipped=issue_skipped,
-        issue_resolutions_failed=issue_failed,
-        playbook_entries_imported=playbook_imported,
-        playbook_entries_skipped=playbook_skipped,
-        playbook_entries_failed=playbook_failed,
-        playbook_files_imported=playbook_files_imported,
-        playbook_files_skipped=playbook_files_skipped,
-        playbook_files_failed=playbook_files_failed,
-        mem0_primary_imported=mem0_primary_imported,
-        mem0_primary_skipped=mem0_primary_skipped,
-        mem0_primary_failed=mem0_primary_failed,
-    )
-
+        ) from exc
 
 @router.get(
     "/exports/{export_id}/download",
