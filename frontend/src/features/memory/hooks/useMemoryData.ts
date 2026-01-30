@@ -25,6 +25,7 @@ import type {
   ListMemoriesRequest,
   ListMemoriesResponse,
   ImportMemorySourcesRequest,
+  ImportZendeskTaggedRequest,
   UpdateRelationshipRequest,
   MergeRelationshipsRequest,
   SplitRelationshipPreviewRequest,
@@ -397,6 +398,25 @@ export function useImportMemorySources() {
   return useMutation({
     mutationFn: (request: ImportMemorySourcesRequest) =>
       memoryAPI.importMemorySources(request),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: memoryKeys.lists() });
+      queryClient.invalidateQueries({ queryKey: memoryKeys.searches() });
+      queryClient.invalidateQueries({ queryKey: memoryKeys.stats() });
+      queryClient.invalidateQueries({ queryKey: memoryKeys.graphBase() });
+      queryClient.invalidateQueries({ queryKey: memoryKeys.duplicatesBase() });
+    },
+  });
+}
+
+/**
+ * Hook to import solved Zendesk tickets tagged for MB_playbook learning (admin only)
+ */
+export function useImportZendeskTagged() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (request: ImportZendeskTaggedRequest) =>
+      memoryAPI.importZendeskTagged(request),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: memoryKeys.lists() });
       queryClient.invalidateQueries({ queryKey: memoryKeys.searches() });

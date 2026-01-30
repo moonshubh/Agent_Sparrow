@@ -187,6 +187,18 @@ DEFAULT_TOOL_CONFIGS: dict[str, ToolExecutionConfig] = {
         retry_backoff=2.0,
         error_recovery_hint="Try rephrasing the query or using web_search instead.",
     ),
+    "minimax_web_search": ToolExecutionConfig(
+        timeout=60.0,
+        max_retries=2,
+        retry_backoff=2.0,
+        error_recovery_hint="Try simplifying the query or fallback to web_search.",
+    ),
+    "minimax_understand_image": ToolExecutionConfig(
+        timeout=90.0,
+        max_retries=2,
+        retry_backoff=2.0,
+        error_recovery_hint="Try a smaller image or a clearer prompt.",
+    ),
     "firecrawl_fetch": ToolExecutionConfig(
         timeout=90.0,
         max_retries=2,

@@ -85,7 +85,7 @@ from app.agents.unified.message_preparation import MessagePreparer
 from app.agents.unified.session_cache import get_session_data
 
 from .model_router import ModelSelectionResult, model_router
-from .tools import get_registered_support_tools, get_registered_tools
+from .tools import get_registered_tools
 from .attachment_processor import get_attachment_processor
 from .log_autoroute_middleware import LogAutorouteMiddleware
 from .name_sanitization_middleware import MessageNameSanitizationMiddleware
@@ -584,12 +584,8 @@ def _build_deep_agent(state: GraphState, runtime: AgentRuntimeConfig):
             fallback_provider=runtime.provider,
             fallback_model=runtime.model,
         )
-    # Zendesk tickets use a curated toolset (safer, support-focused) to reduce leakage risk
-    # and keep replies aligned with internal support playbooks/macros.
     is_zendesk = (state.forwarded_props or {}).get("is_zendesk_ticket") is True
-    tools = list(
-        get_registered_support_tools() if is_zendesk else get_registered_tools()
-    )
+    tools = list(get_registered_tools())
 
     workspace_store = None
     # Inject workspace tools so agents can read persisted context (e.g. playbooks,
@@ -996,7 +992,7 @@ async def _maybe_autoroute_log_analysis(state: GraphState, helper: GemmaHelper) 
 
 def _memory_is_enabled(state: GraphState) -> bool:
     """Return True when memory should run; emit diagnostics when misconfigured."""
-    backend_ready = settings.should_enable_agent_memory()
+    backend_ready = memory_service.is_available()
     requested = bool(getattr(state, "use_server_memory", False))
 
     if requested and not backend_ready and isinstance(state.scratchpad, dict):
@@ -1112,22 +1108,95 @@ def _extract_last_user_query(messages: list[BaseMessage]) -> str:
     return ""
 
 
-def _build_memory_system_message(memories: list[dict[str, Any]]) -> Optional[SystemMessage]:
+def _build_memory_system_message(
+    memory_ui_memories: list[dict[str, Any]],
+    mem0_memories: list[dict[str, Any]],
+) -> Optional[SystemMessage]:
     """Build a system message from retrieved memories."""
-    lines = []
-    for item in memories:
-        text = (item.get("memory") or "").strip()
-        if not text:
-            continue
-        score = item.get("score")
-        if isinstance(score, (int, float)):
-            lines.append(f"- {text} (score={score:.2f})")
-        else:
-            lines.append(f"- {text}")
-    if not lines:
+    sections: list[str] = []
+
+    def _as_float(value: Any) -> Optional[float]:
+        if isinstance(value, (int, float)):
+            return float(value)
         return None
-    header = "Server memory retrieved for this session/user. Use only if relevant:\n"
-    return SystemMessage(content=header + "\n".join(lines), name=MEMORY_SYSTEM_NAME)
+
+    def _composite_score(item: dict[str, Any]) -> float:
+        similarity = _as_float(item.get("score"))
+        confidence = _as_float(item.get("confidence_score"))
+        if confidence is None:
+            confidence = _as_float((item.get("metadata") or {}).get("confidence_score"))
+        if similarity is None and confidence is None:
+            return 0.0
+        if similarity is None:
+            return confidence or 0.0
+        if confidence is None:
+            return similarity
+        return similarity * confidence
+
+    if memory_ui_memories:
+        memory_ui_lines: list[str] = []
+        sorted_items = sorted(
+            memory_ui_memories,
+            key=_composite_score,
+            reverse=True,
+        )
+        for item in sorted_items:
+            text = (item.get("memory") or "").strip()
+            if not text:
+                continue
+            similarity = _as_float(item.get("score"))
+            confidence = _as_float(item.get("confidence_score"))
+            if confidence is None:
+                confidence = _as_float((item.get("metadata") or {}).get("confidence_score"))
+            composite = None
+            if similarity is not None and confidence is not None:
+                composite = similarity * confidence
+            review_status = item.get("review_status")
+            if not isinstance(review_status, str) or not review_status.strip():
+                review_status = (item.get("metadata") or {}).get("review_status")
+
+            details: list[str] = []
+            if similarity is not None:
+                details.append(f"similarity={similarity:.2f}")
+            if confidence is not None:
+                details.append(f"confidence={confidence:.2f}")
+            if composite is not None:
+                details.append(f"composite={composite:.2f}")
+            if isinstance(review_status, str) and review_status.strip():
+                details.append(f"review_status={review_status}")
+
+            if details:
+                memory_ui_lines.append(f"- {text} ({', '.join(details)})")
+            else:
+                memory_ui_lines.append(f"- {text}")
+
+        if memory_ui_lines:
+            sections.append(
+                "Memory UI (primary/trusted; includes pending_review):\n"
+                + "\n".join(memory_ui_lines)
+            )
+
+    if mem0_memories:
+        mem0_lines: list[str] = []
+        for item in mem0_memories:
+            text = (item.get("memory") or "").strip()
+            if not text:
+                continue
+            score = _as_float(item.get("score"))
+            if score is not None:
+                mem0_lines.append(f"- {text} (score={score:.2f})")
+            else:
+                mem0_lines.append(f"- {text}")
+        if mem0_lines:
+            sections.append(
+                "mem0 (low-confidence hints; corroborate before using):\n"
+                + "\n".join(mem0_lines)
+            )
+
+    if not sections:
+        return None
+
+    return SystemMessage(content="\n\n".join(sections), name=MEMORY_SYSTEM_NAME)
 
 
 async def _retrieve_memory_context(state: GraphState) -> Optional[str]:
@@ -1159,16 +1228,31 @@ async def _retrieve_memory_context(state: GraphState) -> Optional[str]:
         "mem0_retrieval_enabled": mem0_enabled,
     }
 
-    retrieved: list[dict[str, Any]] = []
+    mem0_results: list[dict[str, Any]] = []
+    memory_ui_results: list[dict[str, Any]] = []
     memory_ui_retrieved_ids: list[str] = []
 
     if mem0_enabled:
         try:
-            retrieved = await memory_service.retrieve(
+            raw_mem0 = await memory_service.retrieve(
                 agent_id=MEMORY_AGENT_ID,
                 query=query,
                 top_k=settings.memory_top_k,
             )
+            for item in raw_mem0 or []:
+                if isinstance(item, dict):
+                    normalized = dict(item)
+                    normalized.setdefault("source", "mem0")
+                    mem0_results.append(normalized)
+                else:
+                    mem0_results.append(
+                        {
+                            "id": getattr(item, "id", None),
+                            "memory": getattr(item, "memory", None),
+                            "score": getattr(item, "score", None),
+                            "source": "mem0",
+                        }
+                    )
         except Exception as exc:
             logger.warning("memory_retrieve_failed", error=str(exc))
             memory_stats["retrieval_error"] = str(exc)
@@ -1191,17 +1275,21 @@ async def _retrieve_memory_context(state: GraphState) -> Optional[str]:
                 memory_id = item.get("id")
                 if isinstance(memory_id, str) and memory_id:
                     memory_ui_retrieved_ids.append(memory_id)
-                retrieved.append(
+                memory_ui_results.append(
                     {
                         "id": memory_id,
                         "memory": item.get("content"),
                         "score": item.get("similarity"),
+                        "confidence_score": item.get("confidence_score"),
+                        "review_status": item.get("review_status"),
                         "metadata": item.get("metadata") or {},
                         "source": "memory_ui",
                     }
                 )
         except Exception as exc:
             logger.warning("memory_ui_retrieve_failed", error=str(exc))
+
+    retrieved = mem0_results + memory_ui_results
 
     if not retrieved:
         _update_memory_stats(state, memory_stats)
@@ -1213,6 +1301,8 @@ async def _retrieve_memory_context(state: GraphState) -> Optional[str]:
         mem.get("score", 0.0) if isinstance(mem, dict) else getattr(mem, "score", 0.0)
         for mem in retrieved
     ]
+    memory_stats["memory_ui_retrieved"] = len(memory_ui_results)
+    memory_stats["mem0_retrieved"] = len(mem0_results)
     # Extract memory IDs for feedback attribution
     memory_stats["retrieved_memory_ids"] = [
         mem.get("id") if isinstance(mem, dict) else getattr(mem, "id", None)
@@ -1220,16 +1310,27 @@ async def _retrieve_memory_context(state: GraphState) -> Optional[str]:
         if (mem.get("id") if isinstance(mem, dict) else getattr(mem, "id", None))
     ]
 
-    memory_message = _build_memory_system_message(retrieved)
+    memory_message = _build_memory_system_message(memory_ui_results, mem0_results)
     if not memory_message:
         _update_memory_stats(state, memory_stats)
         return None
+
+    is_zendesk = bool(getattr(state, "forwarded_props", {}).get("is_zendesk_ticket"))
+    if is_zendesk:
+        logger.info(
+            "zendesk_memory_retrieval_summary",
+            memory_ui_enabled=memory_ui_enabled,
+            mem0_enabled=mem0_enabled,
+            memory_ui_retrieved=len(memory_ui_results),
+            mem0_retrieved=len(mem0_results),
+            retrieval_error=memory_stats.get("retrieval_error"),
+        )
 
     # Store memory stats in scratchpad for LangSmith
     _update_memory_stats(state, memory_stats)
 
     # Best-effort: increment retrieval_count for Memory UI memories actually retrieved by the agent.
-    if memory_ui_retrieved_ids:
+    if memory_ui_retrieved_ids and not is_zendesk:
         try:
             from app.memory.memory_ui_service import get_memory_ui_service
 
@@ -1252,6 +1353,9 @@ async def _retrieve_memory_context(state: GraphState) -> Optional[str]:
             asyncio.create_task(_record_retrievals(unique_ids))
         except Exception as exc:
             logger.debug("memory_ui_record_retrieval_schedule_failed", error=str(exc))
+    elif memory_ui_retrieved_ids and is_zendesk:
+        memory_stats["retrieval_count_skipped_reason"] = "zendesk_read_only"
+        _update_memory_stats(state, memory_stats)
 
     return memory_message.content
 
@@ -1335,6 +1439,15 @@ async def _record_memory(state: GraphState, ai_message: BaseMessage) -> None:
     if not mem0_enabled and not memory_ui_enabled:
         return
     if not isinstance(ai_message, BaseMessage):
+        return
+    if bool(getattr(state, "forwarded_props", {}).get("is_zendesk_ticket")):
+        _update_memory_stats(
+            state,
+            {
+                "write_attempted": False,
+                "write_skipped_reason": "zendesk_read_only",
+            },
+        )
         return
 
     fact_text = _coerce_message_text(ai_message).strip()
@@ -2194,6 +2307,7 @@ async def run_unified_agent(state: GraphState, config: Optional[RunnableConfig] 
                 ticket_id = forwarded_props.get("zendesk_ticket_id") or forwarded_props.get("ticket_id")
                 system_bucket = scratchpad.get("_system", {}) if isinstance(scratchpad, dict) else {}
                 subagent_models = system_bucket.get("zendesk_subagent_models") if isinstance(system_bucket, dict) else None
+                memory_stats = system_bucket.get("memory_stats") if isinstance(system_bucket, dict) else {}
                 tool_usage = _extract_tool_usage(updated_messages)
                 tools_requested, tools_requested_count = _limit_list(tool_usage.get("requested", set()))
                 tools_executed, tools_executed_count = _limit_list(tool_usage.get("executed", set()))
@@ -2218,6 +2332,11 @@ async def run_unified_agent(state: GraphState, config: Optional[RunnableConfig] 
                     tools_executed_count=tools_executed_count,
                     web_search_tools=web_search_tools,
                     web_search_tool_count=web_search_tool_count,
+                    memory_ui_enabled=memory_stats.get("memory_ui_retrieval_enabled"),
+                    mem0_enabled=memory_stats.get("mem0_retrieval_enabled"),
+                    memory_ui_retrieved=memory_stats.get("memory_ui_retrieved"),
+                    mem0_retrieved=memory_stats.get("mem0_retrieved"),
+                    memory_retrieval_error=memory_stats.get("retrieval_error"),
                 )
             except (KeyError, AttributeError, TypeError) as exc:  # pragma: no cover - logging only
                 logger.debug("zendesk_run_telemetry_failed", error=str(exc)[:180])

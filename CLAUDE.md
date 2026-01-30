@@ -314,6 +314,8 @@ Key tables (see `docs/Database.md`):
 - `entities` - Graph nodes (topics, concepts)
 - `relationships` - Graph edges between entities
 - `memory_feedback` - User feedback on memory accuracy
+- `zendesk_pending_tickets` - Zendesk ticket processing queue with `status`, `status_details` (JSON context report), `last_public_comment_at`
+- `store` - Workspace file storage for context engineering (handoff, progress, goals, per-ticket Zendesk data)
 
 ## Testing Strategy
 
@@ -825,6 +827,83 @@ asyncio.run(test())
 - Celery Health: `http://localhost:8001` (auto-detects port collision)
 - Redis: Default port 6379
 
+## Zendesk Integration (Jan 2026)
+
+The Zendesk integration processes support tickets automatically, generating internal notes with suggested replies using the full agent toolset.
+
+### Architecture
+
+| Component | Location | Purpose |
+|-----------|----------|---------|
+| Scheduler | `app/integrations/zendesk/scheduler.py` | Polls `zendesk_pending_tickets`, orchestrates agent runs |
+| Client | `app/integrations/zendesk/client.py` | Zendesk API wrapper with attachment fetching and PII redaction |
+| Attachments | `app/integrations/zendesk/attachments.py` | URL scrubbing, attachment type summarization, log detection |
+| Spam Guard | `app/integrations/zendesk/spam_guard.py` | Rate-limiting and deduplication for note posting |
+| Import Endpoint | `app/api/v1/endpoints/memory/endpoints.py` | `POST /api/v1/memory/import/zendesk-tagged` for ticket-to-memory ingestion |
+| Asset Proxy | `app/api/v1/endpoints/memory/endpoints.py` | `GET /api/v1/memory/assets/{bucket}/{object_path}` for authenticated image serving |
+| Celery Task | `app/feedme/tasks.py` | `import_zendesk_tagged` background job for ticket ingestion |
+| Queue Routing | `app/feedme/celery_app.py` | Routes Zendesk import tasks to appropriate Celery queues |
+
+### Key Behaviors
+
+- **Full toolset**: Zendesk runs use `get_registered_tools()` (not the restricted `get_registered_support_tools()`), excluding only image generation.
+- **Memory retrieval**: Enabled via `use_server_memory=True` in GraphState. Memory UI retrieval is active when `ENABLE_MEMORY_UI_RETRIEVAL=true`. mem0 is optional.
+- **Attachment handling**: Only public comments are processed. Attachments are fetched via API, PII is redacted, and Zendesk attachment URLs are scrubbed from generated content.
+- **Log detection**: Log attachments (`.log`, `.txt` with log patterns) are detected and routed to the `log_diagnoser` subagent automatically. The agent avoids requesting logs if attachments already contain them.
+- **Context report**: A structured `context_report` is unconditionally persisted in `zendesk_pending_tickets.status_details` for every processed ticket, with serialization error fallbacks.
+- **Reply formatting**: Internal notes use "Suggested Reply only" format. A sanitization pass removes planning artifacts, enforces policy-compliant greetings, and ensures empathetic phrasing.
+- **Telemetry**: `zendesk_run_telemetry` logging captures tool usage, memory stats, and evidence summaries per ticket run.
+- **Session cleanup**: Daily maintenance deletes per-ticket workspace data 7 days after `last_public_comment_at`.
+
+### Zendesk Environment Variables
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `ZENDESK_DRY_RUN` | When `true`, notes are logged but not posted | `true` |
+| `ENABLE_MEMORY_UI_RETRIEVAL` | Enable Memory UI as retrieval source for Zendesk | `false` |
+| `MEMORY_UI_AGENT_ID` | Agent ID for Memory UI queries | — |
+| `MEMORY_UI_TENANT_ID` | Tenant ID for Memory UI queries | — |
+
+### Testing Zendesk Locally
+
+```bash
+# 1. Ensure .env has Zendesk credentials and ZENDESK_DRY_RUN=false
+# 2. Start system
+./scripts/start_on_macos/start_system.sh
+
+# 3. Check queue status
+# Query zendesk_pending_tickets in Supabase for status='pending'
+
+# 4. View logs
+tail -f system_logs/backend/backend.log | grep -i zendesk
+```
+
+### Known Issues & Gotchas
+
+- **LangSmith rate limiting**: Monthly trace limits can be hit during batch Zendesk runs. Non-blocking but reduces observability.
+- **Tavily quota**: When exhausted, web search falls back to Minimax automatically.
+- **mem0 not installed**: If `mem0` package is missing, the system logs a warning and continues with Memory UI only. No false-positive retrieval signals.
+- **Recursion limit**: `ZENDESK_RECURSION_LIMIT` (30) may be overridden by the global LangGraph default (400). Check `GraphState` construction.
+
+## Reliability Patterns (Jan 2026)
+
+### Database Query Retries
+Transient Supabase errors (server disconnected, connection reset) are handled by `_run_supabase_query_with_retry` in `app/agents/tools/tool_executor.py`:
+- Retries up to 2x with exponential backoff
+- Only retries on patterns in `_TRANSIENT_SUPABASE_ERRORS`
+- Non-transient errors propagate immediately
+
+### Web Tool Fallbacks
+- **Tavily -> Minimax**: When Tavily quota is exhausted, web search falls back to Minimax tools automatically
+- **Minimax retries**: Configured with built-in retry logic for transient failures
+- **Firecrawl**: Used as an alternative for URL-specific content extraction
+
+### Internal Retrieval Bounds
+`db_unified_search.max_results_per_source` is clamped to prevent validation errors when the value exceeds tool limits. Applied in `app/integrations/zendesk/scheduler.py`.
+
+### mem0 Availability Check
+`app/core/settings.py` accurately reports whether mem0 backend is configured rather than just checking for package availability, preventing misleading retrieval signals.
+
 ## Key Integration Points
 
 ### AG-UI Streaming
@@ -880,3 +959,7 @@ tail -f system_logs/celery/celery_worker.log
 5. **PDF processing fallback**: Check logs if OCR is being triggered unnecessarily
 6. **CORS errors**: Ensure backend allows frontend port (3000/3001) in `app/main.py`
 7. **SSE connection issues**: Check browser console for AG-UI event errors
+8. **Zendesk 404 on attachments**: Attachment URLs are signed and expire; the scheduler fetches via API and stores locally
+9. **Zendesk context_report missing**: Check serialization in `scheduler.py`; fallbacks should catch JSON errors
+10. **Memory UI retrieval silent**: Set `ENABLE_MEMORY_UI_RETRIEVAL=true` and configure `MEMORY_UI_AGENT_ID`/`MEMORY_UI_TENANT_ID`
+11. **`API_KEY_ENCRYPTION_SECRET` missing**: Required for production; causes `OSError` in `app/core/encryption.py` if absent

@@ -3,8 +3,7 @@
 import React, { useMemo, useState, useCallback, useRef } from 'react';
 import type { User } from '@supabase/supabase-js';
 import { motion, AnimatePresence } from 'framer-motion';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
+import MemoryMarkdown from './MemoryMarkdown';
 import {
   X,
   Save,
@@ -389,7 +388,7 @@ export function MemoryForm({ onClose, onSuccess, memory }: MemoryFormProps) {
               {!isEditMode && previewEnabled && (
                 <div className="add-memory-preview">
                   {content.trim() ? (
-                    <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>
+                    <MemoryMarkdown content={content} />
                   ) : (
                     <div className="add-memory-preview-empty">
                       <p>Start typing to see a preview of your markdown content.</p>

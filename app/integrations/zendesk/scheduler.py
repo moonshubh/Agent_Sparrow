@@ -5,11 +5,12 @@ from dataclasses import dataclass
 import html
 import json
 import logging
+import os
 from datetime import datetime, timedelta, timezone, date
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional, Tuple
 import time
 
-from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
 
 from app.core.config import get_models_config, resolve_coordinator_config
 from app.core.settings import settings
@@ -18,7 +19,12 @@ from .client import ZendeskClient, ZendeskRateLimitError
 from .exclusions import compute_ticket_exclusion
 from .spam_guard import evaluate_spam_guard
 from app.core.user_context import UserContext, user_context_scope
-from app.agents.unified.agent_sparrow import run_unified_agent
+from app.agents.unified.agent_sparrow import (
+    WEB_SEARCH_TOOL_NAMES,
+    _extract_subagent_deployments,
+    _extract_tool_usage,
+    run_unified_agent,
+)
 from app.agents.orchestration.orchestration.state import GraphState
 from app.agents.unified.tools import (
     kb_search_tool,
@@ -40,12 +46,6 @@ from app.security.pii_redactor import redact_pii
 
 logger = logging.getLogger(__name__)
 
-# Recursion limit for Zendesk ticket processing
-# Keep low to prevent runaway agent loops (default is 400, which can take hours with Gemini Pro)
-# 30 is enough for: KB search + FeedMe + web research + subagent calls + final response
-ZENDESK_RECURSION_LIMIT = 30
-
-
 _ZENDESK_PATTERN_CATEGORIES: tuple[str, ...] = (
     "account_setup",
     "sync_auth",
@@ -66,6 +66,7 @@ class ZendeskReplyResult:
     kb_articles_used: list[str]
     macros_used: list[str]
     learning_messages: list[Any]
+    context_report: dict[str, Any] | None = None
 
 @dataclass(frozen=True, slots=True)
 class ZendeskQueryAgentProductContext:
@@ -136,8 +137,16 @@ _ZENDESK_META_LINE_PREFIXES: tuple[str, ...] = (
     "notes",
 )
 
+_ZENDESK_META_HEADING_PREFIXES: tuple[str, ...] = (
+    "internal note",
+    "agent note",
+    "internal notes",
+    "agent notes",
+)
+
 _ZENDESK_META_INLINE_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"(?i)\bzendesk\s+(ticket\s+scenario|internal\s+note)\b"),
+    re.compile(r"(?i)\binternal\s+note(s)?\b"),
     re.compile(r"(?i)\b(i\s+(must|should|need\s+to))\b.*\b(output|reply|respond)\b"),
     re.compile(r"(?i)\b(do\s+not|don't)\b.*\b(mention|include|output|show)\b"),
     re.compile(
@@ -844,6 +853,15 @@ def _zendesk_slice_macro_guidance(
     return _trim_block("\n".join(kept).strip(), int(max_chars))
 
 
+def _clamp_internal_retrieval_max_per_source(value: int) -> int:
+    """Clamp internal retrieval limits to db_unified_search tool bounds."""
+    try:
+        numeric = int(value)
+    except Exception:
+        numeric = 5
+    return max(1, min(10, numeric))
+
+
 async def _zendesk_run_internal_retrieval_preflight(
     *,
     query: str,
@@ -853,6 +871,7 @@ async def _zendesk_run_internal_retrieval_preflight(
     include_header: bool = True,
 ) -> ZendeskInternalRetrievalPreflight:
     _ = intent
+    max_per_source = _clamp_internal_retrieval_max_per_source(max_per_source)
     retrieved = await db_unified_search_tool.ainvoke(
         {
             "query": query,
@@ -1577,6 +1596,334 @@ def _queue_post_resolution_learning(
                 )
 
 
+_ZENDESK_ATTACHMENT_URL_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"https?://[\w.-]+\.zendesk\.com/attachments/[^\s)\]]+", re.IGNORECASE),
+    re.compile(
+        r"https?://[\w.-]+\.zendesk\.com/agent/tickets/\d+/attachments/[^\s)\]]+",
+        re.IGNORECASE,
+    ),
+    re.compile(r"https?://[\w.-]+\.zendesk\.com/api/v2/attachments/[^\s)\]]+", re.IGNORECASE),
+)
+
+
+def _scrub_zendesk_attachment_urls(text: str | None) -> tuple[str | None, int]:
+    if not text or not isinstance(text, str):
+        return text, 0
+    scrubbed = text
+    total = 0
+    for pattern in _ZENDESK_ATTACHMENT_URL_PATTERNS:
+        scrubbed, count = pattern.subn("[attachment provided]", scrubbed)
+        total += count
+    return scrubbed, total
+
+
+def _summarize_attachment_types(attachments: list[Any]) -> dict[str, int]:
+    counts = {
+        "total": len(attachments),
+        "logs": 0,
+        "text": 0,
+        "images": 0,
+        "pdfs": 0,
+        "other": 0,
+    }
+    for att in attachments:
+        name = None
+        content_type = None
+        if hasattr(att, "file_name"):
+            name = getattr(att, "file_name", None)
+            content_type = getattr(att, "content_type", None)
+        elif isinstance(att, dict):
+            name = att.get("file_name") or att.get("filename")
+            content_type = att.get("content_type")
+
+        ext = ""
+        name_lower = ""
+        if isinstance(name, str) and name:
+            name_lower = name.lower()
+            ext = os.path.splitext(name_lower)[1]
+        if content_type and isinstance(content_type, str):
+            ct = content_type.lower()
+        else:
+            ct = ""
+
+        logish_txt = bool(
+            ext == ".txt"
+            and name_lower
+            and re.search(r"(?i)(^|[^a-z])log([^a-z]|$)", name_lower)
+        )
+        if ext in {".log"} or logish_txt:
+            counts["logs"] += 1
+        elif ext in {".txt", ".csv", ".json", ".xml"}:
+            counts["text"] += 1
+        elif ext in {".png", ".jpg", ".jpeg", ".gif", ".webp"} or ct.startswith("image/"):
+            counts["images"] += 1
+        elif ext == ".pdf" or ct == "application/pdf":
+            counts["pdfs"] += 1
+        elif ct == "text/plain":
+            counts["text"] += 1
+        else:
+            counts["other"] += 1
+    return counts
+
+
+def _coerce_zendesk_handoff_messages(run: ZendeskReplyResult) -> list[BaseMessage]:
+    messages: list[BaseMessage] = [
+        msg for msg in (run.learning_messages or []) if isinstance(msg, BaseMessage)
+    ]
+    if messages:
+        return messages
+    fallback: list[BaseMessage] = []
+    if run.redacted_ticket_text:
+        fallback.append(HumanMessage(content=run.redacted_ticket_text))
+    if run.reply:
+        fallback.append(AIMessage(content=run.reply))
+    return fallback
+
+
+def _parse_zendesk_datetime(value: Any) -> Optional[datetime]:
+    if isinstance(value, datetime):
+        dt = value
+    elif isinstance(value, str):
+        raw = value.strip()
+        if not raw:
+            return None
+        try:
+            dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        except Exception:
+            return None
+    else:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
+def _extract_last_public_comment_at(
+    comments: list[dict[str, Any]] | None,
+) -> Optional[str]:
+    if not comments:
+        return None
+    latest_dt: Optional[datetime] = None
+    latest_raw: Optional[str] = None
+    for comment in comments:
+        if not isinstance(comment, dict):
+            continue
+        if comment.get("public") is not True:
+            continue
+        created_raw = comment.get("created_at")
+        dt = _parse_zendesk_datetime(created_raw)
+        if dt is None:
+            continue
+        if latest_dt is None or dt > latest_dt:
+            latest_dt = dt
+            latest_raw = created_raw if isinstance(created_raw, str) else None
+    if latest_dt is None:
+        return None
+    if isinstance(latest_raw, str) and latest_raw.strip():
+        return latest_raw
+    return latest_dt.isoformat()
+
+
+async def _resolve_last_public_comment_at(
+    zc: ZendeskClient,
+    ticket_id: int,
+    comments: list[dict[str, Any]] | None,
+) -> Optional[str]:
+    from_comments = _extract_last_public_comment_at(comments)
+    if from_comments:
+        return from_comments
+    try:
+        fetched = await asyncio.to_thread(zc.get_ticket_comments, ticket_id, 50)
+    except Exception:
+        return None
+    return _extract_last_public_comment_at(fetched)
+
+
+async def _write_zendesk_thread_handoff(
+    *,
+    run: ZendeskReplyResult,
+    last_public_comment_at: str | None,
+) -> None:
+    try:
+        from app.agents.harness._utils import estimate_tokens
+        from app.agents.harness.middleware.handoff_capture_middleware import (
+            HandoffCaptureMiddleware,
+        )
+        from app.agents.harness.store import SparrowWorkspaceStore
+    except Exception as exc:  # pragma: no cover - optional dependency
+        logger.debug("zendesk_handoff_import_failed error=%s", str(exc)[:180])
+        return
+
+    workspace_store = SparrowWorkspaceStore(session_id=run.session_id)
+    messages = _coerce_zendesk_handoff_messages(run)
+    scratchpad: dict[str, Any] = {}
+
+    capture_number = 1
+    try:
+        existing = await workspace_store.get_handoff_context()
+        if isinstance(existing, dict):
+            capture_number = int(existing.get("capture_number") or 0) + 1
+    except Exception:
+        capture_number = 1
+
+    middleware = HandoffCaptureMiddleware(workspace_store=workspace_store)
+    summary = middleware._generate_conversation_summary(messages)
+    next_steps = middleware._extract_next_steps(messages)
+    decisions = middleware._extract_key_decisions(messages)
+    todos = middleware._extract_todos(scratchpad)
+
+    handoff_context = {
+        "summary": summary,
+        "active_todos": todos,
+        "next_steps": next_steps,
+        "key_decisions": decisions,
+        "message_count": len(messages),
+        "estimated_tokens": estimate_tokens(messages),
+        "capture_number": capture_number,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+
+    try:
+        await workspace_store.set_handoff_context(handoff_context)
+    except Exception as exc:
+        logger.debug(
+            "zendesk_handoff_write_failed session_id=%s error=%s",
+            run.session_id,
+            str(exc)[:180],
+        )
+
+    meta: dict[str, Any] = {}
+    try:
+        existing_meta_raw = await workspace_store.read_file("/scratch/zendesk_meta.json")
+        if isinstance(existing_meta_raw, str) and existing_meta_raw.strip():
+            parsed = json.loads(existing_meta_raw)
+            if isinstance(parsed, dict):
+                meta.update(parsed)
+    except Exception:
+        meta = meta or {}
+
+    meta.setdefault("first_seen_at", datetime.now(timezone.utc).isoformat())
+    meta["ticket_id"] = str(run.ticket_id)
+    meta["session_id"] = run.session_id
+    meta["updated_at"] = datetime.now(timezone.utc).isoformat()
+    if last_public_comment_at:
+        meta["last_public_comment_at"] = last_public_comment_at
+
+    try:
+        await workspace_store.write_file(
+            "/scratch/zendesk_meta.json",
+            json.dumps(meta, ensure_ascii=False, indent=2),
+        )
+    except Exception as exc:
+        logger.debug(
+            "zendesk_meta_write_failed session_id=%s error=%s",
+            run.session_id,
+            str(exc)[:180],
+        )
+
+
+def _parse_workspace_session_prefix(prefix: str) -> Tuple[Optional[str], Optional[str]]:
+    parts = (prefix or "").split(":")
+    if len(parts) < 4 or parts[0] != "workspace" or parts[1] != "session":
+        return None, None
+    if len(parts) >= 5:
+        # workspace:session:{user_id}:{session_id}:{path}
+        return parts[3], parts[2]
+    # workspace:session:{session_id}:{path}
+    return parts[2], None
+
+
+async def _cleanup_zendesk_session_workspaces(retention_days: int = 7) -> int:
+    retention_days = max(1, int(retention_days))
+    supa = get_supabase_client()
+    cutoff = datetime.now(timezone.utc) - timedelta(days=retention_days)
+
+    deleted = 0
+    seen_sessions: set[str] = set()
+    page_size = 200
+    offset = 0
+
+    while True:
+        try:
+            response = await supa._exec(
+                lambda: supa.client.table("store")
+                .select("prefix,key,value,created_at,updated_at")
+                .eq("key", "zendesk_meta.json")
+                .like("prefix", "workspace:session:%:scratch")
+                .range(offset, offset + page_size - 1)
+                .execute()
+            )
+        except Exception as exc:
+            logger.debug("zendesk_workspace_list_failed error=%s", str(exc)[:180])
+            break
+
+        rows = response.data or []
+        if not rows:
+            break
+
+        for row in rows:
+            prefix = row.get("prefix") if isinstance(row, dict) else None
+            session_id, user_id = _parse_workspace_session_prefix(str(prefix or ""))
+            if not session_id or not session_id.startswith("zendesk-"):
+                continue
+            if session_id in seen_sessions:
+                continue
+
+            last_public_comment_at = None
+            raw_value = row.get("value") if isinstance(row, dict) else None
+            if isinstance(raw_value, dict):
+                if "last_public_comment_at" in raw_value:
+                    last_public_comment_at = raw_value.get("last_public_comment_at")
+                else:
+                    content = raw_value.get("content")
+                    if isinstance(content, str):
+                        try:
+                            parsed = json.loads(content)
+                            if isinstance(parsed, dict):
+                                last_public_comment_at = parsed.get(
+                                    "last_public_comment_at"
+                                )
+                        except Exception:
+                            last_public_comment_at = None
+            elif isinstance(raw_value, str):
+                try:
+                    parsed = json.loads(raw_value)
+                    if isinstance(parsed, dict):
+                        last_public_comment_at = parsed.get("last_public_comment_at")
+                except Exception:
+                    last_public_comment_at = None
+
+            last_dt = _parse_zendesk_datetime(last_public_comment_at)
+            if last_dt is None:
+                last_dt = _parse_zendesk_datetime(row.get("updated_at"))
+            if last_dt is None:
+                last_dt = _parse_zendesk_datetime(row.get("created_at"))
+            if last_dt is None or last_dt > cutoff:
+                continue
+
+            try:
+                from app.agents.harness.store import SparrowWorkspaceStore
+
+                store = SparrowWorkspaceStore(session_id=session_id, user_id=user_id)
+                await store.cleanup_session_data()
+                seen_sessions.add(session_id)
+                deleted += 1
+            except Exception as exc:
+                logger.debug(
+                    "zendesk_workspace_cleanup_failed session_id=%s error=%s",
+                    session_id,
+                    str(exc)[:180],
+                )
+
+        if len(rows) < page_size:
+            break
+        offset += len(rows)
+
+    if deleted:
+        logger.info("zendesk_workspace_cleanup_deleted count=%s", deleted)
+    return deleted
+
+
 def _normalize_zendesk_heading_candidate(line: str) -> str:
     text = (line or "").strip()
     if not text:
@@ -1604,8 +1951,17 @@ def _extract_suggested_reply_only(note_text: str) -> str:
     lines = raw.splitlines()
     suggested_idx: int | None = None
     first_non_reply_heading_idx: int | None = None
+    suggested_inline: str | None = None
 
     for idx, line in enumerate(lines):
+        inline_match = re.match(
+            r"(?i)^\s*(?:#+\s*)?(?:\*\*|__)?\s*suggested\s+reply\s*(?:\*\*|__)?\s*[:\-–—]\s*(.+)$",
+            line,
+        )
+        if inline_match:
+            suggested_idx = idx
+            suggested_inline = inline_match.group(1).strip()
+            break
         normalized = _normalize_zendesk_heading_candidate(line)
         if normalized == "suggested reply":
             suggested_idx = idx
@@ -1626,7 +1982,13 @@ def _extract_suggested_reply_only(note_text: str) -> str:
             ):
                 end_idx = j
                 break
-        extracted = "\n".join(lines[suggested_idx:end_idx]).strip()
+        extracted_lines = lines[suggested_idx:end_idx]
+        if suggested_inline is not None:
+            if suggested_inline:
+                extracted_lines = [suggested_inline] + extracted_lines[1:]
+            else:
+                extracted_lines = extracted_lines[1:]
+        extracted = "\n".join(extracted_lines).strip()
         return extracted or raw
 
     # If the model produced only non-reply sections, keep any preamble above them.
@@ -1693,7 +2055,9 @@ def _sanitize_suggested_reply_text(text: str) -> str:
                 continue
 
             normalized = _normalize_zendesk_heading_candidate(line)
-            if normalized in _ZENDESK_META_LINE_PREFIXES:
+            if normalized in _ZENDESK_META_LINE_PREFIXES or any(
+                normalized.startswith(prefix) for prefix in _ZENDESK_META_HEADING_PREFIXES
+            ):
                 skip_block = True
                 continue
 
@@ -1809,7 +2173,9 @@ def _sanitize_suggested_reply_text(text: str) -> str:
     return cleaned.strip()
 
 
-def _quality_gate_issues(note_text: str, *, use_html: bool) -> List[str]:
+def _quality_gate_issues(
+    note_text: str, *, use_html: bool, has_log_attachments: bool = False
+) -> List[str]:
     """Hard-stop checks before posting the Zendesk note."""
     raw = str(note_text or "")
     if not raw.strip():
@@ -1907,6 +2273,15 @@ def _quality_gate_issues(note_text: str, *, use_html: bool) -> List[str]:
 
     if re.search(r"(?i)\bpending\b", flat):
         issues.append("contains_placeholder")
+
+    if has_log_attachments:
+        asks_for_logs = bool(
+            re.search(r"(?i)\b(log\s*file|logs?)\b", flat)
+            and re.search(r"(?i)\b(attach|upload|send|share|provide)\b", flat)
+            and re.search(r"(?i)\b(please|could\s+you|can\s+you)\b", flat)
+        )
+        if asks_for_logs:
+            issues.append("log_request_with_attachments")
 
     if re.search(r"(?i)\b(db[- ]?retrieval|supabase|firecrawl|tavily)\b", flat):
         issues.append("mentions_internal_system")
@@ -3270,7 +3645,9 @@ async def _firecrawl_support_bundle(
 
 
 async def _run_daily_maintenance(
-    webhook_retention_days: int = 7, queue_retention_days: int | None = None
+    webhook_retention_days: int = 7,
+    queue_retention_days: int | None = None,
+    session_retention_days: int = 7,
 ) -> None:
     """Perform daily cleanup tasks for webhook events and processed queue rows."""
     try:
@@ -3327,6 +3704,16 @@ async def _run_daily_maintenance(
                 else:
                     state["last_retention_date"] = today
                     updated = True
+
+        last_session_cleanup = state.get("last_session_cleanup_date")
+        if last_session_cleanup != today:
+            try:
+                await _cleanup_zendesk_session_workspaces(session_retention_days)
+            except Exception as cleanup_exc:
+                logger.debug("zendesk_workspace_cleanup_failed: %s", cleanup_exc)
+            else:
+                state["last_session_cleanup_date"] = today
+                updated = True
 
         if updated:
             await supa._exec(
@@ -3610,6 +3997,9 @@ async def _generate_reply(
     _PHONE_RE = re.compile(
         r"(?<!\d)(\+?\d{1,3}[-.\s]?)?(?:\(?\d{3}\)?[-.\s]?){2}\d{4}(?!\d)"
     )
+    has_log_attachments = False
+    attachment_type_counts: dict[str, int] | None = None
+    log_attachment_hint = ""
 
     def _redact_pii(text: str | None) -> str | None:
         if not text or not isinstance(text, str):
@@ -3904,11 +4294,27 @@ async def _generate_reply(
 
     attachments: List[Dict[str, Any]] = []
     unified_attachments = []  # For multimodal processing (images, PDFs)
+    attachment_url_scrubbed = 0
     try:
-        attachments = fetch_ticket_attachments(ticket_id)
+        attachments = fetch_ticket_attachments(ticket_id, public_only=True)
         att_summary = summarize_attachments(attachments)
-        if att_summary:
-            parts_in.append(f"Attachments summary for agent:\n{att_summary}")
+        if attachments:
+            attachment_type_counts = _summarize_attachment_types(attachments)
+            has_log_attachments = bool(attachment_type_counts.get("logs")) if attachment_type_counts else False
+            attachment_notes = [
+                "Note: Attachments are already provided in context; do NOT request or fetch Zendesk attachment URLs."
+            ]
+            if has_log_attachments:
+                attachment_notes.append(
+                    "Log files are attached; do NOT ask the customer to provide logs again."
+                )
+            attachment_note = "\n".join(attachment_notes)
+            if att_summary:
+                parts_in.append(
+                    f"Attachments summary for agent:\n{att_summary}\n{attachment_note}"
+                )
+            else:
+                parts_in.append(attachment_note)
         # Convert to unified agent format for multimodal processing
         unified_attachments = convert_to_unified_attachments(attachments)
         if unified_attachments:
@@ -3918,7 +4324,13 @@ async def _generate_reply(
     except Exception as e:
         logger.debug(f"attachment_fetch_failed ticket={ticket_id}: {e}")
 
+    if has_log_attachments:
+        log_attachment_hint = (
+            "- Log files are already attached in this ticket; do NOT ask the customer to send logs again.\n"
+        )
+
     user_query_raw = "\n\n".join([p for p in parts_in if p]) or "(no description)"
+    user_query_raw, attachment_url_scrubbed = _scrub_zendesk_attachment_urls(user_query_raw)
     user_query = _redact_pii(user_query_raw) or user_query_raw
 
     ticket_is_unclear = _ticket_seems_unclear(
@@ -3966,7 +4378,11 @@ async def _generate_reply(
     session_id = f"zendesk-{ticket_id}"
     state: GraphState | None = None
     result: Dict[str, Any] | None = None
+    result_payload: dict[str, Any] = {}
+    result_scratchpad: dict[str, Any] = {}
+    result_log_notes: dict[str, Any] = {}
     learning_messages: list[Any] = []
+    context_report: dict[str, Any] | None = None
     inferred_category: str | None = None
     kb_articles_used: list[str] = []
     macros_used: list[str] = []
@@ -3980,8 +4396,12 @@ async def _generate_reply(
             internal_context: str | None = None
             web_context: str | None = None
             web_ok = False
+            internal_ok = False
             macro_choice: Dict[str, Any] | None = None
             playbook_path: str | None = None
+            preflight_metrics: dict[str, Any] | None = None
+            pattern_similar_count = 0
+            pattern_playbook_compiled = False
 
             # Fetch policy macros from Supabase so the agent can follow the correct, full procedures.
             policy_macros: List[Dict[str, Any]] = []
@@ -4051,6 +4471,7 @@ async def _generate_reply(
                 max_per_source = int(
                     getattr(settings, "zendesk_internal_retrieval_max_per_source", 5)
                 )
+                max_per_source = _clamp_internal_retrieval_max_per_source(max_per_source)
                 retrieved = await db_unified_search_tool.ainvoke(
                     {
                         "query": user_query,
@@ -4083,6 +4504,7 @@ async def _generate_reply(
                 preflight = _format_internal_retrieval_context(
                     retrieved_results, query=user_query
                 )
+                preflight_metrics = preflight
                 internal_context = preflight.get("context")
                 macro_ok = bool(preflight.get("macro_ok"))
                 feedme_ok = bool(preflight.get("feedme_ok"))
@@ -4167,7 +4589,9 @@ async def _generate_reply(
                         similar_count = int(pattern_preflight.get("similar_count") or 0)
                     except Exception:
                         similar_count = 0
-                    pattern_ok = bool(pattern_preflight.get("playbook_compiled")) or similar_count > 0
+                    pattern_playbook_compiled = bool(pattern_preflight.get("playbook_compiled"))
+                    pattern_similar_count = similar_count
+                    pattern_ok = pattern_playbook_compiled or similar_count > 0
 
                 # Inline a bounded amount of pattern/playbook context so the agent
                 # can stay internal-first without immediately reaching for web search.
@@ -4427,6 +4851,7 @@ async def _generate_reply(
                 session_id=session_id,
                 provider=use_provider,
                 model=agent_model,
+                use_server_memory=True,
                 attachments=attachments_for_agent,  # Pass multimodal attachments for vision processing
                 forwarded_props={
                     "force_websearch": not (
@@ -4444,15 +4869,18 @@ async def _generate_reply(
                 },
             )
 
-            # Pass config with lower recursion limit to prevent runaway agent loops
-            result = await run_unified_agent(
-                state,
-                config={"recursion_limit": ZENDESK_RECURSION_LIMIT},
-            )
+            result = await run_unified_agent(state)
+            result_payload: dict[str, Any] = result if isinstance(result, dict) else {}
+            result_scratchpad: dict[str, Any] = {}
+            result_log_notes: dict[str, Any] = {}
+            if isinstance(result_payload.get("scratchpad"), dict):
+                result_scratchpad = result_payload.get("scratchpad") or {}
+            if isinstance(result_payload.get("log_analysis_notes"), dict):
+                result_log_notes = result_payload.get("log_analysis_notes") or {}
             try:
                 # Preserve original conversation for post-resolution learning (before rewrite passes)
-                if isinstance(result, dict):
-                    learning_messages = list(result.get("messages") or [])
+                if isinstance(result_payload, dict):
+                    learning_messages = list(result_payload.get("messages") or [])
             except Exception:
                 learning_messages = []
             # Treat missing AI output or explicit agent errors as retryable failures.
@@ -4518,6 +4946,8 @@ async def _generate_reply(
                     and re.search(r"(?i)\b(please|could\s+you|can\s+you)\b", text)
                 )
                 if asks_for_logs:
+                    if has_log_attachments:
+                        reasons.append("log_request_despite_attached_logs")
                     draft_steps = _count_step_lines(text)
                     min_steps = 3
                     if log_macro_step_lines:
@@ -4619,6 +5049,7 @@ async def _generate_reply(
                         "- If they provided logs, screenshots, or steps tried, thank them for the effort.\n"
                         "- Zendesk ticket policies (follow when applicable):\n"
                         "  - If requesting a log file, follow the macro titled: TECH: Request log file - Using Mailbird Number 2 (paraphrase, but keep ALL steps).\n"
+                        f"{log_attachment_hint}"
                         "  - If the ticket is unclear, ask for the missing details and request a screenshot (macro: REQUEST:: Ask for a screenshot).\n"
                         '  - If suggesting remove/re-add or reinstall, include backup-first steps (close Mailbird; File Explorer → C:\\Users\\"your user name"\\AppData\\Local; copy the Mailbird folder).\n'
                         "  - If a refund is requested for Premium Pay Once or Premium Yearly, propose the 50% option first (refund experiment macro).\n"
@@ -4734,6 +5165,7 @@ async def _generate_reply(
                         "- If they provided logs, screenshots, or steps tried, thank them for the effort.\n"
                         "- Zendesk ticket policies (follow when applicable):\n"
                         "  - If requesting a log file, follow the macro titled: TECH: Request log file - Using Mailbird Number 2 (paraphrase, but keep ALL steps).\n"
+                        f"{log_attachment_hint}"
                         "  - If the ticket is unclear, ask for the missing details and request a screenshot (macro: REQUEST:: Ask for a screenshot).\n"
                         '  - If suggesting remove/re-add or reinstall, include backup-first steps (close Mailbird; File Explorer → C:\\Users\\"your user name"\\AppData\\Local; copy the Mailbird folder).\n'
                         "  - If a refund is requested for Premium Pay Once or Premium Yearly, propose the 50% option first (refund experiment macro).\n"
@@ -4834,6 +5266,7 @@ async def _generate_reply(
                     "  Many thanks for contacting the Mailbird Customer Happiness Team.\n"
                     "- Zendesk ticket policies (follow when applicable):\n"
                     "  - If requesting a log file, follow the macro titled: TECH: Request log file - Using Mailbird Number 2 (paraphrase, but keep ALL steps).\n"
+                    f"{log_attachment_hint}"
                     "  - If the ticket is unclear, ask for the missing details and request a screenshot (macro: REQUEST:: Ask for a screenshot).\n"
                     '  - If suggesting remove/re-add or reinstall, include backup-first steps (close Mailbird; File Explorer → C:\\Users\\"your user name"\\AppData\\Local; copy the Mailbird folder).\n'
                     "  - If a refund is requested for Premium Pay Once or Premium Yearly, propose the 50% option first (refund experiment macro).\n"
@@ -4913,6 +5346,79 @@ async def _generate_reply(
                         state.model = rewrite_model
                     except Exception:
                         pass
+            # Build context report for observability and post-run inspection.
+            try:
+                tool_messages = [
+                    msg
+                    for msg in (learning_messages or result_payload.get("messages") or [])
+                    if isinstance(msg, BaseMessage)
+                ]
+                tool_usage = _extract_tool_usage(tool_messages)
+                tools_requested = sorted(tool_usage.get("requested", set()))
+                tools_executed = sorted(tool_usage.get("executed", set()))
+                web_tools = sorted(set(tools_executed) & WEB_SEARCH_TOOL_NAMES)
+                subagents = sorted(_extract_subagent_deployments(tool_messages))
+            except Exception:
+                tools_requested = []
+                tools_executed = []
+                web_tools = []
+                subagents = []
+
+            memory_stats: dict[str, Any] = {}
+            if isinstance(result_scratchpad, dict):
+                system_bucket = result_scratchpad.get("_system", {})
+                if isinstance(system_bucket, dict):
+                    stats = system_bucket.get("memory_stats")
+                    if isinstance(stats, dict):
+                        memory_stats = stats
+
+            context_report = {
+                "attachments": {
+                    **(attachment_type_counts or _summarize_attachment_types(attachments)),
+                    "attachment_url_scrubbed": attachment_url_scrubbed,
+                },
+                "internal_sources": {
+                    "macro_ok": macro_ok,
+                    "kb_ok": kb_ok,
+                    "feedme_ok": feedme_ok,
+                    "pattern_ok": pattern_ok,
+                    "pattern_similar_count": pattern_similar_count,
+                    "pattern_playbook_compiled": pattern_playbook_compiled,
+                    "web_ok": web_ok,
+                    "internal_ok": internal_ok,
+                    "macro_hits": (preflight_metrics or {}).get("macro_hits")
+                    if preflight_metrics
+                    else None,
+                    "kb_hits": (preflight_metrics or {}).get("kb_hits")
+                    if preflight_metrics
+                    else None,
+                    "feedme_hits": (preflight_metrics or {}).get("feedme_hits")
+                    if preflight_metrics
+                    else None,
+                },
+                "memory": {
+                    "memory_ui_enabled": memory_stats.get("memory_ui_retrieval_enabled"),
+                    "mem0_enabled": memory_stats.get("mem0_retrieval_enabled"),
+                    "memory_ui_retrieved": memory_stats.get("memory_ui_retrieved"),
+                    "mem0_retrieved": memory_stats.get("mem0_retrieved"),
+                    "retrieval_error": memory_stats.get("retrieval_error"),
+                },
+                "tools": {
+                    "requested": tools_requested,
+                    "executed": tools_executed,
+                    "web_tools": web_tools,
+                    "subagents_deployed": subagents,
+                    "log_diagnoser_used": "log_diagnoser" in tools_executed,
+                    "log_analysis_notes": len(result_log_notes)
+                    if isinstance(result_log_notes, dict)
+                    else 0,
+                },
+                "models": {
+                    "provider": str(use_provider),
+                    "model": str(agent_model),
+                    "rewrite_model": rewrite_model,
+                },
+            }
     finally:
         try:
             if attachments:
@@ -4934,6 +5440,7 @@ async def _generate_reply(
         kb_articles_used=sorted(set(kb_articles_used)),
         macros_used=sorted(set(macros_used)),
         learning_messages=learning_messages,
+        context_report=context_report,
     )
 
 
@@ -5160,7 +5667,20 @@ async def _process_window(
             )
             reply = run.reply
             use_html = bool(getattr(settings, "zendesk_use_html", True))
-            gate_issues = _quality_gate_issues(reply, use_html=use_html)
+            has_log_attachments = False
+            try:
+                attachments_report = (
+                    run.context_report.get("attachments")
+                    if isinstance(run.context_report, dict)
+                    else {}
+                )
+                if isinstance(attachments_report, dict):
+                    has_log_attachments = int(attachments_report.get("logs") or 0) > 0
+            except Exception:
+                has_log_attachments = False
+            gate_issues = _quality_gate_issues(
+                reply, use_html=use_html, has_log_attachments=has_log_attachments
+            )
             if gate_issues:
                 raise RuntimeError(f"quality_gate_failed: {','.join(gate_issues)}")
             # Try HTML if enabled; fallback signature without use_html for test stubs
@@ -5176,17 +5696,57 @@ async def _process_window(
                 await asyncio.to_thread(
                     zc.add_internal_note, tid, reply, add_tag="mb_auto_triaged"
                 )
+            completed_at = datetime.now(timezone.utc).isoformat()
+            status_details: dict[str, Any] = {
+                "processing_started_at": now_iso,
+                "processing_completed_at": completed_at,
+            }
+            context_payload: dict[str, Any]
+            if isinstance(run.context_report, dict):
+                context_payload = run.context_report
+            elif run.context_report is None:
+                context_payload = {"error": "context_report_unavailable"}
+            else:
+                context_payload = {"value": str(run.context_report)}
+            try:
+                json.dumps(context_payload)
+            except TypeError:
+                try:
+                    context_payload = json.loads(
+                        json.dumps(context_payload, default=str)
+                    )
+                except Exception:
+                    context_payload = {"error": "context_report_serialization_failed"}
+            status_details["context_report"] = context_payload
             await supa._exec(
                 lambda: supa.client.table("zendesk_pending_tickets")
                 .update(
                     {
                         "status": "processed",
-                        "processed_at": datetime.now(timezone.utc).isoformat(),
+                        "processed_at": completed_at,
+                        "status_details": status_details,
                     }
                 )
                 .eq("id", row["id"])
                 .execute()
             )
+            if not dry_run:
+                try:
+                    last_public_comment_at = await _resolve_last_public_comment_at(
+                        zc,
+                        tid,
+                        comments if isinstance(comments, list) else None,
+                    )
+                    await _write_zendesk_thread_handoff(
+                        run=run,
+                        last_public_comment_at=last_public_comment_at,
+                    )
+                except Exception as exc:
+                    logger.debug(
+                        "zendesk_handoff_capture_failed ticket_id=%s error=%s",
+                        tid,
+                        str(exc)[:180],
+                    )
             _queue_post_resolution_learning(run, dry_run=dry_run)
             processed += 1
             gemini_remaining = (
@@ -5359,6 +5919,9 @@ async def start_background_scheduler() -> None:
                 webhook_retention_days=7,
                 queue_retention_days=getattr(
                     settings, "zendesk_queue_retention_days", 30
+                ),
+                session_retention_days=int(
+                    getattr(settings, "zendesk_session_retention_days", 7) or 7
                 ),
             )
         except Exception as e:

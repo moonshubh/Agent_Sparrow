@@ -25,7 +25,7 @@ import {
   Sparkles,
 } from 'lucide-react';
 import { toast } from 'sonner';
-import { useMemoryMe, useMemoryStats, useDuplicateCandidates, useImportMemorySources } from '../hooks';
+import { useMemoryMe, useMemoryStats, useDuplicateCandidates, useImportZendeskTagged } from '../hooks';
 import { MemorySearch } from './MemorySearch';
 import { MemoryForm } from './MemoryForm';
 import { GraphErrorBoundary } from './GraphErrorBoundary';
@@ -90,7 +90,7 @@ export default function MemoryClient() {
   const isLocalBypass = process.env.NEXT_PUBLIC_LOCAL_AUTH_BYPASS === 'true';
   const isAdmin = isLocalBypass ? true : meQuery.data?.is_admin ?? false;
   const { data: duplicates } = useDuplicateCandidates('pending', { enabled: isAdmin });
-  const importSources = useImportMemorySources();
+  const importZendesk = useImportZendeskTagged();
 
   const availableEntityTypes = useMemo(() => {
     const counts = stats?.entity_types;
@@ -145,25 +145,24 @@ export default function MemoryClient() {
 
   const handleImportSources = useCallback(async () => {
     try {
-      const result = await importSources.mutateAsync({
-        include_issue_resolutions: true,
-        include_playbook_entries: true,
-        include_playbook_files: true,
-        include_mem0_primary: true,
+      const result = await importZendesk.mutateAsync({
+        tag: 'mb_playbook',
         limit: 200,
-        include_playbook_embeddings: false,
       });
 
-      toast.success(
-        `Imported ${result.issue_resolutions_imported} issue patterns, ${result.playbook_entries_imported} playbook entries, ${result.playbook_files_imported} playbook files, and ${result.mem0_primary_imported} mem0 facts`
-      );
+      if (!result.queued) {
+        toast.error(result.message || 'Import could not be queued');
+        return;
+      }
+      const taskLabel = result.task_id ? ` (task ${result.task_id})` : '';
+      toast.success(result.message || `Import queued${taskLabel}`);
       refetchStats();
       setGraphKey((prev) => prev + 1);
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'Import failed';
       toast.error(message);
     }
-  }, [importSources, refetchStats]);
+  }, [importZendesk, refetchStats]);
 
   const toggleSidebar = useCallback(() => {
     setSidebarCollapsed((prev) => !prev);
@@ -465,7 +464,7 @@ export default function MemoryClient() {
               <motion.button
                 className="memory-sidebar-action"
                 onClick={handleImportSources}
-                disabled={importSources.isPending}
+                disabled={importZendesk.isPending}
                 whileHover={{ scale: 1.02 }}
                 whileTap={{ scale: 0.98 }}
                 transition={springConfig}
@@ -479,7 +478,7 @@ export default function MemoryClient() {
                       animate={{ opacity: 1 }}
                       exit={{ opacity: 0 }}
                     >
-                      {importSources.isPending ? 'Importing…' : 'Import Knowledge'}
+                      {importZendesk.isPending ? 'Queueing…' : 'Import Knowledge'}
                     </motion.span>
                   )}
                 </AnimatePresence>

@@ -1228,3 +1228,26 @@ class ImportMemorySourcesResponse(BaseModel):
     mem0_primary_imported: int = Field(default=0, ge=0)
     mem0_primary_skipped: int = Field(default=0, ge=0)
     mem0_primary_failed: int = Field(default=0, ge=0)
+
+
+class ImportZendeskTaggedRequest(BaseModel):
+    """Admin request to queue Zendesk ticket ingestion for Memory UI."""
+
+    tag: str = Field(
+        default="mb_playbook",
+        description="Zendesk tag to filter tickets for ingestion.",
+    )
+    limit: int = Field(
+        default=200,
+        ge=1,
+        le=2000,
+        description="Max tickets to enqueue for processing.",
+    )
+
+
+class ImportZendeskTaggedResponse(BaseModel):
+    """Response for queued Zendesk import task."""
+
+    queued: bool = Field(default=True)
+    task_id: Optional[str] = Field(default=None)
+    message: str = Field(default="Zendesk import queued")

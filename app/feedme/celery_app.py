@@ -67,6 +67,7 @@ celery_app.conf.update(
         'app.feedme.tasks.process_transcript': {'queue': 'feedme_processing'},
         'app.feedme.tasks.generate_text_chunks_and_embeddings': {'queue': 'feedme_embeddings'},
         'app.feedme.tasks.generate_ai_tags': {'queue': 'feedme_processing'},
+        'app.feedme.tasks.import_zendesk_tagged': {'queue': 'feedme_processing'},
         'app.feedme.tasks.health_check': {'queue': 'feedme_health'},
     },
     

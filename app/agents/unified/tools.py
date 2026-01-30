@@ -58,6 +58,7 @@ from app.agents.unified.minimax_tools import get_minimax_tools, is_minimax_avail
 
 
 TOOL_RATE_LIMIT_BUCKET = "internal.helper"
+_TAVILY_QUOTA_EXHAUSTED = False
 ALLOWED_SUPABASE_TABLES = {
     "knowledge_base",
     "mailbird_knowledge",
@@ -213,6 +214,14 @@ def _firecrawl_client_for_key(api_key: Optional[str]) -> FirecrawlTool:
 
 def _firecrawl_client() -> FirecrawlTool:
     return _firecrawl_client_for_key(settings.firecrawl_api_key)
+
+
+def _mark_tavily_quota_exhausted(error_message: str) -> None:
+    global _TAVILY_QUOTA_EXHAUSTED
+    if _TAVILY_QUOTA_EXHAUSTED:
+        return
+    _TAVILY_QUOTA_EXHAUSTED = True
+    logger.warning("tavily_quota_exhausted", error=error_message[:200])
 
 
 @lru_cache(maxsize=1)
@@ -795,6 +804,47 @@ def _serialize_tool_output(payload: Any) -> str:
         return json.dumps(payload, ensure_ascii=False, default=str)
     except Exception:
         return str(payload)
+
+
+_TRANSIENT_SUPABASE_ERRORS: tuple[str, ...] = (
+    "server disconnected",
+    "connection terminated",
+    "connection reset",
+    "timeout",
+    "timed out",
+    "temporarily unavailable",
+)
+
+
+def _is_transient_supabase_error(error: str) -> bool:
+    lowered = (error or "").lower()
+    return any(token in lowered for token in _TRANSIENT_SUPABASE_ERRORS)
+
+
+async def _run_supabase_query_with_retry(
+    query_fn: Callable[[], Any],
+    *,
+    label: str,
+    retries: int = 2,
+    base_delay: float = 0.6,
+) -> Any:
+    for attempt in range(retries + 1):
+        try:
+            return await asyncio.to_thread(query_fn)
+        except Exception as exc:
+            message = str(exc)
+            if attempt < retries and _is_transient_supabase_error(message):
+                wait_sec = base_delay * (attempt + 1)
+                logger.warning(
+                    "supabase_query_retry",
+                    label=label,
+                    attempt=attempt + 1,
+                    wait_sec=wait_sec,
+                    error=message[:180],
+                )
+                await asyncio.sleep(wait_sec)
+                continue
+            raise
 
 
 def _tool_cache_enabled() -> bool:
@@ -1708,6 +1758,13 @@ async def web_search_tool(
         except Exception:
             return cached
     _cache_hit_miss(False, cache_key)
+    if _TAVILY_QUOTA_EXHAUSTED:
+        return {
+            "error": "web_search_failed",
+            "message": "Tavily quota exhausted in this process. Use Minimax or Firecrawl instead.",
+            "quota_exceeded": True,
+            "fallback_suggestion": "Use minimax_web_search or firecrawl_search for web discovery.",
+        }
 
     for attempt in range(max_retries):
         try:
@@ -1761,9 +1818,17 @@ async def web_search_tool(
                     quota_exceeded=tavily_quota,
                     attempt=attempt + 1,
                 )
+                if tavily_quota:
+                    _mark_tavily_quota_exhausted(error_message)
                 return {
                     "error": "web_search_failed",
                     "message": error_message,
+                    "quota_exceeded": tavily_quota,
+                    "fallback_suggestion": (
+                        "Use minimax_web_search or firecrawl_search for web discovery."
+                        if tavily_quota
+                        else None
+                    ),
                 }
             await asyncio.sleep(1 * (attempt + 1))  # Exponential backoff
 
@@ -1778,6 +1843,13 @@ async def tavily_extract_tool(
 
     if input is None:
         input = TavilyExtractInput(urls=urls or [])
+
+    if _TAVILY_QUOTA_EXHAUSTED:
+        return {
+            "error": "tavily_extract_failed",
+            "message": "Tavily quota exhausted in this process. Use Firecrawl for extraction.",
+            "quota_exceeded": True,
+        }
 
     tavily = _tavily_client()
     try:
@@ -2685,7 +2757,8 @@ def get_registered_tools() -> List[BaseTool]:
             feedme_search_tool,
             supabase_query_tool,
             log_diagnoser_tool,
-            generate_image_tool,  # Gemini Nano Banana Pro image generation
+            memory_search_tool,
+            memory_list_tool,
             write_article_tool,  # Rich article/report artifact creation
             read_skill_tool,  # Progressive skill disclosure - load full skill on demand
             get_weather,
@@ -3921,8 +3994,9 @@ async def db_grep_search_tool(
                 query_builder = query_builder.like("content", ilike_pattern)
             else:
                 query_builder = query_builder.ilike("content", ilike_pattern)
-            kb_resp = await asyncio.to_thread(
-                lambda: query_builder.limit(kb_limit).execute()
+            kb_resp = await _run_supabase_query_with_retry(
+                lambda: query_builder.limit(kb_limit).execute(),
+                label="db_grep_kb",
             )
             for row in kb_resp.data or []:
                 content = row.get("content") or row.get("markdown") or ""
@@ -3964,8 +4038,9 @@ async def db_grep_search_tool(
                 query_builder = query_builder.like("comment_value", ilike_pattern)
             else:
                 query_builder = query_builder.ilike("comment_value", ilike_pattern)
-            macro_resp = await asyncio.to_thread(
-                lambda: query_builder.limit(macro_limit).execute()
+            macro_resp = await _run_supabase_query_with_retry(
+                lambda: query_builder.limit(macro_limit).execute(),
+                label="db_grep_macros",
             )
             for row in macro_resp.data or []:
                 results.append(
@@ -3999,8 +4074,9 @@ async def db_grep_search_tool(
                 query_builder = query_builder.like("content", ilike_pattern)
             else:
                 query_builder = query_builder.ilike("content", ilike_pattern)
-            feedme_resp = await asyncio.to_thread(
-                lambda: query_builder.limit(feedme_limit * 2).execute()
+            feedme_resp = await _run_supabase_query_with_retry(
+                lambda: query_builder.limit(feedme_limit * 2).execute(),
+                label="db_grep_feedme",
             )
 
             # Deduplicate by conversation

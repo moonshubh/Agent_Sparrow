@@ -361,6 +361,8 @@ settings = Settings()
 | `MEMORY_UI_TENANT_ID` | Tenant ID for Memory UI | Backend |
 | `NEXT_PUBLIC_API_URL` | Backend API URL | Frontend |
 | `NEXT_PUBLIC_SUPABASE_URL` | Supabase URL | Frontend |
+| `ZENDESK_DRY_RUN` | Skip real Zendesk note posting when `true` | Backend |
+| `API_KEY_ENCRYPTION_SECRET` | Encryption key for API keys (required in prod) | Backend |
 
 ### Security Checklist
 - [ ] No secrets in code or version control
@@ -454,6 +456,93 @@ repos:
 3. **Type Check**: `pnpm typecheck` + `mypy app/`
 4. **Test**: `pnpm test` + `pytest --cov=app`
 5. **Build**: `pnpm build`
+
+## Zendesk Integration Conventions
+
+### File Organization
+Zendesk integration code lives in `app/integrations/zendesk/`:
+- `scheduler.py` - Ticket processing orchestration, context report persistence, attachment handling
+- `client.py` - Zendesk API wrapper, attachment fetching (`public_only=True`), PII redaction
+- `attachments.py` - URL scrubbing, attachment type summarization, log file detection
+- `spam_guard.py` - Rate-limiting and deduplication for internal note posting
+
+### Key Patterns
+
+#### Attachment Handling
+- Only process **public comments** — never expose private/internal data to the agent
+- Fetch attachments via Zendesk API (signed URLs expire); do not embed raw URLs in agent output
+- Scrub all Zendesk attachment URLs from generated content before posting
+- Summarize attachment types for the agent context instead of passing raw file data
+
+#### Memory & Retrieval for Zendesk
+- Zendesk runs use `use_server_memory=True` in `GraphState` for read access
+- Memory UI retrieval is gated by `ENABLE_MEMORY_UI_RETRIEVAL` env var
+- Zendesk runs are **read-only** for memory — they do not write new memories
+- mem0 is optional; if the package is missing, only Memory UI is queried
+
+#### Reply Formatting Rules
+- Internal notes must use **"Suggested Reply only"** format
+- A sanitization pass removes internal planning artifacts, scratchpad references, and raw tool output
+- Replies must follow policy: proper greeting, empathetic tone, no unsupported claims
+- No log requests if log attachments are already present
+
+#### Context Report Persistence
+- Every processed ticket gets a `context_report` persisted to `zendesk_pending_tickets.status_details`
+- Uses JSON serialization with fallback for non-serializable values
+- Reports include evidence summary, tool usage, and memory retrieval stats
+
+#### Telemetry
+- `zendesk_run_telemetry` logs tool usage, memory stats, and evidence summaries
+- All telemetry is captured as LangSmith metadata (no separate metrics infrastructure)
+
+### Testing Zendesk Changes
+```bash
+# Set ZENDESK_DRY_RUN=false in .env for real note posting
+# Start system, then check:
+# 1. zendesk_pending_tickets status in Supabase
+# 2. Backend logs: grep -i zendesk system_logs/backend/backend.log
+# 3. Internal notes posted to correct tickets
+# 4. context_report persisted in status_details
+```
+
+## Reliability & Error Handling Patterns
+
+### Transient Database Retries
+Use `_run_supabase_query_with_retry` from `app/agents/tools/tool_executor.py` for Supabase queries that may fail transiently:
+```python
+# Retries 2x with backoff for patterns in _TRANSIENT_SUPABASE_ERRORS
+result = await _run_supabase_query_with_retry(lambda: supabase.table("t").select("*").execute())
+```
+
+### Web Tool Fallback Chain
+- Primary: Tavily for web search
+- Fallback: Minimax when Tavily quota is exhausted
+- Firecrawl: For URL-specific content extraction
+- All web tools have retry configuration for transient failures
+
+### Retrieval Bounds Clamping
+Always clamp `max_results_per_source` to stay within tool validation limits. The scheduler enforces this before passing to `db_unified_search`.
+
+### Serialization Safety
+When persisting JSON to Supabase JSONB columns, wrap with try/except for `TypeError` (non-serializable values) and fall back to a simplified representation.
+
+## Memory UI Frontend Conventions
+
+### Zendesk Import Flow
+- The "Import Knowledge" button in `MemoryClient.tsx` triggers `importZendeskTagged` via the `useImportZendeskTagged` hook
+- Backend endpoint: `POST /api/v1/memory/import/zendesk-tagged`
+- Imported tickets get `review_status='pending_review'` in the `memories_new` table
+- Toast notifications for success/error feedback
+
+### Authenticated Image Rendering
+- `MemoryMarkdown.tsx` uses a custom `img` component that routes through the backend asset proxy
+- Asset proxy endpoint: `GET /api/v1/memory/assets/{bucket}/{object_path}`
+- This avoids exposing signed Supabase storage URLs to the browser
+
+### TypeScript Types
+Zendesk import types are in `frontend/src/features/memory/types/index.ts`:
+- `ImportZendeskTaggedRequest` - Request payload with ticket IDs and options
+- `ImportZendeskTaggedResponse` - Response with import status and counts
 
 ## Architecture Principles
 

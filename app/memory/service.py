@@ -341,6 +341,10 @@ class MemoryService:
     # Internal helpers
     # ---------------------------------------------------------------------
 
+    def is_available(self) -> bool:
+        """Return True when the mem0 backend is usable."""
+        return self._is_configured()
+
     def _is_configured(self) -> bool:
         """Return True when the memory backend is ready for use."""
         if not settings.should_enable_agent_memory():
