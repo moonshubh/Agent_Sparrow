@@ -266,6 +266,7 @@ async def evaluate_spam_guard(
             ticket_id,
             allowed_extensions=(".png", ".jpg", ".jpeg"),
             max_bytes=3 * 1024 * 1024,
+            public_only=True,
         )
         label, confidence = await _classify_explicit_images(ticket_id, attachments)
     finally:

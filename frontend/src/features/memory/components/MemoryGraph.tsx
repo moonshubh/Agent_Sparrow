@@ -22,8 +22,7 @@ import {
   ZoomIn,
   ZoomOut,
 } from 'lucide-react';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
+import MemoryMarkdown from './MemoryMarkdown';
 import {
   useAcknowledgeEntity,
   useEntityRelatedMemories,
@@ -766,9 +765,7 @@ export default function MemoryGraph({
                     <div className="memory-detail-section">
                       <label>Content</label>
                       <div className="memory-detail-markdown">
-                        <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                          {inspectedMemoryQuery.data.content}
-                        </ReactMarkdown>
+                        <MemoryMarkdown content={inspectedMemoryQuery.data.content} />
                       </div>
                     </div>
                     <div className="memory-detail-grid">

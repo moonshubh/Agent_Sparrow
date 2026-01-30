@@ -16,6 +16,7 @@ Endpoints:
 """
 
 import logging
+import mimetypes
 import asyncio
 import json
 import re
@@ -25,10 +26,11 @@ from uuid import UUID, NAMESPACE_URL, uuid5
 
 from fastapi import APIRouter, HTTPException, Depends, status
 from fastapi import Query
-from fastapi.responses import RedirectResponse
+from fastapi.responses import RedirectResponse, Response
 
 from app.core.security import get_current_user, TokenPayload
 from app.core.settings import settings
+from app.db.supabase.client import get_supabase_client
 from app.memory.title import derive_memory_title, ensure_memory_title
 from app.memory.memory_ui_service import MemoryUIService, get_memory_ui_service as _get_service
 
@@ -60,6 +62,8 @@ from .schemas import (
     DuplicateCandidateRecord,
     ImportMemorySourcesRequest,
     ImportMemorySourcesResponse,
+    ImportZendeskTaggedRequest,
+    ImportZendeskTaggedResponse,
     MergeRelationshipsRequest,
     MergeRelationshipsResponse,
     SplitRelationshipCommitRequest,
@@ -137,6 +141,41 @@ async def get_memory_me(
         roles=roles,
         is_admin="admin" in roles,
     )
+
+
+@router.get(
+    "/assets/{bucket}/{object_path:path}",
+    summary="Fetch a stored memory asset (Admin only)",
+    description="Streams a stored memory asset from Supabase Storage (admin-only).",
+    responses={
+        200: {"description": "Asset retrieved successfully"},
+        401: {"description": "Authentication required"},
+        403: {"description": "Admin access required"},
+        404: {"description": "Asset not found"},
+    },
+)
+async def get_memory_asset(
+    bucket: str,
+    object_path: str,
+    admin_user: Annotated[TokenPayload, Depends(require_admin)],
+) -> Response:
+    if not bucket or not object_path:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Asset not found")
+
+    supabase = get_supabase_client()
+    try:
+        data = await supabase._exec(
+            lambda: supabase.client.storage.from_(bucket).download(object_path)
+        )
+    except Exception as exc:
+        logger.debug("memory_asset_download_failed bucket=%s path=%s error=%s", bucket, object_path, str(exc)[:180])
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Asset not found")
+
+    if not data:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Asset not found")
+
+    mime_type, _ = mimetypes.guess_type(object_path)
+    return Response(content=data, media_type=mime_type or "application/octet-stream")
 
 
 def _escape_like_pattern(value: str) -> str:
@@ -3845,6 +3884,45 @@ async def import_memory_sources(
     admin_user: Annotated[TokenPayload, Depends(require_admin)],
     service: MemoryUIService = Depends(get_memory_ui_service),
 ) -> ImportMemorySourcesResponse:
+    raise HTTPException(
+        status_code=status.HTTP_410_GONE,
+        detail="Memory import disabled. Use /api/v1/memory/import/zendesk-tagged instead.",
+    )
+
+@router.post(
+    "/import/zendesk-tagged",
+    response_model=ImportZendeskTaggedResponse,
+    summary="Queue Zendesk tagged ticket import (Admin only)",
+    description=(
+        "Queue a background job to ingest solved/closed Zendesk tickets tagged for MB_playbook "
+        "learning into the Memory UI."
+    ),
+    responses={
+        200: {"description": "Import queued"},
+        401: {"description": "Authentication required"},
+        403: {"description": "Admin access required"},
+        500: {"description": "Internal server error"},
+    },
+)
+async def import_zendesk_tagged(
+    request: ImportZendeskTaggedRequest,
+    admin_user: Annotated[TokenPayload, Depends(require_admin)],
+) -> ImportZendeskTaggedResponse:
+    try:
+        from app.feedme.tasks import import_zendesk_tagged as import_task
+
+        task = import_task.delay(tag=request.tag, limit=request.limit)
+        return ImportZendeskTaggedResponse(
+            queued=True,
+            task_id=getattr(task, "id", None),
+            message="Zendesk import queued",
+        )
+    except Exception as exc:
+        logger.exception("Failed to queue Zendesk import: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to queue Zendesk import",
+        )
     supabase = service._get_supabase()
 
     agent_id = getattr(settings, "memory_ui_agent_id", "sparrow") or "sparrow"
