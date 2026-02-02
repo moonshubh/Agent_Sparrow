@@ -251,7 +251,7 @@
   flex: 1;
   display: flex;
   flex-direction: column;
-  height: 100vh;
+  min-height: 0;
   overflow: hidden;
   position: relative;
 }
@@ -265,6 +265,7 @@
   border-bottom: 1px solid var(--lc-border-light);
   background-color: var(--lc-surface-primary);
   min-height: 56px;
+  flex-shrink: 0;
 }
 
 .lc-header-left {
@@ -357,6 +358,8 @@
   /* Vertical padding only */
   scroll-behavior: smooth;
   background-color: var(--lc-surface-primary);
+  min-height: 0;
+  scrollbar-gutter: stable;
 }
 
 .lc-messages-inner {
@@ -394,9 +397,10 @@
   background-color: var(--lc-user-bg);
   border: 1px solid var(--lc-user-border);
   border-radius: 16px;
-  padding: 12px 14px;
+  padding: 12px 14px 22px;
   color: var(--lc-text-primary);
   box-shadow: 0 8px 20px rgba(0, 0, 0, 0.18);
+  position: relative;
 }
 
 .lc-user-bubble-text {
@@ -420,6 +424,17 @@
 
 .lc-user-bubble-toggle:hover {
   color: var(--lc-accent-hover);
+}
+
+.lc-message-timestamp {
+  position: absolute;
+  right: 10px;
+  bottom: 6px;
+  font-size: 11px;
+  color: var(--lc-text-tertiary);
+  opacity: 0;
+  transition: opacity 0.15s ease;
+  pointer-events: none;
 }
 
 .lc-user-attachments {
@@ -865,6 +880,10 @@
   opacity: 1;
 }
 
+.lc-message-canvas:hover .lc-message-timestamp {
+  opacity: 1;
+}
+
 .lc-action-btn {
   display: flex;
   align-items: center;
@@ -888,6 +907,7 @@
 .lc-input-container {
   padding: 16px 24px 24px;
   background: linear-gradient(to top, var(--lc-surface-primary) 85%, transparent);
+  flex-shrink: 0;
 }
 
 .lc-input-wrapper {
@@ -917,10 +937,9 @@
 }
 
 .lc-textarea {
-  /* Modern CSS auto-grow: field-sizing handles height automatically */
-  field-sizing: content;
+  /* Auto-grow is handled via JS for consistent paste behavior */
   /* Flex child settings */
-  flex: 1 1 0%;
+  flex: 1 1 auto;
   min-width: 0;
   box-sizing: border-box;
   resize: none;
@@ -936,11 +955,12 @@
   /* Text wrapping */
   word-wrap: break-word;
   overflow-wrap: break-word;
+  overflow-wrap: anywhere;
   word-break: break-word;
   white-space: pre-wrap;
   /* Overflow for when content exceeds max-height */
   overflow-x: hidden;
-  overflow-y: auto;
+  overflow-y: hidden;
 }
 
 .lc-textarea::placeholder {
@@ -1065,6 +1085,16 @@
   font-size: 16px;
   color: var(--lc-text-primary);
   outline: none;
+  resize: none;
+  line-height: 1.5;
+  max-height: 200px;
+  min-height: 24px;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  overflow-x: hidden;
+  overflow-y: hidden;
 }
 
 .lc-hero-input::placeholder {
@@ -1074,8 +1104,7 @@
 .lc-hero-input-actions {
   position: absolute;
   right: 8px;
-  top: 50%;
-  transform: translateY(-50%);
+  bottom: 8px;
   display: flex;
   align-items: center;
 }

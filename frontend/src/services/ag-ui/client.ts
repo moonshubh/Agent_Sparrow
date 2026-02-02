@@ -107,6 +107,7 @@ export interface Message {
   name?: string;
   tool_call_id?: string;
   metadata?: Record<string, unknown>;
+  created_at?: string;
 }
 
 // RunAgentInput type for CopilotKit compatibility

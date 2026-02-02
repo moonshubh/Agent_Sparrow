@@ -3,7 +3,9 @@
 import React, { memo, useState, useCallback, useEffect, useRef } from 'react';
 import dynamic from 'next/dynamic';
 import type { Message } from '@/services/ag-ui/client';
-import { useAgent } from '@/features/librechat/AgentContext';
+import type { AttachmentInput } from '@/services/ag-ui/types';
+import type { TraceStep, TodoItem, ToolEvidenceUpdateEvent } from '@/services/ag-ui/event-types';
+import type { SubagentRun } from '@/features/librechat/AgentContext';
 import { ThinkingPanel } from './ThinkingPanel';
 import { ResearchProgress } from './ResearchProgress';
 import { ToolIndicator } from './ToolIndicator';
@@ -24,9 +26,21 @@ interface MessageItemProps {
   isLast: boolean;
   isStreaming: boolean;
   sessionId?: string;
+  attachments?: AttachmentInput[];
+  thinkingTrace?: TraceStep[];
+  activeTraceStepId?: string;
+  activeTools?: string[];
+  todos?: TodoItem[];
+  toolEvidence?: Record<string, ToolEvidenceUpdateEvent>;
+  subagentActivity?: Map<string, SubagentRun>;
+  researchProgress?: number;
+  researchStatus?: ResearchStatus;
+  isResearching?: boolean;
   onEditMessage?: (messageId: string, content: string) => void;
   onRegenerate?: () => void;
 }
+
+type ResearchStatus = 'idle' | 'running' | 'stuck' | 'failed';
 
 const LONG_MESSAGE_THRESHOLD = 500;
 const THINK_BLOCK_REGEX = /:::\s*(?:thinking|think|analysis|reasoning)\s*([\s\S]*?)\s*:::/gi;
@@ -37,6 +51,13 @@ const THINK_ORPHAN_CLOSE_REGEX = /(?:^|\n)\s*:::\s*(?=\n|$)/g;
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+
+const EMPTY_ATTACHMENTS: AttachmentInput[] = [];
+const EMPTY_ACTIVE_TOOLS: string[] = [];
+const EMPTY_THINKING_TRACE: TraceStep[] = [];
+const EMPTY_TODOS: TodoItem[] = [];
+const EMPTY_TOOL_EVIDENCE: Record<string, ToolEvidenceUpdateEvent> = {};
+const EMPTY_SUBAGENT_ACTIVITY: Map<string, SubagentRun> = new Map();
 
 function extractThinking(
   content: string
@@ -222,6 +243,18 @@ const parseLogDiagnoserPayload = (
   return { answer: lines.join('\n'), notes };
 };
 
+const getTimestampLabels = (
+  value?: string
+): { label: string; title: string } | null => {
+  if (!value?.trim()) return null;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  return {
+    label: date.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' }),
+    title: date.toLocaleString(),
+  };
+};
+
 const MessageAvatar = memo(function MessageAvatar({ role }: { role: 'user' | 'assistant' }) {
   if (role === 'user') {
     return (
@@ -335,29 +368,37 @@ export const MessageItem = memo(function MessageItem({
   isLast,
   isStreaming,
   sessionId,
+  attachments = EMPTY_ATTACHMENTS,
+  thinkingTrace,
+  activeTraceStepId,
+  activeTools = EMPTY_ACTIVE_TOOLS,
+  todos,
+  toolEvidence,
+  subagentActivity,
+  researchProgress = 0,
+  researchStatus = 'idle',
+  isResearching = false,
   onEditMessage,
   onRegenerate,
 }: MessageItemProps) {
-  const {
-    thinkingTrace,
-    activeTraceStepId,
-    activeTools,
-    messageAttachments,
-    todos,
-    toolEvidence,
-    subagentActivity,
-    researchProgress,
-    researchStatus,
-    isResearching,
-  } = useAgent();
   const [isEditing, setIsEditing] = useState(false);
   const [editContent, setEditContent] = useState('');
   const [isUserExpanded, setIsUserExpanded] = useState(false);
 
-  const attachments = messageAttachments[message.id] || [];
+  const effectiveThinkingTrace = thinkingTrace ?? EMPTY_THINKING_TRACE;
+  const effectiveTodos = todos ?? EMPTY_TODOS;
+  const effectiveToolEvidence = toolEvidence ?? EMPTY_TOOL_EVIDENCE;
+  const effectiveSubagentActivity = subagentActivity ?? EMPTY_SUBAGENT_ACTIVITY;
   const metadata = isRecord(message.metadata) ? message.metadata : undefined;
   const isUserMessage = message.role === 'user';
   const isToolMessage = message.role === 'tool';
+  const createdAtValue =
+    typeof message.created_at === 'string'
+      ? message.created_at
+      : typeof metadata?.created_at === 'string'
+        ? metadata.created_at
+        : undefined;
+  const timestamp = getTimestampLabels(createdAtValue);
 
   const rawContent = typeof message.content === 'string' ? message.content : '';
   const attachmentsOnly =
@@ -373,7 +414,7 @@ export const MessageItem = memo(function MessageItem({
   const showStreaming = isLast && isStreaming && !isUserMessage && !mainContent;
   const shouldRegisterArtifacts = !(isLast && isStreaming);
   const showThinking = !isUserMessage && (
-    thinking || (isLast && (thinkingTrace.length > 0 || subagentActivity.size > 0))
+    thinking || (isLast && (effectiveThinkingTrace.length > 0 || effectiveSubagentActivity.size > 0))
   );
   const showResearchProgress =
     isLast && !isUserMessage && (isResearching || researchStatus !== 'idle');
@@ -463,6 +504,11 @@ export const MessageItem = memo(function MessageItem({
                   {isUserExpanded ? 'Show Less' : 'Read More'}
                 </button>
               )}
+              {timestamp && (
+                <span className="lc-message-timestamp" aria-hidden="true" title={timestamp.title}>
+                  {timestamp.label}
+                </span>
+              )}
             </div>
           ) : (
             <div className="lc-agent-meta">
@@ -482,11 +528,11 @@ export const MessageItem = memo(function MessageItem({
           <div className="lc-thinking-wrapper">
             <ThinkingPanel
               thinking={thinking}
-              traceSteps={isLast ? thinkingTrace : undefined}
-              todos={isLast ? todos : undefined}
-              toolEvidence={isLast ? toolEvidence : undefined}
+              traceSteps={isLast ? effectiveThinkingTrace : undefined}
+              todos={isLast ? effectiveTodos : undefined}
+              toolEvidence={isLast ? effectiveToolEvidence : undefined}
               activeStepId={isLast ? activeTraceStepId : undefined}
-              subagentActivity={isLast ? subagentActivity : undefined}
+              subagentActivity={isLast ? effectiveSubagentActivity : undefined}
               isStreaming={isLast && isStreaming}
             />
             {showResearchProgress && (

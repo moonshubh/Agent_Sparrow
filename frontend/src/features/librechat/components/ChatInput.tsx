@@ -13,7 +13,7 @@ interface ChatInputProps {
   onInitialInputUsed?: () => void;
 }
 
-export function ChatInput({ initialInput, onInitialInputUsed }: ChatInputProps) {
+export function ChatInput({ initialInput, onInitialInputUsed, isLanding }: ChatInputProps) {
   const { sendMessage, isStreaming, abortRun } = useAgent();
   const [input, setInput] = useState('');
   const [attachments, setAttachments] = useState<AttachmentInput[]>([]);
@@ -23,6 +23,14 @@ export function ChatInput({ initialInput, onInitialInputUsed }: ChatInputProps) 
   const lastAppliedInitialInputRef = useRef<string | null>(null);
   const readersRef = useRef<FileReader[]>([]);
   const isMountedRef = useRef(true);
+  const maxTextareaHeight = 200;
+  const normalizePastedText = useCallback((value: string): string => {
+    return value
+      .replace(/\r\n?/g, '\n')
+      .replace(/[\u2028\u2029]/g, '\n')
+      .replace(/[\u00A0\u1680\u2000-\u200A\u202F\u205F\u3000\u2007\u2060]/g, ' ')
+      .replace(/[\u200B\u200C\u200D\uFEFF]/g, '');
+  }, []);
 
   const inferMimeType = useCallback((file: globalThis.File): string => {
     if (file.type) {
@@ -57,32 +65,20 @@ export function ChatInput({ initialInput, onInitialInputUsed }: ChatInputProps) 
     return 'application/octet-stream';
   }, []);
 
-  // Check if browser supports field-sizing: content (CSS handles auto-grow)
-  // If not supported, use JavaScript fallback
-  const supportsFieldSizing = useRef<boolean | null>(null);
-
-  useLayoutEffect(() => {
-    const textarea = textareaRef.current;
+  const resizeTextarea = useCallback((target?: HTMLTextAreaElement | null) => {
+    const textarea = target ?? textareaRef.current;
     if (!textarea) return;
 
-    // Check support once
-    if (supportsFieldSizing.current === null) {
-      supportsFieldSizing.current = CSS.supports('field-sizing', 'content');
-    }
-
-    // If CSS field-sizing is supported, no JS needed - CSS handles everything
-    if (supportsFieldSizing.current) {
-      return;
-    }
-
-    // Fallback for browsers without field-sizing support
-    // Reset height to get accurate scrollHeight
-    textarea.style.height = '0px';
+    textarea.style.height = 'auto';
     const scrollHeight = textarea.scrollHeight;
-    const newHeight = Math.max(24, Math.min(scrollHeight, 200));
+    const newHeight = Math.max(24, Math.min(scrollHeight, maxTextareaHeight));
     textarea.style.height = `${newHeight}px`;
-    textarea.style.overflowY = scrollHeight > 200 ? 'auto' : 'hidden';
-  }, [input]);
+    textarea.style.overflowY = scrollHeight > maxTextareaHeight ? 'auto' : 'hidden';
+  }, [maxTextareaHeight]);
+
+  useLayoutEffect(() => {
+    resizeTextarea();
+  }, [input, resizeTextarea]);
 
   // Handle initial input from starters
   useEffect(() => {
@@ -125,7 +121,7 @@ export function ChatInput({ initialInput, onInitialInputUsed }: ChatInputProps) 
 
     // Reset textarea height
     if (textareaRef.current) {
-      textareaRef.current.style.height = '24px';
+      textareaRef.current.style.height = '';
     }
 
     await sendMessage(message, currentAttachments);
@@ -149,11 +145,34 @@ export function ChatInput({ initialInput, onInitialInputUsed }: ChatInputProps) 
 
   const handleInputChange = useCallback((e: ChangeEvent<HTMLTextAreaElement>) => {
     setInput(e.target.value);
-  }, []);
+    resizeTextarea(e.currentTarget);
+  }, [resizeTextarea]);
 
-  const handlePaste = useCallback(() => {
-    // useLayoutEffect will handle resize when input state updates
-  }, []);
+  const handlePaste = useCallback((e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    const rawText =
+      e.clipboardData?.getData('text/plain') ??
+      e.clipboardData?.getData('text') ??
+      '';
+    if (!rawText) {
+      requestAnimationFrame(() => resizeTextarea(e.currentTarget));
+      return;
+    }
+
+    e.preventDefault();
+    const normalized = normalizePastedText(rawText);
+    const target = e.currentTarget;
+    const start = target.selectionStart ?? input.length;
+    const end = target.selectionEnd ?? input.length;
+    const nextValue = `${input.slice(0, start)}${normalized}${input.slice(end)}`;
+    setInput(nextValue);
+
+    requestAnimationFrame(() => {
+      const cursor = start + normalized.length;
+      target.selectionStart = cursor;
+      target.selectionEnd = cursor;
+      resizeTextarea(target);
+    });
+  }, [input, normalizePastedText, resizeTextarea]);
 
   const handleFileSelect = useCallback(async (files: FileList | null) => {
     if (!files || files.length === 0) return;
@@ -257,7 +276,11 @@ export function ChatInput({ initialInput, onInitialInputUsed }: ChatInputProps) 
   }, []);
 
   return (
-    <div className="lc-input-container">
+    <div
+      className="lc-input-container"
+      style={isLanding ? { display: 'none' } : undefined}
+      aria-hidden={isLanding ? 'true' : undefined}
+    >
       <div className="lc-input-wrapper">
         {/* Attachments preview */}
         {attachments.length > 0 && (
@@ -310,6 +333,7 @@ export function ChatInput({ initialInput, onInitialInputUsed }: ChatInputProps) 
             onChange={handleInputChange}
             onKeyDown={handleKeyDown}
             onPaste={handlePaste}
+            wrap="soft"
             rows={1}
             disabled={isStreaming}
             aria-label="Message input"

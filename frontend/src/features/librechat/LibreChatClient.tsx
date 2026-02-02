@@ -22,6 +22,7 @@ function convertToMessage(record: ChatMessageRecord): Message {
     role: record.message_type === 'tool' ? 'tool' : record.message_type,
     content: record.content,
     metadata: record.metadata || undefined,
+    created_at: record.created_at || undefined,
   };
 }
 

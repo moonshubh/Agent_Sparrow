@@ -102,7 +102,10 @@ export function LibreChatView({
       if (msg.role === 'user') return true;
       if (msg.role !== 'assistant') return false;
       const text = typeof msg.content === 'string' ? msg.content.trim() : '';
-      return Boolean(text);
+      const metadata = msg.metadata as Record<string, unknown> | undefined;
+      const artifacts = Array.isArray(metadata?.artifacts) ? metadata?.artifacts : undefined;
+      const hasArtifacts = Boolean(artifacts && artifacts.length > 0);
+      return Boolean(text) || hasArtifacts;
     });
 
     if (isStreaming && filtered.length > 0 && filtered[filtered.length - 1].role === 'user') {
@@ -118,7 +121,7 @@ export function LibreChatView({
     return filtered;
   }, [messages, isStreaming]);
 
-  const isLandingPage = displayMessages.length === 0 && !isStreaming;
+  const isLandingPage = messages.length === 0 && !isStreaming;
 
   return (
     <div className="lc-layout">
@@ -157,14 +160,12 @@ export function LibreChatView({
           </div>
         )}
 
-        {/* Input Area - Only show if not on landing page (Landing has its own input) */}
-        {!isLandingPage && (
-          <ChatInput
-            isLanding={isLandingPage}
-            initialInput={initialInput}
-            onInitialInputUsed={handleInputUsed}
-          />
-        )}
+        {/* Input Area - keep mounted to avoid layout flicker */}
+        <ChatInput
+          isLanding={isLandingPage}
+          initialInput={initialInput}
+          onInitialInputUsed={handleInputUsed}
+        />
       </main>
 
       <ArtifactPanel />

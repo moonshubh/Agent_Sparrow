@@ -120,11 +120,13 @@ export const sessionsAPI = {
 
   async postMessage(
     sessionId: string | number,
-    data: ChatMessagePayload
+    data: ChatMessagePayload,
+    options?: RequestInit
   ): Promise<ChatMessageRecord> {
-    return apiClient.post<ChatMessageRecord>(
+    return apiClient.post<ChatMessageRecord, ChatMessagePayload>(
       `/api/v1/chat-sessions/${sessionId}/messages`,
-      data
+      data,
+      options
     )
   },
 
