@@ -1275,12 +1275,6 @@ def _strip_html(text: str) -> str:
     return re.sub(r"<[^>]+>", " ", text).strip()
 
 
-def _truncate_text(text: str, max_chars: int) -> str:
-    if len(text) <= max_chars:
-        return text
-    return text[:max_chars].rstrip() + "…"
-
-
 def _extract_public_comment_text(comment: dict[str, Any]) -> str:
     body = comment.get("body") or comment.get("html_body") or ""
     if not isinstance(body, str):
@@ -1313,7 +1307,7 @@ async def _summarize_ticket_with_llm(
     *,
     ticket_id: str,
     subject: str,
-    comment_excerpt: str,
+    public_conversation: str,
     log_summary: str,
 ) -> str:
     from app.agents.unified.provider_factory import build_chat_model, build_summarization_model
@@ -1321,12 +1315,14 @@ async def _summarize_ticket_with_llm(
 
     prompt = (
         "You are summarizing a resolved Zendesk ticket for internal playbook memory.\n"
-        "Summarize the public conversation and key troubleshooting details in 4-8 bullet points.\n"
+        "Summarize the public conversation and key troubleshooting details in detailed bullet points.\n"
+        "Use as many bullet points as needed to capture important steps, observations, and the resolution.\n"
+        "Include concrete troubleshooting actions, errors, settings, and outcomes when present.\n"
         "If a resolution is evident, include it.\n"
         "Do NOT include personal data or email addresses.\n\n"
         f"Ticket ID: {ticket_id}\n"
         f"Subject: {subject}\n\n"
-        f"Public comment excerpts:\n{comment_excerpt}\n\n"
+        f"Public conversation:\n{public_conversation}\n\n"
         f"Log findings:\n{log_summary}\n"
     ).strip()
 
@@ -1458,15 +1454,17 @@ def import_zendesk_tagged(self, tag: str = "mb_playbook", limit: int = 200) -> d
                 if text:
                     public_comments.append(text)
 
-            comment_excerpt_lines = [
-                f"- {_truncate_text(redact_pii(c), 280)}"
-                for c in public_comments[:8]
-                if c
-            ]
-            if not comment_excerpt_lines and description:
-                comment_excerpt_lines = [f"- {_truncate_text(redact_pii(description), 280)}"]
+            public_conversation_lines: list[str] = []
+            for idx, comment_text in enumerate(public_comments, start=1):
+                cleaned = redact_pii(comment_text).strip()
+                if cleaned:
+                    public_conversation_lines.append(f"### Public Comment {idx}\n{cleaned}")
+            if not public_conversation_lines and description:
+                cleaned_description = redact_pii(description).strip()
+                if cleaned_description:
+                    public_conversation_lines = [f"### Ticket Description\n{cleaned_description}"]
 
-            comment_excerpt = "\n".join(comment_excerpt_lines).strip()
+            public_conversation = "\n\n".join(public_conversation_lines).strip()
 
             attachments = []
             image_assets: list[dict[str, Any]] = []
@@ -1543,7 +1541,7 @@ def import_zendesk_tagged(self, tag: str = "mb_playbook", limit: int = 200) -> d
             summary_text = await _summarize_ticket_with_llm(
                 ticket_id=ticket_id,
                 subject=subject,
-                comment_excerpt=comment_excerpt,
+                public_conversation=public_conversation,
                 log_summary=log_summary,
             )
             summary_text = redact_pii(summary_text)
@@ -1566,9 +1564,9 @@ def import_zendesk_tagged(self, tag: str = "mb_playbook", limit: int = 200) -> d
                 lines.append(summary_text)
                 lines.append("")
 
-            if comment_excerpt:
-                lines.append("## Public comment excerpts")
-                lines.append(comment_excerpt)
+            if public_conversation:
+                lines.append("## Public conversation (full)")
+                lines.append(public_conversation)
                 lines.append("")
 
             if log_findings:
@@ -1581,7 +1579,7 @@ def import_zendesk_tagged(self, tag: str = "mb_playbook", limit: int = 200) -> d
                             content = section.get("content")
                             line_nums = section.get("line_numbers")
                             if content:
-                                snippet = _truncate_text(redact_pii(str(content)), 280)
+                                snippet = redact_pii(str(content))
                                 if line_nums:
                                     lines.append(f"  - ({line_nums}) {snippet}")
                                 else:

@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import ReactMarkdown from 'react-markdown';
+import ReactMarkdown, { defaultUrlTransform } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { supabase } from '@/services/supabase';
 import { getAuthToken as getLocalToken } from '@/services/auth/local-auth';
@@ -101,6 +101,11 @@ export default function MemoryMarkdown({ content }: { content: string }) {
   return (
     <ReactMarkdown
       remarkPlugins={[remarkGfm]}
+      urlTransform={(value) => {
+        if (value.startsWith(MEMORY_ASSET_PREFIX)) return value;
+        if (value.startsWith(`${MEMORY_API_BASE}/assets/`)) return value;
+        return defaultUrlTransform(value);
+      }}
       components={{
         img: ({ src, alt }) => <AuthenticatedImage src={src} alt={alt} />,
       }}

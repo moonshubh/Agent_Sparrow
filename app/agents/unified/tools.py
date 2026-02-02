@@ -4172,7 +4172,7 @@ async def db_context_search_tool(
                 lambda: client.client.table("mailbird_knowledge")
                 .select("*")
                 .eq("id", numeric_id)
-                .single()
+                .maybe_single()
                 .execute()
             )
             if resp.data:
@@ -4197,7 +4197,7 @@ async def db_context_search_tool(
                 lambda: client.client.table("zendesk_macros")
                 .select("*")
                 .eq("zendesk_id", zendesk_id)
-                .single()
+                .maybe_single()
                 .execute()
             )
             if resp.data:

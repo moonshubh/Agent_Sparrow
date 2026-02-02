@@ -5540,6 +5540,35 @@ async def _process_window(
         if gemini_remaining <= 0 and not dry_run:
             logger.warning("Gemini daily limit exhausted; stopping processing")
             break
+        note_logged = False
+
+        def log_internal_note_result(
+            posted: bool,
+            reason: str | None = None,
+            error: str | None = None,
+        ) -> None:
+            nonlocal note_logged
+            if note_logged:
+                return
+            note_logged = True
+            posted_label = "yes" if posted else "no"
+            if error:
+                logger.info(
+                    "zendesk_internal_note_result ticket_id=%s posted=%s reason=%s dry_run=%s error=%s",
+                    tid,
+                    posted_label,
+                    reason or "unspecified",
+                    dry_run,
+                    error,
+                )
+            else:
+                logger.info(
+                    "zendesk_internal_note_result ticket_id=%s posted=%s reason=%s dry_run=%s",
+                    tid,
+                    posted_label,
+                    reason or "unspecified",
+                    dry_run,
+                )
         try:
             # Claim row BEFORE doing any heavy work to avoid duplicate compute across workers
             now_iso = datetime.now(timezone.utc).isoformat()
@@ -5603,6 +5632,10 @@ async def _process_window(
                     .eq("id", row["id"])
                     .execute()
                 )
+                log_internal_note_result(
+                    posted=False,
+                    reason=f"excluded:{exclusion.reason}",
+                )
                 continue
 
             # Spam guard: skip obvious spam bursts to avoid LLM processing costs.
@@ -5622,22 +5655,35 @@ async def _process_window(
                 comments=comments,
             )
             if spam_decision and spam_decision.skip:
+                spam_note_posted = False
+                spam_error: str | None = None
                 try:
-                    await asyncio.to_thread(
+                    spam_resp = await asyncio.to_thread(
                         zc.add_internal_note,
                         tid,
                         spam_decision.note,
                         add_tag=spam_decision.tag,
                         use_html=False,
                     )
+                    spam_note_posted = not dry_run
+                    if spam_resp is None:
+                        spam_note_posted = False
+                    if isinstance(spam_resp, dict) and spam_resp.get("dry_run"):
+                        spam_note_posted = False
                 except ZendeskRateLimitError:
                     raise
                 except Exception as exc:
+                    spam_error = str(exc)[:180]
                     logger.warning(
                         "zendesk_spam_guard_note_failed ticket_id=%s error=%s",
                         tid,
                         str(exc)[:180],
                     )
+                log_internal_note_result(
+                    posted=spam_note_posted,
+                    reason="spam_guard",
+                    error=spam_error,
+                )
                 await supa._exec(
                     lambda: supa.client.table("zendesk_pending_tickets")
                     .update(
@@ -5685,7 +5731,7 @@ async def _process_window(
                 raise RuntimeError(f"quality_gate_failed: {','.join(gate_issues)}")
             # Try HTML if enabled; fallback signature without use_html for test stubs
             try:
-                await asyncio.to_thread(
+                note_resp = await asyncio.to_thread(
                     zc.add_internal_note,
                     tid,
                     reply,
@@ -5693,9 +5739,18 @@ async def _process_window(
                     use_html=use_html,
                 )
             except TypeError:
-                await asyncio.to_thread(
+                note_resp = await asyncio.to_thread(
                     zc.add_internal_note, tid, reply, add_tag="mb_auto_triaged"
                 )
+            note_posted = not dry_run
+            if note_resp is None:
+                note_posted = False
+            if isinstance(note_resp, dict) and note_resp.get("dry_run"):
+                note_posted = False
+            log_internal_note_result(
+                posted=note_posted,
+                reason="dry_run" if dry_run else "reply",
+            )
             completed_at = datetime.now(timezone.utc).isoformat()
             status_details: dict[str, Any] = {
                 "processing_started_at": now_iso,
@@ -5757,6 +5812,11 @@ async def _process_window(
             if retry_after is None:
                 retry_after = 60.0
             retry_after = max(5.0, float(retry_after) + 1.0)
+            log_internal_note_result(
+                posted=False,
+                reason="rate_limited",
+                error=f"{e.operation}:{e.request_id}" if e.request_id else e.operation,
+            )
             next_at = (
                 datetime.now(timezone.utc) + timedelta(seconds=retry_after)
             ).isoformat()
@@ -5786,6 +5846,11 @@ async def _process_window(
             logger.warning("posting failed for ticket %s: %s", tid, e)
             err = str(e)
             err_short = err[:500]
+            log_internal_note_result(
+                posted=False,
+                reason="exception",
+                error=err_short,
+            )
             # If credentials invalid (401/403), revert claim and stop this cycle
             if (
                 "Zendesk update failed: 401" in err

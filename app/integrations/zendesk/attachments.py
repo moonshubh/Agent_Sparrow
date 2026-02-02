@@ -247,7 +247,12 @@ def convert_to_unified_attachments(
                 size=att.size or file_size,
             ))
             size_mb = file_size / (1024 * 1024)
-            logger.info(f"Converted attachment for multimodal: {att.file_name} ({mime_type}, {size_mb:.2f}MB)")
+            logger.info(
+                "Converted attachment for multimodal attachment filename=%s mime=%s size_mb=%.2f",
+                att.file_name,
+                mime_type,
+                size_mb,
+            )
 
         except Exception as e:
             logger.warning(f"Failed to convert attachment {att.file_name}: {e}")

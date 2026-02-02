@@ -145,19 +145,18 @@ async def get_memory_me(
 
 @router.get(
     "/assets/{bucket}/{object_path:path}",
-    summary="Fetch a stored memory asset (Admin only)",
-    description="Streams a stored memory asset from Supabase Storage (admin-only).",
+    summary="Fetch a stored memory asset (Authenticated)",
+    description="Streams a stored memory asset from Supabase Storage (authenticated users only).",
     responses={
         200: {"description": "Asset retrieved successfully"},
         401: {"description": "Authentication required"},
-        403: {"description": "Admin access required"},
         404: {"description": "Asset not found"},
     },
 )
 async def get_memory_asset(
     bucket: str,
     object_path: str,
-    _admin_user: Annotated[TokenPayload, Depends(require_admin)],
+    _current_user: Annotated[TokenPayload, Depends(get_current_user)],
     supabase: SupabaseClient = Depends(get_supabase_client),
 ) -> Response:
     if not bucket or not object_path:
