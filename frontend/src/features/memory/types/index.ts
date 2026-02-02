@@ -296,6 +296,11 @@ export interface ImportMemorySourcesRequest {
   include_mem0_primary?: boolean;
 }
 
+export interface ImportZendeskTaggedRequest {
+  tag?: string;
+  limit?: number;
+}
+
 export interface UpdateRelationshipRequest {
   source_entity_id: string;
   target_entity_id: string;
@@ -416,6 +421,12 @@ export interface ImportMemorySourcesResponse {
   mem0_primary_imported: number;
   mem0_primary_skipped: number;
   mem0_primary_failed: number;
+}
+
+export interface ImportZendeskTaggedResponse {
+  queued: boolean;
+  task_id?: string | null;
+  message?: string;
 }
 
 export interface MergeRelationshipsResponse {

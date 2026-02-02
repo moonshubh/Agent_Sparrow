@@ -11,6 +11,7 @@ This module provides:
 """
 
 import traceback
+import os
 import time
 import asyncio
 from typing import Dict, Any, List, Optional
@@ -1259,6 +1260,414 @@ def update_parsed_content(conversation_id: int, parsed_content: str):
         logger.info(f"Updated parsed content for conversation {conversation_id}")
     except Exception as e:
         logger.error(f"Error updating parsed content for conversation {conversation_id}: {e}")
+
+
+# =============================================================================
+# Zendesk MB_playbook Import (Memory UI)
+# =============================================================================
+
+ZENDESK_IMPORT_IMAGE_BUCKET = os.getenv("ZENDESK_MEMORY_BUCKET", "memory-assets").strip() or "memory-assets"
+
+
+def _strip_html(text: str) -> str:
+    if not text:
+        return ""
+    return re.sub(r"<[^>]+>", " ", text).strip()
+
+
+def _truncate_text(text: str, max_chars: int) -> str:
+    if len(text) <= max_chars:
+        return text
+    return text[:max_chars].rstrip() + "…"
+
+
+def _extract_public_comment_text(comment: dict[str, Any]) -> str:
+    body = comment.get("body") or comment.get("html_body") or ""
+    if not isinstance(body, str):
+        return ""
+    return _strip_html(body)
+
+
+def _extract_last_public_comment_at(comments: list[dict[str, Any]]) -> str | None:
+    latest = None
+    for comment in comments:
+        if not isinstance(comment, dict):
+            continue
+        if comment.get("public") is not True:
+            continue
+        created_at = comment.get("created_at")
+        if not isinstance(created_at, str):
+            continue
+        try:
+            dt = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        if latest is None or dt > latest[0]:
+            latest = (dt, created_at)
+    if latest is None:
+        return None
+    return latest[1]
+
+
+async def _summarize_ticket_with_llm(
+    *,
+    ticket_id: str,
+    subject: str,
+    comment_excerpt: str,
+    log_summary: str,
+) -> str:
+    from app.agents.unified.provider_factory import build_chat_model, build_summarization_model
+    from app.agents.unified.minimax_tools import is_minimax_available
+
+    prompt = (
+        "You are summarizing a resolved Zendesk ticket for internal playbook memory.\n"
+        "Summarize the public conversation and key troubleshooting details in 4-8 bullet points.\n"
+        "If a resolution is evident, include it.\n"
+        "Do NOT include personal data or email addresses.\n\n"
+        f"Ticket ID: {ticket_id}\n"
+        f"Subject: {subject}\n\n"
+        f"Public comment excerpts:\n{comment_excerpt}\n\n"
+        f"Log findings:\n{log_summary}\n"
+    ).strip()
+
+    try:
+        if is_minimax_available():
+            model = build_chat_model("minimax", "minimax/MiniMax-M2.1", role="summarization")
+        else:
+            model = build_summarization_model()
+        response = await model.ainvoke(prompt)
+        text = getattr(response, "content", "") if response is not None else ""
+        if isinstance(text, list):
+            parts = []
+            for part in text:
+                if isinstance(part, dict) and part.get("type") == "text":
+                    parts.append(str(part.get("text") or ""))
+                elif isinstance(part, str):
+                    parts.append(part)
+            return "\n".join(p for p in parts if p).strip()
+        return str(text).strip()
+    except Exception as exc:
+        logger.debug("zendesk_import_summary_failed ticket_id=%s error=%s", ticket_id, str(exc)[:180])
+        return ""
+
+
+async def _analyze_log_file(
+    *,
+    file_name: str,
+    content: str,
+    question: str,
+) -> dict[str, Any]:
+    from app.agents.unified.tools import log_diagnoser_tool
+
+    result = await log_diagnoser_tool(
+        file_name=file_name,
+        log_content=content,
+        question=question,
+    )
+    return result if isinstance(result, dict) else {}
+
+
+@celery_app.task(bind=True, base=CallbackTask, name='app.feedme.tasks.import_zendesk_tagged')
+def import_zendesk_tagged(self, tag: str = "mb_playbook", limit: int = 200) -> dict[str, Any]:
+    """Queue ingestion of solved/closed Zendesk tickets tagged for MB_playbook learning."""
+    async def _run() -> dict[str, Any]:
+        from app.integrations.zendesk.client import ZendeskClient, ZendeskRateLimitError
+        from app.integrations.zendesk.attachments import (
+            fetch_ticket_attachments,
+            cleanup_attachments,
+        )
+        from app.agents.unified.image_store import store_image_bytes
+        from app.agents.harness.store import SparrowWorkspaceStore
+        from app.memory.title import ensure_memory_title
+        from app.memory.memory_ui_service import get_memory_ui_service
+        from app.security.pii_redactor import redact_pii, redact_pii_from_dict
+        from uuid import uuid5, NAMESPACE_URL
+
+        settings = current_settings()
+        if not (settings.zendesk_subdomain and settings.zendesk_email and settings.zendesk_api_token):
+            raise RuntimeError("Zendesk credentials missing")
+
+        zc = ZendeskClient(
+            subdomain=str(settings.zendesk_subdomain),
+            email=str(settings.zendesk_email),
+            api_token=str(settings.zendesk_api_token),
+            dry_run=bool(getattr(settings, "zendesk_dry_run", True)),
+        )
+
+        tag_value = (tag or "mb_playbook").strip()
+        ticket_limit = max(1, int(limit))
+
+        queries = [
+            f"type:ticket tags:{tag_value} status:solved",
+            f"type:ticket tags:{tag_value} status:closed",
+        ]
+        tickets: list[dict[str, Any]] = []
+        for q in queries:
+            try:
+                batch = await asyncio.to_thread(zc.search_tickets, q, per_page=100, max_pages=10)
+                if batch:
+                    tickets.extend(batch)
+            except ZendeskRateLimitError:
+                raise
+            except Exception as exc:
+                logger.warning("zendesk_search_failed query=%s error=%s", q, str(exc)[:180])
+
+        deduped: dict[str, dict[str, Any]] = {}
+        for item in tickets:
+            tid = item.get("id")
+            if tid is None:
+                continue
+            deduped[str(tid)] = item
+        ticket_rows = list(deduped.values())[:ticket_limit]
+
+        supabase = get_supabase_client()
+        service = get_memory_ui_service()
+        agent_id = getattr(settings, "memory_ui_agent_id", "sparrow") or "sparrow"
+        tenant_id = getattr(settings, "memory_ui_tenant_id", "mailbot") or "mailbot"
+
+        imported = skipped = failed = 0
+
+        for row in ticket_rows:
+            ticket_id = str(row.get("id") or "")
+            if not ticket_id:
+                continue
+
+            memory_id = str(uuid5(NAMESPACE_URL, f"zendesk-ticket:{ticket_id}"))
+
+            try:
+                ticket = await asyncio.to_thread(zc.get_ticket, ticket_id)
+            except Exception:
+                ticket = row if isinstance(row, dict) else {}
+
+            subject = str(ticket.get("subject") or row.get("subject") or "").strip()
+            description = str(ticket.get("description") or "").strip()
+            tags = ticket.get("tags") if isinstance(ticket, dict) else None
+            tags_list = [t for t in tags if isinstance(t, str)] if isinstance(tags, list) else []
+
+            try:
+                comments = await asyncio.to_thread(zc.get_ticket_comments_all, ticket_id, public_only=True)
+            except Exception:
+                comments = []
+            last_public_comment_at = _extract_last_public_comment_at(comments or [])
+
+            public_comments: list[str] = []
+            for comment in comments or []:
+                if not isinstance(comment, dict):
+                    continue
+                text = _extract_public_comment_text(comment)
+                if text:
+                    public_comments.append(text)
+
+            comment_excerpt_lines = [
+                f"- {_truncate_text(redact_pii(c), 280)}"
+                for c in public_comments[:8]
+                if c
+            ]
+            if not comment_excerpt_lines and description:
+                comment_excerpt_lines = [f"- {_truncate_text(redact_pii(description), 280)}"]
+
+            comment_excerpt = "\n".join(comment_excerpt_lines).strip()
+
+            attachments = []
+            image_assets: list[dict[str, Any]] = []
+            log_findings: list[dict[str, Any]] = []
+            try:
+                attachments = await asyncio.to_thread(
+                    fetch_ticket_attachments,
+                    ticket_id,
+                    allowed_extensions=(".log", ".txt", ".png", ".jpg", ".jpeg", ".gif", ".webp"),
+                    public_only=True,
+                )
+
+                for att in attachments:
+                    if not att.local_path:
+                        continue
+                    name = att.file_name or "attachment"
+                    ext = (name or "").lower()
+                    if att.content_type and att.content_type.startswith("image/"):
+                        try:
+                            with open(att.local_path, "rb") as f:
+                                data = f.read()
+                            stored = await store_image_bytes(
+                                data,
+                                mime_type=att.content_type or "image/png",
+                                bucket=ZENDESK_IMPORT_IMAGE_BUCKET,
+                                public=False,
+                                path_prefix=f"zendesk/{ticket_id}",
+                            )
+                            image_assets.append(
+                                {
+                                    "file_name": name,
+                                    "bucket": stored.bucket,
+                                    "path": stored.path,
+                                    "mime_type": stored.mime_type,
+                                    "width": stored.width,
+                                    "height": stored.height,
+                                }
+                            )
+                        except Exception as exc:
+                            logger.warning("zendesk_import_image_store_failed ticket_id=%s file=%s error=%s", ticket_id, name, str(exc)[:180])
+                    elif ext.endswith((".log", ".txt")):
+                        try:
+                            with open(att.local_path, "r", encoding="utf-8", errors="ignore") as f:
+                                raw = f.read(12000)
+                            if raw:
+                                question = f"Summarize the most relevant errors for ticket {ticket_id}: {subject}"
+                                analysis = await _analyze_log_file(
+                                    file_name=name,
+                                    content=raw,
+                                    question=question,
+                                )
+                                summary = str(analysis.get("overall_summary") or "").strip()
+                                if summary:
+                                    log_findings.append(
+                                        {
+                                            "file_name": name,
+                                            "summary": redact_pii(summary),
+                                            "priority_concerns": analysis.get("priority_concerns") or [],
+                                            "relevant_log_sections": analysis.get("relevant_log_sections") or [],
+                                        }
+                                    )
+                        except Exception as exc:
+                            logger.warning("zendesk_import_log_analyze_failed ticket_id=%s file=%s error=%s", ticket_id, name, str(exc)[:180])
+            finally:
+                if attachments:
+                    cleanup_attachments(attachments)
+
+            log_summary_lines = []
+            for item in log_findings:
+                line = f"- {item.get('file_name')}: {item.get('summary')}"
+                log_summary_lines.append(line)
+            log_summary = "\n".join(log_summary_lines).strip()
+
+            summary_text = await _summarize_ticket_with_llm(
+                ticket_id=ticket_id,
+                subject=subject,
+                comment_excerpt=comment_excerpt,
+                log_summary=log_summary,
+            )
+            summary_text = redact_pii(summary_text)
+
+            subdomain = str(settings.zendesk_subdomain).strip()
+            zendesk_url = (
+                f"https://{subdomain}.zendesk.com/agent/tickets/{ticket_id}" if subdomain else ""
+            )
+
+            lines: list[str] = []
+            if subject:
+                lines.append(f"Zendesk Ticket {ticket_id}: {subject}")
+            else:
+                lines.append(f"Zendesk Ticket {ticket_id}")
+            if zendesk_url:
+                lines.append(f"Zendesk URL: {zendesk_url}")
+            lines.append("")
+            if summary_text:
+                lines.append("## Summary")
+                lines.append(summary_text)
+                lines.append("")
+
+            if comment_excerpt:
+                lines.append("## Public comment excerpts")
+                lines.append(comment_excerpt)
+                lines.append("")
+
+            if log_findings:
+                lines.append("## Log findings")
+                for finding in log_findings:
+                    lines.append(f"- **{finding.get('file_name')}**: {finding.get('summary')}")
+                    sections = finding.get("relevant_log_sections") or []
+                    for section in sections[:2]:
+                        if isinstance(section, dict):
+                            content = section.get("content")
+                            line_nums = section.get("line_numbers")
+                            if content:
+                                snippet = _truncate_text(redact_pii(str(content)), 280)
+                                if line_nums:
+                                    lines.append(f"  - ({line_nums}) {snippet}")
+                                else:
+                                    lines.append(f"  - {snippet}")
+                lines.append("")
+
+            if image_assets:
+                lines.append("## Images (admin-only)")
+                for asset in image_assets:
+                    bucket = asset.get("bucket")
+                    path = asset.get("path")
+                    name = asset.get("file_name") or "attachment"
+                    if bucket and path:
+                        lines.append(f"- {name}")
+                        lines.append(f"![{name}](memory-asset://{bucket}/{path})")
+                lines.append("")
+
+            content = "\n".join(lines).strip()
+            if not content:
+                skipped += 1
+                continue
+
+            metadata = {
+                "source": "zendesk_mb_playbook",
+                "zendesk_ticket_id": ticket_id,
+                "zendesk_url": zendesk_url,
+                "tags": tags_list,
+                "image_assets": image_assets,
+                "log_findings": log_findings,
+                "last_public_comment_at": last_public_comment_at,
+                "imported_at": datetime.now(timezone.utc).isoformat(),
+            }
+
+            metadata = redact_pii_from_dict(metadata)
+            metadata = ensure_memory_title(metadata, content=content)
+
+            try:
+                embedding = await service.generate_embedding(content)
+            except Exception as exc:
+                logger.warning("zendesk_import_embedding_failed ticket_id=%s error=%s", ticket_id, str(exc)[:180])
+                failed += 1
+                continue
+
+            payload = {
+                "id": memory_id,
+                "content": redact_pii(content),
+                "metadata": metadata,
+                "source_type": "manual",
+                "agent_id": agent_id,
+                "tenant_id": tenant_id,
+                "review_status": "pending_review",
+                "confidence_score": 0.6,
+                "embedding": embedding,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }
+
+            try:
+                await supabase._exec(
+                    lambda: supabase.client.table("memories").insert(payload).execute()
+                )
+            except Exception as exc:
+                msg = str(exc).lower()
+                if "duplicate key" in msg or "unique constraint" in msg or "23505" in msg:
+                    skipped += 1
+                    continue
+                logger.warning("zendesk_import_insert_failed ticket_id=%s error=%s", ticket_id, str(exc)[:180])
+                failed += 1
+                continue
+
+            try:
+                store = SparrowWorkspaceStore(session_id=f"zendesk-{ticket_id}")
+                await store.cleanup_session_data()
+            except Exception as exc:
+                logger.debug("zendesk_import_cleanup_failed ticket_id=%s error=%s", ticket_id, str(exc)[:180])
+
+            imported += 1
+
+        return {
+            "imported": imported,
+            "skipped": skipped,
+            "failed": failed,
+            "tag": tag_value,
+        }
+
+    return asyncio.run(_run())
 
 
 # Task monitoring utilities

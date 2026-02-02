@@ -303,6 +303,67 @@ class ZendeskClient:
         except Exception:
             return []
 
+    def get_ticket_comments_all(
+        self, ticket_id: int | str, *, public_only: bool = False
+    ) -> List[Dict[str, Any]]:
+        """Return all comments for a ticket in chronological order."""
+        url = f"{self.base_url}/tickets/{ticket_id}/comments.json?sort_order=asc&include=attachments"
+        try:
+            self._throttle()
+            resp = self.session.get(url, headers=self._headers, timeout=30)
+            if resp.status_code == 429:
+                raise ZendeskRateLimitError.from_response(resp, operation="get_ticket_comments_all")
+            if resp.status_code >= 400:
+                return []
+            data = resp.json() if resp.headers.get("Content-Type", "").startswith("application/json") else {}
+            comments = data.get("comments") or []
+            if not isinstance(comments, list):
+                return []
+            if public_only:
+                return [c for c in comments if isinstance(c, dict) and c.get("public") is True]
+            return comments
+        except ZendeskRateLimitError:
+            raise
+        except Exception:
+            return []
+
+    def search_tickets(
+        self,
+        query: str,
+        *,
+        per_page: int = 100,
+        max_pages: int = 10,
+    ) -> List[Dict[str, Any]]:
+        """Search Zendesk tickets using the Search API (best-effort)."""
+        q = (query or "").strip()
+        if not q:
+            return []
+
+        page_limit = max(1, min(int(per_page), 100))
+        max_pages = max(1, int(max_pages))
+
+        results: List[Dict[str, Any]] = []
+        next_url = f"{self.base_url}/search.json?query={quote(q)}&per_page={page_limit}"
+        pages = 0
+
+        while next_url and pages < max_pages:
+            self._throttle()
+            resp = self.session.get(next_url, headers=self._headers, timeout=30)
+            if resp.status_code == 429:
+                raise ZendeskRateLimitError.from_response(resp, operation="search_tickets")
+            if resp.status_code >= 400:
+                break
+            data = resp.json() if resp.headers.get("Content-Type", "").startswith("application/json") else {}
+            batch = data.get("results") or []
+            if isinstance(batch, list):
+                for item in batch:
+                    if isinstance(item, dict) and item.get("result_type") == "ticket":
+                        results.append(item)
+            next_url = data.get("next_page")
+            pages += 1
+
+        return results
+
     def get_last_public_comment_snippet(self, ticket_id: int | str, max_chars: int = 600) -> Optional[str]:
         """Return the latest public comment body (plain text) truncated to max_chars.
 

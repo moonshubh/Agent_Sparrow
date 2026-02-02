@@ -45,6 +45,7 @@ def fetch_ticket_attachments(
     ticket_id: int | str,
     allowed_extensions: Iterable[str] = (".log", ".txt", ".png", ".jpg", ".jpeg", ".pdf", ".gif"),
     max_bytes: int = 10 * 1024 * 1024,  # 10 MB guardrail per file (support large logs)
+    public_only: bool = False,
 ) -> List[AttachmentInfo]:
     """
     Fetch allowed attachments for a ticket and download them to a temp folder.
@@ -60,6 +61,8 @@ def fetch_ticket_attachments(
     resp.raise_for_status()
     data = resp.json()
     comments = data.get("comments") or []
+    if public_only:
+        comments = [c for c in comments if isinstance(c, dict) and c.get("public") is True]
 
     results: List[AttachmentInfo] = []
     tmpdir: str | None = None
