@@ -4,7 +4,12 @@ on:
   push:
     branches:
       - main
-  workflow_dispatch: # Allow manual triggering
+  workflow_dispatch:
+    inputs:
+      notify_tag:
+        description: "Send Slack notification for this tag (e.g. v0.2.3). Leave empty to run release-please normally."
+        required: false
+        type: string
 
 permissions:
   contents: write
@@ -87,14 +92,26 @@ jobs:
   # -----------------------------------------------------------------
   notify-slack:
     needs: release-please
-    if: ${{ needs.release-please.outputs.release_created == 'true' }}
+    if: ${{ always() && (needs.release-please.outputs.release_created == 'true' || inputs.notify_tag != '') }}
     runs-on: ubuntu-latest
     steps:
+      - name: Resolve tag
+        id: resolve
+        run: |
+          # Manual dispatch overrides release-please output
+          if [ -n "${{ inputs.notify_tag }}" ]; then
+            TAG="${{ inputs.notify_tag }}"
+          else
+            TAG="${{ needs.release-please.outputs.tag_name }}"
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+
       - name: Fetch enriched release body
         id: fetch
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG_NAME: ${{ needs.release-please.outputs.tag_name }}
+          TAG_NAME: ${{ steps.resolve.outputs.tag }}
         run: |
           # Small delay to ensure release edit has propagated
           sleep 5
@@ -179,19 +196,19 @@ jobs:
           token: ${{ secrets.SLACK_BOT_TOKEN }}
           payload: |
             channel: "C09MV869UPK"
-            text: "🚀 Agent Sparrow ${{ needs.release-please.outputs.tag_name }} Released"
+            text: "🚀 Agent Sparrow ${{ steps.resolve.outputs.tag }} Released"
             blocks:
               - type: "header"
                 text:
                   type: "plain_text"
-                  text: "🚀 New Release: Agent Sparrow ${{ needs.release-please.outputs.tag_name }}"
+                  text: "🚀 New Release: Agent Sparrow ${{ steps.resolve.outputs.tag }}"
                   emoji: true
               - type: "section"
                 fields:
                   - type: "mrkdwn"
-                    text: "*Version:*\n${{ needs.release-please.outputs.version }}"
+                    text: "*Version:*\n${{ steps.resolve.outputs.version }}"
                   - type: "mrkdwn"
-                    text: "*Tag:*\n${{ needs.release-please.outputs.tag_name }}"
+                    text: "*Tag:*\n${{ steps.resolve.outputs.tag }}"
               - type: "divider"
               - type: "section"
                 text:
@@ -201,7 +218,7 @@ jobs:
               - type: "section"
                 text:
                   type: "mrkdwn"
-                  text: "📋 <${{ needs.release-please.outputs.html_url }}|View Full Release Notes on GitHub>"
+                  text: "📋 <https://github.com/${{ github.repository }}/releases/tag/${{ steps.resolve.outputs.tag }}|View Full Release Notes on GitHub>"
 
       - name: Notify Slack (multi-block)
         if: ${{ steps.changelog.outputs.has_overflow == 'true' }}
@@ -212,19 +229,19 @@ jobs:
           token: ${{ secrets.SLACK_BOT_TOKEN }}
           payload: |
             channel: "C09MV869UPK"
-            text: "🚀 Agent Sparrow ${{ needs.release-please.outputs.tag_name }} Released"
+            text: "🚀 Agent Sparrow ${{ steps.resolve.outputs.tag }} Released"
             blocks:
               - type: "header"
                 text:
                   type: "plain_text"
-                  text: "🚀 New Release: Agent Sparrow ${{ needs.release-please.outputs.tag_name }}"
+                  text: "🚀 New Release: Agent Sparrow ${{ steps.resolve.outputs.tag }}"
                   emoji: true
               - type: "section"
                 fields:
                   - type: "mrkdwn"
-                    text: "*Version:*\n${{ needs.release-please.outputs.version }}"
+                    text: "*Version:*\n${{ steps.resolve.outputs.version }}"
                   - type: "mrkdwn"
-                    text: "*Tag:*\n${{ needs.release-please.outputs.tag_name }}"
+                    text: "*Tag:*\n${{ steps.resolve.outputs.tag }}"
               - type: "divider"
               - type: "section"
                 text:
@@ -238,4 +255,4 @@ jobs:
               - type: "section"
                 text:
                   type: "mrkdwn"
-                  text: "📋 <${{ needs.release-please.outputs.html_url }}|View Full Release Notes on GitHub>"
+                  text: "📋 <https://github.com/${{ github.repository }}/releases/tag/${{ steps.resolve.outputs.tag }}|View Full Release Notes on GitHub>"

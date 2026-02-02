@@ -254,6 +254,39 @@ async def search_memories_text(
     agent_id: str | None = Query(default=None),
     tenant_id: str | None = Query(default=None),
 ) -> List[MemoryRecord]:
+    supabase = service._get_supabase()
+    trimmed = (query or "").strip()
+    if not trimmed:
+        return []
+
+    escaped = _escape_like_pattern(trimmed)
+    pattern = f"%{escaped}%"
+
+    try:
+        q = (
+            supabase.client.table("memories")
+            .select(service.MEMORY_SELECT_COLUMNS)
+            .ilike("content", pattern)
+            .gte("confidence_score", float(min_confidence))
+            .order("confidence_score", desc=True)
+            .limit(int(limit))
+        )
+        if agent_id:
+            q = q.eq("agent_id", agent_id)
+        if tenant_id:
+            q = q.eq("tenant_id", tenant_id)
+
+        resp = await supabase._exec(lambda: q.execute())
+        rows = list(resp.data or [])
+        return rows  # type: ignore[return-value]
+    except Exception as exc:
+        logger.exception("Error searching memories: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to search memories",
+        )
+
+
 @router.get(
     "/entities",
     response_model=List[MemoryEntityRecord],
