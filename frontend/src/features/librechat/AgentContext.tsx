@@ -683,6 +683,14 @@ const getToolCallIdFromMessageRecord = (msg: Record<string, unknown>): string =>
   return '';
 };
 
+const getCreatedAtFromMessageRecord = (msg: Record<string, unknown>): string | undefined => {
+  const direct = msg.created_at;
+  if (typeof direct === 'string' && direct.trim()) return direct.trim();
+  const alt = msg.createdAt;
+  if (typeof alt === 'string' && alt.trim()) return alt.trim();
+  return undefined;
+};
+
 const hasToolCallData = (msg: Record<string, unknown>): boolean => {
   const toolCalls = msg.tool_calls ?? msg.toolCalls;
   if (Array.isArray(toolCalls) && toolCalls.length > 0) return true;
@@ -712,6 +720,7 @@ const normalizeIncomingMessage = (raw: unknown, index: number): Message | null =
   const name = typeof raw.name === 'string' ? raw.name : undefined;
   const toolCallId = getToolCallIdFromMessageRecord(raw);
   const content = normalizeMessageContent(raw.content);
+  const createdAt = getCreatedAtFromMessageRecord(raw);
 
   // Remove assistant tool-call placeholder messages (no user-visible content).
   if (role === 'assistant' && hasToolCallData(raw) && !content.trim()) {
@@ -740,6 +749,7 @@ const normalizeIncomingMessage = (raw: unknown, index: number): Message | null =
     name,
     tool_call_id: toolCallId || undefined,
     metadata,
+    created_at: createdAt,
   };
 };
 
@@ -1207,6 +1217,7 @@ export function AgentProvider({
         id: crypto.randomUUID(),
         role: 'user',
         content,
+        created_at: new Date().toISOString(),
       };
       lastRunUserMessageIdRef.current = userMessage.id;
 
@@ -1352,6 +1363,7 @@ export function AgentProvider({
                   id: crypto.randomUUID(),
                   role: 'assistant',
                   content: buffer,
+                  created_at: new Date().toISOString(),
                 };
                 return [...prevMessages, assistantMessage];
               })();
@@ -1433,9 +1445,15 @@ export function AgentProvider({
                   (persistedToLocal.has(msg.id)
                     ? existingById.get(persistedToLocal.get(msg.id) as string)
                     : undefined);
-                if (!existing?.metadata) return msg;
+                if (!existing) return msg;
                 const mergedMetadata = mergeMetadata(msg.metadata, existing.metadata);
-                return mergedMetadata ? { ...msg, metadata: mergedMetadata } : msg;
+                const mergedCreatedAt = msg.created_at ?? existing.created_at;
+                if (mergedMetadata === msg.metadata && mergedCreatedAt === msg.created_at) return msg;
+                return {
+                  ...msg,
+                  metadata: mergedMetadata,
+                  created_at: mergedCreatedAt,
+                };
               });
 
               try {
@@ -1496,6 +1514,7 @@ export function AgentProvider({
                         id: crypto.randomUUID(),
                         role: 'assistant',
                         content: lastToolFormatted,
+                        created_at: new Date().toISOString(),
                       },
                     ];
                   }
@@ -1569,6 +1588,7 @@ export function AgentProvider({
                         id: crypto.randomUUID(),
                         role: 'assistant',
                         content: formattedFromTool,
+                        created_at: new Date().toISOString(),
                       },
                     ];
                   } else {
@@ -2054,6 +2074,7 @@ export function AgentProvider({
               id: crypto.randomUUID(),
               role: 'assistant',
               content: '',
+              created_at: new Date().toISOString(),
             };
             const nextMessages = [...currentMessages, fallbackMessage];
             currentMessages = nextMessages;

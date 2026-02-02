@@ -175,11 +175,19 @@ class StreamEventEmitter:
             ]
         return obj
 
-    def emit_custom_event(self, name: str, payload: Dict[str, Any]) -> None:
+    def emit_custom_event(
+        self,
+        name: str,
+        payload: Dict[str, Any],
+        *,
+        truncate: bool = True,
+    ) -> None:
         """Emit a custom AG-UI event."""
         if self.writer is None:
             return
-        sanitized_payload = self._truncate_strings_in_payload(payload)
+        sanitized_payload = (
+            self._truncate_strings_in_payload(payload) if truncate else payload
+        )
         self.writer({
             "event": "on_custom_event",
             "name": name,
@@ -289,7 +297,7 @@ class StreamEventEmitter:
         if page_url is not None:
             payload["pageUrl"] = page_url
 
-        self.emit_custom_event("image_artifact", payload)
+        self.emit_custom_event("image_artifact", payload, truncate=False)
 
         # Update last emission time after successful emit
         self._last_image_emission_time = time.time()

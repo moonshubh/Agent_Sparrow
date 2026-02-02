@@ -243,6 +243,18 @@ const parseLogDiagnoserPayload = (
   return { answer: lines.join('\n'), notes };
 };
 
+const getTimestampLabels = (
+  value?: string
+): { label: string; title: string } | null => {
+  if (!value?.trim()) return null;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  return {
+    label: date.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' }),
+    title: date.toLocaleString(),
+  };
+};
+
 const MessageAvatar = memo(function MessageAvatar({ role }: { role: 'user' | 'assistant' }) {
   if (role === 'user') {
     return (
@@ -380,6 +392,13 @@ export const MessageItem = memo(function MessageItem({
   const metadata = isRecord(message.metadata) ? message.metadata : undefined;
   const isUserMessage = message.role === 'user';
   const isToolMessage = message.role === 'tool';
+  const createdAtValue =
+    typeof message.created_at === 'string'
+      ? message.created_at
+      : typeof metadata?.created_at === 'string'
+        ? metadata.created_at
+        : undefined;
+  const timestamp = getTimestampLabels(createdAtValue);
 
   const rawContent = typeof message.content === 'string' ? message.content : '';
   const attachmentsOnly =
@@ -484,6 +503,11 @@ export const MessageItem = memo(function MessageItem({
                 >
                   {isUserExpanded ? 'Show Less' : 'Read More'}
                 </button>
+              )}
+              {timestamp && (
+                <span className="lc-message-timestamp" aria-hidden="true" title={timestamp.title}>
+                  {timestamp.label}
+                </span>
               )}
             </div>
           ) : (

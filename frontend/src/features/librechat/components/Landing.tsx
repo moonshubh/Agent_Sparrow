@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useCallback, useState, useRef, ChangeEvent } from 'react';
+import React, { useCallback, useState, useRef, ChangeEvent, useLayoutEffect, KeyboardEvent } from 'react';
 import { useAgent } from '@/features/librechat/AgentContext';
 import { Sparkles, ArrowUp, Command, PenTool, MessageSquare, Zap, Paperclip, SquarePen } from 'lucide-react';
 import type { AttachmentInput } from '@/services/ag-ui/types';
@@ -30,6 +30,30 @@ export function Landing({ onStarterClick }: LandingProps) {
   const [attachments, setAttachments] = useState<AttachmentInput[]>([]);
   const [isDragOver, setIsDragOver] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const maxTextareaHeight = 200;
+
+  const normalizePastedText = useCallback((value: string): string => {
+    return value
+      .replace(/\r\n?/g, '\n')
+      .replace(/[\u2028\u2029]/g, '\n')
+      .replace(/[\u00A0\u1680\u2000-\u200A\u202F\u205F\u3000\u2007\u2060]/g, ' ')
+      .replace(/[\u200B\u200C\u200D\uFEFF]/g, '');
+  }, []);
+
+  const resizeTextarea = useCallback((target?: HTMLTextAreaElement | null) => {
+    const textarea = target ?? textareaRef.current;
+    if (!textarea) return;
+    textarea.style.height = 'auto';
+    const scrollHeight = textarea.scrollHeight;
+    const newHeight = Math.max(24, Math.min(scrollHeight, maxTextareaHeight));
+    textarea.style.height = `${newHeight}px`;
+    textarea.style.overflowY = scrollHeight > maxTextareaHeight ? 'auto' : 'hidden';
+  }, [maxTextareaHeight]);
+
+  useLayoutEffect(() => {
+    resizeTextarea();
+  }, [inputValue, resizeTextarea]);
 
   const inferMimeType = useCallback((file: globalThis.File): string => {
     if (file.type) {
@@ -125,13 +149,16 @@ export function Landing({ onStarterClick }: LandingProps) {
     fileInputRef.current?.click();
   }, []);
 
-  const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
+  const handleKeyDown = useCallback((e: KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       if (inputValue.trim() || attachments.length > 0) {
         sendMessage(inputValue.trim(), attachments);
         setInputValue('');
         setAttachments([]);
+        if (textareaRef.current) {
+          textareaRef.current.style.height = '';
+        }
       }
     }
   }, [inputValue, attachments, sendMessage]);
@@ -141,8 +168,40 @@ export function Landing({ onStarterClick }: LandingProps) {
       sendMessage(inputValue.trim(), attachments);
       setInputValue('');
       setAttachments([]);
+      if (textareaRef.current) {
+        textareaRef.current.style.height = '';
+      }
     }
   }, [inputValue, attachments, sendMessage]);
+
+  const handleInputChange = useCallback((e: ChangeEvent<HTMLTextAreaElement>) => {
+    setInputValue(e.target.value);
+    resizeTextarea(e.currentTarget);
+  }, [resizeTextarea]);
+
+  const handlePaste = useCallback((e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    const rawText =
+      e.clipboardData?.getData('text/plain') ??
+      e.clipboardData?.getData('text') ??
+      '';
+    if (!rawText) {
+      requestAnimationFrame(() => resizeTextarea(e.currentTarget));
+      return;
+    }
+    e.preventDefault();
+    const normalized = normalizePastedText(rawText);
+    const target = e.currentTarget;
+    const start = target.selectionStart ?? inputValue.length;
+    const end = target.selectionEnd ?? inputValue.length;
+    const nextValue = `${inputValue.slice(0, start)}${normalized}${inputValue.slice(end)}`;
+    setInputValue(nextValue);
+    requestAnimationFrame(() => {
+      const cursor = start + normalized.length;
+      target.selectionStart = cursor;
+      target.selectionEnd = cursor;
+      resizeTextarea(target);
+    });
+  }, [inputValue, normalizePastedText, resizeTextarea]);
 
   // Force display of 3.0 Flash for landing page visual consistency
   const modelName = 'Gemini 3.0 Flash';
@@ -206,13 +265,16 @@ export function Landing({ onStarterClick }: LandingProps) {
                 style={{ display: 'none' }}
               />
 
-              <input
-                type="text"
+              <textarea
+                ref={textareaRef}
                 className="lc-hero-input flex-1"
                 placeholder="Ask anything..."
                 value={inputValue}
-                onChange={(e) => setInputValue(e.target.value)}
+                onChange={handleInputChange}
                 onKeyDown={handleKeyDown}
+                onPaste={handlePaste}
+                rows={1}
+                wrap="soft"
                 autoFocus
               />
               <div className="lc-hero-input-actions mr-1">
