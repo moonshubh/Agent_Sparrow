@@ -609,7 +609,10 @@ export const ThinkingPanel = memo(function ThinkingPanel({
   }, [expandedItemIds, isStreaming, scrollTargetId]);
 
   useEffect(() => {
-    if (!isExpanded || !scrollTargetId) return;
+    if (!isExpanded || !scrollTargetId) {
+      lastScrollTargetRef.current = undefined;
+      return;
+    }
     if (scrollTargetId === lastScrollTargetRef.current) return;
     lastScrollTargetRef.current = scrollTargetId;
 

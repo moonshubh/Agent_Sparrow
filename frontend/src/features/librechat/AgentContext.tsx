@@ -1388,6 +1388,12 @@ export function AgentProvider({
               // Log summary only to avoid RangeError with large content
               console.debug('[AG-UI] onMessagesChanged received:', agentMessages.length, 'messages');
 
+              if (streamingRafRef.current !== null) {
+                cancelAnimationFrame(streamingRafRef.current);
+                streamingRafRef.current = null;
+              }
+              pendingStreamMessagesRef.current = null;
+
               let messagesWithIds = agentMessages
                 .map((msg, idx) => normalizeIncomingMessage(msg, idx))
                 .filter((msg): msg is Message => Boolean(msg));
