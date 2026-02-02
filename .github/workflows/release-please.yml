@@ -17,6 +17,12 @@ concurrency:
 jobs:
   release-please:
     runs-on: ubuntu-latest
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
+      version: ${{ steps.release.outputs.version }}
+      html_url: ${{ steps.release.outputs.html_url }}
+      pr: ${{ steps.release.outputs.pr }}
     steps:
       - uses: googleapis/release-please-action@v4
         id: release
@@ -25,7 +31,31 @@ jobs:
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
 
-      # Log release info for visibility
+      # ---------------------------------------------------------------
+      # Checkout is needed for both PR enrichment and release enrichment
+      # ---------------------------------------------------------------
+      - name: Checkout
+        if: ${{ steps.release.outputs.pr || steps.release.outputs.release_created }}
+        uses: actions/checkout@v4
+
+      # ---------------------------------------------------------------
+      # Enrich the release PR body with CodeRabbit summaries
+      # (cosmetic — helps reviewers see what's in the release)
+      # ---------------------------------------------------------------
+      - name: Enrich Release PR
+        if: ${{ steps.release.outputs.pr && !steps.release.outputs.release_created }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ steps.release.outputs.pr }}
+          REPO: ${{ github.repository }}
+          MODE: pr
+        run: bash .github/scripts/enrich-release-notes.sh
+
+      # ---------------------------------------------------------------
+      # On actual release: enrich the GitHub release body, then notify
+      # Release-please sets the body from CHANGELOG.md, so we overwrite
+      # it with our enriched version before Slack reads it.
+      # ---------------------------------------------------------------
       - name: Release Info
         if: ${{ steps.release.outputs.release_created }}
         env:
@@ -40,42 +70,108 @@ jobs:
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo "View the release at: ${HTML_URL}" >> "$GITHUB_STEP_SUMMARY"
 
-      # Prepare changelog for Slack (convert markdown links, truncate if needed)
-      - name: Prepare Changelog for Slack
+      - name: Enrich GitHub Release
         if: ${{ steps.release.outputs.release_created }}
-        id: changelog
+        id: enrich
         env:
-          RELEASE_BODY: ${{ steps.release.outputs.body }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          MODE: release
+          TAG_NAME: ${{ steps.release.outputs.tag_name }}
+          VERSION: ${{ steps.release.outputs.version }}
+        run: bash .github/scripts/enrich-release-notes.sh
+
+  # -----------------------------------------------------------------
+  # Slack notification — separate job to ensure release enrichment
+  # has completed before we read the release body.
+  # -----------------------------------------------------------------
+  notify-slack:
+    needs: release-please
+    if: ${{ needs.release-please.outputs.release_created == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fetch enriched release body
+        id: fetch
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG_NAME: ${{ needs.release-please.outputs.tag_name }}
         run: |
-          # Convert GitHub markdown links [text](url) to Slack format <url|text>
-          # Remove commit hashes in parentheses for cleaner output
-          # Truncate to 2400 chars (Slack section limit is 3000; toJSON escaping inflates ~20%)
-          SLACK_BODY=$(printf '%s' "$RELEASE_BODY" | \
-            sed -E 's/\[([^\]]+)\]\(([^)]+)\)/<\2|\1>/g' | \
-            sed -E 's/ \([a-f0-9]{7}\)//g' | \
-            cut -c -2400)
+          # Small delay to ensure release edit has propagated
+          sleep 5
 
-          # If truncated, add indicator
-          BODY_LEN=$(printf '%s' "$RELEASE_BODY" | wc -m | tr -d ' ')
-          if [ "$BODY_LEN" -gt 2400 ]; then
-            SLACK_BODY="${SLACK_BODY}..."$'\n\n'"_See full release notes for more details._"
+          RELEASE_BODY=$(gh release view "$TAG_NAME" \
+            --repo "${{ github.repository }}" \
+            --json body -q '.body' 2>/dev/null || echo "")
+
+          if [ -z "$RELEASE_BODY" ]; then
+            RELEASE_BODY="Release ${TAG_NAME} published. See GitHub for details."
           fi
 
-          # Fallback if body is empty
-          if [ -z "$SLACK_BODY" ]; then
-            SLACK_BODY="No changelog details available. See the GitHub release for full notes."
-          fi
-
-          # Output using heredoc for multiline support
           {
-            echo "body<<SLACKEOF"
-            printf '%s\n' "$SLACK_BODY"
-            echo "SLACKEOF"
+            echo "body<<RELEASE_EOF"
+            printf '%s\n' "$RELEASE_BODY"
+            echo "RELEASE_EOF"
           } >> "$GITHUB_OUTPUT"
 
-      # Notify Slack on successful release
-      - name: Notify Slack
-        if: ${{ steps.release.outputs.release_created }}
+      - name: Prepare Slack changelog
+        id: changelog
+        env:
+          RELEASE_BODY: ${{ steps.fetch.outputs.body }}
+        run: |
+          # Convert GitHub markdown to Slack mrkdwn:
+          #   [text](url) → <url|text>
+          #   **bold**    → *bold*
+          #   ### Header  → *Header*
+          SLACK_BODY=$(printf '%s' "$RELEASE_BODY" | \
+            sed -E 's/\[([^]]+)\]\(([^)]+)\)/<\2|\1>/g' | \
+            sed -E 's/\*\*([^*]+)\*\*/*\1*/g' | \
+            sed -E 's/^### (.+)/*\1*/g' | \
+            sed -E 's/^## .+//g')
+
+          # Strip boilerplate
+          SLACK_BODY=$(printf '%s' "$SLACK_BODY" | \
+            sed '/^:robot:/d' | \
+            sed '/^---$/d' | \
+            sed '/^This PR was generated/d' | \
+            sed '/Release notes enriched/d' | \
+            sed '/^$/{ N; /^\n$/d; }')
+
+          # Trim leading/trailing blank lines
+          SLACK_BODY=$(printf '%s' "$SLACK_BODY" | sed '/./,$!d' | sed -e :a -e '/^\n*$/{$d;N;ba' -e '}')
+
+          # Slack section block limit is 3000 chars.
+          BODY_LEN=${#SLACK_BODY}
+
+          if [ "$BODY_LEN" -le 2900 ]; then
+            {
+              echo "part1<<SLACKEOF1"
+              printf '%s\n' "$SLACK_BODY"
+              echo "SLACKEOF1"
+            } >> "$GITHUB_OUTPUT"
+            echo "has_overflow=false" >> "$GITHUB_OUTPUT"
+          else
+            # Split at a line boundary near 2800 chars
+            CUTPOINT=$(printf '%s' "$SLACK_BODY" | head -c 2800 | wc -l | tr -d ' ')
+            PART1=$(printf '%s' "$SLACK_BODY" | head -n "$CUTPOINT")
+            PART2=$(printf '%s' "$SLACK_BODY" | tail -n +"$((CUTPOINT + 1))" | head -c 2800)
+
+            {
+              echo "part1<<SLACKEOF1"
+              printf '%s\n' "$PART1"
+              echo "SLACKEOF1"
+            } >> "$GITHUB_OUTPUT"
+
+            {
+              echo "part2<<SLACKEOF2"
+              printf '%s\n' "$PART2"
+              echo "SLACKEOF2"
+            } >> "$GITHUB_OUTPUT"
+
+            echo "has_overflow=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Notify Slack (single block)
+        if: ${{ steps.changelog.outputs.has_overflow == 'false' }}
         uses: slackapi/slack-github-action@v2.0.0
         continue-on-error: true
         with:
@@ -83,26 +179,63 @@ jobs:
           token: ${{ secrets.SLACK_BOT_TOKEN }}
           payload: |
             channel: "C09MV869UPK"
-            text: "🚀 Agent Sparrow ${{ steps.release.outputs.tag_name }} Released"
+            text: "🚀 Agent Sparrow ${{ needs.release-please.outputs.tag_name }} Released"
             blocks:
               - type: "header"
                 text:
                   type: "plain_text"
-                  text: "🚀 New Release: Agent Sparrow ${{ steps.release.outputs.tag_name }}"
+                  text: "🚀 New Release: Agent Sparrow ${{ needs.release-please.outputs.tag_name }}"
                   emoji: true
               - type: "section"
                 fields:
                   - type: "mrkdwn"
-                    text: "*Version:*\n${{ steps.release.outputs.version }}"
+                    text: "*Version:*\n${{ needs.release-please.outputs.version }}"
                   - type: "mrkdwn"
-                    text: "*Tag:*\n${{ steps.release.outputs.tag_name }}"
+                    text: "*Tag:*\n${{ needs.release-please.outputs.tag_name }}"
               - type: "divider"
               - type: "section"
                 text:
                   type: "mrkdwn"
-                  text: ${{ toJSON(steps.changelog.outputs.body) }}
+                  text: ${{ toJSON(steps.changelog.outputs.part1) }}
               - type: "divider"
               - type: "section"
                 text:
                   type: "mrkdwn"
-                  text: "📋 <${{ steps.release.outputs.html_url }}|View Full Release Notes on GitHub>"
+                  text: "📋 <${{ needs.release-please.outputs.html_url }}|View Full Release Notes on GitHub>"
+
+      - name: Notify Slack (multi-block)
+        if: ${{ steps.changelog.outputs.has_overflow == 'true' }}
+        uses: slackapi/slack-github-action@v2.0.0
+        continue-on-error: true
+        with:
+          method: chat.postMessage
+          token: ${{ secrets.SLACK_BOT_TOKEN }}
+          payload: |
+            channel: "C09MV869UPK"
+            text: "🚀 Agent Sparrow ${{ needs.release-please.outputs.tag_name }} Released"
+            blocks:
+              - type: "header"
+                text:
+                  type: "plain_text"
+                  text: "🚀 New Release: Agent Sparrow ${{ needs.release-please.outputs.tag_name }}"
+                  emoji: true
+              - type: "section"
+                fields:
+                  - type: "mrkdwn"
+                    text: "*Version:*\n${{ needs.release-please.outputs.version }}"
+                  - type: "mrkdwn"
+                    text: "*Tag:*\n${{ needs.release-please.outputs.tag_name }}"
+              - type: "divider"
+              - type: "section"
+                text:
+                  type: "mrkdwn"
+                  text: ${{ toJSON(steps.changelog.outputs.part1) }}
+              - type: "section"
+                text:
+                  type: "mrkdwn"
+                  text: ${{ toJSON(steps.changelog.outputs.part2) }}
+              - type: "divider"
+              - type: "section"
+                text:
+                  type: "mrkdwn"
+                  text: "📋 <${{ needs.release-please.outputs.html_url }}|View Full Release Notes on GitHub>"
