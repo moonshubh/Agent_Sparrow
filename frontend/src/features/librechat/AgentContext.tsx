@@ -143,6 +143,9 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 
 type ResearchStatus = 'idle' | 'running' | 'stuck' | 'failed';
 
+const INITIAL_RESEARCH_STATUS: ResearchStatus = 'idle';
+const RESEARCH_STATUS_FAILED: ResearchStatus = 'failed';
+
 const RESEARCH_TOOL_NAMES = new Set([
   'kb_search',
   'feedme_search',
@@ -903,7 +906,7 @@ export function AgentProvider({
   const [resolvedModel, setResolvedModel] = useState<string | undefined>(undefined);
   const [resolvedTaskType, setResolvedTaskType] = useState<string | undefined>(undefined);
   const [researchProgress, setResearchProgress] = useState(0);
-  const [researchStatus, setResearchStatus] = useState<ResearchStatus>('idle');
+  const [researchStatus, setResearchStatus] = useState<ResearchStatus>(INITIAL_RESEARCH_STATUS);
   const [isResearching, setIsResearching] = useState(false);
   const [messageAttachments, setMessageAttachments] = useState<Record<string, AttachmentInput[]>>({});
   const interruptResolverRef = useRef<((value: string) => void) | null>(null);
@@ -918,12 +921,14 @@ export function AgentProvider({
   const articleArtifactKeysRef = useRef<Set<string>>(new Set());
   const pendingLogAnalysisNotesRef = useRef<Record<string, unknown>>({});
   const researchProgressRef = useRef(0);
-  const researchStatusRef = useRef<ResearchStatus>('idle');
+  const researchStatusRef = useRef<ResearchStatus>(INITIAL_RESEARCH_STATUS);
   const researchTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const researchLastActivityRef = useRef<number>(0);
   const researchToolCountRef = useRef(0);
   const researchToolCompletedRef = useRef(0);
   const isResearchingRef = useRef(false);
+  const streamingRafRef = useRef<number | null>(null);
+  const pendingStreamMessagesRef = useRef<Message[] | null>(null);
 
   useEffect(() => {
     researchProgressRef.current = researchProgress;
@@ -936,6 +941,14 @@ export function AgentProvider({
   useEffect(() => {
     isResearchingRef.current = isResearching;
   }, [isResearching]);
+
+  useEffect(() => {
+    return () => {
+      if (streamingRafRef.current !== null) {
+        cancelAnimationFrame(streamingRafRef.current);
+      }
+    };
+  }, []);
 
   useEffect(() => {
     articleArtifactKeysRef.current = new Set();
@@ -1128,7 +1141,7 @@ export function AgentProvider({
     clearResearchTimer();
     researchTimerRef.current = setInterval(() => {
       const idleMs = Date.now() - researchLastActivityRef.current;
-      if (idleMs > RESEARCH_STUCK_MS && researchStatusRef.current !== 'failed') {
+      if (idleMs > RESEARCH_STUCK_MS && researchStatusRef.current !== RESEARCH_STATUS_FAILED) {
         setResearchStatus('stuck');
       }
 
@@ -1328,24 +1341,34 @@ export function AgentProvider({
                   buffer = '';
                 }
               }
-              setMessages((prev) => {
-                const lastMsg = prev[prev.length - 1];
-                const next: Message[] = (() => {
-                  if (lastMsg && lastMsg.role === 'assistant') {
-                    return [...prev.slice(0, -1), { ...lastMsg, content: buffer }];
+              const prevMessages = messagesRef.current;
+              const lastMsg = prevMessages[prevMessages.length - 1];
+              const nextMessages: Message[] = (() => {
+                if (lastMsg && lastMsg.role === 'assistant') {
+                  return [...prevMessages.slice(0, -1), { ...lastMsg, content: buffer }];
+                }
+
+                const assistantMessage: Message = {
+                  id: crypto.randomUUID(),
+                  role: 'assistant',
+                  content: buffer,
+                };
+                return [...prevMessages, assistantMessage];
+              })();
+
+              messagesRef.current = nextMessages;
+              pendingStreamMessagesRef.current = nextMessages;
+
+              if (streamingRafRef.current === null) {
+                streamingRafRef.current = requestAnimationFrame(() => {
+                  streamingRafRef.current = null;
+                  const pending = pendingStreamMessagesRef.current;
+                  if (pending) {
+                    pendingStreamMessagesRef.current = null;
+                    setMessages(pending);
                   }
-
-                  const assistantMessage: Message = {
-                    id: crypto.randomUUID(),
-                    role: 'assistant',
-                    content: buffer,
-                  };
-                  return [...prev, assistantMessage];
-                })();
-
-                messagesRef.current = next;
-                return next;
-              });
+                });
+              }
             },
 
             // Handle complete message updates
@@ -1998,7 +2021,7 @@ export function AgentProvider({
           setError(err);
         }
       } finally {
-        if (isResearchingRef.current && researchStatusRef.current !== 'failed') {
+        if (isResearchingRef.current && researchStatusRef.current !== RESEARCH_STATUS_FAILED) {
           completeResearchTracking();
         }
         setIsStreaming(false);
@@ -2127,20 +2150,26 @@ export function AgentProvider({
                 { id: candidate.id, artifacts: artifacts?.length || 0 },
               );
 
-            sessionsAPI.postMessage(sessionId, {
-              message_type: 'assistant',
-              content: contentToPersist || candidate.content,
-              agent_type: agentType,
-              metadata: metadataToPersist,
-            }).then((record) => {
-              if (record?.id !== undefined && record?.id !== null) {
-                persistedMessageIdRef.current[candidate.id] = String(record.id);
-              }
-              const latestMessages = messagesRef.current;
-              const currentLastId = lastPersistedAssistantIdBySessionRef.current[sessionKey];
-              const currentLastIndex = currentLastId
-                ? findLastIndex(latestMessages, (msg) => msg.id === currentLastId)
-                : -1;
+              try {
+                const record = await sessionsAPI.postMessage(
+                  sessionId,
+                  {
+                    message_type: 'assistant',
+                    content: contentToPersist || candidate.content,
+                    agent_type: agentType,
+                    metadata: metadataToPersist,
+                  },
+                  { keepalive: true },
+                );
+
+                if (record?.id !== undefined && record?.id !== null) {
+                  persistedMessageIdRef.current[candidate.id] = String(record.id);
+                }
+                const latestMessages = messagesRef.current;
+                const currentLastId = lastPersistedAssistantIdBySessionRef.current[sessionKey];
+                const currentLastIndex = currentLastId
+                  ? findLastIndex(latestMessages, (msg) => msg.id === currentLastId)
+                  : -1;
                 const candidateIndexNow = findLastIndex(latestMessages, (msg) => msg.id === candidate.id);
 
                 if (candidateIndexNow >= 0 && candidateIndexNow > currentLastIndex) {
@@ -2150,10 +2179,10 @@ export function AgentProvider({
                 }
 
                 console.debug('[Persistence] Assistant message persisted successfully');
-              }).catch((err) => {
+              } catch (err) {
                 console.error('[Persistence] Failed to persist assistant message:', err);
                 assistantPersistedRef.current = false;
-              });
+              }
             }
           }
         }

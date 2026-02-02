@@ -251,7 +251,7 @@
   flex: 1;
   display: flex;
   flex-direction: column;
-  height: 100vh;
+  min-height: 0;
   overflow: hidden;
   position: relative;
 }
@@ -265,6 +265,7 @@
   border-bottom: 1px solid var(--lc-border-light);
   background-color: var(--lc-surface-primary);
   min-height: 56px;
+  flex-shrink: 0;
 }
 
 .lc-header-left {
@@ -357,6 +358,8 @@
   /* Vertical padding only */
   scroll-behavior: smooth;
   background-color: var(--lc-surface-primary);
+  min-height: 0;
+  scrollbar-gutter: stable;
 }
 
 .lc-messages-inner {
@@ -888,6 +891,7 @@
 .lc-input-container {
   padding: 16px 24px 24px;
   background: linear-gradient(to top, var(--lc-surface-primary) 85%, transparent);
+  flex-shrink: 0;
 }
 
 .lc-input-wrapper {
@@ -920,7 +924,7 @@
   /* Modern CSS auto-grow: field-sizing handles height automatically */
   field-sizing: content;
   /* Flex child settings */
-  flex: 1 1 0%;
+  flex: 1 1 auto;
   min-width: 0;
   box-sizing: border-box;
   resize: none;
@@ -940,7 +944,7 @@
   white-space: pre-wrap;
   /* Overflow for when content exceeds max-height */
   overflow-x: hidden;
-  overflow-y: auto;
+  overflow-y: hidden;
 }
 
 .lc-textarea::placeholder {

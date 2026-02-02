@@ -22,7 +22,7 @@
     /* Modern CSS auto-sizing - textarea grows with content */
     field-sizing: content !important;
     /* Flex settings */
-    flex: 1 1 0% !important;
+    flex: 1 1 auto !important;
     min-width: 0 !important;
     max-width: 100% !important;
     box-sizing: border-box !important;
@@ -33,7 +33,7 @@
     word-break: break-word !important;
     /* Overflow */
     overflow-x: hidden !important;
-    overflow-y: auto !important;
+    overflow-y: hidden !important;
   }
 
   /* Ensure sidebar behaves as overlay */

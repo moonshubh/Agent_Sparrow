@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useMemo, useCallback, useEffect, useRef } from 'react';
+import React, { useState, useMemo, useCallback, useEffect, useRef, memo } from 'react';
 import {
   AlertCircle,
   Brain,
@@ -154,7 +154,7 @@ const summarizeRetrievalPayload = (raw: unknown): string | null => {
 
   const sourcesRaw = parsed.sources_searched;
   const sources = Array.isArray(sourcesRaw)
-    ? sourcesRaw.filter((item): item is string => typeof item === 'string' && item.trim())
+    ? sourcesRaw.filter((item): item is string => typeof item === 'string' && Boolean(item.trim()))
     : [];
   const results = Array.isArray(parsed.results) ? parsed.results : [];
 
@@ -482,7 +482,7 @@ const buildTimelineItems = (steps: TraceStep[]): TimelineItem[] => {
   return items;
 };
 
-export function ThinkingPanel({
+export const ThinkingPanel = memo(function ThinkingPanel({
   thinking,
   traceSteps = [],
   todos = [],
@@ -496,6 +496,7 @@ export function ThinkingPanel({
   const [expandedItemIds, setExpandedItemIds] = useState<Set<string>>(new Set());
   const [expandedSubagentIds, setExpandedSubagentIds] = useState<Set<string>>(new Set());
   const contentRef = useRef<HTMLDivElement | null>(null);
+  const lastScrollTargetRef = useRef<string | undefined>(undefined);
 
   const hasContent = thinking || traceSteps.length > 0 || todos.length > 0 || subagentActivity.size > 0;
 
@@ -608,11 +609,11 @@ export function ThinkingPanel({
   }, [expandedItemIds, isStreaming, scrollTargetId]);
 
   useEffect(() => {
-    if (!isExpanded) return;
+    if (!isExpanded || !scrollTargetId) return;
+    if (scrollTargetId === lastScrollTargetRef.current) return;
+    lastScrollTargetRef.current = scrollTargetId;
 
-    if (!scrollTargetId) return;
-
-    const rafId = requestAnimationFrame(() => {
+    const timeoutId = window.setTimeout(() => {
       try {
         const safeTargetId =
           typeof CSS !== 'undefined' && typeof CSS.escape === 'function'
@@ -620,14 +621,17 @@ export function ThinkingPanel({
             : scrollTargetId;
         const el = contentRef.current?.querySelector(
           `[data-step-id="${safeTargetId}"]`
-        );
-        el?.scrollIntoView({ block: 'nearest' });
+        ) as HTMLElement | null;
+        const container = contentRef.current;
+        if (!el || !container) return;
+        const targetTop = el.offsetTop - container.clientHeight / 3;
+        container.scrollTop = Math.max(0, targetTop);
       } catch {
         // noop - selector can fail on unexpected IDs
       }
-    });
+    }, 100);
 
-    return () => cancelAnimationFrame(rafId);
+    return () => window.clearTimeout(timeoutId);
   }, [isExpanded, scrollTargetId]);
 
   const toggleItem = useCallback((id: string) => {
@@ -970,6 +974,6 @@ export function ThinkingPanel({
       )}
     </div>
   );
-}
+});
 
 export default ThinkingPanel;

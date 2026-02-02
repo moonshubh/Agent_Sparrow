@@ -13,7 +13,7 @@ interface ChatInputProps {
   onInitialInputUsed?: () => void;
 }
 
-export function ChatInput({ initialInput, onInitialInputUsed }: ChatInputProps) {
+export function ChatInput({ initialInput, onInitialInputUsed, isLanding }: ChatInputProps) {
   const { sendMessage, isStreaming, abortRun } = useAgent();
   const [input, setInput] = useState('');
   const [attachments, setAttachments] = useState<AttachmentInput[]>([]);
@@ -57,26 +57,11 @@ export function ChatInput({ initialInput, onInitialInputUsed }: ChatInputProps) 
     return 'application/octet-stream';
   }, []);
 
-  // Check if browser supports field-sizing: content (CSS handles auto-grow)
-  // If not supported, use JavaScript fallback
-  const supportsFieldSizing = useRef<boolean | null>(null);
-
   useLayoutEffect(() => {
     const textarea = textareaRef.current;
     if (!textarea) return;
 
-    // Check support once
-    if (supportsFieldSizing.current === null) {
-      supportsFieldSizing.current = CSS.supports('field-sizing', 'content');
-    }
-
-    // If CSS field-sizing is supported, no JS needed - CSS handles everything
-    if (supportsFieldSizing.current) {
-      return;
-    }
-
-    // Fallback for browsers without field-sizing support
-    // Reset height to get accurate scrollHeight
+    // Auto-grow using scrollHeight for consistent behavior across browsers
     textarea.style.height = '0px';
     const scrollHeight = textarea.scrollHeight;
     const newHeight = Math.max(24, Math.min(scrollHeight, 200));
@@ -125,7 +110,7 @@ export function ChatInput({ initialInput, onInitialInputUsed }: ChatInputProps) 
 
     // Reset textarea height
     if (textareaRef.current) {
-      textareaRef.current.style.height = '24px';
+      textareaRef.current.style.height = '';
     }
 
     await sendMessage(message, currentAttachments);
@@ -257,7 +242,11 @@ export function ChatInput({ initialInput, onInitialInputUsed }: ChatInputProps) 
   }, []);
 
   return (
-    <div className="lc-input-container">
+    <div
+      className="lc-input-container"
+      style={isLanding ? { display: 'none' } : undefined}
+      aria-hidden={isLanding ? 'true' : undefined}
+    >
       <div className="lc-input-wrapper">
         {/* Attachments preview */}
         {attachments.length > 0 && (
