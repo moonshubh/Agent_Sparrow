@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { NodeViewWrapper, type NodeViewProps } from '@tiptap/react';
 import { resolveMemoryAssetUrl } from '@/features/memory/lib/memoryAssetResolver';
-import { parseMemoryImageSrc, withSizeFragment } from '@/features/memory/lib/memoryImageSizing';
+import { parseMemoryImageSrc, parseDimensionValue, withSizeFragment } from '@/features/memory/lib/memoryImageSizing';
 
 type ResizeHandle =
   | 'top-left'
@@ -38,10 +38,12 @@ const clamp = (value: number, min: number, max?: number) => {
 export function MemoryImageView({ node, editor, selected, updateAttributes }: NodeViewProps) {
   const src = node.attrs.src || '';
   const alt = node.attrs.alt || '';
-  const { baseSrc, width: initialWidth, height: initialHeight } = useMemo(
+  const { baseSrc, width: parsedWidth, height: parsedHeight } = useMemo(
     () => parseMemoryImageSrc(src),
     [src]
   );
+  const initialWidth = parseDimensionValue(node.attrs.width) ?? parsedWidth;
+  const initialHeight = parseDimensionValue(node.attrs.height) ?? parsedHeight;
 
   const [resolvedSrc, setResolvedSrc] = useState<string | null>(null);
   const [hasError, setHasError] = useState(false);
@@ -152,7 +154,11 @@ export function MemoryImageView({ node, editor, selected, updateAttributes }: No
 
         const { width, height } = sizeRef.current;
         if (!width || !height) return;
-        updateAttributes({ src: withSizeFragment(baseSrc, width, height) });
+        updateAttributes({
+          width: Math.round(width),
+          height: Math.round(height),
+          src: withSizeFragment(baseSrc, width, height),
+        });
       };
 
       window.addEventListener('pointermove', handleMove);
