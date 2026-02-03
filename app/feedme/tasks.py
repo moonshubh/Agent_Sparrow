@@ -30,6 +30,14 @@ from app.api.v1.websocket.feedme_websocket import notify_processing_update
 from app.core.config import get_models_config
 from app.core.settings import get_settings
 from functools import lru_cache
+from app.feedme.zendesk_import_utils import (
+    extract_log_errors,
+    build_log_excerpt,
+    parse_summary_json,
+    normalize_summary,
+    fallback_summary_from_text,
+    format_zendesk_memory_content,
+)
 
 # Use cached settings accessor for dynamic reload capability
 @lru_cache(maxsize=1)
@@ -1267,18 +1275,14 @@ def update_parsed_content(conversation_id: int, parsed_content: str):
 # =============================================================================
 
 ZENDESK_IMPORT_IMAGE_BUCKET = os.getenv("ZENDESK_MEMORY_BUCKET", "memory-assets").strip() or "memory-assets"
+ZENDESK_LOG_READ_CHARS = int(os.getenv("ZENDESK_LOG_READ_CHARS", "120000"))
+ZENDESK_PUBLIC_EXCERPT_CHARS = int(os.getenv("ZENDESK_PUBLIC_EXCERPT_CHARS", "20000"))
 
 
 def _strip_html(text: str) -> str:
     if not text:
         return ""
     return re.sub(r"<[^>]+>", " ", text).strip()
-
-
-def _truncate_text(text: str, max_chars: int) -> str:
-    if len(text) <= max_chars:
-        return text
-    return text[:max_chars].rstrip() + "…"
 
 
 def _extract_public_comment_text(comment: dict[str, Any]) -> str:
@@ -1313,29 +1317,13 @@ async def _summarize_ticket_with_llm(
     *,
     ticket_id: str,
     subject: str,
-    comment_excerpt: str,
+    public_conversation: str,
     log_summary: str,
 ) -> str:
     from app.agents.unified.provider_factory import build_chat_model, build_summarization_model
     from app.agents.unified.minimax_tools import is_minimax_available
 
-    prompt = (
-        "You are summarizing a resolved Zendesk ticket for internal playbook memory.\n"
-        "Summarize the public conversation and key troubleshooting details in 4-8 bullet points.\n"
-        "If a resolution is evident, include it.\n"
-        "Do NOT include personal data or email addresses.\n\n"
-        f"Ticket ID: {ticket_id}\n"
-        f"Subject: {subject}\n\n"
-        f"Public comment excerpts:\n{comment_excerpt}\n\n"
-        f"Log findings:\n{log_summary}\n"
-    ).strip()
-
-    try:
-        if is_minimax_available():
-            model = build_chat_model("minimax", "minimax/MiniMax-M2.1", role="summarization")
-        else:
-            model = build_summarization_model()
-        response = await model.ainvoke(prompt)
+    def _extract_response_text(response: Any) -> str:
         text = getattr(response, "content", "") if response is not None else ""
         if isinstance(text, list):
             parts = []
@@ -1346,6 +1334,110 @@ async def _summarize_ticket_with_llm(
                     parts.append(part)
             return "\n".join(p for p in parts if p).strip()
         return str(text).strip()
+
+    def _chunk_text(s: str, max_chars: int = 24000) -> list[str]:
+        s = (s or "").strip()
+        if not s:
+            return []
+        paras = [p.strip() for p in re.split(r"\n\n+", s) if p.strip()]
+        chunks: list[str] = []
+        buf: list[str] = []
+        cur = 0
+        for p in paras:
+            if cur + len(p) + 2 > max_chars and buf:
+                chunks.append("\n\n".join(buf))
+                buf = [p]
+                cur = len(p)
+            else:
+                buf.append(p)
+                cur += len(p) + 2
+        if buf:
+            chunks.append("\n\n".join(buf))
+        return chunks
+
+    base_json_instructions = (
+        "Return STRICT JSON with keys:\n"
+        "- problem (string)\n"
+        "- impact (string)\n"
+        "- environment (string)\n"
+        "- symptoms (array of strings)\n"
+        "- timeline_steps (array of strings)\n"
+        "- actions_taken (array of strings)\n"
+        "- errors (array of strings)\n"
+        "- resolution (string)\n"
+        "- root_cause (string)\n"
+        "- contributing_factors (array of strings)\n"
+        "- prevention (array of strings)\n"
+        "- follow_ups (array of strings)\n"
+        "- key_settings (array of strings)\n"
+        "- log_error_summary (string)\n"
+        "Rules: no personal data (names, emails, phone), no markdown, no quotes, no extra keys.\n"
+    )
+
+    single_prompt = (
+        "You are summarizing a resolved Zendesk ticket for internal playbook memory.\n"
+        "Write a deep-analysis structured summary that captures problem context, impact, timeline, "
+        "troubleshooting steps, errors, settings, root cause, contributing factors, prevention, "
+        "and resolution if present.\n"
+        "Be concrete and specific. If a field is unknown, leave it as an empty string or empty list.\n"
+        f"{base_json_instructions}\n\n"
+        f"Ticket ID: {ticket_id}\n"
+        f"Subject: {subject}\n\n"
+        f"Public conversation:\n{public_conversation}\n\n"
+        f"Log findings:\n{log_summary}\n"
+    ).strip()
+
+    map_prompt = (
+        "Summarize the following excerpt of a support conversation into 4-8 concise bullet points.\n"
+        "Capture issue context, impact, timeline events, actions taken, errors, and outcomes.\n"
+        "Avoid personal data. Output ONLY bullet points, one per line starting with '- '.\n\n"
+    )
+
+    reduce_prompt_template = (
+        "You are consolidating bullet points from ALL parts of a single Zendesk conversation.\n"
+        "Produce a deep-analysis structured summary for internal playbook memory.\n"
+        "Include impact, timeline, root cause, contributing factors, and prevention when possible.\n"
+        f"{base_json_instructions}\n\n"
+        "Ticket ID: {ticket_id}\n"
+        "Subject: {subject}\n\n"
+        "BULLETS:\n{bullets}\n\n"
+        "Log findings:\n{log_summary}\n"
+    )
+
+    try:
+        if is_minimax_available():
+            model = build_chat_model("minimax", "minimax/MiniMax-M2.1", role="summarization")
+        else:
+            model = build_summarization_model()
+
+        chunks = _chunk_text(public_conversation)
+        if len(chunks) <= 1:
+            response = await model.ainvoke(single_prompt)
+            return _extract_response_text(response)
+
+        map_summaries: list[str] = []
+        for chunk in chunks:
+            response = await model.ainvoke(map_prompt + chunk)
+            text = _extract_response_text(response)
+            if not text:
+                continue
+            lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+            normalized: list[str] = []
+            for ln in lines:
+                if not ln.startswith("- "):
+                    ln = f"- {ln.lstrip('-•* ')}"
+                normalized.append(ln)
+            map_summaries.append("\n".join(normalized))
+
+        bullets = "\n".join(map_summaries).strip()
+        reduce_prompt = reduce_prompt_template.format(
+            ticket_id=ticket_id,
+            subject=subject,
+            bullets=bullets or "No bullet summaries available.",
+            log_summary=log_summary,
+        ).strip()
+        response = await model.ainvoke(reduce_prompt)
+        return _extract_response_text(response)
     except Exception as exc:
         logger.debug("zendesk_import_summary_failed ticket_id=%s error=%s", ticket_id, str(exc)[:180])
         return ""
@@ -1380,7 +1472,7 @@ def import_zendesk_tagged(self, tag: str = "mb_playbook", limit: int = 200) -> d
         from app.agents.harness.store import SparrowWorkspaceStore
         from app.memory.title import ensure_memory_title
         from app.memory.memory_ui_service import get_memory_ui_service
-        from app.security.pii_redactor import redact_pii, redact_pii_from_dict
+        from app.security.pii_redactor import redact_pii
         from uuid import uuid5, NAMESPACE_URL
 
         settings = current_settings()
@@ -1426,6 +1518,10 @@ def import_zendesk_tagged(self, tag: str = "mb_playbook", limit: int = 200) -> d
         tenant_id = getattr(settings, "memory_ui_tenant_id", "mailbot") or "mailbot"
 
         imported = skipped = failed = 0
+        if not getattr(settings, "supabase_service_key", None):
+            logger.warning(
+                "zendesk_import_missing_service_key; memory assets may fail to render for private buckets"
+            )
 
         for row in ticket_rows:
             ticket_id = str(row.get("id") or "")
@@ -1458,19 +1554,22 @@ def import_zendesk_tagged(self, tag: str = "mb_playbook", limit: int = 200) -> d
                 if text:
                     public_comments.append(text)
 
-            comment_excerpt_lines = [
-                f"- {_truncate_text(redact_pii(c), 280)}"
-                for c in public_comments[:8]
-                if c
-            ]
-            if not comment_excerpt_lines and description:
-                comment_excerpt_lines = [f"- {_truncate_text(redact_pii(description), 280)}"]
+            public_conversation_lines: list[str] = []
+            for idx, comment_text in enumerate(public_comments, start=1):
+                cleaned = redact_pii(comment_text).strip()
+                if cleaned:
+                    public_conversation_lines.append(f"### Public Comment {idx}\n{cleaned}")
+            if not public_conversation_lines and description:
+                cleaned_description = redact_pii(description).strip()
+                if cleaned_description:
+                    public_conversation_lines = [f"### Ticket Description\n{cleaned_description}"]
 
-            comment_excerpt = "\n".join(comment_excerpt_lines).strip()
+            public_conversation = "\n\n".join(public_conversation_lines).strip()
 
             attachments = []
             image_assets: list[dict[str, Any]] = []
             log_findings: list[dict[str, Any]] = []
+            log_errors: list[dict[str, Any]] = []
             try:
                 attachments = await asyncio.to_thread(
                     fetch_ticket_attachments,
@@ -1510,12 +1609,21 @@ def import_zendesk_tagged(self, tag: str = "mb_playbook", limit: int = 200) -> d
                     elif ext.endswith((".log", ".txt")):
                         try:
                             with open(att.local_path, "r", encoding="utf-8", errors="ignore") as f:
-                                raw = f.read(12000)
+                                raw = f.read(ZENDESK_LOG_READ_CHARS)
                             if raw:
+                                errors = extract_log_errors(raw)
+                                if errors:
+                                    log_errors.append(
+                                        {
+                                            "file_name": name,
+                                            "errors": errors,
+                                        }
+                                    )
+                                excerpt = build_log_excerpt(errors, raw, max_chars=6000)
                                 question = f"Summarize the most relevant errors for ticket {ticket_id}: {subject}"
                                 analysis = await _analyze_log_file(
                                     file_name=name,
-                                    content=raw,
+                                    content=excerpt,
                                     question=question,
                                 )
                                 summary = str(analysis.get("overall_summary") or "").strip()
@@ -1525,6 +1633,7 @@ def import_zendesk_tagged(self, tag: str = "mb_playbook", limit: int = 200) -> d
                                             "file_name": name,
                                             "summary": redact_pii(summary),
                                             "priority_concerns": analysis.get("priority_concerns") or [],
+                                            "identified_issues": analysis.get("identified_issues") or [],
                                             "relevant_log_sections": analysis.get("relevant_log_sections") or [],
                                         }
                                     )
@@ -1535,87 +1644,151 @@ def import_zendesk_tagged(self, tag: str = "mb_playbook", limit: int = 200) -> d
                     cleanup_attachments(attachments)
 
             log_summary_lines = []
+            for entry in log_errors:
+                file_name = entry.get("file_name") or "log"
+                for error in entry.get("errors") or []:
+                    first_line = str(error.get("first_line") or error.get("signature") or "").strip()
+                    if not first_line:
+                        continue
+                    count = error.get("count") or 1
+                    log_summary_lines.append(f"- {file_name}: {first_line} (x{count})")
             for item in log_findings:
                 line = f"- {item.get('file_name')}: {item.get('summary')}"
                 log_summary_lines.append(line)
-            log_summary = "\n".join(log_summary_lines).strip()
+            log_summary = redact_pii("\n".join(log_summary_lines).strip())
 
             summary_text = await _summarize_ticket_with_llm(
                 ticket_id=ticket_id,
                 subject=subject,
-                comment_excerpt=comment_excerpt,
+                public_conversation=public_conversation,
                 log_summary=log_summary,
             )
-            summary_text = redact_pii(summary_text)
+            summary_payload = parse_summary_json(summary_text)
+            if summary_payload:
+                summary = normalize_summary(summary_payload)
+            else:
+                summary = fallback_summary_from_text(summary_text, subject=subject)
+            if log_summary and not summary.get("log_error_summary"):
+                summary["log_error_summary"] = log_summary
+            if not summary.get("problem"):
+                summary["problem"] = subject or "Zendesk support ticket"
+            # Redact summary fields but preserve structure
+            try:
+                summary = {
+                    key: (
+                        [redact_pii(str(item)) for item in value if isinstance(item, str)]
+                        if isinstance(value, list)
+                        else redact_pii(str(value)) if isinstance(value, str) else value
+                    )
+                    for key, value in summary.items()
+                }
+            except Exception:
+                summary = summary
 
             subdomain = str(settings.zendesk_subdomain).strip()
             zendesk_url = (
                 f"https://{subdomain}.zendesk.com/agent/tickets/{ticket_id}" if subdomain else ""
             )
 
-            lines: list[str] = []
-            if subject:
-                lines.append(f"Zendesk Ticket {ticket_id}: {subject}")
-            else:
-                lines.append(f"Zendesk Ticket {ticket_id}")
-            if zendesk_url:
-                lines.append(f"Zendesk URL: {zendesk_url}")
-            lines.append("")
-            if summary_text:
-                lines.append("## Summary")
-                lines.append(summary_text)
-                lines.append("")
+            flat_errors: list[dict[str, Any]] = []
+            for entry in log_errors:
+                file_name = entry.get("file_name")
+                for err in entry.get("errors") or []:
+                    record = dict(err)
+                    if file_name:
+                        record["file_name"] = file_name
+                    for field in ("first_line", "sample", "signature"):
+                        if isinstance(record.get(field), str):
+                            record[field] = redact_pii(record[field])
+                    flat_errors.append(record)
+            flat_errors.sort(key=lambda item: item.get("count", 0), reverse=True)
 
-            if comment_excerpt:
-                lines.append("## Public comment excerpts")
-                lines.append(comment_excerpt)
-                lines.append("")
-
-            if log_findings:
-                lines.append("## Log findings")
-                for finding in log_findings:
-                    lines.append(f"- **{finding.get('file_name')}**: {finding.get('summary')}")
-                    sections = finding.get("relevant_log_sections") or []
-                    for section in sections[:2]:
-                        if isinstance(section, dict):
-                            content = section.get("content")
-                            line_nums = section.get("line_numbers")
-                            if content:
-                                snippet = _truncate_text(redact_pii(str(content)), 280)
-                                if line_nums:
-                                    lines.append(f"  - ({line_nums}) {snippet}")
-                                else:
-                                    lines.append(f"  - {snippet}")
-                lines.append("")
-
-            if image_assets:
-                lines.append("## Images (admin-only)")
-                for asset in image_assets:
-                    bucket = asset.get("bucket")
-                    path = asset.get("path")
-                    name = asset.get("file_name") or "attachment"
-                    if bucket and path:
-                        lines.append(f"- {name}")
-                        lines.append(f"![{name}](memory-asset://{bucket}/{path})")
-                lines.append("")
-
-            content = "\n".join(lines).strip()
+            # Content is already redacted at field-level; avoid redacting full content
+            # to prevent mutating memory-asset URLs.
+            content = format_zendesk_memory_content(
+                summary,
+                subject=subject,
+                ticket_id=ticket_id,
+                zendesk_url=zendesk_url,
+                log_errors=flat_errors,
+                image_assets=image_assets,
+            )
             if not content:
                 skipped += 1
                 continue
 
+            public_excerpt = public_conversation
+            if public_excerpt and len(public_excerpt) > ZENDESK_PUBLIC_EXCERPT_CHARS:
+                public_excerpt = public_excerpt[: ZENDESK_PUBLIC_EXCERPT_CHARS - 1].rstrip() + "…"
+            public_excerpt = redact_pii(public_excerpt)
+
+            def _redact_log_errors(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
+                redacted_entries: list[dict[str, Any]] = []
+                for entry in entries:
+                    file_name = entry.get("file_name")
+                    errors = []
+                    for err in entry.get("errors") or []:
+                        clean = dict(err)
+                        for field in ("first_line", "sample", "signature"):
+                            if isinstance(clean.get(field), str):
+                                clean[field] = redact_pii(clean[field])
+                        errors.append(clean)
+                    redacted_entries.append(
+                        {
+                            "file_name": file_name,
+                            "errors": errors,
+                        }
+                    )
+                return redacted_entries
+
+            def _redact_log_findings(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
+                redacted_entries: list[dict[str, Any]] = []
+                for entry in entries:
+                    clean = dict(entry)
+                    if isinstance(clean.get("summary"), str):
+                        clean["summary"] = redact_pii(clean["summary"])
+                    issues = clean.get("identified_issues")
+                    if isinstance(issues, list):
+                        redacted_issues = []
+                        for issue in issues:
+                            if isinstance(issue, dict):
+                                issue_clean = dict(issue)
+                                for field in ("title", "details"):
+                                    if isinstance(issue_clean.get(field), str):
+                                        issue_clean[field] = redact_pii(issue_clean[field])
+                                redacted_issues.append(issue_clean)
+                            else:
+                                redacted_issues.append(issue)
+                        clean["identified_issues"] = redacted_issues
+                    sections = clean.get("relevant_log_sections")
+                    if isinstance(sections, list):
+                        redacted_sections = []
+                        for section in sections:
+                            if isinstance(section, dict):
+                                section_clean = dict(section)
+                                if isinstance(section_clean.get("content"), str):
+                                    section_clean["content"] = redact_pii(section_clean["content"])
+                                redacted_sections.append(section_clean)
+                            else:
+                                redacted_sections.append(section)
+                        clean["relevant_log_sections"] = redacted_sections
+                    redacted_entries.append(clean)
+                return redacted_entries
+
             metadata = {
                 "source": "zendesk_mb_playbook",
+                "import_version": "structured_summary_v1",
                 "zendesk_ticket_id": ticket_id,
                 "zendesk_url": zendesk_url,
                 "tags": tags_list,
                 "image_assets": image_assets,
-                "log_findings": log_findings,
+                "log_errors": _redact_log_errors(log_errors),
+                "log_findings": _redact_log_findings(log_findings),
+                "summary_structured": summary,
+                "public_conversation_excerpt": public_excerpt,
                 "last_public_comment_at": last_public_comment_at,
                 "imported_at": datetime.now(timezone.utc).isoformat(),
             }
-
-            metadata = redact_pii_from_dict(metadata)
             metadata = ensure_memory_title(metadata, content=content)
 
             try:
@@ -1646,8 +1819,43 @@ def import_zendesk_tagged(self, tag: str = "mb_playbook", limit: int = 200) -> d
             except Exception as exc:
                 msg = str(exc).lower()
                 if "duplicate key" in msg or "unique constraint" in msg or "23505" in msg:
-                    skipped += 1
-                    continue
+                    try:
+                        update_payload = {
+                            "content": payload["content"],
+                            "metadata": payload["metadata"],
+                            "source_type": payload["source_type"],
+                            "agent_id": payload["agent_id"],
+                            "tenant_id": payload["tenant_id"],
+                            "review_status": payload["review_status"],
+                            "confidence_score": payload["confidence_score"],
+                            "embedding": payload["embedding"],
+                            "updated_at": payload["updated_at"],
+                        }
+                        await supabase._exec(
+                            lambda: supabase.client.table("memories")
+                            .update(update_payload)
+                            .eq("id", memory_id)
+                            .execute()
+                        )
+                        try:
+                            store = SparrowWorkspaceStore(session_id=f"zendesk-{ticket_id}")
+                            await store.cleanup_session_data()
+                        except Exception as cleanup_exc:
+                            logger.debug(
+                                "zendesk_import_cleanup_failed ticket_id=%s error=%s",
+                                ticket_id,
+                                str(cleanup_exc)[:180],
+                            )
+                        imported += 1
+                        continue
+                    except Exception as update_exc:
+                        logger.warning(
+                            "zendesk_import_update_failed ticket_id=%s error=%s",
+                            ticket_id,
+                            str(update_exc)[:180],
+                        )
+                        failed += 1
+                        continue
                 logger.warning("zendesk_import_insert_failed ticket_id=%s error=%s", ticket_id, str(exc)[:180])
                 failed += 1
                 continue

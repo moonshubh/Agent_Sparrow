@@ -3,7 +3,8 @@
 import React, { useMemo, useState, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { ChevronDown, ChevronUp, ThumbsUp, ThumbsDown, Eye, Trash2, Pencil } from 'lucide-react';
-import MemoryMarkdown from './MemoryMarkdown';
+import { MemoryTipTapEditor } from './MemoryTipTapEditor';
+import { normalizeLegacyMemoryContent } from '../lib/legacyMemoryFormatting';
 import { useMemories, useMemory, useMemorySearch, useSubmitFeedback, useDeleteMemory } from '../hooks';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/shared/ui/tooltip';
 import { ConfidenceBadge } from './ConfidenceBadge';
@@ -516,7 +517,11 @@ export default function MemoryTable({
                 <div className="memory-detail-section">
                   <label>Content</label>
                   <div className="memory-detail-markdown">
-                    <MemoryMarkdown content={effectiveSelectedMemory.content} />
+                    <MemoryTipTapEditor
+                      content={normalizeLegacyMemoryContent(effectiveSelectedMemory.content)}
+                      readOnly
+                      className="memory-detail-tiptap"
+                    />
                   </div>
                 </div>
                 <div className="memory-detail-grid">

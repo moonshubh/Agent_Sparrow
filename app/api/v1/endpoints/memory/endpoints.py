@@ -16,11 +16,13 @@ Endpoints:
 """
 
 import logging
+import os
 import mimetypes
 import asyncio
 import json
 import re
 from datetime import datetime, timezone
+from datetime import timedelta
 from typing import Annotated, Any, Dict, List, Literal, Optional, Tuple
 from uuid import UUID, NAMESPACE_URL, uuid5
 
@@ -83,6 +85,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["Memory"])
 
 EXPORTS_BUCKET = "memory-exports"
+MEMORY_ASSET_SIGNED_TTL_SEC = int(os.getenv("MEMORY_ASSET_SIGNED_TTL_SEC", "900"))
 
 # ============================================================================
 # Auth Dependencies
@@ -145,23 +148,28 @@ async def get_memory_me(
 
 @router.get(
     "/assets/{bucket}/{object_path:path}",
-    summary="Fetch a stored memory asset (Admin only)",
-    description="Streams a stored memory asset from Supabase Storage (admin-only).",
+    summary="Fetch a stored memory asset (Authenticated)",
+    description="Streams a stored memory asset from Supabase Storage (authenticated users only).",
     responses={
         200: {"description": "Asset retrieved successfully"},
         401: {"description": "Authentication required"},
-        403: {"description": "Admin access required"},
         404: {"description": "Asset not found"},
     },
 )
 async def get_memory_asset(
     bucket: str,
     object_path: str,
-    _admin_user: Annotated[TokenPayload, Depends(require_admin)],
+    _current_user: Annotated[TokenPayload, Depends(get_current_user)],
     supabase: SupabaseClient = Depends(get_supabase_client),
 ) -> Response:
     if not bucket or not object_path:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Asset not found")
+    if not settings.supabase_service_key:
+        logger.warning(
+            "memory_asset_service_key_missing bucket=%s path=%s",
+            bucket,
+            object_path,
+        )
 
     try:
         data = await supabase._exec(
@@ -176,6 +184,55 @@ async def get_memory_asset(
 
     mime_type, _ = mimetypes.guess_type(object_path)
     return Response(content=data, media_type=mime_type or "application/octet-stream")
+
+
+@router.get(
+    "/assets/{bucket}/{object_path:path}/signed",
+    summary="Get a signed URL for a memory asset (Authenticated)",
+    description="Returns a short-lived signed URL for a stored memory asset.",
+    responses={
+        200: {"description": "Signed URL generated"},
+        401: {"description": "Authentication required"},
+        404: {"description": "Asset not found"},
+    },
+)
+async def get_memory_asset_signed(
+    bucket: str,
+    object_path: str,
+    _current_user: Annotated[TokenPayload, Depends(get_current_user)],
+    supabase: SupabaseClient = Depends(get_supabase_client),
+) -> dict[str, Any]:
+    if not bucket or not object_path:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Asset not found")
+
+    try:
+        signed = await supabase._exec(
+            lambda: supabase.client.storage.from_(bucket).create_signed_url(
+                object_path, MEMORY_ASSET_SIGNED_TTL_SEC
+            )
+        )
+        signed_url = None
+        if isinstance(signed, dict):
+            signed_url = signed.get("signedURL") or signed.get("signedUrl")
+
+        if not signed_url:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Asset not found"
+            )
+
+        expires_at = (datetime.now(timezone.utc) + timedelta(seconds=MEMORY_ASSET_SIGNED_TTL_SEC)).isoformat()
+        return {
+            "signed_url": signed_url,
+            "expires_at": expires_at,
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("Error generating asset signed URL: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to generate signed URL",
+        ) from exc
 
 
 def _escape_like_pattern(value: str) -> str:
