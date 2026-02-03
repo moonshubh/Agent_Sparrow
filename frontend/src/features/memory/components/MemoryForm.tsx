@@ -1,15 +1,16 @@
 'use client';
 
-import React, { useMemo, useState, useCallback, useRef } from 'react';
+import React, { useMemo, useState, useCallback, useEffect } from 'react';
 import type { User } from '@supabase/supabase-js';
 import { motion, AnimatePresence } from 'framer-motion';
-import MemoryMarkdown from './MemoryMarkdown';
+import { MemoryTipTapEditor } from './MemoryTipTapEditor';
 import {
   X,
   Save,
   AlertCircle,
   Bold,
   Italic,
+  Underline,
   List,
   ListOrdered,
   Code,
@@ -17,13 +18,15 @@ import {
   Link2,
   FileText,
   Zap,
-  Eye,
 } from 'lucide-react';
 import { useAddMemory, useUpdateMemory } from '../hooks';
 import type { Memory, SourceType } from '../types';
 import { SourceBadge } from './SourceBadge';
 import { useAuth } from '@/shared/contexts/AuthContext';
 import { ADMIN_EDITOR_EMAILS } from '../lib/memoryFlags';
+import { normalizeLegacyMemoryContent } from '../lib/legacyMemoryFormatting';
+import { toast } from 'sonner';
+import type { Editor } from '@tiptap/core';
 
 interface MemoryFormProps {
   onClose: () => void;
@@ -60,7 +63,11 @@ const getUserDisplayName = (user: User | null): string | null => {
 export function MemoryForm({ onClose, onSuccess, memory }: MemoryFormProps) {
   const isEditMode = Boolean(memory);
   const { user } = useAuth();
-  const [content, setContent] = useState(memory?.content ?? '');
+  const initialContent = useMemo(
+    () => normalizeLegacyMemoryContent(memory?.content ?? ''),
+    [memory?.content]
+  );
+  const [content, setContent] = useState(initialContent);
   const [sourceType, setSourceType] = useState<SourceType>(
     memory?.source_type ?? 'manual'
   );
@@ -72,8 +79,11 @@ export function MemoryForm({ onClose, onSuccess, memory }: MemoryFormProps) {
   const [error, setError] = useState<string | null>(null);
   const [metadataError, setMetadataError] = useState<string | null>(null);
   const [metadataExpanded, setMetadataExpanded] = useState(false);
-  const [previewEnabled, setPreviewEnabled] = useState(false);
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const [editor, setEditor] = useState<Editor | null>(null);
+
+  useEffect(() => {
+    setContent(initialContent);
+  }, [initialContent]);
 
   const addMemory = useAddMemory();
   const updateMemory = useUpdateMemory();
@@ -81,34 +91,34 @@ export function MemoryForm({ onClose, onSuccess, memory }: MemoryFormProps) {
   const editorName = useMemo(() => getUserDisplayName(user), [user]);
   const editorEmail = useMemo(() => (user?.email ? user.email.toLowerCase() : null), [user]);
 
-  // Insert formatting at cursor
-  const insertFormat = useCallback((prefix: string, suffix: string = '') => {
-    const textarea = textareaRef.current;
-    if (!textarea) return;
-
-    const start = textarea.selectionStart;
-    const end = textarea.selectionEnd;
-    const selectedText = content.substring(start, end);
-    const before = content.substring(0, start);
-    const after = content.substring(end);
-
-    const newContent = before + prefix + selectedText + suffix + after;
-    setContent(newContent);
-
-    // Focus and set cursor position
-    setTimeout(() => {
-      textarea.focus();
-      const newCursorPos = start + prefix.length + selectedText.length + suffix.length;
-      textarea.setSelectionRange(newCursorPos, newCursorPos);
-    }, 0);
-  }, [content]);
-
-  const handleBold = () => insertFormat('**', '**');
-  const handleItalic = () => insertFormat('_', '_');
-  const handleCode = () => insertFormat('`', '`');
-  const handleBulletList = () => insertFormat('\n- ');
-  const handleNumberedList = () => insertFormat('\n1. ');
-  const handleLink = () => insertFormat('[', '](url)');
+  const handleBold = useCallback(() => {
+    editor?.chain().focus().toggleBold().run();
+  }, [editor]);
+  const handleItalic = useCallback(() => {
+    editor?.chain().focus().toggleItalic().run();
+  }, [editor]);
+  const handleUnderline = useCallback(() => {
+    editor?.chain().focus().toggleUnderline().run();
+  }, [editor]);
+  const handleCode = useCallback(() => {
+    editor?.chain().focus().toggleCodeBlock().run();
+  }, [editor]);
+  const handleBulletList = useCallback(() => {
+    editor?.chain().focus().toggleBulletList().run();
+  }, [editor]);
+  const handleNumberedList = useCallback(() => {
+    editor?.chain().focus().toggleOrderedList().run();
+  }, [editor]);
+  const handleLink = useCallback(() => {
+    const previousUrl = editor?.getAttributes('link').href || '';
+    const url = window.prompt('Enter URL', previousUrl);
+    if (url === null) return;
+    if (!url) {
+      editor?.chain().focus().unsetLink().run();
+      return;
+    }
+    editor?.chain().focus().setLink({ href: url }).run();
+  }, [editor]);
 
   const handlePrettifyMetadata = useCallback(() => {
     const trimmed = metadata.trim();
@@ -144,7 +154,10 @@ export function MemoryForm({ onClose, onSuccess, memory }: MemoryFormProps) {
       setError(null);
       setMetadataError(null);
 
-      if (!content.trim()) {
+      const editorContent = editor?.getMarkdown() ?? content;
+      const trimmedContent = editorContent.trim();
+
+      if (!trimmedContent) {
         setError('Content is required');
         return;
       }
@@ -188,16 +201,18 @@ export function MemoryForm({ onClose, onSuccess, memory }: MemoryFormProps) {
           await updateMemory.mutateAsync({
             memoryId: memory.id,
             request: {
-              content: content.trim(),
+              content: trimmedContent,
               metadata: metadataWithEditor,
             },
           });
+          toast.success('Memory updated');
         } else {
           await addMemory.mutateAsync({
-            content: content.trim(),
+            content: trimmedContent,
             source_type: sourceType,
             metadata: parsedMetadata,
           });
+          toast.success('Memory saved');
         }
 
         onSuccess?.();
@@ -211,6 +226,7 @@ export function MemoryForm({ onClose, onSuccess, memory }: MemoryFormProps) {
       content,
       sourceType,
       metadata,
+      editor,
       addMemory,
       updateMemory,
       isEditMode,
@@ -263,41 +279,8 @@ export function MemoryForm({ onClose, onSuccess, memory }: MemoryFormProps) {
               {isEditMode ? 'Refine knowledge for the agent' : 'Add knowledge to the graph'}
             </p>
           </div>
-          <motion.button
-            className="add-memory-close"
-            onClick={onClose}
-            whileHover={{ scale: 1.1, rotate: 90 }}
-            whileTap={{ scale: 0.9 }}
-          >
-            <X size={18} />
-          </motion.button>
-        </div>
-
-        {/* Form */}
-        <form onSubmit={handleSubmit} className="add-memory-form">
-          {/* Error message */}
-          <AnimatePresence>
-            {error && (
-              <motion.div
-                className="add-memory-error"
-                initial={{ opacity: 0, y: -10, height: 0 }}
-                animate={{ opacity: 1, y: 0, height: 'auto' }}
-                exit={{ opacity: 0, y: -10, height: 0 }}
-              >
-                <AlertCircle size={16} />
-                <span>{error}</span>
-              </motion.div>
-            )}
-          </AnimatePresence>
-
-          {/* Full-width content editor */}
-          <div
-            className={`add-memory-editor-section ${
-              !isEditMode && previewEnabled ? 'with-preview' : ''
-            }`}
-          >
-            {/* Formatting toolbar */}
-            <div className="add-memory-toolbar">
+          <div className="add-memory-header-right">
+            <div className="add-memory-toolbar add-memory-toolbar--header">
               <motion.button
                 type="button"
                 className="add-memory-tool-btn"
@@ -321,10 +304,20 @@ export function MemoryForm({ onClose, onSuccess, memory }: MemoryFormProps) {
               <motion.button
                 type="button"
                 className="add-memory-tool-btn"
+                onClick={handleUnderline}
+                whileHover={{ scale: 1.1 }}
+                whileTap={{ scale: 0.95 }}
+                title="Underline"
+              >
+                <Underline size={14} />
+              </motion.button>
+              <motion.button
+                type="button"
+                className="add-memory-tool-btn"
                 onClick={handleCode}
                 whileHover={{ scale: 1.1 }}
                 whileTap={{ scale: 0.95 }}
-                title="Code"
+                title="Code Block"
               >
                 <Code size={14} />
               </motion.button>
@@ -359,96 +352,100 @@ export function MemoryForm({ onClose, onSuccess, memory }: MemoryFormProps) {
               >
                 <Link2 size={14} />
               </motion.button>
-              <div className="add-memory-toolbar-spacer" />
-              {!isEditMode && (
-                <motion.button
-                  type="button"
-                  className={`add-memory-tool-btn ${previewEnabled ? 'active' : ''}`}
-                  onClick={() => setPreviewEnabled((prev) => !prev)}
-                  whileHover={{ scale: 1.1 }}
-                  whileTap={{ scale: 0.95 }}
-                  title={previewEnabled ? 'Hide preview' : 'Show preview'}
-                >
-                  <Eye size={14} />
-                </motion.button>
-              )}
+              <div className="add-memory-tool-divider" />
               <span className="add-memory-char-count">{content.length} chars</span>
             </div>
-
-            <div className="add-memory-editor-split">
-              <textarea
-                ref={textareaRef}
-                value={content}
-                onChange={(e) => setContent(e.target.value)}
-                placeholder="Enter the memory content...&#10;&#10;Example: To resolve sync issues with Gmail, clear the OAuth cache by going to Settings > Accounts > Gmail > Reconnect."
-                className="add-memory-textarea add-memory-textarea-main"
-                autoFocus
-              />
-
-              {!isEditMode && previewEnabled && (
-                <div className="add-memory-preview">
-                  {content.trim() ? (
-                    <MemoryMarkdown content={content} />
-                  ) : (
-                    <div className="add-memory-preview-empty">
-                      <p>Start typing to see a preview of your markdown content.</p>
-                      <p className="memory-empty-hint">
-                        Preview renders markdown (lists, code, links) to make memories easier to read.
-                      </p>
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
+            <motion.button
+              className="add-memory-close"
+              onClick={onClose}
+              whileHover={{ scale: 1.1, rotate: 90 }}
+              whileTap={{ scale: 0.9 }}
+            >
+              <X size={18} />
+            </motion.button>
           </div>
+        </div>
 
-          {/* Collapsible Metadata Panel */}
-          <AnimatePresence>
-            {metadataExpanded && (
-              <motion.div
-                className="add-memory-meta-panel"
-                initial={{ height: 0, opacity: 0 }}
-                animate={{ height: 'auto', opacity: 1 }}
-                exit={{ height: 0, opacity: 0 }}
-                transition={{ duration: 0.2 }}
-              >
-                <div className="add-memory-meta-panel-inner">
-                  <div className="add-memory-meta-toolbar">
-                    <button
-                      type="button"
-                      className="add-memory-meta-btn"
-                      onClick={handlePrettifyMetadata}
-                    >
-                      Prettify
-                    </button>
-                    <button
-                      type="button"
-                      className="add-memory-meta-btn"
-                      onClick={handleClearMetadata}
-                    >
-                      Clear
-                    </button>
-                  </div>
-                  <textarea
-                    value={metadata}
-                    onChange={(e) => {
-                      setMetadata(e.target.value);
-                      setMetadataError(null);
-                    }}
-                    placeholder='{"ticket_id": "12345", "source": "zendesk"}'
-                    className="add-memory-textarea add-memory-code add-memory-metadata-textarea"
-                    rows={3}
+        {/* Form */}
+        <form onSubmit={handleSubmit} className="add-memory-form">
+          <div className="add-memory-body">
+            {/* Error message */}
+            <AnimatePresence>
+              {error && (
+                <motion.div
+                  className="add-memory-error"
+                  initial={{ opacity: 0, y: -10, height: 0 }}
+                  animate={{ opacity: 1, y: 0, height: 'auto' }}
+                  exit={{ opacity: 0, y: -10, height: 0 }}
+                >
+                  <AlertCircle size={16} />
+                  <span>{error}</span>
+                </motion.div>
+              )}
+            </AnimatePresence>
+
+            {/* Full-width content editor */}
+            <div className="add-memory-editor-section">
+              <div className="add-memory-editor-split">
+                <div className="add-memory-tiptap">
+                  <MemoryTipTapEditor
+                    content={content}
+                    onChange={setContent}
+                    onEditorReady={setEditor}
+                    placeholder="Enter the memory content... Example: To resolve sync issues with Gmail, clear the OAuth cache by going to Settings > Accounts > Gmail > Reconnect."
                   />
-                  {metadataError && (
-                    <div className="add-memory-field-error">
-                      <AlertCircle size={14} />
-                      <span>{metadataError}</span>
-                    </div>
-                  )}
                 </div>
-              </motion.div>
-            )}
-          </AnimatePresence>
+              </div>
+            </div>
+
+            {/* Collapsible Metadata Panel */}
+            <AnimatePresence>
+              {metadataExpanded && (
+                <motion.div
+                  className="add-memory-meta-panel"
+                  initial={{ height: 0, opacity: 0 }}
+                  animate={{ height: 'auto', opacity: 1 }}
+                  exit={{ height: 0, opacity: 0 }}
+                  transition={{ duration: 0.2 }}
+                >
+                  <div className="add-memory-meta-panel-inner">
+                    <div className="add-memory-meta-toolbar">
+                      <button
+                        type="button"
+                        className="add-memory-meta-btn"
+                        onClick={handlePrettifyMetadata}
+                      >
+                        Prettify
+                      </button>
+                      <button
+                        type="button"
+                        className="add-memory-meta-btn"
+                        onClick={handleClearMetadata}
+                      >
+                        Clear
+                      </button>
+                    </div>
+                    <textarea
+                      value={metadata}
+                      onChange={(e) => {
+                        setMetadata(e.target.value);
+                        setMetadataError(null);
+                      }}
+                      placeholder='{"ticket_id": "12345", "source": "zendesk"}'
+                      className="add-memory-textarea add-memory-code add-memory-metadata-textarea"
+                      rows={3}
+                    />
+                    {metadataError && (
+                      <div className="add-memory-field-error">
+                        <AlertCircle size={14} />
+                        <span>{metadataError}</span>
+                      </div>
+                    )}
+                  </div>
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </div>
 
           {/* Compact Footer */}
           <div className="add-memory-footer">
