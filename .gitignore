@@ -113,6 +113,10 @@ lib/
 !frontend/lib/
 !frontend/src/shared/lib/
 !frontend/src/shared/lib/**
+!frontend/src/features/memory/lib/
+!frontend/src/features/memory/lib/**
+!frontend/src/features/memory/lib/
+!frontend/src/features/memory/lib/**
 lib64/
 parts/
 sdist/
@@ -158,6 +162,8 @@ lib/
 !frontend/lib/
 !frontend/src/shared/lib/
 !frontend/src/shared/lib/**
+!frontend/src/features/memory/lib/
+!frontend/src/features/memory/lib/**
 lib64/
 parts/
 sdist/
