@@ -1,7 +1,7 @@
 import asyncio
 import uuid
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Any
 
 from app.agents.harness.persistence.memory_checkpointer import SanitizingMemorySaver
 from langgraph.config import RunnableConfig
@@ -331,4 +331,25 @@ def build_unified_graph():
     return app
 
 
-app = build_unified_graph()
+_compiled_graph: Optional[Any] = None
+
+
+def get_compiled_graph() -> Any:
+    """Lazily build the unified graph to avoid side effects at import time."""
+    global _compiled_graph
+    if _compiled_graph is None:
+        _compiled_graph = build_unified_graph()
+    return _compiled_graph
+
+
+class _LazyGraph:
+    """Proxy that resolves the compiled graph on first use."""
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(get_compiled_graph(), name)
+
+    def __call__(self, *args: Any, **kwargs: Any) -> Any:
+        return get_compiled_graph()(*args, **kwargs)
+
+
+app = _LazyGraph()

@@ -209,7 +209,7 @@ async def upload_transcript(
     try:
         conversation = await create_conversation_in_db(conversation_data)
 
-        if auto_process and conversation.uploaded_by:
+        if auto_process:
             background_tasks.add_task(
                 process_uploaded_transcript,
                 conversation.id,

@@ -48,6 +48,9 @@ class Settings(BaseSettings):
     gemma_helper_max_calls: int = Field(
         default=10, alias="GEMMA_HELPER_MAX_CALLS"
     )
+    gemini_afc_max_remote_calls: Optional[int] = Field(
+        default=1000, alias="GEMINI_AFC_MAX_REMOTE_CALLS"
+    )
 
     @model_validator(mode="after")
     def hydrate_gemini_api_key(self) -> "Settings":

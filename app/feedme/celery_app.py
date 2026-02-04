@@ -32,6 +32,23 @@ _health_server: HTTPServer | None = None
 default_broker = "redis://localhost:6379/1"
 default_backend = "redis://localhost:6379/2"
 
+
+def _optional_int_env(name: str, default: int | None) -> int | None:
+    """Parse an optional int env var; <=0 disables the limit (None)."""
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    raw = raw.strip()
+    if not raw:
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        return default
+    if value <= 0:
+        return None
+    return value
+
 celery_app = Celery(
     "feedme",
     broker=getattr(settings, "feedme_celery_broker", default_broker),
@@ -48,7 +65,7 @@ celery_app.conf.update(
     broker_connection_max_retries=None,
     broker_transport_options={
         # With acks_late enabled, tasks must remain invisible while executing.
-        # Keep comfortably above our task_time_limit (10 minutes).
+        # Keep comfortably above any configured task_time_limit.
         "visibility_timeout": int(
             os.getenv("FEEDME_CELERY_VISIBILITY_TIMEOUT", "3600")
         ),
@@ -96,8 +113,10 @@ celery_app.conf.update(
     worker_prefetch_multiplier=1,
     task_reject_on_worker_lost=True,
     # Task time limits
-    task_soft_time_limit=300,  # 5 minutes
-    task_time_limit=600,  # 10 minutes
+    task_soft_time_limit=_optional_int_env(
+        "FEEDME_CELERY_SOFT_TIME_LIMIT", None
+    ),
+    task_time_limit=_optional_int_env("FEEDME_CELERY_TIME_LIMIT", None),
     # Worker configuration - Memory optimization
     # Restart worker after 50 tasks to prevent memory accumulation from PDF processing
     worker_max_tasks_per_child=50,

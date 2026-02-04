@@ -26,7 +26,7 @@ LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 logging.basicConfig(
     level=LOG_LEVEL,
     format="%(message)s",  # structlog already renders JSON with timestamp, level
-    stream=sys.stdout,
+    stream=sys.stderr,
 )
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
@@ -39,7 +39,9 @@ structlog.configure(
         getattr(logging, LOG_LEVEL, logging.INFO)
     ),
     context_class=dict,
-    logger_factory=structlog.PrintLoggerFactory(),  # prints via stdlib logging config
+    logger_factory=structlog.PrintLoggerFactory(
+        file=sys.stderr
+    ),  # keep JSON logs off stdout (reserved for JSONRPC)
     processors=[
         structlog.processors.TimeStamper(fmt="iso"),
         structlog.processors.StackInfoRenderer(),

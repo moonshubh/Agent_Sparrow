@@ -10,6 +10,7 @@ import functools
 from typing import Any, Callable, Optional, TypeVar, Dict, cast
 
 from app.core.logging_config import get_logger
+from app.core.settings import settings
 from .bucket_limiter import BucketRateLimiter
 from .config import RateLimitConfig
 from .exceptions import (
@@ -388,6 +389,68 @@ class ChatGoogleGenerativeAIWrapper(RateLimitedAgent):
         self.model_name = model_name
         self.temperature = getattr(chat_model, "temperature", 0)
         self.max_tokens = getattr(chat_model, "max_tokens", None)
+
+    @staticmethod
+    def _apply_afc_config(kwargs: Dict[str, Any]) -> Dict[str, Any]:
+        """Inject Automatic Function Calling (AFC) config for Gemini."""
+        max_calls = settings.gemini_afc_max_remote_calls
+        if max_calls is None:
+            return kwargs
+
+        afc_update: Dict[str, Any] = {}
+        if max_calls <= 0:
+            afc_update = {"disable": True, "maximum_remote_calls": max_calls}
+        else:
+            afc_update = {"maximum_remote_calls": max_calls}
+
+        existing = kwargs.get("automatic_function_calling")
+        if existing is None:
+            kwargs["automatic_function_calling"] = afc_update
+            return kwargs
+
+        if isinstance(existing, dict):
+            merged = dict(existing)
+            merged.update(afc_update)
+            kwargs["automatic_function_calling"] = merged
+            return kwargs
+
+        try:
+            if hasattr(existing, "model_copy"):
+                kwargs["automatic_function_calling"] = existing.model_copy(
+                    update=afc_update
+                )
+                return kwargs
+            if "maximum_remote_calls" in afc_update and hasattr(
+                existing, "maximum_remote_calls"
+            ):
+                setattr(
+                    existing,
+                    "maximum_remote_calls",
+                    afc_update["maximum_remote_calls"],
+                )
+            if "disable" in afc_update and hasattr(existing, "disable"):
+                setattr(existing, "disable", afc_update["disable"])
+        except Exception:
+            # Best-effort; leave existing config if update fails.
+            return kwargs
+
+        kwargs["automatic_function_calling"] = existing
+        return kwargs
+
+    async def invoke(self, *args, **kwargs) -> Any:
+        """Inject AFC config before invoking Gemini."""
+        kwargs = self._apply_afc_config(dict(kwargs))
+        return await super().invoke(*args, **kwargs)
+
+    def stream(self, *args, **kwargs) -> Any:
+        """Inject AFC config before streaming Gemini."""
+        kwargs = self._apply_afc_config(dict(kwargs))
+        return super().stream(*args, **kwargs)
+
+    async def astream(self, *args, **kwargs) -> Any:
+        """Inject AFC config before async streaming Gemini."""
+        kwargs = self._apply_afc_config(dict(kwargs))
+        return await super().astream(*args, **kwargs)
 
     async def _call(self, messages: list, **kwargs) -> str:
         """LangChain _call method compatibility."""

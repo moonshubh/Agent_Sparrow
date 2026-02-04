@@ -32,7 +32,8 @@ from app.db.supabase.client import get_supabase_client
 logger = logging.getLogger(__name__)
 
 
-_TEMP_EXAMPLES_TABLE = "feedme_temp_examples"
+_PREFERRED_TEMP_EXAMPLES_TABLE = "feedme_temp_examples"
+_FALLBACK_TEMP_EXAMPLES_TABLE = "feedme_examples_temp"
 _REVIEW_HISTORY_TABLE = "feedme_review_history"
 
 
@@ -72,6 +73,8 @@ class ApprovalWorkflowEngine:
     ):
         """Initialize the workflow engine."""
         self._supabase_client = None
+        self._temp_examples_table: Optional[str] = None
+        self._use_fallback_temp_examples = False
         self.embedding_service = embedding_service
         self.config = config
         self.state_machine = ApprovalStateMachine()
@@ -97,6 +100,28 @@ class ApprovalWorkflowEngine:
             return {}
 
         normalized = dict(row)
+        metadata = normalized.get("metadata") or {}
+        if isinstance(metadata, dict):
+            for key in (
+                "approval_status",
+                "assigned_reviewer",
+                "priority",
+                "extraction_confidence",
+                "ai_model_used",
+                "extraction_method",
+                "extraction_timestamp",
+                "auto_approved",
+                "auto_approval_reason",
+                "review_notes",
+                "rejection_reason",
+                "revision_instructions",
+                "reviewer_id",
+                "reviewer_confidence_score",
+                "reviewer_usefulness_score",
+                "tags",
+            ):
+                if normalized.get(key) is None and key in metadata:
+                    normalized[key] = metadata.get(key)
         if not normalized.get("extraction_timestamp"):
             normalized["extraction_timestamp"] = (
                 normalized.get("created_at") or self._now().isoformat()
@@ -135,6 +160,71 @@ class ApprovalWorkflowEngine:
             normalized["updated_at"] = normalized.get("created_at")
 
         return normalized
+
+    async def _get_temp_examples_table(self) -> str:
+        if self._temp_examples_table:
+            return self._temp_examples_table
+
+        try:
+            await self._exec(
+                lambda: self.supabase_client.table(_PREFERRED_TEMP_EXAMPLES_TABLE)
+                .select("id")
+                .limit(1)
+                .execute()
+            )
+            self._temp_examples_table = _PREFERRED_TEMP_EXAMPLES_TABLE
+            self._use_fallback_temp_examples = False
+            return self._temp_examples_table
+        except Exception as exc:
+            if self.supabase_client._record_missing_table(
+                _PREFERRED_TEMP_EXAMPLES_TABLE, exc
+            ):
+                self._temp_examples_table = _FALLBACK_TEMP_EXAMPLES_TABLE
+                self._use_fallback_temp_examples = True
+                return self._temp_examples_table
+            raise
+
+    @staticmethod
+    def _fallback_columns() -> set[str]:
+        return {
+            "conversation_id",
+            "question_text",
+            "answer_text",
+            "context_before",
+            "context_after",
+            "confidence_score",
+            "metadata",
+            "created_at",
+            "updated_at",
+        }
+
+    def _project_temp_example_payload(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        if not self._use_fallback_temp_examples:
+            return payload
+
+        metadata = dict(payload.get("metadata") or {})
+        if payload.get("confidence_score") is None and payload.get(
+            "extraction_confidence"
+        ) is not None:
+            payload["confidence_score"] = payload.get("extraction_confidence")
+
+        for key, value in payload.items():
+            if key not in self._fallback_columns():
+                metadata[key] = value
+
+        projected = {k: payload.get(k) for k in self._fallback_columns()}
+        projected["metadata"] = metadata
+        return projected
+
+    def _merge_metadata_update(
+        self, current: Dict[str, Any], updates: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        merged = dict(current.get("metadata") or {})
+        for key, value in updates.items():
+            if key in self._fallback_columns():
+                continue
+            merged[key] = value
+        return merged
 
     async def _exec(self, fn):
         return await self.supabase_client._exec(fn)
@@ -177,9 +267,17 @@ class ApprovalWorkflowEngine:
                     "confidence_threshold" if auto_approved else None
                 ),
             }
+            metadata = dict(temp_example.metadata or {})
+            if temp_example.issue_category:
+                metadata.setdefault("issue_category", temp_example.issue_category)
+            example_data["metadata"] = metadata
+            example_data["tags"] = temp_example.tags or []
+
+            table = await self._get_temp_examples_table()
+            example_data = self._project_temp_example_payload(example_data)
 
             response = await self._exec(
-                lambda: self.supabase_client.table(_TEMP_EXAMPLES_TABLE)
+                lambda: self.supabase_client.table(table)
                 .insert(example_data)
                 .execute()
             )
@@ -219,8 +317,9 @@ class ApprovalWorkflowEngine:
 
     async def get_temp_example(self, temp_example_id: int) -> Optional[Dict[str, Any]]:
         """Retrieve a temp example by ID."""
+        table = await self._get_temp_examples_table()
         response = await self._exec(
-            lambda: self.supabase_client.table(_TEMP_EXAMPLES_TABLE)
+            lambda: self.supabase_client.table(table)
             .select("*")
             .eq("id", temp_example_id)
             .execute()
@@ -239,36 +338,60 @@ class ApprovalWorkflowEngine:
         page_size: int,
     ) -> Dict[str, Any]:
         """List temp examples with filtering and pagination."""
-        query = self.supabase_client.table(_TEMP_EXAMPLES_TABLE).select(
-            "*", count="exact"
-        )
+        table = await self._get_temp_examples_table()
+        query = self.supabase_client.table(table).select("*", count="exact")
 
         approval_status = filters.get("approval_status")
-        if approval_status:
+        if approval_status and not self._use_fallback_temp_examples:
             query = query.eq("approval_status", approval_status)
 
         assigned_reviewer = filters.get("assigned_reviewer")
-        if assigned_reviewer:
+        if assigned_reviewer and not self._use_fallback_temp_examples:
             query = query.eq("assigned_reviewer", assigned_reviewer)
 
         priority = filters.get("priority")
-        if priority:
+        if priority and not self._use_fallback_temp_examples:
             query = query.eq("priority", priority)
 
         min_confidence = filters.get("min_confidence")
-        if min_confidence is not None:
+        if min_confidence is not None and not self._use_fallback_temp_examples:
             query = query.gte("extraction_confidence", min_confidence)
 
         offset = max(0, (page - 1) * page_size)
-        query = query.order("created_at", desc=True).range(
-            offset, offset + page_size - 1
-        )
+        query = query.order("created_at", desc=True)
+        if not self._use_fallback_temp_examples:
+            query = query.range(offset, offset + page_size - 1)
 
         response = await self._exec(lambda: query.execute())
         items = [self._normalize_temp_example(row) for row in (response.data or [])]
 
-        total = response.count if response.count is not None else len(items)
+        if self._use_fallback_temp_examples:
+            if approval_status:
+                items = [
+                    item
+                    for item in items
+                    if item.get("approval_status") == approval_status
+                ]
+            if assigned_reviewer:
+                items = [
+                    item
+                    for item in items
+                    if item.get("assigned_reviewer") == assigned_reviewer
+                ]
+            if priority:
+                items = [
+                    item for item in items if item.get("priority") == priority
+                ]
+            if min_confidence is not None:
+                items = [
+                    item
+                    for item in items
+                    if (item.get("extraction_confidence") or 0) >= min_confidence
+                ]
+
+        total = len(items)
         total_pages = (total + page_size - 1) // page_size if total > 0 else 0
+        items = items[offset : offset + page_size]
 
         return {
             "items": items,
@@ -291,8 +414,15 @@ class ApprovalWorkflowEngine:
             payload["priority"] = payload["priority"].value
         payload["updated_at"] = self._now().isoformat()
 
+        table = await self._get_temp_examples_table()
+        if self._use_fallback_temp_examples:
+            current = await self.get_temp_example(temp_example_id)
+            if current:
+                payload["metadata"] = self._merge_metadata_update(current, payload)
+            payload = self._project_temp_example_payload(payload)
+
         response = await self._exec(
-            lambda: self.supabase_client.table(_TEMP_EXAMPLES_TABLE)
+            lambda: self.supabase_client.table(table)
             .update(payload)
             .eq("id", temp_example_id)
             .execute()
@@ -309,8 +439,14 @@ class ApprovalWorkflowEngine:
             "assigned_reviewer": reviewer_id,
             "updated_at": self._now().isoformat(),
         }
+        table = await self._get_temp_examples_table()
+        if self._use_fallback_temp_examples:
+            current = await self.get_temp_example(temp_example_id)
+            if current:
+                payload["metadata"] = self._merge_metadata_update(current, payload)
+            payload = self._project_temp_example_payload(payload)
         response = await self._exec(
-            lambda: self.supabase_client.table(_TEMP_EXAMPLES_TABLE)
+            lambda: self.supabase_client.table(table)
             .update(payload)
             .eq("id", temp_example_id)
             .execute()
@@ -354,8 +490,15 @@ class ApprovalWorkflowEngine:
             "updated_at": self._now().isoformat(),
         }
 
+        table = await self._get_temp_examples_table()
+        if self._use_fallback_temp_examples:
+            update_payload["metadata"] = self._merge_metadata_update(
+                current, update_payload
+            )
+            update_payload = self._project_temp_example_payload(update_payload)
+
         response = await self._exec(
-            lambda: self.supabase_client.table(_TEMP_EXAMPLES_TABLE)
+            lambda: self.supabase_client.table(table)
             .update(update_payload)
             .eq("id", temp_example_id)
             .execute()
@@ -448,18 +591,29 @@ class ApprovalWorkflowEngine:
         period_start = start_date or (now - timedelta(days=30))
         period_end = end_date or now
 
-        query = (
-            self.supabase_client.table(_TEMP_EXAMPLES_TABLE)
-            .select(
-                "approval_status, auto_approved, extraction_confidence, reviewed_at, created_at, reviewer_id, assigned_reviewer",
-                count="exact",
+        table = await self._get_temp_examples_table()
+        if self._use_fallback_temp_examples:
+            query = (
+                self.supabase_client.table(table)
+                .select("*", count="exact")
+                .gte("created_at", period_start.isoformat())
+                .lte("created_at", period_end.isoformat())
             )
-            .gte("created_at", period_start.isoformat())
-            .lte("created_at", period_end.isoformat())
-        )
+        else:
+            query = (
+                self.supabase_client.table(table)
+                .select(
+                    "approval_status, auto_approved, extraction_confidence, reviewed_at, created_at, reviewer_id, assigned_reviewer",
+                    count="exact",
+                )
+                .gte("created_at", period_start.isoformat())
+                .lte("created_at", period_end.isoformat())
+            )
 
         response = await self._exec(lambda: query.execute())
         rows = response.data or []
+        if self._use_fallback_temp_examples:
+            rows = [self._normalize_temp_example(row) for row in rows]
 
         total_pending = sum(
             1
@@ -550,11 +704,17 @@ class ApprovalWorkflowEngine:
 
     async def get_reviewer_workload(self) -> ReviewerWorkloadSummary:
         """Get workload summary for reviewers."""
-        query = self.supabase_client.table(_TEMP_EXAMPLES_TABLE).select(
-            "assigned_reviewer, reviewer_id, approval_status, reviewed_at, created_at"
-        )
+        table = await self._get_temp_examples_table()
+        if self._use_fallback_temp_examples:
+            query = self.supabase_client.table(table).select("*")
+        else:
+            query = self.supabase_client.table(table).select(
+                "assigned_reviewer, reviewer_id, approval_status, reviewed_at, created_at"
+            )
         response = await self._exec(lambda: query.execute())
         rows = response.data or []
+        if self._use_fallback_temp_examples:
+            rows = [self._normalize_temp_example(row) for row in rows]
 
         reviewers: Dict[str, Dict[str, Any]] = {}
         now = self._now()
@@ -647,15 +807,39 @@ class ApprovalWorkflowEngine:
 
     async def cleanup_old_rejected_items(self, cutoff_date: datetime) -> int:
         """Clean up old rejected temp examples."""
+        table = await self._get_temp_examples_table()
+        if not self._use_fallback_temp_examples:
+            response = await self._exec(
+                lambda: self.supabase_client.table(table)
+                .delete()
+                .eq("approval_status", ApprovalState.REJECTED.value)
+                .lt("created_at", cutoff_date.isoformat())
+                .execute()
+            )
+            return len(response.data or [])
+
+        # Fallback table: filter in-memory, then delete by id.
         response = await self._exec(
-            lambda: self.supabase_client.table(_TEMP_EXAMPLES_TABLE)
-            .delete()
-            .eq("approval_status", ApprovalState.REJECTED.value)
+            lambda: self.supabase_client.table(table)
+            .select("id, created_at, metadata")
             .lt("created_at", cutoff_date.isoformat())
             .execute()
         )
-
-        return len(response.data or [])
+        rows = [self._normalize_temp_example(row) for row in (response.data or [])]
+        rejected_ids = [
+            row.get("id")
+            for row in rows
+            if row.get("approval_status") == ApprovalState.REJECTED.value
+        ]
+        if not rejected_ids:
+            return 0
+        delete_response = await self._exec(
+            lambda: self.supabase_client.table(table)
+            .delete()
+            .in_("id", rejected_ids)
+            .execute()
+        )
+        return len(delete_response.data or [])
 
     async def get_approval_metrics(
         self, start_date: Optional[datetime] = None, end_date: Optional[datetime] = None
