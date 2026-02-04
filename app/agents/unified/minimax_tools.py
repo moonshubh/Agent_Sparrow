@@ -47,7 +47,9 @@ except ImportError:
 
 # Minimax API Configuration
 MINIMAX_API_HOST = "https://api.minimax.io"
-MINIMAX_MCP_TIMEOUT = 60.0  # seconds
+MINIMAX_MCP_TIMEOUT = float(
+    getattr(settings, "minimax_mcp_timeout_sec", 60.0) or 60.0
+)  # seconds
 MINIMAX_TOOL_RATE_LIMIT_BUCKET = "internal.minimax_tools"
 MINIMAX_MCP_SERVER_NAME = "minimax"
 MINIMAX_MCP_TOOL_WEB_SEARCH = "web_search"
@@ -378,6 +380,26 @@ _minimax_mcp_tools: Dict[str, BaseTool] = {}
 _mcp_client_lock = asyncio.Lock()
 
 
+def _resolve_mcp_timeout() -> Optional[float]:
+    """Resolve the timeout for MCP tool calls (seconds)."""
+    try:
+        timeout = float(getattr(settings, "minimax_mcp_timeout_sec", 60.0) or 60.0)
+    except (TypeError, ValueError):
+        timeout = 60.0
+    if timeout <= 0:
+        return None
+    return timeout
+
+
+async def _reset_minimax_mcp_client(reason: str) -> None:
+    """Reset MCP client/tool cache after failures to avoid stuck sessions."""
+    global _minimax_mcp_client
+    async with _mcp_client_lock:
+        _minimax_mcp_client = None
+        _minimax_mcp_tools.clear()
+    logger.warning("minimax_mcp_client_reset", reason=reason)
+
+
 async def get_minimax_api_client() -> Optional[MinimaxAPIClient]:
     """Get or create Minimax API client singleton."""
     global _minimax_api_client
@@ -450,10 +472,26 @@ async def _get_minimax_mcp_tool(tool_name: str) -> Optional[BaseTool]:
     if cached is not None:
         return cached
 
+    timeout = _resolve_mcp_timeout()
     try:
-        tools = await client.get_tools(server_name=MINIMAX_MCP_SERVER_NAME)
+        if timeout:
+            tools = await asyncio.wait_for(
+                client.get_tools(server_name=MINIMAX_MCP_SERVER_NAME),
+                timeout=timeout,
+            )
+        else:
+            tools = await client.get_tools(server_name=MINIMAX_MCP_SERVER_NAME)
+    except asyncio.TimeoutError:
+        logger.warning(
+            "minimax_mcp_tools_load_timeout",
+            timeout=timeout,
+            server=MINIMAX_MCP_SERVER_NAME,
+        )
+        await _reset_minimax_mcp_client("tools_load_timeout")
+        return None
     except Exception as exc:
         logger.warning("minimax_mcp_tools_load_failed", error=str(exc))
+        await _reset_minimax_mcp_client("tools_load_failed")
         return None
 
     for tool_item in tools:
@@ -486,10 +524,23 @@ async def _invoke_minimax_mcp_tool(
     if tool is None:
         return None
 
+    timeout = _resolve_mcp_timeout()
     try:
-        result = await tool.ainvoke(args)
+        if timeout:
+            result = await asyncio.wait_for(tool.ainvoke(args), timeout=timeout)
+        else:
+            result = await tool.ainvoke(args)
+    except asyncio.TimeoutError:
+        logger.warning(
+            "minimax_mcp_tool_invoke_timeout",
+            tool=tool_name,
+            timeout=timeout,
+        )
+        await _reset_minimax_mcp_client("invoke_timeout")
+        return {"error": "minimax_mcp_timeout"}
     except Exception as exc:
         logger.warning("minimax_mcp_tool_invoke_failed", tool=tool_name, error=str(exc))
+        await _reset_minimax_mcp_client("invoke_failed")
         return {"error": str(exc)}
 
     if isinstance(result, dict):

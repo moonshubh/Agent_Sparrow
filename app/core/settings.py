@@ -100,6 +100,9 @@ class Settings(BaseSettings):
     minimax_mcp_args: str = Field(
         default="-m minimax_mcp.server", alias="MINIMAX_MCP_ARGS"
     )
+    minimax_mcp_timeout_sec: Optional[float] = Field(
+        default=60.0, alias="MINIMAX_MCP_TIMEOUT_SEC"
+    )
 
     # LangSmith tracing configuration
     langsmith_tracing_enabled: bool = Field(
