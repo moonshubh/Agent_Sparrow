@@ -27,6 +27,7 @@ class GemmaHelper:
     """Small wrapper to share a single client and usage cap per run."""
 
     def __init__(self, *, max_calls: int = 10) -> None:
+        # max_calls <= 0 disables the cap (unlimited helper calls).
         self.max_calls = max_calls
         self._calls = 0
         self._client: Optional[Any] = None
@@ -49,6 +50,8 @@ class GemmaHelper:
         return self._client
 
     def _remaining(self) -> int:
+        if self.max_calls <= 0:
+            return 1_000_000_000
         return max(self.max_calls - self._calls, 0)
 
     async def summarize(self, text: str, *, budget_tokens: int = 1024) -> Optional[str]:

@@ -90,17 +90,32 @@ async def analyze_conversation_batch(
         # Get conversations from database if IDs provided
         if request.conversation_ids:
             supabase = get_supabase_client()
-            result = await supabase._exec(
-                lambda: supabase.client.table("feedme_examples")
-                .select("*")
-                .in_("conversation_id", request.conversation_ids)
-                .execute()
-            )
-            conversations = result.data if result.data else []
+            conversations = []
+            if supabase._is_table_missing("feedme_examples"):
+                conversations = []
+            else:
+                try:
+                    result = await supabase._exec(
+                        lambda: supabase.client.table("feedme_examples")
+                        .select("*")
+                        .in_("conversation_id", request.conversation_ids)
+                        .execute()
+                    )
+                    conversations = result.data if result.data else []
+                except Exception as e:
+                    if not supabase._record_missing_table("feedme_examples", e):
+                        raise
         else:
             conversations = request.conversations
 
         if not conversations:
+            if request.conversation_ids and supabase._is_table_missing(
+                "feedme_examples"
+            ):
+                raise HTTPException(
+                    status_code=503,
+                    detail="FeedMe examples store unavailable; provide conversations directly.",
+                )
             raise HTTPException(
                 status_code=400, detail="No conversations provided for analysis"
             )
@@ -176,6 +191,19 @@ Return JSON with:
 
         # Perform semantic search with enhanced query
         supabase = get_supabase_client()
+        if supabase._is_table_missing("feedme_examples"):
+            return SmartSearchResponse(
+                success=True,
+                query=request.query,
+                intent=intent_data.get("intent", "general"),
+                key_terms=intent_data.get("key_terms", []),
+                results=[],
+                total_results=0,
+                suggestions=[
+                    f"Try searching for: {term}"
+                    for term in intent_data.get("key_terms", [])[:3]
+                ],
+            )
 
         # Search with filters
         query_builder = supabase.client.table("feedme_examples").select("*")
@@ -188,9 +216,25 @@ Return JSON with:
 
         # Perform vector similarity search
         # Note: This is a simplified version. In production, you'd use pgvector similarity search
-        result = await supabase._exec(
-            lambda: query_builder.limit(request.limit).execute()
-        )
+        try:
+            result = await supabase._exec(
+                lambda: query_builder.limit(request.limit).execute()
+            )
+        except Exception as e:
+            if supabase._record_missing_table("feedme_examples", e):
+                return SmartSearchResponse(
+                    success=True,
+                    query=request.query,
+                    intent=intent_data.get("intent", "general"),
+                    key_terms=intent_data.get("key_terms", []),
+                    results=[],
+                    total_results=0,
+                    suggestions=[
+                        f"Try searching for: {term}"
+                        for term in intent_data.get("key_terms", [])[:3]
+                    ],
+                )
+            raise
 
         # Enhance results with relevance scoring
         enhanced_results: list[SmartSearchResult] = []
@@ -249,14 +293,35 @@ async def get_insights_dashboard(
 
         cutoff_date = (datetime.now() - timedelta(days=days)).isoformat()
 
-        result = await supabase._exec(
-            lambda: supabase.client.table("feedme_conversations")
-            .select("*, feedme_examples(*)")
-            .gte("created_at", cutoff_date)
-            .execute()
-        )
-
-        conversations = result.data if result.data else []
+        conversations = []
+        if supabase._is_table_missing("feedme_examples"):
+            result = await supabase._exec(
+                lambda: supabase.client.table("feedme_conversations")
+                .select("*")
+                .gte("created_at", cutoff_date)
+                .execute()
+            )
+            conversations = result.data if result.data else []
+        else:
+            try:
+                result = await supabase._exec(
+                    lambda: supabase.client.table("feedme_conversations")
+                    .select("*, feedme_examples(*)")
+                    .gte("created_at", cutoff_date)
+                    .execute()
+                )
+                conversations = result.data if result.data else []
+            except Exception as e:
+                if supabase._record_missing_table("feedme_examples", e):
+                    result = await supabase._exec(
+                        lambda: supabase.client.table("feedme_conversations")
+                        .select("*")
+                        .gte("created_at", cutoff_date)
+                        .execute()
+                    )
+                    conversations = result.data if result.data else []
+                else:
+                    raise
 
         # Calculate metrics
         total_conversations = len(conversations)

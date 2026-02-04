@@ -4199,6 +4199,12 @@ async def import_zendesk_tagged(
     _admin_user: Annotated[TokenPayload, Depends(require_admin)],
 ) -> ImportZendeskTaggedResponse:
     try:
+        supabase = get_supabase_client()
+        if not getattr(supabase.config, "service_key", None):
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Supabase service key required for Zendesk memory import.",
+            )
         from app.feedme.tasks import import_zendesk_tagged as import_task
 
         task = import_task.delay(tag=request.tag, limit=request.limit)

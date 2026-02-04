@@ -519,6 +519,14 @@ def store_temp_examples(conversation_id: int, examples: List[Dict[str, Any]]):
         )
 
     except Exception as e:
+        try:
+            if client._record_missing_table("feedme_examples", e):
+                logger.warning(
+                    "feedme_examples table missing; skipping temp example storage"
+                )
+                return
+        except Exception:
+            pass
         logger.error(f"Error storing temp examples: {e}")
         raise
 
@@ -1525,6 +1533,14 @@ def save_examples_to_temp_db(
 
         return len(supabase_examples)
     except Exception as e:
+        try:
+            if client._record_missing_table("feedme_examples", e):
+                logger.warning(
+                    "feedme_examples table missing; skipping example persistence"
+                )
+                return 0
+        except Exception:
+            pass
         logger.error(f"Error saving examples to Supabase: {e}")
         return 0
 
@@ -1821,12 +1837,23 @@ def import_zendesk_tagged(
         ticket_rows = list(deduped.values())[:ticket_limit]
 
         supabase = get_supabase_client()
+        if not getattr(supabase.config, "service_key", None):
+            logger.error(
+                "zendesk_import_requires_service_key; aborting to avoid RLS failures"
+            )
+            return {
+                "imported": 0,
+                "skipped": 0,
+                "failed": len(ticket_rows),
+                "tag": tag_value,
+                "error": "SUPABASE_SERVICE_KEY is required for memory imports",
+            }
         service = get_memory_ui_service()
         agent_id = getattr(settings, "memory_ui_agent_id", "sparrow") or "sparrow"
         tenant_id = getattr(settings, "memory_ui_tenant_id", "mailbot") or "mailbot"
 
         imported = skipped = failed = 0
-        if not getattr(settings, "supabase_service_key", None):
+        if not getattr(supabase.config, "service_key", None):
             logger.warning(
                 "zendesk_import_missing_service_key; memory assets may fail to render for private buckets"
             )

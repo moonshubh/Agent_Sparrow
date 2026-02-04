@@ -164,7 +164,12 @@ BUCKET_NAME = "kb-screenshots"
 
 def get_supabase() -> Client:
     url = _env("SUPABASE_URL")
-    key = _env("SUPABASE_SERVICE_KEY") or _env("SUPABASE_ANON_KEY")
+    key = (
+        _env("SUPABASE_SERVICE_KEY")
+        or _env("SUPABASE_SERVICE_ROLE_KEY")
+        or _env("SUPABASE_SERVICE_ROLE")
+        or _env("SUPABASE_ANON_KEY")
+    )
     if not url or not key:
         raise RuntimeError(
             "Supabase not configured (SUPABASE_URL, SUPABASE_SERVICE_KEY/ANON missing)"

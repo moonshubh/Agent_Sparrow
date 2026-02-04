@@ -142,24 +142,30 @@ async def reject_conversation(
                 status_code=500, detail="Failed to update conversation rejection status"
             )
 
-        # Mark all examples as rejected
-        examples_update_response = await supabase_client._exec(
-            lambda: supabase_client.client.table("feedme_examples")
-            .update(
-                {
-                    "review_status": "rejected",
-                    "reviewed_by": rejection_request.rejected_by,
-                    "reviewed_at": rejection_time,
-                    "is_active": False,
-                }
+        # Mark all examples as rejected (skip if examples table is retired)
+        rejected_count = 0
+        try:
+            examples_update_response = await supabase_client._exec(
+                lambda: supabase_client.client.table("feedme_examples")
+                .update(
+                    {
+                        "review_status": "rejected",
+                        "reviewed_by": rejection_request.rejected_by,
+                        "reviewed_at": rejection_time,
+                        "is_active": False,
+                    }
+                )
+                .eq("conversation_id", conversation_id)
+                .execute()
             )
-            .eq("conversation_id", conversation_id)
-            .execute()
-        )
-
-        rejected_count = (
-            len(examples_update_response.data) if examples_update_response.data else 0
-        )
+            rejected_count = (
+                len(examples_update_response.data)
+                if examples_update_response.data
+                else 0
+            )
+        except Exception as e:
+            if not supabase_client._record_missing_table("feedme_examples", e):
+                raise
         logger.info(
             f"Conversation {conversation_id} rejected. Rejected {rejected_count} examples."
         )

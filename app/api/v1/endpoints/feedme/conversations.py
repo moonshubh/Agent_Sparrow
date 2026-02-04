@@ -7,7 +7,6 @@ CRUD operations for conversations and examples management.
 import logging
 from typing import Any, Dict, Optional
 
-from postgrest.base_request_builder import CountMethod
 
 from fastapi import APIRouter, HTTPException, Query, Request
 
@@ -37,8 +36,6 @@ from .helpers import (
 )
 
 logger = logging.getLogger(__name__)
-
-COUNT_EXACT: CountMethod = CountMethod.exact
 
 router = APIRouter(tags=["FeedMe"])
 
@@ -193,40 +190,19 @@ async def list_conversation_examples(
 
     try:
         client = get_supabase_client()
-
-        query = client.client.table("feedme_examples").select("""
-            id, uuid, conversation_id, question_text, answer_text,
-            context_before, context_after, tags, issue_type, resolution_type,
-            confidence_score, usefulness_score, is_active, version,
-            review_status, reviewed_by, reviewed_at, reviewer_notes, generated_by_model,
-            created_at, updated_at
-        """)
-        query = query.eq("conversation_id", conversation_id)
-
-        if is_active is not None:
-            query = query.eq("is_active", is_active)
-
-        count_response = (
-            client.client.table("feedme_examples")
-            .select("id", count=COUNT_EXACT)
-            .eq("conversation_id", conversation_id)
+        total_count = await client.count_examples_by_conversation(
+            conversation_id, is_active=is_active
         )
-
-        if is_active is not None:
-            count_response = count_response.eq("is_active", is_active)
-
-        count_result = await client._exec(lambda: count_response.execute())
-        total_count = count_result.count if count_result.count else 0
-
         offset = (page - 1) * page_size
-        query = query.order("created_at", desc=True).range(
-            offset, offset + page_size - 1
+        response_data = await client.get_examples_by_conversation(
+            conversation_id,
+            limit=page_size,
+            offset=offset,
+            is_active=is_active,
         )
-
-        response = await client._exec(lambda: query.execute())
 
         examples = []
-        for row in response.data:
+        for row in response_data:
             try:
                 example_data = dict(row)
                 if "reviewer_notes" not in example_data:

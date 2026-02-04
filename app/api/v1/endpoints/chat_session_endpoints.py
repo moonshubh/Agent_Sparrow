@@ -145,7 +145,11 @@ def _has_database_credentials() -> bool:
         return True
 
     supabase_url = settings.supabase_url or os.getenv("SUPABASE_URL")
-    service_key = os.getenv("SUPABASE_SERVICE_KEY")
+    service_key = (
+        os.getenv("SUPABASE_SERVICE_KEY")
+        or os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+        or os.getenv("SUPABASE_SERVICE_ROLE")
+    )
     anon_key = os.getenv("SUPABASE_ANON_KEY")
 
     return bool(supabase_url and (service_key or anon_key))

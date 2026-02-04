@@ -2070,7 +2070,9 @@ async def run_unified_agent(
         limiter = get_rate_limiter()
 
         # 2. Initialize helpers
-        helper = GemmaHelper(max_calls=10)
+        helper = GemmaHelper(
+            max_calls=getattr(settings, "gemma_helper_max_calls", 10)
+        )
         session_id = getattr(state, "session_id", None) or getattr(
             state, "trace_id", None
         )

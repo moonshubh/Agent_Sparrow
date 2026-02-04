@@ -45,6 +45,9 @@ class Settings(BaseSettings):
 
     gemini_api_key: Optional[str] = Field(default=None, alias="GEMINI_API_KEY")
     google_api_key: Optional[str] = Field(default=None, alias="GOOGLE_API_KEY")
+    gemma_helper_max_calls: int = Field(
+        default=10, alias="GEMMA_HELPER_MAX_CALLS"
+    )
 
     @model_validator(mode="after")
     def hydrate_gemini_api_key(self) -> "Settings":

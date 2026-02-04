@@ -121,6 +121,7 @@ export interface SearchExamplesRequest {
 
 class SupabaseClient {
   private client: SupabaseClientType | null = null;
+  private missingTables = new Set<string>();
 
   constructor() {
     if (SUPABASE_URL && SUPABASE_ANON_KEY) {
@@ -140,6 +141,44 @@ class SupabaseClient {
       );
     }
     return this.client;
+  }
+
+  private normalizeTableName(name: string): string {
+    return name.trim().toLowerCase();
+  }
+
+  private isMissingTableError(error: unknown, table: string): boolean {
+    const message =
+      typeof error === "string"
+        ? error
+        : (error as { message?: string })?.message || "";
+    const haystack = message.toLowerCase();
+    const normalized = this.normalizeTableName(table);
+    const variants = [
+      normalized,
+      normalized.replace(/_/g, " "),
+      normalized.replace(/_/g, ""),
+    ];
+    const signals = [
+      "could not find the table",
+      "schema cache",
+      "does not exist",
+      "relation",
+    ];
+    return (
+      signals.some((sig) => haystack.includes(sig)) &&
+      variants.some((variant) => haystack.includes(variant))
+    );
+  }
+
+  private markMissingTable(error: unknown, table: string): boolean {
+    if (!this.isMissingTableError(error, table)) return false;
+    this.missingTables.add(this.normalizeTableName(table));
+    return true;
+  }
+
+  private isTableMissing(table: string): boolean {
+    return this.missingTables.has(this.normalizeTableName(table));
   }
 
   // =====================================================
@@ -300,6 +339,9 @@ class SupabaseClient {
     examples: Partial<SupabaseExample>[],
     markApproved: boolean = true,
   ): Promise<SupabaseExample[]> {
+    if (this.isTableMissing("feedme_examples")) {
+      return [];
+    }
     const client = this.ensureClient();
 
     // Add approval fields if marking as approved
@@ -319,6 +361,9 @@ class SupabaseClient {
       .select();
 
     if (error) {
+      if (this.markMissingTable(error, "feedme_examples")) {
+        return [];
+      }
       console.error("Error inserting examples:", error);
       throw new Error(`Failed to insert examples: ${error.message}`);
     }
@@ -332,6 +377,16 @@ class SupabaseClient {
     approved_by: string;
     timestamp: string;
   }> {
+    if (this.isTableMissing("feedme_examples")) {
+      const now = new Date().toISOString();
+      await this.updateConversationStatus(request.conversation_id, "approved");
+      return {
+        conversation_id: request.conversation_id,
+        approved_count: 0,
+        approved_by: request.approved_by,
+        timestamp: now,
+      };
+    }
     const client = this.ensureClient();
     const now = new Date().toISOString();
 
@@ -354,6 +409,15 @@ class SupabaseClient {
     const { data, error } = await query.select();
 
     if (error) {
+      if (this.markMissingTable(error, "feedme_examples")) {
+        await this.updateConversationStatus(request.conversation_id, "approved");
+        return {
+          conversation_id: request.conversation_id,
+          approved_count: 0,
+          approved_by: request.approved_by,
+          timestamp: now,
+        };
+      }
       console.error("Error approving examples:", error);
       throw new Error(`Failed to approve examples: ${error.message}`);
     }
@@ -372,6 +436,9 @@ class SupabaseClient {
   async searchExamples(
     request: SearchExamplesRequest,
   ): Promise<Array<SupabaseExample & { similarity: number }>> {
+    if (this.isTableMissing("feedme_examples")) {
+      return [];
+    }
     const client = this.ensureClient();
 
     const { data, error } = await client.rpc("search_feedme_examples", {
@@ -383,6 +450,9 @@ class SupabaseClient {
     });
 
     if (error) {
+      if (this.markMissingTable(error, "feedme_examples")) {
+        return [];
+      }
       console.error("Error searching examples:", error);
       throw new Error(`Failed to search examples: ${error.message}`);
     }
@@ -395,6 +465,9 @@ class SupabaseClient {
   // =====================================================
 
   async getUnsyncedExamples(limit: number = 100): Promise<SupabaseExample[]> {
+    if (this.isTableMissing("feedme_examples")) {
+      return [];
+    }
     const client = this.ensureClient();
 
     const { data, error } = await client
@@ -405,6 +478,9 @@ class SupabaseClient {
       .limit(limit);
 
     if (error) {
+      if (this.markMissingTable(error, "feedme_examples")) {
+        return [];
+      }
       console.error("Error getting unsynced examples:", error);
       throw new Error(`Failed to get unsynced examples: ${error.message}`);
     }
@@ -413,6 +489,9 @@ class SupabaseClient {
   }
 
   async markExamplesSynced(exampleIds: number[]): Promise<number> {
+    if (this.isTableMissing("feedme_examples")) {
+      return 0;
+    }
     const client = this.ensureClient();
 
     const { data, error } = await client
@@ -425,6 +504,9 @@ class SupabaseClient {
       .select();
 
     if (error) {
+      if (this.markMissingTable(error, "feedme_examples")) {
+        return 0;
+      }
       console.error("Error marking examples as synced:", error);
       throw new Error(`Failed to mark examples as synced: ${error.message}`);
     }

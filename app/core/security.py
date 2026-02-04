@@ -147,6 +147,8 @@ def _get_supabase_jwks() -> dict:
         api_key = (
             os.getenv("SUPABASE_ANON_KEY")
             or os.getenv("SUPABASE_SERVICE_KEY")
+            or os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+            or os.getenv("SUPABASE_SERVICE_ROLE")
             or getattr(settings, "supabase_anon_key", None)
             or getattr(settings, "supabase_service_key", None)
         )

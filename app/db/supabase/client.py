@@ -31,7 +31,11 @@ class SupabaseConfig:
     def __init__(self):
         raw_url = os.environ.get("SUPABASE_URL", "")
         raw_anon = os.environ.get("SUPABASE_ANON_KEY", "")
-        raw_service = os.environ.get("SUPABASE_SERVICE_KEY", "")
+        raw_service = (
+            os.environ.get("SUPABASE_SERVICE_KEY", "")
+            or os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
+            or os.environ.get("SUPABASE_SERVICE_ROLE", "")
+        )
 
         self.url = raw_url.strip() or None
         self.anon_key = raw_anon.strip() or None
@@ -67,11 +71,55 @@ class SupabaseClient:
         # across threads. Guard execution to avoid intermittent httpx/http2
         # "Server disconnected" errors in the Memory UI (split preview, analysis).
         self._exec_lock = asyncio.Lock()
+        self._missing_tables: set[str] = set()
 
         if not self.mock_mode:
             self._initialize_client()
         else:
             logger.info("Running in mock mode - no Supabase connection")
+
+    @staticmethod
+    def _normalize_table_name(name: str) -> str:
+        return (name or "").strip().lower()
+
+    def _is_table_missing(self, name: str) -> bool:
+        return self._normalize_table_name(name) in self._missing_tables
+
+    def _record_missing_table(self, name: str, exc: Exception) -> bool:
+        """Track missing-table errors so we can degrade gracefully."""
+        table = self._normalize_table_name(name)
+        if not table or table in self._missing_tables:
+            return bool(table)
+
+        texts: list[str] = [str(exc)]
+        if isinstance(exc, APIError):
+            for attr in ("message", "details", "hint", "code"):
+                val = getattr(exc, attr, None)
+                if val:
+                    texts.append(str(val))
+        haystack = " ".join(texts).lower()
+
+        candidates = {
+            table,
+            table.replace("_", " "),
+            table.replace("_", ""),
+        }
+        missing_signals = (
+            "could not find the table",
+            "schema cache",
+            "does not exist",
+            "relation",
+        )
+        if any(sig in haystack for sig in missing_signals) and any(
+            cand in haystack for cand in candidates
+        ):
+            self._missing_tables.add(table)
+            logger.warning(
+                "Supabase table missing; disabling operations",
+                extra={"table": table, "error": str(exc)[:180]},
+            )
+            return True
+        return False
 
     def _initialize_client(self):
         """Initialize Supabase client"""
@@ -873,6 +921,8 @@ class SupabaseClient:
         Returns:
             Dict containing example data if found, None otherwise
         """
+        if self._is_table_missing("feedme_examples"):
+            return None
         try:
             response = await self._exec(
                 lambda: self.client.table("feedme_examples")
@@ -889,6 +939,8 @@ class SupabaseClient:
                 return None
 
         except Exception as e:
+            if self._record_missing_table("feedme_examples", e):
+                return None
             logger.error(f"Error retrieving example {example_id}: {e}")
             return None
 
@@ -905,6 +957,8 @@ class SupabaseClient:
         Returns:
             Updated example data if successful, None otherwise
         """
+        if self._is_table_missing("feedme_examples"):
+            return None
         try:
             # Add updated_at timestamp
             update_data["updated_at"] = datetime.now().isoformat()
@@ -924,6 +978,8 @@ class SupabaseClient:
                 return None
 
         except Exception as e:
+            if self._record_missing_table("feedme_examples", e):
+                return None
             logger.error(f"Error updating example {example_id}: {e}")
             return None
 
@@ -939,6 +995,8 @@ class SupabaseClient:
         Returns:
             Dict containing example and conversation data if found, None otherwise
         """
+        if self._is_table_missing("feedme_examples"):
+            return None
         try:
             response = await self._exec(
                 lambda: self.client.table("feedme_examples")
@@ -955,6 +1013,8 @@ class SupabaseClient:
                 return None
 
         except Exception as e:
+            if self._record_missing_table("feedme_examples", e):
+                return None
             logger.error(
                 f"Error retrieving example {example_id} with conversation: {e}"
             )
@@ -970,6 +1030,9 @@ class SupabaseClient:
         Returns:
             True if deletion was successful, False otherwise
         """
+        if self._is_table_missing("feedme_examples"):
+            logger.warning("feedme_examples table missing; skipping delete_example")
+            return False
         try:
             # First get the example to know which conversation to update
             example = await self.get_example_by_id(example_id)
@@ -997,6 +1060,8 @@ class SupabaseClient:
                 return False
 
         except Exception as e:
+            if self._record_missing_table("feedme_examples", e):
+                return False
             logger.error(f"Error deleting example {example_id}: {e}")
             return False
 
@@ -1010,6 +1075,26 @@ class SupabaseClient:
         Returns:
             True if update was successful, False otherwise
         """
+        if self._is_table_missing("feedme_examples"):
+            # Keep conversation stats consistent with the unified text pipeline.
+            try:
+                response = await self._exec(
+                    lambda: self.client.table("feedme_conversations")
+                    .update(
+                        {
+                            "total_examples": 0,
+                            "updated_at": datetime.now().isoformat(),
+                        }
+                    )
+                    .eq("id", conversation_id)
+                    .execute()
+                )
+                return bool(response.data)
+            except Exception as e:
+                logger.error(
+                    f"Error resetting example count for conversation {conversation_id}: {e}"
+                )
+                return False
         try:
             # Count examples for this conversation
             count_response = await self._exec(
@@ -1048,6 +1133,8 @@ class SupabaseClient:
                 return False
 
         except Exception as e:
+            if self._record_missing_table("feedme_examples", e):
+                return False
             logger.error(
                 f"Error updating conversation {conversation_id} example count: {e}"
             )
@@ -1081,6 +1168,8 @@ class SupabaseClient:
         Returns:
             List of approved examples
         """
+        if self._is_table_missing("feedme_examples"):
+            return []
         try:
             response = await self._exec(
                 lambda: self.client.table("feedme_examples")
@@ -1102,6 +1191,8 @@ class SupabaseClient:
             return approved_examples
 
         except Exception as e:
+            if self._record_missing_table("feedme_examples", e):
+                return []
             logger.error(f"Error approving examples: {e}")
             raise
 
@@ -1118,6 +1209,8 @@ class SupabaseClient:
         Returns:
             List of created examples
         """
+        if self._is_table_missing("feedme_examples"):
+            return []
         try:
             # Note: Approval fields temporarily disabled until migration is applied
             # TODO: Re-enable after adding approval columns to Supabase table
@@ -1133,6 +1226,8 @@ class SupabaseClient:
                 raise Exception("No data returned from examples insertion")
 
         except Exception as e:
+            if self._record_missing_table("feedme_examples", e):
+                return []
             logger.error(f"Error inserting examples: {e}")
             raise
 
@@ -1153,6 +1248,16 @@ class SupabaseClient:
         Returns:
             Approval summary
         """
+        if self._is_table_missing("feedme_examples"):
+            await self.update_conversation(
+                conversation_id, {"approval_status": "approved"}
+            )
+            return {
+                "conversation_id": conversation_id,
+                "approved_count": 0,
+                "approved_by": approved_by,
+                "timestamp": datetime.utcnow().isoformat(),
+            }
         try:
             # Build the query
             query = (
@@ -1190,6 +1295,16 @@ class SupabaseClient:
             }
 
         except Exception as e:
+            if self._record_missing_table("feedme_examples", e):
+                await self.update_conversation(
+                    conversation_id, {"approval_status": "approved"}
+                )
+                return {
+                    "conversation_id": conversation_id,
+                    "approved_count": 0,
+                    "approved_by": approved_by,
+                    "timestamp": datetime.utcnow().isoformat(),
+                }
             logger.error(f"Error approving examples: {e}")
             raise
 
@@ -1214,6 +1329,8 @@ class SupabaseClient:
         Returns:
             List of similar examples with scores
         """
+        if self._is_table_missing("feedme_examples"):
+            return []
         try:
             # Build RPC call for vector search
             params = {
@@ -1243,6 +1360,8 @@ class SupabaseClient:
             return response.data or []
 
         except Exception as e:
+            if self._record_missing_table("feedme_examples", e):
+                return []
             logger.error(f"Error searching examples: {e}")
             raise
 
@@ -1430,6 +1549,8 @@ class SupabaseClient:
 
     async def get_unsynced_examples(self, limit: int = 100) -> List[Dict[str, Any]]:
         """Get approved examples that haven't been synced to Supabase"""
+        if self._is_table_missing("feedme_examples"):
+            return []
         try:
             response = await self._exec(
                 lambda: self.client.table("feedme_examples")
@@ -1443,11 +1564,15 @@ class SupabaseClient:
             return response.data or []
 
         except Exception as e:
+            if self._record_missing_table("feedme_examples", e):
+                return []
             logger.error(f"Error getting unsynced examples: {e}")
             raise
 
     async def mark_examples_synced(self, example_ids: List[int]) -> int:
         """Mark examples as synced to Supabase"""
+        if self._is_table_missing("feedme_examples"):
+            return 0
         try:
             response = await self._exec(
                 lambda: self.client.table("feedme_examples")
@@ -1466,6 +1591,8 @@ class SupabaseClient:
             return count
 
         except Exception as e:
+            if self._record_missing_table("feedme_examples", e):
+                return 0
             logger.error(f"Error marking examples as synced: {e}")
             raise
 
@@ -1604,6 +1731,18 @@ class SupabaseClient:
             return result
 
         except Exception as e:
+            if self._record_missing_table("feedme_examples", e):
+                result = {
+                    "total_conversations": 0,
+                    "total_examples": 0,
+                    "total_text_chunks": 0,
+                    "status_breakdown": {},
+                    "approval_breakdown": {},
+                    "avg_quality_score": 0,
+                    "generated_at": datetime.utcnow().isoformat(),
+                }
+                cache.set("conversation_analytics", result)
+                return result
             logger.error(f"Error getting conversation analytics: {e}")
             return {
                 "total_conversations": 0,
@@ -1642,14 +1781,19 @@ class SupabaseClient:
             conversation = conversation_response.data[0]
 
             # Get examples stats
-            examples_response = await self._exec(
-                lambda: self.client.table("feedme_examples")
-                .select("confidence_score, usefulness_score, review_status")
-                .eq("conversation_id", conversation_id)
-                .execute()
-            )
-
-            examples = examples_response.data or []
+            examples: List[Dict[str, Any]] = []
+            if not self._is_table_missing("feedme_examples"):
+                try:
+                    examples_response = await self._exec(
+                        lambda: self.client.table("feedme_examples")
+                        .select("confidence_score, usefulness_score, review_status")
+                        .eq("conversation_id", conversation_id)
+                        .execute()
+                    )
+                    examples = examples_response.data or []
+                except Exception as e:
+                    if not self._record_missing_table("feedme_examples", e):
+                        raise
 
             # Calculate stats
             total_examples = len(examples)
@@ -1768,6 +1912,28 @@ class SupabaseClient:
             return result
 
         except Exception as e:
+            if self._record_missing_table("feedme_examples", e):
+                result = {
+                    "conversation_approval": {
+                        "total": 0,
+                        "status_breakdown": {
+                            "pending": 0,
+                            "approved": 0,
+                            "rejected": 0,
+                        },
+                        "unique_approvers": 0,
+                    },
+                    "example_stats": {
+                        "total": 0,
+                        "high_confidence": 0,
+                        "medium_confidence": 0,
+                        "low_confidence": 0,
+                        "avg_confidence": 0,
+                    },
+                    "recent_approvals": [],
+                }
+                cache.set("approval_workflow_stats", result)
+                return result
             logger.error(f"Error getting approval workflow stats: {e}")
             return {
                 "conversation_approval": {
@@ -2388,6 +2554,8 @@ class SupabaseClient:
         Returns:
             List of updated examples
         """
+        if self._is_table_missing("feedme_examples"):
+            return []
         try:
             # Add updated_at timestamp
             update_data["updated_at"] = datetime.now().isoformat()
@@ -2404,11 +2572,42 @@ class SupabaseClient:
             return updated_examples
 
         except Exception as e:
+            if self._record_missing_table("feedme_examples", e):
+                return []
             logger.error(f"Error bulk updating examples: {e}")
             raise
 
+    async def count_examples_by_conversation(
+        self, conversation_id: int, is_active: Optional[bool] = None
+    ) -> int:
+        """Count examples for a conversation with graceful missing-table handling."""
+        if self._is_table_missing("feedme_examples"):
+            return 0
+        try:
+            query = (
+                self.client.table("feedme_examples")
+                .select("id", count=COUNT_EXACT)
+                .eq("conversation_id", conversation_id)
+            )
+            if is_active is not None:
+                query = query.eq("is_active", is_active)
+
+            response = await self._exec(lambda: query.execute())
+            return response.count if response.count is not None else 0
+        except Exception as e:
+            if self._record_missing_table("feedme_examples", e):
+                return 0
+            logger.error(
+                f"Error counting examples for conversation {conversation_id}: {e}"
+            )
+            return 0
+
     async def get_examples_by_conversation(
-        self, conversation_id: int, limit: Optional[int] = None, offset: int = 0
+        self,
+        conversation_id: int,
+        limit: Optional[int] = None,
+        offset: int = 0,
+        is_active: Optional[bool] = None,
     ) -> List[Dict[str, Any]]:
         """
         Get all examples for a conversation
@@ -2421,6 +2620,8 @@ class SupabaseClient:
         Returns:
             List of examples
         """
+        if self._is_table_missing("feedme_examples"):
+            return []
         try:
             query = (
                 self.client.table("feedme_examples")
@@ -2428,6 +2629,8 @@ class SupabaseClient:
                 .eq("conversation_id", conversation_id)
                 .order("created_at", desc=False)
             )
+            if is_active is not None:
+                query = query.eq("is_active", is_active)
 
             if limit is not None:
                 query = query.range(offset, offset + limit - 1)
@@ -2441,6 +2644,8 @@ class SupabaseClient:
             return examples
 
         except Exception as e:
+            if self._record_missing_table("feedme_examples", e):
+                return []
             logger.error(
                 f"Error getting examples for conversation {conversation_id}: {e}"
             )
