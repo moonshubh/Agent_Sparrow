@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, type RefObject } from "react";
 import { Canvas } from "@react-three/fiber";
 import { OrbitControls } from "@react-three/drei";
 import * as THREE from "three";
+import "../lib/r3f-extensions";
 import type {
   EntityType,
   GraphNode,

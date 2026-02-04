@@ -1202,7 +1202,7 @@ class ImportZendeskTaggedRequest(BaseModel):
     """Admin request to queue Zendesk ticket ingestion for Memory UI."""
 
     tag: str = Field(
-        default="mb_playbook",
+        default="md_playbook",
         description="Zendesk tag to filter tickets for ingestion.",
     )
     limit: int = Field(

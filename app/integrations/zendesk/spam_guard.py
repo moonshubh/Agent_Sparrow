@@ -158,11 +158,11 @@ def _summarize_repeated_shortlinks(counts: dict[str, int]) -> dict[str, Any]:
 def _make_thumbnail_path(image_path: str, *, max_size: int = 512) -> str | None:
     try:
         with Image.open(image_path) as img:
-            img = img.convert("RGB")
-            img.thumbnail((max_size, max_size))
+            converted = img.convert("RGB")
+            converted.thumbnail((max_size, max_size))
             tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".jpg")
             tmp.close()
-            img.save(tmp.name, format="JPEG", quality=70, optimize=True)
+            converted.save(tmp.name, format="JPEG", quality=70, optimize=True)
             return tmp.name
     except (UnidentifiedImageError, OSError) as exc:
         logger.debug("spam_guard_thumbnail_failed", error=str(exc)[:180])

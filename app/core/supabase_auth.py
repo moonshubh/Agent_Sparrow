@@ -435,8 +435,10 @@ class SupabaseAuthClient:
                     except Exception:
                         pass  # Don't fail if activity update fails
 
+                    sub = payload.get("sub")
+                    sub_preview = str(sub)[:8] if sub is not None else "unknown"
                     logger.debug(
-                        f"JWT verified successfully for user: {payload.get('sub')[:8]}..."
+                        f"JWT verified successfully for user: {sub_preview}..."
                     )
                     return payload
 
@@ -453,8 +455,10 @@ class SupabaseAuthClient:
                             algorithms=[self.jwt_algorithm],
                             options={"verify_exp": True, "verify_aud": False},
                         )
+                        sub = payload.get("sub")
+                        sub_preview = str(sub)[:8] if sub is not None else "unknown"
                         logger.debug(
-                            f"JWT verified without audience check for user: {payload.get('sub')[:8]}..."
+                            f"JWT verified without audience check for user: {sub_preview}..."
                         )
                         return payload
                     except Exception as e2:

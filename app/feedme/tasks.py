@@ -425,11 +425,21 @@ def process_transcript(
             message="Generating embeddings and quality metrics",
         )
 
+        embed_scheduled = True
         # Schedule chunking + embeddings (Gemini embeddings) for unified text
         try:
             generate_text_chunks_and_embeddings.delay(conversation_id)
         except Exception as e:
+            embed_scheduled = False
             logger.warning(f"Failed to schedule chunk+embed task: {e}")
+            update_conversation_status(
+                conversation_id,
+                ProcessingStatus.FAILED,
+                error_message=str(e),
+                stage=ProcessingStage.FAILED,
+                progress=100,
+                message="Embedding scheduling failed",
+            )
 
         # Schedule AI tags/comments generation (low token usage)
         try:
@@ -437,23 +447,24 @@ def process_transcript(
         except Exception as e:
             logger.warning(f"Failed to schedule AI tags task: {e}")
 
-        # Keep status as PROCESSING since downstream tasks are still running
-        # The downstream tasks should mark as COMPLETED when they finish
-        update_conversation_status(
-            conversation_id,
-            ProcessingStatus.PROCESSING,
-            processing_time_ms=processing_time_ms,
-            stage=ProcessingStage.QUALITY_ASSESSMENT,
-            progress=90,
-            message="Finalizing embeddings and metadata",
-        )
+        if embed_scheduled:
+            # Keep status as PROCESSING since downstream tasks are still running
+            # The downstream tasks should mark as COMPLETED when they finish
+            update_conversation_status(
+                conversation_id,
+                ProcessingStatus.PROCESSING,
+                processing_time_ms=processing_time_ms,
+                stage=ProcessingStage.QUALITY_ASSESSMENT,
+                progress=90,
+                message="Finalizing embeddings and metadata",
+            )
 
         logger.info(
             f"Successfully processed conversation {conversation_id} in {processing_time:.2f}s"
         )
 
         return {
-            "success": True,
+            "success": embed_scheduled,
             "conversation_id": conversation_id,
             "processing_time": processing_time,
         }
@@ -694,7 +705,20 @@ def generate_text_chunks_and_embeddings(
         raw_text_value = convo.get("extracted_text")
         raw_text = raw_text_value.strip() if isinstance(raw_text_value, str) else ""
         if not raw_text:
-            return {"success": True, "conversation_id": conversation_id, "chunks": 0}
+            update_conversation_status(
+                conversation_id,
+                ProcessingStatus.FAILED,
+                error_message="No extracted text available for embeddings",
+                stage=ProcessingStage.FAILED,
+                progress=100,
+                message="Embedding failed: missing extracted text",
+            )
+            return {
+                "success": False,
+                "conversation_id": conversation_id,
+                "chunks": 0,
+                "error": "No extracted text available for embeddings",
+            }
 
         # Normalize content for embeddings: prefer plain text without markdown/HTML
         def markdown_to_text(md: str) -> str:
@@ -734,7 +758,20 @@ def generate_text_chunks_and_embeddings(
 
         text = markdown_to_text(raw_text)
         if not text:
-            return {"success": True, "conversation_id": conversation_id, "chunks": 0}
+            update_conversation_status(
+                conversation_id,
+                ProcessingStatus.FAILED,
+                error_message="Extracted text normalization returned empty content",
+                stage=ProcessingStage.FAILED,
+                progress=100,
+                message="Embedding failed: empty text",
+            )
+            return {
+                "success": False,
+                "conversation_id": conversation_id,
+                "chunks": 0,
+                "error": "Extracted text normalization returned empty content",
+            }
 
         # Simple chunking by paragraph groups
         paras = [p.strip() for p in text.split("\n\n") if p.strip()]
@@ -883,6 +920,14 @@ def generate_text_chunks_and_embeddings(
         return {"success": True, "conversation_id": conversation_id, "chunks": stored}
     except Exception as e:
         logger.error(f"Chunk+embed task failed: {e}")
+        update_conversation_status(
+            conversation_id,
+            ProcessingStatus.FAILED,
+            error_message=str(e),
+            stage=ProcessingStage.FAILED,
+            progress=100,
+            message="Embedding failed",
+        )
         return {"success": False, "conversation_id": conversation_id, "error": str(e)}
 
 
@@ -1741,13 +1786,17 @@ def import_zendesk_tagged(
             dry_run=bool(getattr(settings, "zendesk_dry_run", True)),
         )
 
-        tag_value = (tag or "mb_playbook").strip()
+        raw_tag = (tag or "md_playbook").strip()
+        tag_tokens = [t.strip() for t in raw_tag.split(",") if t.strip()]
+        if len(tag_tokens) == 1 and tag_tokens[0] in {"md_playbook", "mb_playbook"}:
+            tag_tokens = ["md_playbook", "mb_playbook"]
+        tag_value = ",".join(tag_tokens) if tag_tokens else "md_playbook"
         ticket_limit = max(1, int(limit))
 
-        queries = [
-            f"type:ticket tags:{tag_value} status:solved",
-            f"type:ticket tags:{tag_value} status:closed",
-        ]
+        queries: list[str] = []
+        for tag_name in tag_tokens or ["md_playbook"]:
+            queries.append(f"type:ticket tags:{tag_name} status:solved")
+            queries.append(f"type:ticket tags:{tag_name} status:closed")
         tickets: list[dict[str, Any]] = []
         for q in queries:
             try:

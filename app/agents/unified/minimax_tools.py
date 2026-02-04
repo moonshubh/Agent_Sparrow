@@ -403,19 +403,6 @@ def _build_minimax_mcp_connection(api_key: str) -> Dict[str, Any]:
             "MINIMAX_API_HOST": _get_minimax_api_host(),
         }
     )
-    disable_wrapper = os.getenv("MINIMAX_MCP_DISABLE_WRAPPER", "").strip().lower() in {
-        "1",
-        "true",
-        "yes",
-    }
-    if disable_wrapper:
-        return {
-            "transport": "stdio",
-            "command": _get_minimax_mcp_command(),
-            "args": _get_minimax_mcp_args(),
-            "env": env,
-        }
-
     env["MINIMAX_MCP_REAL_COMMAND"] = _get_minimax_mcp_command()
     env["MINIMAX_MCP_REAL_ARGS"] = json.dumps(_get_minimax_mcp_args())
     return {

@@ -4184,7 +4184,7 @@ async def import_memory_sources(
     response_model=ImportZendeskTaggedResponse,
     summary="Queue Zendesk tagged ticket import (Admin only)",
     description=(
-        "Queue a background job to ingest solved/closed Zendesk tickets tagged for MB_playbook "
+        "Queue a background job to ingest solved/closed Zendesk tickets tagged for md_playbook "
         "learning into the Memory UI."
     ),
     responses={

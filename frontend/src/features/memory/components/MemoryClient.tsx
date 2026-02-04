@@ -163,7 +163,7 @@ export default function MemoryClient() {
   const handleImportSources = useCallback(async () => {
     try {
       const result = await importZendesk.mutateAsync({
-        tag: "mb_playbook",
+        tag: "md_playbook",
         limit: 200,
       });
 

@@ -620,6 +620,10 @@ class SupabaseClient:
                 )
             )
 
+            if response is None:
+                logger.warning("Conversation %s not found", conversation_id)
+                return None
+
             if response.data:
                 logger.info(f"Retrieved conversation {conversation_id}")
                 return response.data
