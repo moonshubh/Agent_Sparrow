@@ -207,6 +207,13 @@ class Settings(BaseSettings):
     )
     # Thinking trace mode: narrated | hybrid | provider_reasoning | off
     trace_mode: str = Field(default="narrated", alias="TRACE_MODE")
+    # Agent timeouts: disabled by default for quality-first processing
+    agent_disable_timeouts: bool = Field(
+        default=True, alias="AGENT_DISABLE_TIMEOUTS"
+    )
+    agent_helper_timeout_sec: Optional[float] = Field(
+        default=None, alias="AGENT_HELPER_TIMEOUT_SEC"
+    )
 
     @field_validator("trace_mode")
     @classmethod

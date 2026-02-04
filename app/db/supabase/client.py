@@ -19,6 +19,7 @@ from postgrest.base_request_builder import CountMethod
 from postgrest.exceptions import APIError
 
 from app.db.cache import get_analytics_cache
+from app.core.settings import settings
 
 logger = logging.getLogger(__name__)
 
@@ -216,13 +217,20 @@ class SupabaseClient:
         Note: The underlying client is not thread-safe. We serialize calls and
         do a single retry for transient disconnects.
         """
+        resolved_timeout: float | None = timeout
+        if settings.agent_disable_timeouts:
+            resolved_timeout = None
+        elif resolved_timeout is not None and resolved_timeout <= 0:
+            resolved_timeout = None
         async with self._exec_lock:
             for attempt in range(2):
                 try:
                     loop = asyncio.get_running_loop()
+                    if resolved_timeout is None:
+                        return await loop.run_in_executor(None, fn)
                     return await asyncio.wait_for(
                         loop.run_in_executor(None, fn),
-                        timeout=timeout,
+                        timeout=resolved_timeout,
                     )
                 except Exception as e:
                     msg = str(e).lower()

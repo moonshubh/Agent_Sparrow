@@ -9,6 +9,8 @@ import asyncio
 import concurrent.futures as _futures
 from typing import Awaitable, TypeVar, Optional
 
+from app.core.settings import settings
+
 T = TypeVar("T")
 
 
@@ -18,6 +20,10 @@ def run_coro_blocking(coro: Awaitable[T], timeout: Optional[float] = 30) -> T:
     - If no loop is running: use asyncio.run with wait_for.
     - If a loop is running: execute in a dedicated thread.
     """
+    if settings.agent_disable_timeouts:
+        timeout = None
+    elif timeout is not None and timeout <= 0:
+        timeout = None
     try:
         asyncio.get_running_loop()
     except RuntimeError:

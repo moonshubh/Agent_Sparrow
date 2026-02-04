@@ -2311,52 +2311,58 @@ async def run_unified_agent(
                 tuple[Any, RunnableConfig, AgentRuntimeConfig] | None
             ):
                 models_config = get_models_config()
-                fallback_runtime = None
-
+                candidates: list[str] = []
                 if is_minimax_available():
-                    coordinator_cfg = resolve_coordinator_config(
-                        models_config,
-                        "minimax",
-                        with_subagents=with_subagents,
-                        zendesk=is_zendesk,
-                    )
-                    fallback_runtime = AgentRuntimeConfig(
-                        provider="minimax",
-                        model=coordinator_cfg.model_id,
-                        task_type=runtime.task_type,
-                    )
-                else:
-                    fallback_provider = _select_non_google_fallback_provider()
-                    if fallback_provider:
+                    candidates.append("minimax")
+                fallback_provider = _select_non_google_fallback_provider()
+                if fallback_provider and fallback_provider not in candidates:
+                    candidates.append(fallback_provider)
+
+                if not candidates:
+                    return None
+
+                last_error: Exception | None = None
+                for provider in candidates:
+                    try:
                         coordinator_cfg = resolve_coordinator_config(
                             models_config,
-                            fallback_provider,
+                            provider,
                             with_subagents=with_subagents,
                             zendesk=is_zendesk,
                         )
                         fallback_runtime = AgentRuntimeConfig(
-                            provider=fallback_provider,
+                            provider=provider,
                             model=coordinator_cfg.model_id,
                             task_type=runtime.task_type,
                         )
 
-                if not fallback_runtime:
-                    return None
+                        original_provider = getattr(state, "provider", None)
+                        original_model = getattr(state, "model", None)
+                        try:
+                            state.provider = fallback_runtime.provider
+                            state.model = fallback_runtime.model
+                            fallback_agent = _build_deep_agent(
+                                state, fallback_runtime
+                            )
+                            fallback_config = _build_runnable_config(
+                                state, config, fallback_runtime
+                            )
+                            return fallback_agent, fallback_config, fallback_runtime
+                        finally:
+                            state.provider = original_provider
+                            state.model = original_model
+                    except Exception as exc:
+                        last_error = exc
+                        logger.warning(
+                            "fallback_provider_unavailable",
+                            provider=provider,
+                            error=str(exc),
+                        )
+                        continue
 
-                original_provider = getattr(state, "provider", None)
-                original_model = getattr(state, "model", None)
-                try:
-                    state.provider = fallback_runtime.provider
-                    state.model = fallback_runtime.model
-                    fallback_agent = _build_deep_agent(state, fallback_runtime)
-                    fallback_config = _build_runnable_config(
-                        state, config, fallback_runtime
-                    )
-                    return fallback_agent, fallback_config, fallback_runtime
-                except Exception:
-                    state.provider = original_provider
-                    state.model = original_model
-                    raise
+                if last_error:
+                    logger.warning("fallback_agent_build_failed", error=str(last_error))
+                return None
 
             fallback_agent_factory = _build_fallback_agent
 

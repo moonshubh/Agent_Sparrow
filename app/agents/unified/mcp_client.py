@@ -111,7 +111,7 @@ class MCPToolConfig:
     name: str
     max_age_ms: int = 172800000  # 48 hours default
     rate_limit_rpm: int = 60
-    timeout_sec: float = 90.0
+    timeout_sec: float | None = 90.0
     retry_count: int = 3
 
 
@@ -366,9 +366,10 @@ class FirecrawlMCPClient:
         self._last_used = time.monotonic()
 
         async def handler(request: MCPToolRequest):
-            return await asyncio.wait_for(
-                tool.ainvoke(request.args), timeout=config.timeout_sec
-            )
+            timeout = None if settings.agent_disable_timeouts else config.timeout_sec
+            if timeout is None or timeout <= 0:
+                return await tool.ainvoke(request.args)
+            return await asyncio.wait_for(tool.ainvoke(request.args), timeout=timeout)
 
         rate_interceptor = await self._get_rate_limit_interceptor(
             tool_name, config.rate_limit_rpm

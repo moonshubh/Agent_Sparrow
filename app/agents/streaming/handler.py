@@ -74,6 +74,18 @@ if TYPE_CHECKING:
 # Timeout for Gemma helper calls
 HELPER_TIMEOUT_SECONDS = 8.0
 
+
+def _resolve_helper_timeout() -> float | None:
+    if settings.agent_disable_timeouts:
+        return None
+    timeout = settings.agent_helper_timeout_sec
+    if timeout is None:
+        return HELPER_TIMEOUT_SECONDS
+    if timeout <= 0:
+        return None
+    return timeout
+
+
 # Pattern for detecting thinking blocks
 THINKING_TOKEN_PATTERN = r"(?:thinking|think|analysis|reasoning|thought)"
 THINKING_BLOCK_PATTERN = re.compile(
@@ -413,6 +425,8 @@ class StreamEventHandler:
     def _is_google_overloaded_error(error: Exception) -> bool:
         message = str(error).lower()
         if "model is overloaded" in message:
+            return True
+        if "deadline expired" in message:
             return True
         if "503" in message and "service unavailable" in message:
             return True
@@ -2177,14 +2191,22 @@ class StreamEventHandler:
         try:
             import asyncio
 
-            reranked = await asyncio.wait_for(
-                self.helper.rerank(
+            timeout = _resolve_helper_timeout()
+            if timeout is None:
+                reranked = await self.helper.rerank(
                     snippet_texts,
                     self.last_user_query,
                     top_k=min(3, len(snippet_texts)),
-                ),
-                timeout=HELPER_TIMEOUT_SECONDS,
-            )
+                )
+            else:
+                reranked = await asyncio.wait_for(
+                    self.helper.rerank(
+                        snippet_texts,
+                        self.last_user_query,
+                        top_k=min(3, len(snippet_texts)),
+                    ),
+                    timeout=timeout,
+                )
 
             if reranked:
                 # Cache the result
@@ -2197,7 +2219,7 @@ class StreamEventHandler:
                 return self._apply_reranked_results(output, results, reranked)
 
         except asyncio.TimeoutError:
-            logger.warning("gemma_rerank_grounding_timeout")
+            logger.warning("gemma_rerank_grounding_timeout", timeout=timeout)
         except Exception as exc:
             logger.warning("gemma_rerank_grounding_failed", error=str(exc))
 

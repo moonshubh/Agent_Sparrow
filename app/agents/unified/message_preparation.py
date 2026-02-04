@@ -61,6 +61,17 @@ _IMPORTANT_LINE_RE = re.compile(
 _HTTP_STATUS_RE = re.compile(r"\b[45]\d{2}\b")
 
 
+def _resolve_helper_timeout() -> float | None:
+    if settings.agent_disable_timeouts:
+        return None
+    timeout = settings.agent_helper_timeout_sec
+    if timeout is None:
+        return HELPER_TIMEOUT_SECONDS
+    if timeout <= 0:
+        return None
+    return timeout
+
+
 class MessagePreparer:
     """Handles all pre-agent message transformations.
 
@@ -701,13 +712,18 @@ class MessagePreparer:
         self,
         coro: Any,
         label: str,
-        timeout: float = HELPER_TIMEOUT_SECONDS,
+        timeout: float | None = None,
     ) -> Optional[Any]:
         """Apply a timeout to helper calls."""
         try:
-            return await asyncio.wait_for(coro, timeout=timeout)
+            resolved = _resolve_helper_timeout() if timeout is None else timeout
+            if settings.agent_disable_timeouts:
+                resolved = None
+            if resolved is None or resolved <= 0:
+                return await coro
+            return await asyncio.wait_for(coro, timeout=resolved)
         except asyncio.TimeoutError:
-            logger.warning(f"{label}_timeout", timeout=timeout)
+            logger.warning(f"{label}_timeout", timeout=_resolve_helper_timeout())
         except Exception as exc:
             logger.warning(f"{label}_failed", error=str(exc))
         return None

@@ -20,6 +20,7 @@ from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import BaseTool
 
 from app.core.logging_config import get_logger
+from app.core.settings import settings
 
 logger = get_logger(__name__)
 
@@ -62,7 +63,7 @@ class ToolExecutionConfig:
     - Retryable errors: Which exceptions should trigger retries
     """
 
-    timeout: float = 45.0
+    timeout: float | None = 45.0
     max_retries: int = 2
     retry_backoff: float = 1.0
     retryable_errors: tuple[type[BaseException], ...] = (
@@ -323,6 +324,16 @@ class ToolExecutor:
         """Get configuration for a specific tool."""
         return self.configs.get(tool_name, self.default_config)
 
+    @staticmethod
+    def _resolve_timeout(timeout: float | None) -> float | None:
+        if settings.agent_disable_timeouts:
+            return None
+        if timeout is None:
+            return None
+        if timeout <= 0:
+            return None
+        return timeout
+
     async def execute(
         self,
         tool: BaseTool,
@@ -357,8 +368,12 @@ class ToolExecutor:
         async with self._get_semaphore():
             for attempt in range(tool_config.max_retries + 1):
                 try:
-                    async with asyncio.timeout(tool_config.timeout):
+                    resolved_timeout = self._resolve_timeout(tool_config.timeout)
+                    if resolved_timeout is None:
                         result = await tool.ainvoke(tool_args, config=config)
+                    else:
+                        async with asyncio.timeout(resolved_timeout):
+                            result = await tool.ainvoke(tool_args, config=config)
 
                         duration_ms = int((time.monotonic() - start_time) * 1000)
 
