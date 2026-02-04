@@ -607,6 +607,9 @@ class Settings(BaseSettings):
     zendesk_query_decomposition_max_subqueries: int = Field(
         default=3, alias="ZENDESK_QUERY_DECOMPOSITION_MAX_SUBQUERIES"
     )
+    zendesk_scheduler_ticket_timeout_sec: Optional[int] = Field(
+        default=3600, alias="ZENDESK_SCHEDULER_TICKET_TIMEOUT_SEC"
+    )
     # Complexity detection (Phase 2 context engineering)
     zendesk_complexity_threshold: float = Field(
         default=0.5, alias="ZENDESK_COMPLEXITY_THRESHOLD"

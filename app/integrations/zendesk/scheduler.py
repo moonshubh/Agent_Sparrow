@@ -5784,13 +5784,36 @@ async def _process_window(
                 continue
 
             # Generate suggested reply after successful claim
-            run = await _generate_reply(
-                tid,
-                row.get("subject"),
-                row.get("description"),
-                provider=provider,
-                model=model,
+            ticket_timeout = getattr(
+                settings, "zendesk_scheduler_ticket_timeout_sec", None
             )
+            if ticket_timeout is not None:
+                try:
+                    ticket_timeout = int(ticket_timeout)
+                except (TypeError, ValueError):
+                    ticket_timeout = None
+            if ticket_timeout is not None and ticket_timeout <= 0:
+                ticket_timeout = None
+
+            if ticket_timeout:
+                run = await asyncio.wait_for(
+                    _generate_reply(
+                        tid,
+                        row.get("subject"),
+                        row.get("description"),
+                        provider=provider,
+                        model=model,
+                    ),
+                    timeout=float(ticket_timeout),
+                )
+            else:
+                run = await _generate_reply(
+                    tid,
+                    row.get("subject"),
+                    row.get("description"),
+                    provider=provider,
+                    model=model,
+                )
             reply = run.reply
             use_html = bool(getattr(settings, "zendesk_use_html", True))
             has_log_attachments = False
@@ -5926,6 +5949,32 @@ async def _process_window(
                 e.request_id,
             )
             break
+        except asyncio.TimeoutError:
+            logger.warning("zendesk_ticket_timeout ticket_id=%s", tid)
+            log_internal_note_result(
+                posted=False,
+                reason="timeout",
+                error="scheduler_timeout",
+            )
+            rc = (row.get("retry_count") or 0) + 1
+            next_at = (
+                datetime.now(timezone.utc) + timedelta(minutes=5)
+            ).isoformat()
+            await supa._exec(
+                lambda: supa.client.table("zendesk_pending_tickets")
+                .update(
+                    {
+                        "status": "retry",
+                        "retry_count": rc,
+                        "last_error": "scheduler_timeout",
+                        "last_attempt_at": datetime.now(timezone.utc).isoformat(),
+                        "next_attempt_at": next_at,
+                    }
+                )
+                .eq("id", row["id"])
+                .execute()
+            )
+            failures += 1
         except Exception as e:
             logger.warning("posting failed for ticket %s: %s", tid, e)
             err = str(e)
