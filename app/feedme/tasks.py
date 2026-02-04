@@ -1787,13 +1787,30 @@ def import_zendesk_tagged(
         from app.security.pii_redactor import redact_pii
         from uuid import uuid5, NAMESPACE_URL
 
+        raw_tag = (tag or "md_playbook").strip()
+        tag_tokens = [t.strip() for t in raw_tag.split(",") if t.strip()]
+        if len(tag_tokens) == 1 and tag_tokens[0] in {"md_playbook", "mb_playbook"}:
+            tag_tokens = ["md_playbook", "mb_playbook"]
+        tag_value = ",".join(tag_tokens) if tag_tokens else "md_playbook"
+        ticket_limit = max(1, int(limit))
+
         settings = current_settings()
         if not (
             settings.zendesk_subdomain
             and settings.zendesk_email
             and settings.zendesk_api_token
         ):
-            raise RuntimeError("Zendesk credentials missing")
+            logger.error(
+                "zendesk_credentials_missing; skipping zendesk import task",
+                extra={"tag": tag_value},
+            )
+            return {
+                "imported": 0,
+                "skipped": 0,
+                "failed": 0,
+                "tag": tag_value,
+                "error": "Zendesk credentials missing",
+            }
 
         zc = ZendeskClient(
             subdomain=str(settings.zendesk_subdomain),
@@ -1801,13 +1818,6 @@ def import_zendesk_tagged(
             api_token=str(settings.zendesk_api_token),
             dry_run=bool(getattr(settings, "zendesk_dry_run", True)),
         )
-
-        raw_tag = (tag or "md_playbook").strip()
-        tag_tokens = [t.strip() for t in raw_tag.split(",") if t.strip()]
-        if len(tag_tokens) == 1 and tag_tokens[0] in {"md_playbook", "mb_playbook"}:
-            tag_tokens = ["md_playbook", "mb_playbook"]
-        tag_value = ",".join(tag_tokens) if tag_tokens else "md_playbook"
-        ticket_limit = max(1, int(limit))
 
         queries: list[str] = []
         for tag_name in tag_tokens or ["md_playbook"]:
